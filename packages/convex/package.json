@@ -1,0 +1,17 @@
+{
+  "name": "@code-chat-sync/convex",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "convex dev",
+    "deploy": "convex deploy"
+  },
+  "dependencies": {
+    "@auth/core": "^0.37.2",
+    "@convex-dev/auth": "^0.0.79",
+    "convex": "^1.17.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "code-chat-sync",
+  "version": "0.1.0",
+  "description": "Sync coding agent conversations to a shared Convex database",
+  "type": "module",
+  "bin": {
+    "code-chat-sync": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.1",
+    "commander": "^12.1.0",
+    "convex": "^1.17.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.7.2"
+  }
+}

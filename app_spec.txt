@@ -1,0 +1,360 @@
+<project_specification>
+  <project_name>code-chat-sync - Coding Agent History Sync</project_name>
+
+  <overview>
+    A utility that watches Claude Code, Codex CLI, and Cursor history files on developers' machines
+    and pushes conversations to a shared Convex database in real-time. Team members install a
+    background daemon that monitors local JSONL/SQLite history files and syncs new conversations
+    as they happen. A web dashboard allows browsing and searching all team conversations.
+  </overview>
+
+  <goals>
+    - Enable teams to share coding agent conversations automatically
+    - Provide real-time sync as conversations happen
+    - Support personal (private) and shared (team) conversation views
+    - Zero manual effort after initial setup - runs as background daemon
+    - Make it easy to search and learn from team's agent interactions
+  </goals>
+
+  <technology_stack>
+    <watcher_daemon>
+      <runtime>Node.js with Bun</runtime>
+      <file_watching>chokidar for cross-platform file watching</file_watching>
+      <database_client>Convex client for real-time sync</database_client>
+      <process_management>Launch agent for macOS, systemd for Linux</process_management>
+      <cli_framework>Commander.js for CLI commands</cli_framework>
+    </watcher_daemon>
+    <backend>
+      <database>Convex (serverless, real-time)</database>
+      <auth>Convex Auth with email/password</auth>
+      <functions>Convex functions for mutations and queries</functions>
+    </backend>
+    <web_dashboard>
+      <framework>Next.js 14 with App Router</framework>
+      <styling>Tailwind CSS</styling>
+      <state>Convex React hooks for real-time updates</state>
+      <ui_components>shadcn/ui</ui_components>
+    </web_dashboard>
+  </technology_stack>
+
+  <user_roles>
+    <role name="team_member">
+      - Installs daemon on their machine
+      - Conversations auto-sync to team space
+      - Can mark conversations as private (not shared)
+      - Can browse own and team conversations on dashboard
+    </role>
+    <role name="team_admin">
+      - Can invite team members
+      - Can configure team settings
+      - Can see team activity stats
+    </role>
+  </user_roles>
+
+  <supported_agents>
+    <agent name="claude_code" priority="P0">
+      <history_location>~/.claude/projects/[hash]/[session].jsonl</history_location>
+      <global_history>~/.claude/history.jsonl</global_history>
+      <format>JSONL with session_meta, response_item, event_msg records</format>
+    </agent>
+    <agent name="codex_cli" priority="P0">
+      <history_location>~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl</history_location>
+      <format>JSONL with session_meta, response_item, event_msg records</format>
+    </agent>
+    <agent name="cursor" priority="P1_phase2">
+      <history_location>~/Library/Application Support/Cursor/User/workspaceStorage/[hash]/state.vscdb</history_location>
+      <format>SQLite database, requires parsing aiService.prompts table</format>
+    </agent>
+  </supported_agents>
+
+  <core_features>
+    <daemon_watcher>
+      <installation>
+        - Install via npm: `npm install -g code-chat-sync`
+        - Run setup: `code-chat-sync setup` to authenticate and configure
+        - Start daemon: `code-chat-sync start` (or auto-start on login)
+        - Check status: `code-chat-sync status`
+        - Stop daemon: `code-chat-sync stop`
+      </installation>
+
+      <file_watching>
+        - Watch Claude Code history: ~/.claude/projects/*/*.jsonl and ~/.claude/history.jsonl
+        - Watch Codex history: ~/.codex/sessions/**/*.jsonl
+        - Detect new lines appended to JSONL files
+        - Parse each line as JSON and categorize by record type
+        - Handle file rotation and new session files
+        - Debounce rapid writes to batch sync efficiently
+      </file_watching>
+
+      <sync_behavior>
+        - On new session detected: create conversation record in Convex
+        - On new message: append to existing conversation
+        - Include metadata: timestamp, project path, agent type, model used
+        - Hash sensitive data (file paths) for privacy
+        - Maintain local cache of synced positions to avoid re-syncing
+        - Queue failed syncs for retry with exponential backoff
+      </sync_behavior>
+
+      <privacy_controls>
+        - Default: all conversations sync to team
+        - Config file to exclude specific project paths
+        - Environment variable to pause syncing: CODE_CHAT_SYNC_PAUSED=1
+        - Local command to mark session private: `code-chat-sync private [session-id]`
+      </privacy_controls>
+
+      <daemon_management>
+        - Auto-start on system login (configurable)
+        - Run in background with minimal resource usage
+        - Log to ~/.code-chat-sync/daemon.log
+        - Health check endpoint on localhost port
+        - Graceful shutdown on system sleep/shutdown
+      </daemon_management>
+    </daemon_watcher>
+
+    <web_dashboard>
+      <authentication>
+        - Sign up with email/password via Convex Auth
+        - Login redirects to conversations list
+        - Session persists across browser restarts
+        - Logout clears local session
+      </authentication>
+
+      <conversation_list>
+        - List all conversations (personal + team)
+        - Filter by: agent type (Claude/Codex), user, date range
+        - Search by: message content, project name
+        - Sort by: date (newest first), activity
+        - Tabs: "My Conversations" | "Team Conversations"
+        - Show: title (auto-generated from first message), agent icon, timestamp, message count
+        - Pagination with infinite scroll
+      </conversation_list>
+
+      <conversation_view>
+        - Display full conversation thread
+        - Show user messages and assistant responses
+        - Render code blocks with syntax highlighting
+        - Show tool calls and their outputs
+        - Display thinking/reasoning blocks if present
+        - Show metadata: agent type, model, project path (hashed), timestamp
+        - Copy message or entire conversation to clipboard
+      </conversation_view>
+
+      <user_settings>
+        - Profile: name, email
+        - Daemon status: show if currently connected, last sync time
+        - Privacy: default sharing preference (team/private)
+        - Notifications: none initially (future: daily digest)
+      </user_settings>
+
+      <team_management>
+        - View team members
+        - Invite by email (admin only)
+        - Remove member (admin only)
+        - Team name and settings (admin only)
+      </team_management>
+    </web_dashboard>
+
+    <data_model>
+      <users>
+        - id, email, name, created_at
+        - team_id (belongs to one team)
+        - role (member, admin)
+        - daemon_last_seen (timestamp)
+      </users>
+
+      <teams>
+        - id, name, created_at
+        - invite_code (for joining)
+      </teams>
+
+      <conversations>
+        - id, user_id, team_id
+        - agent_type (claude_code, codex, cursor)
+        - session_id (original from agent)
+        - title (auto-generated)
+        - project_hash (hashed project path for privacy)
+        - model (e.g., claude-sonnet-4-5-20250929)
+        - started_at, updated_at
+        - message_count
+        - is_private (boolean, default false)
+        - status (active, completed)
+      </conversations>
+
+      <messages>
+        - id, conversation_id
+        - role (user, assistant, system, tool)
+        - content (text content)
+        - tool_name (if tool call)
+        - tool_input (if tool call)
+        - tool_output (if tool result)
+        - thinking (if reasoning content)
+        - timestamp
+        - tokens_used (if available)
+      </messages>
+
+      <sync_cursors>
+        - id, user_id
+        - file_path_hash
+        - last_position (byte offset or line number)
+        - last_synced_at
+      </sync_cursors>
+    </data_model>
+  </core_features>
+
+  <cli_commands>
+    <command name="setup">
+      - Prompt for email/password or show login URL
+      - Authenticate and store credentials in ~/.code-chat-sync/config.json
+      - Detect available agents (check if history directories exist)
+      - Create team or join existing team
+      - Test connection to Convex
+    </command>
+
+    <command name="start">
+      - Start background daemon
+      - Register with system launch agent (macOS) or systemd (Linux)
+      - Show PID and log file location
+    </command>
+
+    <command name="stop">
+      - Stop background daemon
+      - Remove from auto-start if --disable-autostart flag
+    </command>
+
+    <command name="status">
+      - Show daemon running status
+      - Show last sync time
+      - Show watched directories
+      - Show pending sync queue size
+      - Show connection status to Convex
+    </command>
+
+    <command name="sync">
+      - Manual trigger to sync all unsynced conversations
+      - Useful for initial sync of existing history
+      - Show progress: "Syncing 45 conversations..."
+    </command>
+
+    <command name="private">
+      - Mark a session as private: `code-chat-sync private [session-id]`
+      - List private sessions: `code-chat-sync private --list`
+      - Un-private: `code-chat-sync private --remove [session-id]`
+    </command>
+
+    <command name="config">
+      - Show current config: `code-chat-sync config`
+      - Set value: `code-chat-sync config set key value`
+      - Keys: auto_start, default_privacy, excluded_paths
+    </command>
+
+    <command name="logs">
+      - Tail daemon logs: `code-chat-sync logs`
+      - Show last N lines: `code-chat-sync logs -n 50`
+    </command>
+  </cli_commands>
+
+  <error_handling>
+    <daemon_errors>
+      - Network failure: queue messages, retry with exponential backoff
+      - Auth expired: pause sync, notify user via status command
+      - File permission denied: log warning, continue with accessible files
+      - Parse error in JSONL: log and skip malformed line, continue
+      - Disk full: pause logging, warn in status
+    </daemon_errors>
+
+    <dashboard_errors>
+      - Network error: show toast, retry button
+      - Auth error: redirect to login
+      - Empty states: "No conversations yet" with helpful message
+      - Loading states: skeleton loaders for conversation list
+    </dashboard_errors>
+  </error_handling>
+
+  <empty_states>
+    <no_conversations>
+      "No conversations synced yet. Make sure the daemon is running: code-chat-sync status"
+    </no_conversations>
+    <no_team_conversations>
+      "No team conversations yet. Invite team members to start sharing."
+    </no_team_conversations>
+    <search_no_results>
+      "No conversations match your search. Try different keywords."
+    </search_no_results>
+    <daemon_not_running>
+      "Daemon is not running. Start it with: code-chat-sync start"
+    </daemon_not_running>
+  </empty_states>
+
+  <security_considerations>
+    - Store Convex credentials in ~/.code-chat-sync/config.json with 600 permissions
+    - Hash project paths before syncing (SHA256) for privacy
+    - Never sync .env files or detected secrets in messages
+    - API key in messages should be redacted before sync
+    - Team invite codes expire after 7 days
+    - Rate limit sync to prevent abuse
+  </security_considerations>
+
+  <performance_requirements>
+    - Daemon CPU usage: <1% when idle
+    - Daemon memory: <50MB
+    - Sync latency: <2 seconds for new message to appear in dashboard
+    - Dashboard load time: <2 seconds for conversation list
+    - Search response: <500ms
+    - Support up to 100k messages per team
+  </performance_requirements>
+
+  <accessibility>
+    - Dashboard: keyboard navigable
+    - Dashboard: screen reader compatible
+    - Dashboard: respects prefers-reduced-motion
+    - CLI: clear error messages with actionable steps
+    - CLI: --help on all commands
+  </accessibility>
+
+  <out_of_scope>
+    - Real-time collaboration on conversations
+    - Editing or deleting synced conversations
+    - Analytics beyond basic counts (token usage dashboards, etc.)
+    - Mobile app
+    - Cursor support (Phase 2)
+    - Webhook integrations (Slack, etc.)
+    - Self-hosted option (Convex only)
+    - Message threading or replies
+    - Conversation branching visualization
+    - Export to other formats
+  </out_of_scope>
+
+  <phase_2_future>
+    - Cursor editor support (SQLite parsing)
+    - Analytics dashboard (token usage, patterns)
+    - Annotations and comments on conversations
+    - Slack/Discord notifications
+    - Team activity feed
+    - Conversation tagging
+    - Export to Markdown/JSON
+  </phase_2_future>
+
+  <installation_flow>
+    1. User runs: npm install -g code-chat-sync
+    2. User runs: code-chat-sync setup
+       - Opens browser for Convex Auth
+       - User creates account or logs in
+       - Returns auth token to CLI
+       - CLI stores in config
+    3. CLI detects available agents (checks ~/.claude, ~/.codex exist)
+    4. User either creates new team or enters invite code
+    5. CLI confirms setup complete
+    6. User runs: code-chat-sync start
+    7. Daemon starts watching and syncing
+    8. User visits web dashboard to see conversations
+  </installation_flow>
+
+  <development_setup>
+    - Monorepo with packages: cli, web, convex
+    - Bun as package manager
+    - TypeScript throughout
+    - ESLint + Prettier for code style
+    - Convex dev server for local development
+    - CLI can point to local or production Convex
+  </development_setup>
+</project_specification>
