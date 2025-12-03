@@ -23,7 +23,17 @@ export default function LoginPage() {
       await signIn("password", { email, password, flow: "signIn" });
       router.push("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Invalid credentials");
+      if (err instanceof Error) {
+        if (err.message.includes("Invalid") || err.message.includes("credentials")) {
+          setError("Invalid email or password. Please try again.");
+        } else if (err.message.includes("not found")) {
+          setError("No account found with this email.");
+        } else {
+          setError("Sign in failed. Please try again.");
+        }
+      } else {
+        setError("An unexpected error occurred.");
+      }
     } finally {
       setLoading(false);
     }
