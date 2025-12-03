@@ -1,9 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { LogoutButton } from "../../components/LogoutButton";
+import { ConversationList } from "../../components/ConversationList";
 
 export default function DashboardPage() {
+  const [filter, setFilter] = useState<"my" | "team">("my");
+
   return (
     <AuthGuard>
       <main className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -17,14 +21,30 @@ export default function DashboardPage() {
         </header>
 
         <div className="max-w-7xl mx-auto px-4 py-8">
-          <div className="text-center py-16">
-            <h2 className="text-2xl font-medium text-white mb-2">
-              No conversations synced yet
-            </h2>
-            <p className="text-slate-400">
-              Make sure the daemon is running: code-chat-sync status
-            </p>
+          <div className="flex gap-4 mb-6">
+            <button
+              onClick={() => setFilter("my")}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                filter === "my"
+                  ? "bg-blue-600 text-white"
+                  : "bg-slate-800 text-slate-400 hover:text-white"
+              }`}
+            >
+              My Conversations
+            </button>
+            <button
+              onClick={() => setFilter("team")}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                filter === "team"
+                  ? "bg-blue-600 text-white"
+                  : "bg-slate-800 text-slate-400 hover:text-white"
+              }`}
+            >
+              Team
+            </button>
           </div>
+
+          <ConversationList filter={filter} />
         </div>
       </main>
     </AuthGuard>

@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
 export const createConversation = mutation({
   args: {
@@ -72,5 +73,52 @@ export const getConversation = query({
       ...conversation,
       messages: sortedMessages,
     };
+  },
+});
+
+export const listConversations = query({
+  args: {
+    filter: v.union(v.literal("my"), v.literal("team")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return [];
+    }
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      return [];
+    }
+
+    let conversations;
+    if (args.filter === "my") {
+      conversations = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+    } else {
+      const allConversations = await ctx.db.query("conversations").collect();
+      conversations = allConversations.filter((c) => {
+        const isOwn = c.user_id.toString() === userId.toString();
+        if (isOwn) return true;
+        if (c.is_private) return false;
+        if (user.team_id && c.team_id?.toString() === user.team_id.toString()) {
+          return true;
+        }
+        return false;
+      });
+    }
+
+    return conversations
+      .sort((a, b) => b.updated_at - a.updated_at)
+      .map((c) => ({
+        _id: c._id,
+        title: c.title || `Session ${c.session_id.slice(0, 8)}`,
+        agent_type: c.agent_type,
+        started_at: c.started_at,
+        updated_at: c.updated_at,
+        message_count: c.message_count,
+        status: c.status,
+      }));
   },
 });

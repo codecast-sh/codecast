@@ -8,7 +8,13 @@
  * @module
  */
 
+import type * as auth from "../auth.js";
+import type * as conversations from "../conversations.js";
 import type * as health from "../health.js";
+import type * as messages from "../messages.js";
+import type * as syncCursors from "../syncCursors.js";
+import type * as teams from "../teams.js";
+import type * as users from "../users.js";
 
 import type {
   ApiFromModules,
@@ -17,7 +23,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  auth: typeof auth;
+  conversations: typeof conversations;
   health: typeof health;
+  messages: typeof messages;
+  syncCursors: typeof syncCursors;
+  teams: typeof teams;
+  users: typeof users;
 }>;
 
 /**
