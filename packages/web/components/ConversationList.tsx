@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@code-chat-sync/convex/convex/_generated/api";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
+import { EmptyState } from "./EmptyState";
 
 export function ConversationList({ filter }: { filter: "my" | "team" }) {
   const conversations = useQuery(api.conversations.listConversations, {
@@ -15,9 +16,14 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
   if (conversations.length === 0) {
     return (
-      <div className="text-center py-16 text-slate-400">
-        No conversations found
-      </div>
+      <EmptyState
+        title="No conversations yet"
+        description="Your synced conversations will appear here. Start a conversation in Claude Code or Cursor to see it listed."
+        action={{
+          label: "Learn how to sync",
+          href: "/docs/sync",
+        }}
+      />
     );
   }
 
