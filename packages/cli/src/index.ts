@@ -2,11 +2,45 @@
 import { Command } from "commander";
 import open from "open";
 import * as readline from "readline";
+import * as fs from "fs";
+import * as path from "path";
 
 const program = new Command();
 
 const CONFIG_DIR = process.env.HOME + "/.code-chat-sync";
+const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const WEB_URL = process.env.CODE_CHAT_SYNC_WEB_URL || "http://localhost:3000";
+
+interface Config {
+  auth_token: string;
+  web_url?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+function ensureConfigDir(): void {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { mode: 0o700 });
+  }
+}
+
+function readConfig(): Config | null {
+  if (!fs.existsSync(CONFIG_FILE)) {
+    return null;
+  }
+  const content = fs.readFileSync(CONFIG_FILE, "utf-8");
+  return JSON.parse(content) as Config;
+}
+
+function writeConfig(config: Config): void {
+  ensureConfigDir();
+  config.updated_at = new Date().toISOString();
+  if (!config.created_at) {
+    config.created_at = config.updated_at;
+  }
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+  fs.chmodSync(CONFIG_FILE, 0o600);
+}
 
 async function promptForEnter(message: string): Promise<void> {
   const rl = readline.createInterface({
@@ -41,8 +75,15 @@ async function runSetup(): Promise<void> {
 
   await promptForEnter("Press Enter after you've completed authentication in the browser...");
 
+  const placeholderToken = `cli_setup_${Date.now()}`;
+  const config: Config = {
+    auth_token: placeholderToken,
+    web_url: WEB_URL,
+  };
+  writeConfig(config);
+
   console.log("\nAuthentication flow completed.");
-  console.log(`Configuration will be stored in: ${CONFIG_DIR}/config.json`);
+  console.log(`Configuration stored in: ${CONFIG_FILE}`);
   console.log("\nNext steps:");
   console.log("  1. Run 'code-chat-sync start' to begin syncing conversations");
   console.log("  2. Visit the web dashboard to view your synced conversations\n");
