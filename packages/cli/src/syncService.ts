@@ -1,4 +1,5 @@
 import { ConvexHttpClient } from "convex/browser";
+import { redactSecrets } from "./redact";
 
 export type AgentType = "claude_code" | "codex" | "cursor";
 
@@ -39,5 +40,31 @@ export class SyncService {
 
   setAuth(token: string): void {
     this.client.setAuth(token);
+  }
+
+  async addMessage(params: {
+    conversationId: string;
+    role: "human" | "assistant" | "tool_use" | "tool_result";
+    content: string;
+    timestamp: number;
+    toolName?: string;
+    toolInput?: string;
+  }): Promise<string> {
+    const redactedContent = redactSecrets(params.content);
+    const roleMap: Record<string, "user" | "assistant" | "system" | "tool"> = {
+      human: "user",
+      assistant: "assistant",
+      tool_use: "tool",
+      tool_result: "tool",
+    };
+    const messageId = await this.client.mutation(
+      "messages:addMessage" as any,
+      {
+        conversation_id: params.conversationId,
+        role: roleMap[params.role],
+        content: redactedContent,
+      }
+    );
+    return messageId as string;
   }
 }
