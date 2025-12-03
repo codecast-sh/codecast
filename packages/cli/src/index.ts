@@ -25,6 +25,50 @@ interface Config {
   updated_at?: string;
 }
 
+interface DetectedAgent {
+  name: string;
+  type: "claude_code" | "codex" | "cursor";
+  configPath: string;
+  historyPath: string;
+}
+
+function detectAgents(): DetectedAgent[] {
+  const agents: DetectedAgent[] = [];
+  const home = process.env.HOME || "";
+
+  const claudePath = path.join(home, ".claude");
+  if (fs.existsSync(claudePath)) {
+    agents.push({
+      name: "Claude Code",
+      type: "claude_code",
+      configPath: claudePath,
+      historyPath: path.join(claudePath, "projects"),
+    });
+  }
+
+  const codexPath = path.join(home, ".codex");
+  if (fs.existsSync(codexPath)) {
+    agents.push({
+      name: "Codex CLI",
+      type: "codex",
+      configPath: codexPath,
+      historyPath: path.join(codexPath, "history"),
+    });
+  }
+
+  const cursorPath = path.join(home, ".cursor");
+  if (fs.existsSync(cursorPath)) {
+    agents.push({
+      name: "Cursor",
+      type: "cursor",
+      configPath: cursorPath,
+      historyPath: path.join(cursorPath, "history"),
+    });
+  }
+
+  return agents;
+}
+
 function ensureConfigDir(): void {
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
@@ -173,6 +217,21 @@ async function promptForEnter(message: string): Promise<void> {
 
 async function runSetup(): Promise<void> {
   console.log("\n=== code-chat-sync Setup ===\n");
+
+  const agents = detectAgents();
+  if (agents.length > 0) {
+    console.log("Detected coding agents:");
+    for (const agent of agents) {
+      console.log(`  - ${agent.name}`);
+      console.log(`    Config: ${agent.configPath}`);
+      console.log(`    History: ${agent.historyPath}`);
+    }
+    console.log();
+  } else {
+    console.log("No coding agents detected.");
+    console.log("Supported agents: Claude Code (~/.claude), Codex CLI (~/.codex), Cursor (~/.cursor)\n");
+  }
+
   console.log("To use code-chat-sync, you need to authenticate with your account.");
   console.log("This will open a browser window where you can sign in or create an account.\n");
 
