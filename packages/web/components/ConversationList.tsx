@@ -2,6 +2,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@code-chat-sync/convex/convex/_generated/api";
 import Link from "next/link";
+import { LoadingSkeleton } from "./LoadingSkeleton";
 
 export function ConversationList({ filter }: { filter: "my" | "team" }) {
   const conversations = useQuery(api.conversations.listConversations, {
@@ -9,7 +10,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
   });
 
   if (!conversations) {
-    return <div className="text-slate-400">Loading...</div>;
+    return <LoadingSkeleton />;
   }
 
   if (conversations.length === 0) {
