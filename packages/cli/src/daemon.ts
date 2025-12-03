@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as fs from "fs";
 import * as path from "path";
+import { HistoryWatcher, type FileChangeEvent } from "./watcher.js";
 
 const CONFIG_DIR = process.env.HOME + "/.code-chat-sync";
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
@@ -22,20 +23,32 @@ async function main(): Promise<void> {
   log("Daemon started");
   log(`PID: ${process.pid}`);
 
-  process.on("SIGTERM", () => {
-    log("Received SIGTERM, shutting down");
-    process.exit(0);
+  const watcher = new HistoryWatcher();
+
+  watcher.on("ready", () => {
+    log(`Watching: ${watcher.getHistoryPath()}`);
   });
 
-  process.on("SIGINT", () => {
-    log("Received SIGINT, shutting down");
-    process.exit(0);
+  watcher.on("change", (event: FileChangeEvent) => {
+    log(`File ${event.eventType}: ${event.filePath}`);
   });
 
-  while (true) {
-    log("Daemon running...");
-    await new Promise((resolve) => setTimeout(resolve, 30000));
-  }
+  watcher.on("error", (error: Error) => {
+    log(`Watcher error: ${error.message}`);
+  });
+
+  watcher.start();
+
+  const shutdown = () => {
+    log("Shutting down");
+    watcher.stop();
+    process.exit(0);
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+
+  await new Promise(() => {});
 }
 
 main().catch((err) => {
