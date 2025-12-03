@@ -49,20 +49,46 @@ function writeConfig(config: Config): void {
   fs.chmodSync(CONFIG_FILE, 0o600);
 }
 
-function isDaemonRunning(): boolean {
+function getDaemonPid(): number | null {
   if (!fs.existsSync(PID_FILE)) {
-    return false;
+    return null;
   }
   const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
   if (isNaN(pid)) {
-    return false;
+    return null;
   }
   try {
     process.kill(pid, 0);
-    return true;
+    return pid;
   } catch {
     fs.unlinkSync(PID_FILE);
-    return false;
+    return null;
+  }
+}
+
+function isDaemonRunning(): boolean {
+  return getDaemonPid() !== null;
+}
+
+function showStatus(): void {
+  const pid = getDaemonPid();
+  const config = readConfig();
+
+  if (pid) {
+    console.log(`Daemon: running (PID: ${pid})`);
+  } else {
+    console.log("Daemon: stopped");
+  }
+
+  console.log(`Config: ${CONFIG_FILE}`);
+
+  if (config) {
+    const authStatus = config.auth_token ? "configured" : "not configured";
+    console.log(`Auth: ${authStatus}`);
+    console.log(`Web URL: ${config.web_url || WEB_URL}`);
+  } else {
+    console.log("Auth: not configured");
+    console.log(`Web URL: ${WEB_URL}`);
   }
 }
 
@@ -208,7 +234,7 @@ program
   .command("status")
   .description("Show daemon status and sync information")
   .action(() => {
-    console.log("Status command - not yet implemented");
+    showStatus();
   });
 
 program
