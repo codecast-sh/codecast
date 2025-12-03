@@ -66,6 +66,45 @@ function isDaemonRunning(): boolean {
   }
 }
 
+function stopDaemon(): void {
+  if (!fs.existsSync(PID_FILE)) {
+    console.log("Daemon is not running (no PID file)");
+    return;
+  }
+
+  const pidStr = fs.readFileSync(PID_FILE, "utf-8").trim();
+  const pid = parseInt(pidStr, 10);
+
+  if (isNaN(pid)) {
+    console.log("Invalid PID file, removing it");
+    fs.unlinkSync(PID_FILE);
+    return;
+  }
+
+  try {
+    process.kill(pid, 0);
+  } catch {
+    console.log("Daemon is not running (process not found)");
+    fs.unlinkSync(PID_FILE);
+    return;
+  }
+
+  try {
+    process.kill(pid, "SIGTERM");
+    fs.unlinkSync(PID_FILE);
+    console.log("Daemon stopped");
+  } catch (err) {
+    const error = err as NodeJS.ErrnoException;
+    if (error.code === "ESRCH") {
+      console.log("Daemon already stopped");
+      fs.unlinkSync(PID_FILE);
+    } else {
+      console.error(`Failed to stop daemon: ${error.message}`);
+      process.exit(1);
+    }
+  }
+}
+
 function startDaemon(): void {
   ensureConfigDir();
 
@@ -162,7 +201,7 @@ program
   .command("stop")
   .description("Stop the background daemon")
   .action(() => {
-    console.log("Stop command - not yet implemented");
+    stopDaemon();
   });
 
 program
