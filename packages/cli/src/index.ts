@@ -4,11 +4,18 @@ import open from "open";
 import * as readline from "readline";
 import * as fs from "fs";
 import * as path from "path";
+import { spawn } from "child_process";
+import { fileURLToPath } from "url";
 
 const program = new Command();
 
 const CONFIG_DIR = process.env.HOME + "/.code-chat-sync";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
+const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const WEB_URL = process.env.CODE_CHAT_SYNC_WEB_URL || "http://localhost:3000";
 
 interface Config {
@@ -20,7 +27,7 @@ interface Config {
 
 function ensureConfigDir(): void {
   if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { mode: 0o700 });
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
 }
 
@@ -40,6 +47,49 @@ function writeConfig(config: Config): void {
   }
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
   fs.chmodSync(CONFIG_FILE, 0o600);
+}
+
+function isDaemonRunning(): boolean {
+  if (!fs.existsSync(PID_FILE)) {
+    return false;
+  }
+  const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
+  if (isNaN(pid)) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    fs.unlinkSync(PID_FILE);
+    return false;
+  }
+}
+
+function startDaemon(): void {
+  ensureConfigDir();
+
+  if (isDaemonRunning()) {
+    const pid = fs.readFileSync(PID_FILE, "utf-8").trim();
+    console.log(`Daemon is already running (PID: ${pid})`);
+    return;
+  }
+
+  const daemonPath = path.join(__dirname, "daemon.js");
+  const child = spawn(process.execPath, [daemonPath], {
+    detached: true,
+    stdio: "ignore",
+  });
+
+  child.unref();
+
+  if (child.pid) {
+    fs.writeFileSync(PID_FILE, String(child.pid), { mode: 0o600 });
+    console.log("Daemon started");
+  } else {
+    console.error("Failed to start daemon");
+    process.exit(1);
+  }
 }
 
 async function promptForEnter(message: string): Promise<void> {
@@ -105,7 +155,7 @@ program
   .command("start")
   .description("Start the background daemon to watch and sync conversations")
   .action(() => {
-    console.log("Start command - not yet implemented");
+    startDaemon();
   });
 
 program
