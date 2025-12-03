@@ -2,20 +2,35 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useAuthActions } from "@convex-dev/auth/react";
+import { useRouter } from "next/navigation";
 
 export default function SignUpPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const { signIn } = useAuthActions();
+  const router = useRouter();
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
-
     if (password !== confirmPassword) {
       setError("Passwords do not match");
       return;
+    }
+    setLoading(true);
+    setError("");
+
+    try {
+      await signIn("password", { email, password, flow: "signUp" });
+      router.push("/dashboard");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign up failed");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -103,9 +118,10 @@ export default function SignUpPage() {
 
           <button
             type="submit"
-            className="w-full mt-6 py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-800"
+            disabled={loading}
+            className="w-full mt-6 py-3 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-800"
           >
-            Sign Up
+            {loading ? "Signing up..." : "Sign Up"}
           </button>
 
           <p className="mt-6 text-center text-sm text-slate-400">
