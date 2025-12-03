@@ -23,3 +23,24 @@ export function parseLines(content: string): ClaudeMessage[] {
     .map(parseLine)
     .filter((m): m is ClaudeMessage => m !== null);
 }
+
+export interface CodexMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export function parseCodexLine(line: string): CodexMessage | null {
+  if (!line.trim()) return null;
+  try {
+    return JSON.parse(line) as CodexMessage;
+  } catch {
+    return null;
+  }
+}
+
+export function parseCodexLines(content: string): CodexMessage[] {
+  return content
+    .split("\n")
+    .map(parseCodexLine)
+    .filter((m): m is CodexMessage => m !== null);
+}
