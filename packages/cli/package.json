@@ -1,5 +1,5 @@
 {
-  "name": "code-chat-sync",
+  "name": "@code-chat-sync/cli",
   "version": "0.1.0",
   "description": "Sync coding agent conversations to a shared Convex database",
   "type": "module",
