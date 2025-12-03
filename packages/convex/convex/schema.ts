@@ -1,3 +1,67 @@
-import { defineSchema } from "convex/server";
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
 
-export default defineSchema({});
+export default defineSchema({
+  users: defineTable({
+    email: v.string(),
+    name: v.optional(v.string()),
+    created_at: v.number(),
+    team_id: v.optional(v.id("teams")),
+    role: v.union(v.literal("member"), v.literal("admin")),
+    daemon_last_seen: v.optional(v.number()),
+  }).index("by_email", ["email"]),
+
+  teams: defineTable({
+    name: v.string(),
+    created_at: v.number(),
+    invite_code: v.string(),
+  }).index("by_invite_code", ["invite_code"]),
+
+  conversations: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    agent_type: v.union(
+      v.literal("claude_code"),
+      v.literal("codex"),
+      v.literal("cursor")
+    ),
+    session_id: v.string(),
+    title: v.optional(v.string()),
+    project_hash: v.optional(v.string()),
+    model: v.optional(v.string()),
+    started_at: v.number(),
+    updated_at: v.number(),
+    message_count: v.number(),
+    is_private: v.boolean(),
+    status: v.union(v.literal("active"), v.literal("completed")),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_agent_type", ["agent_type"]),
+
+  messages: defineTable({
+    conversation_id: v.id("conversations"),
+    role: v.union(
+      v.literal("user"),
+      v.literal("assistant"),
+      v.literal("system"),
+      v.literal("tool")
+    ),
+    content: v.optional(v.string()),
+    tool_name: v.optional(v.string()),
+    tool_input: v.optional(v.string()),
+    tool_output: v.optional(v.string()),
+    thinking: v.optional(v.string()),
+    timestamp: v.number(),
+    tokens_used: v.optional(v.number()),
+  }).index("by_conversation_id", ["conversation_id"]),
+
+  sync_cursors: defineTable({
+    user_id: v.id("users"),
+    file_path_hash: v.string(),
+    last_position: v.number(),
+    last_synced_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_file_path_hash", ["file_path_hash"]),
+});
