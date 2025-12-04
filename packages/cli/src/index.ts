@@ -459,33 +459,33 @@ program
       return;
     }
 
-    if (key === "auth_token") {
-      if (value === undefined) {
-        console.log(`auth_token: ${maskToken(config?.auth_token)}`);
-      } else {
-        const newConfig = config || { auth_token: "" };
-        newConfig.auth_token = value;
-        writeConfig(newConfig);
-        console.log(`auth_token: ${maskToken(value)}`);
-      }
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id"] as const;
+    const sensitiveKeys = ["auth_token"];
+    type SettableKey = (typeof settableKeys)[number];
+
+    if (!settableKeys.includes(key as SettableKey)) {
+      console.error(`Unknown config key: ${key}`);
+      console.log(`Valid keys: ${settableKeys.join(", ")}`);
+      process.exit(1);
+    }
+
+    const configKey = key as SettableKey;
+    const currentValue = config?.[configKey];
+
+    if (value === undefined) {
+      const displayValue = sensitiveKeys.includes(configKey)
+        ? maskToken(currentValue)
+        : currentValue || "(not set)";
+      console.log(`${configKey}: ${displayValue}`);
       return;
     }
 
-    if (key === "web_url") {
-      if (value === undefined) {
-        console.log(`web_url: ${config?.web_url || WEB_URL}`);
-      } else {
-        const newConfig = config || { auth_token: "" };
-        newConfig.web_url = value;
-        writeConfig(newConfig);
-        console.log(`web_url: ${value}`);
-      }
-      return;
-    }
+    const newConfig: Config = config || {};
+    newConfig[configKey] = value;
+    writeConfig(newConfig);
 
-    console.error(`Unknown config key: ${key}`);
-    console.log("Valid keys: auth_token, web_url");
-    process.exit(1);
+    const displayValue = sensitiveKeys.includes(configKey) ? maskToken(value) : value;
+    console.log(`Updated ${configKey}: ${displayValue}`);
   });
 
 program
