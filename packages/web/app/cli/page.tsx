@@ -1,7 +1,7 @@
 "use client";
 
 import { useConvexAuth, useQuery } from "convex/react";
-import { api } from "@code-chat-sync/convex";
+import { api } from "@code-chat-sync/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { useState } from "react";
