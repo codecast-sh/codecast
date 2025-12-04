@@ -6,6 +6,7 @@ import { parseSessionFile, type ParsedMessage } from "./parser.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { SyncService } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
+import { RetryQueue, type RetryOperation } from "./retryQueue.js";
 
 const CONFIG_DIR = process.env.HOME + "/.code-chat-sync";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -19,6 +20,16 @@ interface Config {
 
 interface ConversationCache {
   [sessionId: string]: string;
+}
+
+interface PendingMessages {
+  [sessionId: string]: Array<{
+    role: "human" | "assistant";
+    content: string;
+    timestamp: number;
+    filePath: string;
+    fileSize: number;
+  }>;
 }
 
 function log(message: string): void {
@@ -67,7 +78,9 @@ async function processSessionFile(
   projectPath: string,
   syncService: SyncService,
   userId: string,
-  conversationCache: ConversationCache
+  conversationCache: ConversationCache,
+  retryQueue: RetryQueue,
+  pendingMessages: PendingMessages
 ): Promise<void> {
   const lastPosition = getPosition(filePath);
   const stats = fs.statSync(filePath);
@@ -102,8 +115,54 @@ async function processSessionFile(
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Created conversation ${conversationId} for session ${sessionId}`);
+
+      if (pendingMessages[sessionId]) {
+        for (const msg of pendingMessages[sessionId]) {
+          try {
+            await syncService.addMessage({
+              conversationId,
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.timestamp,
+            });
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log(`Failed to add pending message, queueing for retry: ${errMsg}`);
+            retryQueue.add("addMessage", {
+              conversationId,
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.timestamp,
+            }, errMsg);
+          }
+        }
+        delete pendingMessages[sessionId];
+      }
     } catch (err) {
-      log(`Failed to create conversation: ${err}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log(`Failed to create conversation, queueing for retry: ${errMsg}`);
+
+      if (!pendingMessages[sessionId]) {
+        pendingMessages[sessionId] = [];
+      }
+      for (const msg of messages) {
+        pendingMessages[sessionId].push({
+          role: msg.role === "user" ? "human" : "assistant",
+          content: redactSecrets(msg.content),
+          timestamp: msg.timestamp,
+          filePath,
+          fileSize: stats.size,
+        });
+      }
+
+      retryQueue.add("createConversation", {
+        userId,
+        sessionId,
+        agentType: "claude_code",
+        projectPath,
+      }, errMsg);
+
+      setPosition(filePath, stats.size);
       return;
     }
   }
@@ -117,7 +176,14 @@ async function processSessionFile(
         timestamp: msg.timestamp,
       });
     } catch (err) {
-      log(`Failed to add message: ${err}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log(`Failed to add message, queueing for retry: ${errMsg}`);
+      retryQueue.add("addMessage", {
+        conversationId,
+        role: msg.role === "user" ? "human" : "assistant",
+        content: redactSecrets(msg.content),
+        timestamp: msg.timestamp,
+      }, errMsg);
     }
   }
 
@@ -152,6 +218,67 @@ async function main(): Promise<void> {
 
   const syncService = new SyncService({ convexUrl });
   const conversationCache = readConversationCache();
+  const pendingMessages: PendingMessages = {};
+
+  const retryQueue = new RetryQueue({
+    initialDelayMs: 1000,
+    maxDelayMs: 30000,
+    maxAttempts: 10,
+    onLog: log,
+  });
+
+  retryQueue.setExecutor(async (op: RetryOperation): Promise<boolean> => {
+    if (op.type === "createConversation") {
+      const params = op.params as {
+        userId: string;
+        sessionId: string;
+        agentType: "claude_code" | "codex" | "cursor";
+        projectPath: string;
+      };
+      const conversationId = await syncService.createConversation(params);
+      conversationCache[params.sessionId] = conversationId;
+      saveConversationCache(conversationCache);
+      log(`Retry: Created conversation ${conversationId} for session ${params.sessionId}`);
+
+      if (pendingMessages[params.sessionId]) {
+        for (const msg of pendingMessages[params.sessionId]) {
+          try {
+            await syncService.addMessage({
+              conversationId,
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.timestamp,
+            });
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log(`Failed to add pending message during retry: ${errMsg}`);
+            retryQueue.add("addMessage", {
+              conversationId,
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.timestamp,
+            }, errMsg);
+          }
+        }
+        delete pendingMessages[params.sessionId];
+      }
+      return true;
+    }
+
+    if (op.type === "addMessage") {
+      const params = op.params as {
+        conversationId: string;
+        role: "human" | "assistant";
+        content: string;
+        timestamp: number;
+      };
+      await syncService.addMessage(params);
+      return true;
+    }
+
+    return false;
+  });
+
   const watcher = new SessionWatcher();
 
   watcher.on("ready", () => {
@@ -167,7 +294,9 @@ async function main(): Promise<void> {
         event.projectPath,
         syncService,
         config.user_id!,
-        conversationCache
+        conversationCache,
+        retryQueue,
+        pendingMessages
       );
     } catch (err) {
       log(`Error processing session: ${err}`);
@@ -182,6 +311,11 @@ async function main(): Promise<void> {
 
   const shutdown = () => {
     log("Shutting down");
+    const pendingOps = retryQueue.getQueueSize();
+    if (pendingOps > 0) {
+      log(`Warning: ${pendingOps} operations still pending in retry queue`);
+    }
+    retryQueue.stop();
     watcher.stop();
     process.exit(0);
   };
