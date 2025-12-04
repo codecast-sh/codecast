@@ -33,16 +33,18 @@ cd packages/convex
 bunx convex dev
 ```
 
-This will prompt you to log in to Convex and create a new project. Note your deployment URL.
+This will prompt you to log in to Convex and create a new project. It creates a `.env.local` file in `packages/convex/` with your deployment URL.
 
 ### 3. Configure the web dashboard
 
+Copy the Convex URL to the web package:
+
 ```bash
-cd packages/web
+cd ../web
 cp .env.example .env.local
 ```
 
-Edit `.env.local` and add your Convex URL:
+Edit `packages/web/.env.local` and add the same Convex URL from step 2:
 
 ```
 NEXT_PUBLIC_CONVEX_URL=https://your-project.convex.cloud
@@ -51,7 +53,7 @@ NEXT_PUBLIC_CONVEX_URL=https://your-project.convex.cloud
 ### 4. Build the CLI
 
 ```bash
-cd packages/cli
+cd ../cli
 bun run build
 ```
 
@@ -110,14 +112,14 @@ code-chat-sync private <conversation-id>
 
 ## Web Dashboard
 
-Start the development server:
+The web dashboard runs locally on your machine alongside the CLI daemon. Start it with:
 
 ```bash
 cd packages/web
 bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to:
+Then open [http://localhost:3000](http://localhost:3000) to:
 - Sign in or create an account
 - Browse your conversations and team conversations
 - Search across all synced conversations
