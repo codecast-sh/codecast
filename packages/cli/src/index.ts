@@ -7,6 +7,7 @@ import * as path from "path";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
+import { ConvexHttpClient } from "convex/browser";
 
 const program = new Command();
 
@@ -18,10 +19,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const WEB_URL = process.env.CODE_CHAT_SYNC_WEB_URL || "http://localhost:3000";
+const CONVEX_URL = process.env.CONVEX_URL || "https://marvelous-meerkat-539.convex.cloud";
 
 interface Config {
-  auth_token: string;
+  auth_token?: string;
+  user_id?: string;
+  convex_url?: string;
   web_url?: string;
+  team_id?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -216,6 +221,48 @@ async function promptForEnter(message: string): Promise<void> {
   });
 }
 
+async function promptForInput(message: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(message, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function promptForChoice(message: string, choices: string[]): Promise<number> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  console.log(message);
+  choices.forEach((choice, index) => {
+    console.log(`  ${index + 1}. ${choice}`);
+  });
+
+  return new Promise((resolve) => {
+    const askQuestion = () => {
+      rl.question(`Enter choice (1-${choices.length}): `, (answer) => {
+        const choice = parseInt(answer.trim(), 10);
+        if (choice >= 1 && choice <= choices.length) {
+          rl.close();
+          resolve(choice - 1);
+        } else {
+          console.log(`Please enter a number between 1 and ${choices.length}`);
+          askQuestion();
+        }
+      });
+    };
+    askQuestion();
+  });
+}
+
 async function runSetup(): Promise<void> {
   console.log("\n=== code-chat-sync Setup ===\n");
 
@@ -236,29 +283,112 @@ async function runSetup(): Promise<void> {
   console.log("To use code-chat-sync, you need to authenticate with your account.");
   console.log("This will open a browser window where you can sign in or create an account.\n");
 
-  const loginUrl = `${WEB_URL}/login?cli=true`;
+  const cliUrl = `${WEB_URL}/cli`;
 
   console.log("Opening browser for authentication...");
-  console.log(`\nIf the browser doesn't open, visit this URL manually:\n  ${loginUrl}\n`);
+  console.log(`\nIf the browser doesn't open, visit this URL manually:\n  ${cliUrl}\n`);
 
   try {
-    await open(loginUrl);
+    await open(cliUrl);
   } catch {
     console.log("Could not open browser automatically.");
-    console.log(`Please visit: ${loginUrl}\n`);
+    console.log(`Please visit: ${cliUrl}\n`);
   }
 
-  await promptForEnter("Press Enter after you've completed authentication in the browser...");
+  await promptForEnter("Press Enter after you've signed in...");
 
-  const placeholderToken = `cli_setup_${Date.now()}`;
+  console.log("\nPlease copy your User ID from the CLI Setup page in your browser.");
+  const userId = await promptForInput("User ID: ");
+
+  if (!userId) {
+    console.error("User ID is required. Please run setup again.");
+    process.exit(1);
+  }
+
+  const convexUrl = CONVEX_URL;
+  const client = new ConvexHttpClient(convexUrl);
+
+  const existingConfig = readConfig();
   const config: Config = {
-    auth_token: placeholderToken,
+    ...existingConfig,
+    user_id: userId,
+    convex_url: convexUrl,
     web_url: WEB_URL,
   };
+
+  console.log("\n=== Team Setup ===\n");
+
+  const teamChoice = await promptForChoice(
+    "Would you like to create a new team or join an existing one?",
+    ["Create new team", "Join existing team"]
+  );
+
+  if (teamChoice === 0) {
+    const teamName = await promptForInput("\nTeam name: ");
+    if (!teamName) {
+      console.error("Team name is required.");
+      process.exit(1);
+    }
+
+    console.log("\nCreating team...");
+    try {
+      const teamId = await client.mutation("teams:createTeam" as any, {
+        name: teamName,
+        user_id: userId,
+      });
+      config.team_id = teamId;
+
+      const team = await client.query("teams:getTeam" as any, {
+        team_id: teamId,
+      });
+      const inviteCode = team?.invite_code || "N/A";
+
+      console.log("\nTeam created successfully!");
+      console.log(`Team name: ${teamName}`);
+      console.log(`Team ID: ${teamId}`);
+      console.log(`\nInvite code: ${inviteCode}`);
+      console.log("Share this code with your teammates so they can join your team.");
+    } catch (err) {
+      console.error(`Failed to create team: ${err}`);
+      process.exit(1);
+    }
+  } else {
+    const inviteCode = await promptForInput("\nEnter invite code: ");
+    if (!inviteCode) {
+      console.error("Invite code is required.");
+      process.exit(1);
+    }
+
+    console.log("\nJoining team...");
+    try {
+      const teamId = await client.mutation("teams:joinTeam" as any, {
+        invite_code: inviteCode.toUpperCase(),
+        user_id: userId,
+      });
+      config.team_id = teamId;
+
+      const team = await client.query("teams:getTeam" as any, {
+        team_id: teamId,
+      });
+      const teamName = team?.name || "Unknown";
+
+      console.log("\nSuccessfully joined team!");
+      console.log(`Team name: ${teamName}`);
+      console.log(`Team ID: ${teamId}`);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes("Invalid invite code")) {
+        console.error("\nInvalid invite code. Please check the code and try again.");
+      } else {
+        console.error(`Failed to join team: ${err}`);
+      }
+      process.exit(1);
+    }
+  }
+
   writeConfig(config);
 
-  console.log("\nAuthentication flow completed.");
-  console.log(`Configuration stored in: ${CONFIG_FILE}`);
+  console.log(`\nConfiguration stored in: ${CONFIG_FILE}`);
   console.log("\nNext steps:");
   console.log("  1. Run 'code-chat-sync start' to begin syncing conversations");
   console.log("  2. Visit the web dashboard to view your synced conversations\n");
@@ -316,7 +446,10 @@ program
       console.log("Configuration:");
       console.log(`  Path: ${CONFIG_FILE}`);
       if (config) {
-        console.log(`  auth_token: ${maskToken(config.auth_token)}`);
+        if (config.user_id) console.log(`  user_id: ${config.user_id}`);
+        if (config.convex_url) console.log(`  convex_url: ${config.convex_url}`);
+        if (config.team_id) console.log(`  team_id: ${config.team_id}`);
+        if (config.auth_token) console.log(`  auth_token: ${maskToken(config.auth_token)}`);
         console.log(`  web_url: ${config.web_url || WEB_URL}`);
         if (config.created_at) console.log(`  created_at: ${config.created_at}`);
         if (config.updated_at) console.log(`  updated_at: ${config.updated_at}`);
