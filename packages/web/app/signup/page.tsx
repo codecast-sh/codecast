@@ -28,7 +28,21 @@ export default function SignUpPage() {
       await signIn("password", { email, password, flow: "signUp" });
       router.push("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Sign up failed");
+      if (err instanceof Error) {
+        if (
+          err.message.includes("already") ||
+          err.message.includes("exists") ||
+          err.message.includes("registered")
+        ) {
+          setError("Email already registered");
+        } else if (err.message.includes("password")) {
+          setError("Password must be at least 8 characters");
+        } else {
+          setError("Sign up failed. Please try again.");
+        }
+      } else {
+        setError("An unexpected error occurred.");
+      }
     } finally {
       setLoading(false);
     }
