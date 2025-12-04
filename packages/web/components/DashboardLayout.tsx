@@ -1,6 +1,7 @@
 "use client";
 import { ReactNode } from "react";
-import { LogoutButton } from "./LogoutButton";
+import { UserMenu } from "./UserMenu";
+import { Sidebar } from "./Sidebar";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -14,14 +15,15 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           <h1 className="text-xl font-semibold text-white tracking-tight">
             code-chat-sync
           </h1>
-          <div className="flex items-center gap-4">
-            <LogoutButton />
-          </div>
+          <UserMenu />
         </div>
       </header>
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        {children}
-      </main>
+      <div className="flex">
+        <Sidebar />
+        <main className="flex-1 max-w-5xl mx-auto px-4 py-8">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }
