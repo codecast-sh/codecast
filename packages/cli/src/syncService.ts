@@ -15,6 +15,7 @@ export interface CreateConversationParams {
   teamId?: string;
   sessionId: string;
   agentType: AgentType;
+  projectPath?: string;
 }
 
 export class SyncService {
@@ -34,6 +35,9 @@ export class SyncService {
   }
 
   async createConversation(params: CreateConversationParams): Promise<string> {
+    const projectHash = params.projectPath
+      ? hashPath(params.projectPath)
+      : undefined;
     const result = await this.client.mutation(
       "conversations:createConversation" as any,
       {
@@ -41,6 +45,7 @@ export class SyncService {
         team_id: params.teamId,
         agent_type: params.agentType,
         session_id: params.sessionId,
+        project_hash: projectHash,
       }
     );
     return result as string;

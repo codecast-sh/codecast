@@ -7,6 +7,7 @@ export interface SessionEvent {
   sessionId: string;
   filePath: string;
   eventType: "add" | "change";
+  projectPath: string;
 }
 
 export interface SessionWatcherEvents {
@@ -87,10 +88,16 @@ export class SessionWatcher extends EventEmitter {
 
   private handleFileEvent(filePath: string, eventType: "add" | "change"): void {
     const sessionId = this.extractSessionId(filePath);
-    this.emit("session", { sessionId, filePath, eventType });
+    const projectPath = this.extractProjectPath(filePath);
+    this.emit("session", { sessionId, filePath, eventType, projectPath });
   }
 
   private extractSessionId(filePath: string): string {
     return path.basename(filePath, ".jsonl");
+  }
+
+  private extractProjectPath(filePath: string): string {
+    const parentDir = path.basename(path.dirname(filePath));
+    return parentDir.replace(/-/g, "/");
   }
 }

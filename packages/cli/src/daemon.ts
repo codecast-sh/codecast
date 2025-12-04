@@ -64,6 +64,7 @@ function saveConversationCache(cache: ConversationCache): void {
 async function processSessionFile(
   filePath: string,
   sessionId: string,
+  projectPath: string,
   syncService: SyncService,
   userId: string,
   conversationCache: ConversationCache
@@ -96,6 +97,7 @@ async function processSessionFile(
         userId,
         sessionId,
         agentType: "claude_code",
+        projectPath,
       });
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
@@ -162,6 +164,7 @@ async function main(): Promise<void> {
       await processSessionFile(
         event.filePath,
         event.sessionId,
+        event.projectPath,
         syncService,
         config.user_id!,
         conversationCache

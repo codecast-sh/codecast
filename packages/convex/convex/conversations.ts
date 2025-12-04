@@ -12,6 +12,7 @@ export const createConversation = mutation({
       v.literal("cursor")
     ),
     session_id: v.string(),
+    project_hash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -24,6 +25,7 @@ export const createConversation = mutation({
       team_id: args.team_id,
       agent_type: args.agent_type,
       session_id: args.session_id,
+      project_hash: args.project_hash,
       started_at: now,
       updated_at: now,
       message_count: 0,
