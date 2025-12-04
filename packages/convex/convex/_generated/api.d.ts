@@ -11,6 +11,7 @@
 import type * as auth from "../auth.js";
 import type * as conversations from "../conversations.js";
 import type * as health from "../health.js";
+import type * as http from "../http.js";
 import type * as messages from "../messages.js";
 import type * as syncCursors from "../syncCursors.js";
 import type * as teams from "../teams.js";
@@ -26,6 +27,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   conversations: typeof conversations;
   health: typeof health;
+  http: typeof http;
   messages: typeof messages;
   syncCursors: typeof syncCursors;
   teams: typeof teams;

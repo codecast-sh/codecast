@@ -51,6 +51,15 @@ export const joinTeam = mutation({
   },
 });
 
+export const getTeam = query({
+  args: {
+    team_id: v.id("teams"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.team_id);
+  },
+});
+
 export const getTeamMembers = query({
   args: {
     team_id: v.id("teams"),
