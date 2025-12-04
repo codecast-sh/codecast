@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@code-chat-sync/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useEffect, useRef } from "react";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { Id } from "@code-chat-sync/convex/convex/_generated/dataModel";
 
@@ -90,10 +91,21 @@ function MessageBubble({
 export default function ConversationPage() {
   const params = useParams();
   const id = params.id as string;
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const prevMessageCount = useRef<number>(0);
 
   const conversation = useQuery(api.conversations.getConversation, {
     conversation_id: id as Id<"conversations">,
   });
+
+  const messageCount = conversation?.messages.length ?? 0;
+
+  useEffect(() => {
+    if (messageCount > prevMessageCount.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    prevMessageCount.current = messageCount;
+  }, [messageCount]);
 
   const title =
     conversation?.title || `Session ${conversation?.session_id?.slice(0, 8) || "..."}`;
@@ -125,18 +137,21 @@ export default function ConversationPage() {
               No messages in this conversation
             </div>
           ) : (
-            conversation.messages.map((msg) => (
-              <MessageBubble
-                key={msg._id}
-                role={msg.role}
-                content={msg.content}
-                timestamp={msg.timestamp}
-                toolName={msg.tool_name}
-                toolInput={msg.tool_input}
-                toolOutput={msg.tool_output}
-                thinking={msg.thinking}
-              />
-            ))
+            <>
+              {conversation.messages.map((msg) => (
+                <MessageBubble
+                  key={msg._id}
+                  role={msg.role}
+                  content={msg.content}
+                  timestamp={msg.timestamp}
+                  toolName={msg.tool_name}
+                  toolInput={msg.tool_input}
+                  toolOutput={msg.tool_output}
+                  thinking={msg.thinking}
+                />
+              ))}
+              <div ref={messagesEndRef} />
+            </>
           )}
         </div>
       </main>
