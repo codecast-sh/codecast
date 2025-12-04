@@ -5,7 +5,7 @@ import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { parseSessionFile, type ParsedMessage } from "./parser.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { SyncService } from "./syncService.js";
-import { redactSecrets } from "./redact.js";
+import { redactSecrets, maskToken } from "./redact.js";
 
 const CONFIG_DIR = process.env.HOME + "/.code-chat-sync";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -14,6 +14,7 @@ const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 interface Config {
   user_id?: string;
   convex_url?: string;
+  auth_token?: string;
 }
 
 interface ConversationCache {
@@ -143,6 +144,9 @@ async function main(): Promise<void> {
 
   log(`User ID: ${config.user_id}`);
   log(`Convex URL: ${convexUrl}`);
+  if (config.auth_token) {
+    log(`Auth token: ${maskToken(config.auth_token)}`);
+  }
 
   const syncService = new SyncService({ convexUrl });
   const conversationCache = readConversationCache();

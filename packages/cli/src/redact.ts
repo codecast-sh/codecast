@@ -22,3 +22,9 @@ export function containsSecrets(content: string): boolean {
     return pattern.test(content);
   });
 }
+
+export function maskToken(token: string | undefined): string {
+  if (!token) return "(not set)";
+  if (token.length <= 8) return "*****";
+  return `${token.slice(0, 3)}...${token.slice(-3)}`;
+}
