@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
+import { maskToken } from "./redact.js";
 
 const program = new Command();
 
@@ -309,7 +310,49 @@ program
   .argument("[key]", "Configuration key to get or set")
   .argument("[value]", "Value to set")
   .action((key, value) => {
-    console.log("Config command - not yet implemented");
+    const config = readConfig();
+
+    if (!key) {
+      console.log("Configuration:");
+      console.log(`  Path: ${CONFIG_FILE}`);
+      if (config) {
+        console.log(`  auth_token: ${maskToken(config.auth_token)}`);
+        console.log(`  web_url: ${config.web_url || WEB_URL}`);
+        if (config.created_at) console.log(`  created_at: ${config.created_at}`);
+        if (config.updated_at) console.log(`  updated_at: ${config.updated_at}`);
+      } else {
+        console.log("  (no configuration found - run 'code-chat-sync setup')");
+      }
+      return;
+    }
+
+    if (key === "auth_token") {
+      if (value === undefined) {
+        console.log(`auth_token: ${maskToken(config?.auth_token)}`);
+      } else {
+        const newConfig = config || { auth_token: "" };
+        newConfig.auth_token = value;
+        writeConfig(newConfig);
+        console.log(`auth_token: ${maskToken(value)}`);
+      }
+      return;
+    }
+
+    if (key === "web_url") {
+      if (value === undefined) {
+        console.log(`web_url: ${config?.web_url || WEB_URL}`);
+      } else {
+        const newConfig = config || { auth_token: "" };
+        newConfig.web_url = value;
+        writeConfig(newConfig);
+        console.log(`web_url: ${value}`);
+      }
+      return;
+    }
+
+    console.error(`Unknown config key: ${key}`);
+    console.log("Valid keys: auth_token, web_url");
+    process.exit(1);
   });
 
 program
