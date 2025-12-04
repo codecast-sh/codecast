@@ -1,5 +1,6 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
 export const addMessage = mutation({
   args: {
@@ -13,6 +14,17 @@ export const addMessage = mutation({
     content: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized: must be logged in to add messages");
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Unauthorized: can only add messages to your own conversations");
+    }
     const now = Date.now();
     const messageId = await ctx.db.insert("messages", {
       conversation_id: args.conversation_id,
@@ -20,13 +32,10 @@ export const addMessage = mutation({
       content: args.content,
       timestamp: now,
     });
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (conversation) {
-      await ctx.db.patch(args.conversation_id, {
-        message_count: conversation.message_count + 1,
-        updated_at: now,
-      });
-    }
+    await ctx.db.patch(args.conversation_id, {
+      message_count: conversation.message_count + 1,
+      updated_at: now,
+    });
     return messageId;
   },
 });

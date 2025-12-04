@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
 export const updateSyncCursor = mutation({
   args: {
@@ -8,6 +9,10 @@ export const updateSyncCursor = mutation({
     last_position: v.number(),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId || authUserId.toString() !== args.user_id.toString()) {
+      throw new Error("Unauthorized: can only update your own sync cursors");
+    }
     const existing = await ctx.db
       .query("sync_cursors")
       .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
@@ -39,6 +44,10 @@ export const getSyncCursor = query({
     file_path_hash: v.string(),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId || authUserId.toString() !== args.user_id.toString()) {
+      return null;
+    }
     const cursors = await ctx.db
       .query("sync_cursors")
       .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))

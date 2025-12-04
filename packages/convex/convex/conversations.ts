@@ -14,6 +14,10 @@ export const createConversation = mutation({
     session_id: v.string(),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId || authUserId.toString() !== args.user_id.toString()) {
+      throw new Error("Unauthorized: can only create conversations for yourself");
+    }
     const now = Date.now();
     const conversationId = await ctx.db.insert("conversations", {
       user_id: args.user_id,
@@ -35,6 +39,10 @@ export const getConversations = query({
     user_id: v.id("users"),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId || authUserId.toString() !== args.user_id.toString()) {
+      return [];
+    }
     const user = await ctx.db.get(args.user_id);
     if (!user) {
       return [];
@@ -58,9 +66,27 @@ export const getConversation = query({
     conversation_id: v.id("conversations"),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return null;
+    }
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) {
       return null;
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      if (conversation.is_private) {
+        return null;
+      }
+      const authUser = await ctx.db.get(authUserId);
+      if (
+        !authUser ||
+        !authUser.team_id ||
+        authUser.team_id.toString() !== conversation.team_id?.toString()
+      ) {
+        return null;
+      }
     }
     const messages = await ctx.db
       .query("messages")
