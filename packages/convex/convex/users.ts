@@ -1,5 +1,17 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
+
+export const getCurrentUser = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return null;
+    }
+    return await ctx.db.get(userId);
+  },
+});
 
 export const createUser = mutation({
   args: {
@@ -14,5 +26,12 @@ export const createUser = mutation({
       role: "member",
     });
     return userId;
+  },
+});
+
+export const listUsers = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("users").collect();
   },
 });

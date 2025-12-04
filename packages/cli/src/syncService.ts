@@ -1,14 +1,13 @@
 import { ConvexHttpClient } from "convex/browser";
-import { Id } from "@code-chat-sync/convex";
-import { redactSecrets } from "./redact";
-import { hashPath } from "./hash";
+import { redactSecrets } from "./redact.js";
+import { hashPath } from "./hash.js";
 
 export type AgentType = "claude_code" | "codex" | "cursor";
 
 export interface SyncConfig {
   convexUrl: string;
   authToken?: string;
-  userId?: Id<"users">;
+  userId?: string;
 }
 
 export interface CreateConversationParams {
@@ -20,7 +19,7 @@ export interface CreateConversationParams {
 
 export class SyncService {
   private client: ConvexHttpClient;
-  private userId?: Id<"users">;
+  private userId?: string;
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
@@ -30,7 +29,7 @@ export class SyncService {
     this.userId = config.userId;
   }
 
-  setUserId(userId: Id<"users">): void {
+  setUserId(userId: string): void {
     this.userId = userId;
   }
 

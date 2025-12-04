@@ -46,23 +46,26 @@ export class SessionWatcher extends EventEmitter {
       fs.mkdirSync(this.projectsPath, { recursive: true });
     }
 
-    const pattern = path.join(this.projectsPath, "**", "*.jsonl");
-
-    this.watcher = watch(pattern, {
+    this.watcher = watch(this.projectsPath, {
       persistent: true,
       ignoreInitial: false,
       awaitWriteFinish: {
         stabilityThreshold: 100,
         pollInterval: 50,
       },
+      depth: 2,
     });
 
     this.watcher.on("add", (filePath) => {
-      this.handleFileEvent(filePath, "add");
+      if (filePath.endsWith(".jsonl")) {
+        this.handleFileEvent(filePath, "add");
+      }
     });
 
     this.watcher.on("change", (filePath) => {
-      this.handleFileEvent(filePath, "change");
+      if (filePath.endsWith(".jsonl")) {
+        this.handleFileEvent(filePath, "change");
+      }
     });
 
     this.watcher.on("error", (err: unknown) => {
