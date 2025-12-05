@@ -298,6 +298,97 @@ export const getSharedConversation = query({
   },
 });
 
+export const searchConversations = query({
+  args: {
+    query: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return [];
+    }
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      return [];
+    }
+
+    const searchTerm = args.query.toLowerCase().trim();
+    if (!searchTerm || searchTerm.length < 2) {
+      return [];
+    }
+
+    const limit = args.limit ?? 20;
+
+    const allConversations = await ctx.db
+      .query("conversations")
+      .order("desc")
+      .take(200);
+
+    const accessibleConversations = allConversations.filter((c) => {
+      const isOwn = c.user_id.toString() === userId.toString();
+      if (isOwn) return true;
+      if (c.is_private) return false;
+      if (user.team_id && c.team_id?.toString() === user.team_id.toString()) {
+        return true;
+      }
+      return false;
+    });
+
+    const results: Array<{
+      conversationId: string;
+      title: string;
+      matches: Array<{
+        messageId: string;
+        content: string;
+        role: string;
+        timestamp: number;
+      }>;
+      updatedAt: number;
+      authorName: string;
+      isOwn: boolean;
+    }> = [];
+
+    for (const conv of accessibleConversations) {
+      const messages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) =>
+          q.eq("conversation_id", conv._id)
+        )
+        .collect();
+
+      const matchingMessages = messages.filter(
+        (m) => m.content && m.content.toLowerCase().includes(searchTerm)
+      );
+
+      if (matchingMessages.length > 0) {
+        const conversationUser = await ctx.db.get(conv.user_id);
+        const title = conv.slug
+          ? formatSlugAsTitle(conv.slug)
+          : conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+
+        results.push({
+          conversationId: conv._id,
+          title,
+          matches: matchingMessages.slice(0, 3).map((m) => ({
+            messageId: m._id,
+            content: m.content || "",
+            role: m.role,
+            timestamp: m.timestamp,
+          })),
+          updatedAt: conv.updated_at,
+          authorName: conversationUser?.name || "Unknown",
+          isOwn: conv.user_id.toString() === userId.toString(),
+        });
+
+        if (results.length >= limit) break;
+      }
+    }
+
+    return results.sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+});
+
 export const updateSlug = mutation({
   args: {
     conversation_id: v.id("conversations"),
