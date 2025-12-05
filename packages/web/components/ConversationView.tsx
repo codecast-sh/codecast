@@ -483,6 +483,16 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
   }, []);
 
   const title = conversation?.title || `Session ${conversation?.session_id?.slice(0, 8) || "..."}`;
+  const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
+
+  useEffect(() => {
+    if (conversation) {
+      document.title = `codecast | ${truncatedTitle}`;
+    }
+    return () => {
+      document.title = "codecast";
+    };
+  }, [truncatedTitle, conversation]);
 
   const toolCallMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -547,7 +557,7 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
           >
             &larr; {backLabel}
           </Link>
-          <h1 className="text-sm font-medium text-slate-200 truncate">{title}</h1>
+          <h1 className="text-sm font-medium text-slate-200 truncate">{truncatedTitle}</h1>
           {conversation && (
             <>
               <span className="ml-auto text-amber-500">

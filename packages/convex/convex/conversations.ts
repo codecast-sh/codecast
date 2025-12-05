@@ -130,8 +130,27 @@ export const getConversation = query({
       .collect();
     const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
     const user = await ctx.db.get(conversation.user_id);
+
+    let firstUserMessage = "";
+    for (const msg of sortedMessages) {
+      const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+      if (msg.role === "user" && !hasToolResults) {
+        const text = msg.content?.trim();
+        if (text) {
+          firstUserMessage = text.slice(0, 120);
+          if (text.length > 120) firstUserMessage += "...";
+          break;
+        }
+      }
+    }
+
+    const title = conversation.slug
+      ? formatSlugAsTitle(conversation.slug)
+      : conversation.title || firstUserMessage || `Session ${conversation.session_id.slice(0, 8)}`;
+
     return {
       ...conversation,
+      title,
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
     };
@@ -327,8 +346,26 @@ export const getSharedConversation = query({
     const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
     const user = await ctx.db.get(conversation.user_id);
 
+    let firstUserMessage = "";
+    for (const msg of sortedMessages) {
+      const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+      if (msg.role === "user" && !hasToolResults) {
+        const text = msg.content?.trim();
+        if (text) {
+          firstUserMessage = text.slice(0, 120);
+          if (text.length > 120) firstUserMessage += "...";
+          break;
+        }
+      }
+    }
+
+    const title = conversation.slug
+      ? formatSlugAsTitle(conversation.slug)
+      : conversation.title || firstUserMessage || `Session ${conversation.session_id.slice(0, 8)}`;
+
     return {
       ...conversation,
+      title,
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
     };
