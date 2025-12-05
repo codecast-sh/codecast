@@ -62,19 +62,40 @@ export class SyncService {
   async addMessage(params: {
     conversationId: string;
     messageUuid?: string;
-    role: "human" | "assistant" | "tool_use" | "tool_result";
+    role: "human" | "assistant" | "system";
     content: string;
     timestamp: number;
-    toolName?: string;
-    toolInput?: string;
+    thinking?: string;
+    toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+    toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
+    images?: Array<{ mediaType: string; data: string }>;
+    subtype?: string;
   }): Promise<string> {
     const redactedContent = redactSecrets(params.content);
+    const redactedThinking = params.thinking ? redactSecrets(params.thinking) : undefined;
     const roleMap: Record<string, "user" | "assistant" | "system" | "tool"> = {
       human: "user",
       assistant: "assistant",
-      tool_use: "tool",
-      tool_result: "tool",
+      system: "system",
     };
+
+    const toolCalls = params.toolCalls?.map(tc => ({
+      id: tc.id,
+      name: tc.name,
+      input: redactSecrets(JSON.stringify(tc.input)),
+    }));
+
+    const toolResults = params.toolResults?.map(tr => ({
+      tool_use_id: tr.toolUseId,
+      content: redactSecrets(tr.content),
+      is_error: tr.isError,
+    }));
+
+    const images = params.images?.map(img => ({
+      media_type: img.mediaType,
+      data: img.data,
+    }));
+
     const messageId = await this.client.mutation(
       "messages:addMessage" as any,
       {
@@ -82,6 +103,11 @@ export class SyncService {
         message_uuid: params.messageUuid,
         role: roleMap[params.role],
         content: redactedContent,
+        thinking: redactedThinking,
+        tool_calls: toolCalls,
+        tool_results: toolResults,
+        images,
+        subtype: params.subtype,
         timestamp: params.timestamp,
       }
     );

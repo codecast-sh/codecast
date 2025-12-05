@@ -58,10 +58,22 @@ export default defineSchema({
       v.literal("tool")
     ),
     content: v.optional(v.string()),
-    tool_name: v.optional(v.string()),
-    tool_input: v.optional(v.string()),
-    tool_output: v.optional(v.string()),
     thinking: v.optional(v.string()),
+    tool_calls: v.optional(v.array(v.object({
+      id: v.string(),
+      name: v.string(),
+      input: v.string(),
+    }))),
+    tool_results: v.optional(v.array(v.object({
+      tool_use_id: v.string(),
+      content: v.string(),
+      is_error: v.optional(v.boolean()),
+    }))),
+    images: v.optional(v.array(v.object({
+      media_type: v.string(),
+      data: v.string(),
+    }))),
+    subtype: v.optional(v.string()),
     timestamp: v.number(),
     tokens_used: v.optional(v.number()),
   })

@@ -1,15 +1,19 @@
 type ContentBlock =
   | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
+  | { type: "image"; source: { type: string; media_type: string; data: string } };
 
 export interface ClaudeSessionEntry {
-  type: "user" | "assistant" | "summary" | "file-history-snapshot";
+  type: "user" | "assistant" | "summary" | "file-history-snapshot" | "system";
+  subtype?: "local_command" | "stop_hook_summary" | "compact_boundary";
   uuid?: string;
   parentUuid?: string;
   sessionId?: string;
   slug?: string;
   timestamp?: string;
+  content?: string;
   message?: {
     role: "user" | "assistant";
     content: string | ContentBlock[];
@@ -18,12 +22,33 @@ export interface ClaudeSessionEntry {
   summary?: string;
 }
 
+export interface ToolCall {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface ToolResult {
+  toolUseId: string;
+  content: string;
+  isError?: boolean;
+}
+
+export interface ImageBlock {
+  mediaType: string;
+  data: string;
+}
+
 export interface ParsedMessage {
   uuid?: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   timestamp: number;
-  toolCalls?: Array<{ name: string; input: Record<string, unknown> }>;
+  thinking?: string;
+  toolCalls?: ToolCall[];
+  toolResults?: ToolResult[];
+  images?: ImageBlock[];
+  subtype?: string;
 }
 
 export function parseSessionLine(line: string): ClaudeSessionEntry | null {
@@ -39,15 +64,32 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
   const messages: ParsedMessage[] = [];
 
   for (const entry of entries) {
+    const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
+
+    if (entry.type === "system") {
+      if (entry.content && entry.subtype) {
+        messages.push({
+          uuid: entry.uuid,
+          role: "system",
+          content: entry.content,
+          timestamp,
+          subtype: entry.subtype,
+        });
+      }
+      continue;
+    }
+
     if (entry.type !== "user" && entry.type !== "assistant") continue;
     if (!entry.message) continue;
 
-    const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
     const role = entry.message.role;
     const content = entry.message.content;
 
     let textContent = "";
-    const toolCalls: Array<{ name: string; input: Record<string, unknown> }> = [];
+    let thinking = "";
+    const toolCalls: ToolCall[] = [];
+    const toolResults: ToolResult[] = [];
+    const images: ImageBlock[] = [];
 
     if (typeof content === "string") {
       textContent = content;
@@ -55,19 +97,35 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
       for (const block of content) {
         if (block.type === "text") {
           textContent += block.text;
+        } else if (block.type === "thinking") {
+          thinking += block.thinking;
         } else if (block.type === "tool_use") {
-          toolCalls.push({ name: block.name, input: block.input });
+          toolCalls.push({ id: block.id, name: block.name, input: block.input });
+        } else if (block.type === "tool_result") {
+          toolResults.push({
+            toolUseId: block.tool_use_id,
+            content: block.content,
+            isError: block.is_error,
+          });
+        } else if (block.type === "image") {
+          images.push({
+            mediaType: block.source.media_type,
+            data: block.source.data,
+          });
         }
       }
     }
 
-    if (textContent || toolCalls.length > 0) {
+    if (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0) {
       messages.push({
         uuid: entry.uuid,
         role,
         content: textContent,
         timestamp,
+        thinking: thinking || undefined,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        toolResults: toolResults.length > 0 ? toolResults : undefined,
+        images: images.length > 0 ? images : undefined,
       });
     }
   }

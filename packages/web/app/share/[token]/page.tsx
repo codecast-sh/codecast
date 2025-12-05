@@ -3,11 +3,27 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
-import { ToolCallDisplay } from "../../../components/ToolCallDisplay";
 import "highlight.js/styles/github-dark.css";
+
+type ToolCall = {
+  id: string;
+  name: string;
+  input: string;
+};
+
+type ToolResult = {
+  tool_use_id: string;
+  content: string;
+  is_error?: boolean;
+};
+
+type ImageData = {
+  media_type: string;
+  data: string;
+};
 
 function formatTimestamp(ts: number) {
   return new Date(ts).toLocaleTimeString([], {
@@ -39,47 +55,179 @@ function ClaudeIcon() {
   );
 }
 
+function CollapsibleSection({
+  title,
+  badge,
+  badgeColor = "slate",
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  badge?: string;
+  badgeColor?: "slate" | "amber" | "red" | "emerald";
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultOpen);
+  const colors = {
+    slate: "bg-slate-700 text-slate-300",
+    amber: "bg-amber-800/50 text-amber-300",
+    red: "bg-red-900/50 text-red-300",
+    emerald: "bg-emerald-900/50 text-emerald-300",
+  };
+
+  return (
+    <div className="border border-slate-700/50 rounded-lg overflow-hidden my-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-3 py-2 bg-slate-800/30 flex items-center justify-between text-left hover:bg-slate-800/50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {badge && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${colors[badgeColor]}`}>
+              {badge}
+            </span>
+          )}
+          <span className="text-xs font-medium text-slate-300">{title}</span>
+        </div>
+        <span className="text-slate-500 text-[10px]">
+          {expanded ? "collapse" : "expand"}
+        </span>
+      </button>
+      {expanded && (
+        <div className="p-3 bg-slate-900/30 text-xs">{children}</div>
+      )}
+    </div>
+  );
+}
+
+function ThinkingBlock({ content }: { content: string }) {
+  return (
+    <CollapsibleSection title="Thinking" badge="thinking" badgeColor="amber">
+      <div className="text-slate-400 italic whitespace-pre-wrap font-mono text-[11px] max-h-[300px] overflow-y-auto">
+        {content}
+      </div>
+    </CollapsibleSection>
+  );
+}
+
+function ToolCallBlock({ tool }: { tool: ToolCall }) {
+  let parsedInput = tool.input;
+  try {
+    const obj = JSON.parse(tool.input);
+    parsedInput = JSON.stringify(obj, null, 2);
+  } catch {}
+
+  return (
+    <CollapsibleSection title={tool.name} badge="tool" badgeColor="emerald">
+      <pre className="text-slate-300 font-mono text-[11px] overflow-x-auto whitespace-pre-wrap">
+        {parsedInput}
+      </pre>
+    </CollapsibleSection>
+  );
+}
+
+function ToolResultBlock({ result }: { result: ToolResult }) {
+  const lines = result.content.split("\n");
+  const truncated = lines.length > 50;
+  const [showAll, setShowAll] = useState(false);
+  const displayContent = showAll ? result.content : lines.slice(0, 50).join("\n");
+
+  return (
+    <CollapsibleSection
+      title={result.is_error ? "Error" : "Result"}
+      badge="output"
+      badgeColor={result.is_error ? "red" : "slate"}
+    >
+      <pre
+        className={`font-mono text-[11px] overflow-x-auto whitespace-pre-wrap max-h-[400px] overflow-y-auto ${
+          result.is_error ? "text-red-300" : "text-slate-300"
+        }`}
+      >
+        {displayContent}
+      </pre>
+      {truncated && !showAll && (
+        <button
+          onClick={() => setShowAll(true)}
+          className="mt-2 text-[10px] text-blue-400 hover:text-blue-300"
+        >
+          Show all {lines.length} lines
+        </button>
+      )}
+    </CollapsibleSection>
+  );
+}
+
+function ImageBlock({ image }: { image: ImageData }) {
+  return (
+    <div className="my-2">
+      <img
+        src={`data:${image.media_type};base64,${image.data}`}
+        alt="User provided image"
+        className="max-w-full rounded-lg border border-slate-700"
+      />
+    </div>
+  );
+}
+
+function SystemMessage({ content, subtype }: { content: string; subtype?: string }) {
+  const subtypeLabels: Record<string, string> = {
+    local_command: "Command",
+    stop_hook_summary: "Hook",
+    compact_boundary: "Compact",
+  };
+
+  return (
+    <div className="mb-3 px-3 py-2 bg-slate-800/30 border-l-2 border-amber-600/50 text-xs">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-400">
+          {subtypeLabels[subtype || ""] || "System"}
+        </span>
+      </div>
+      <div className="text-slate-400 font-mono text-[11px] whitespace-pre-wrap">
+        {content.replace(/<[^>]+>/g, "")}
+      </div>
+    </div>
+  );
+}
+
 function MessageBubble({
   role,
   content,
   timestamp,
-  toolName,
-  toolInput,
-  toolOutput,
   thinking,
+  toolCalls,
+  toolResults,
+  images,
+  subtype,
   userName,
 }: {
   role: string;
   content?: string;
   timestamp: number;
-  toolName?: string;
-  toolInput?: string;
-  toolOutput?: string;
   thinking?: string;
+  toolCalls?: ToolCall[];
+  toolResults?: ToolResult[];
+  images?: ImageData[];
+  subtype?: string;
   userName?: string;
 }) {
   const isUser = role === "user";
   const isSystem = role === "system";
-  const isTool = role === "tool";
   const isAssistant = role === "assistant";
 
   const hasContent = content && content.trim().length > 0;
-  const hasTool = toolName || toolInput || toolOutput;
+  const hasThinking = thinking && thinking.trim().length > 0;
+  const hasToolCalls = toolCalls && toolCalls.length > 0;
+  const hasToolResults = toolResults && toolResults.length > 0;
+  const hasImages = images && images.length > 0;
 
-  if (isAssistant && !hasContent && hasTool) {
-    return (
-      <div className="mb-4 flex justify-start gap-3">
-        <ClaudeIcon />
-        <div className="flex-1 max-w-2xl">
-          <ToolCallDisplay
-            name={toolName || "Tool"}
-            input={toolInput}
-            output={toolOutput}
-            timestamp={timestamp}
-          />
-        </div>
-      </div>
-    );
+  if (isSystem) {
+    return <SystemMessage content={content || ""} subtype={subtype} />;
+  }
+
+  if (!hasContent && !hasThinking && !hasToolCalls && !hasToolResults && !hasImages) {
+    return null;
   }
 
   return (
@@ -91,18 +239,14 @@ function MessageBubble({
         className={`rounded-lg px-4 py-3 ${
           isUser
             ? "bg-blue-600 text-white max-w-2xl"
-            : isSystem
-              ? "bg-amber-900/50 border border-amber-700 text-amber-200 max-w-2xl"
-              : isTool
-                ? "bg-slate-700/50 border border-slate-600 text-slate-300 max-w-2xl"
-                : "bg-slate-800 border border-slate-700 text-slate-200 max-w-2xl"
+            : "bg-slate-800 border border-slate-700 text-slate-200 flex-1 max-w-3xl"
         }`}
       >
         <div className="flex items-center gap-2 mb-2">
           <span
             className={`text-xs font-medium ${isUser ? "text-blue-200" : "text-slate-400"}`}
           >
-            {isAssistant ? "Claude" : isUser && userName ? userName : role.charAt(0).toUpperCase() + role.slice(1)}
+            {isAssistant ? "Claude" : isUser && userName ? userName : "User"}
           </span>
           <span
             className={`text-xs ${isUser ? "text-blue-300" : "text-slate-500"}`}
@@ -110,26 +254,20 @@ function MessageBubble({
             {formatTimestamp(timestamp)}
           </span>
         </div>
-        {thinking && (
-          <div className="text-xs text-slate-400 italic mb-2 border-l-2 border-slate-600 pl-2">
-            {thinking}
-          </div>
-        )}
+
+        {hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
+
+        {hasThinking && <ThinkingBlock content={thinking!} />}
+
+        {hasToolCalls && toolCalls?.map((tc) => <ToolCallBlock key={tc.id} tool={tc} />)}
+
+        {hasToolResults && toolResults?.map((tr) => <ToolResultBlock key={tr.tool_use_id} result={tr} />)}
+
         {hasContent && (
           <div className="prose prose-invert prose-sm max-w-none">
             <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
               {content}
             </ReactMarkdown>
-          </div>
-        )}
-        {hasTool && hasContent && (
-          <div className="mt-3">
-            <ToolCallDisplay
-              name={toolName || "Tool"}
-              input={toolInput}
-              output={toolOutput}
-              timestamp={timestamp}
-            />
           </div>
         )}
       </div>
@@ -168,7 +306,7 @@ export default function SharedConversationPage() {
           <h1 className="text-lg font-medium text-white truncate">{title}</h1>
           {conversation && (
             <span className="text-xs text-slate-500 ml-auto">
-              {conversation.agent_type} • Shared conversation
+              {conversation.agent_type} - Shared conversation
             </span>
           )}
         </div>
@@ -192,10 +330,11 @@ export default function SharedConversationPage() {
                 role={msg.role}
                 content={msg.content}
                 timestamp={msg.timestamp}
-                toolName={msg.tool_name}
-                toolInput={msg.tool_input}
-                toolOutput={msg.tool_output}
                 thinking={msg.thinking}
+                toolCalls={msg.tool_calls}
+                toolResults={msg.tool_results}
+                images={msg.images}
+                subtype={msg.subtype}
                 userName={conversation.user?.name || "User"}
               />
             ))}

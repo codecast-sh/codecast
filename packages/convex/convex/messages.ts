@@ -13,6 +13,22 @@ export const addMessage = mutation({
       v.literal("tool")
     ),
     content: v.optional(v.string()),
+    thinking: v.optional(v.string()),
+    tool_calls: v.optional(v.array(v.object({
+      id: v.string(),
+      name: v.string(),
+      input: v.string(),
+    }))),
+    tool_results: v.optional(v.array(v.object({
+      tool_use_id: v.string(),
+      content: v.string(),
+      is_error: v.optional(v.boolean()),
+    }))),
+    images: v.optional(v.array(v.object({
+      media_type: v.string(),
+      data: v.string(),
+    }))),
+    subtype: v.optional(v.string()),
     timestamp: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -52,6 +68,11 @@ export const addMessage = mutation({
       message_uuid: args.message_uuid,
       role: args.role,
       content: args.content,
+      thinking: args.thinking,
+      tool_calls: args.tool_calls,
+      tool_results: args.tool_results,
+      images: args.images,
+      subtype: args.subtype,
       timestamp: msgTimestamp,
     });
     await ctx.db.patch(args.conversation_id, {

@@ -25,11 +25,16 @@ interface ConversationCache {
 interface PendingMessages {
   [sessionId: string]: Array<{
     uuid?: string;
-    role: "human" | "assistant";
+    role: "human" | "assistant" | "system";
     content: string;
     timestamp: number;
     filePath: string;
     fileSize: number;
+    thinking?: string;
+    toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+    toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
+    images?: Array<{ mediaType: string; data: string }>;
+    subtype?: string;
   }>;
 }
 
@@ -135,6 +140,11 @@ async function processSessionFile(
               role: msg.role,
               content: msg.content,
               timestamp: msg.timestamp,
+              thinking: msg.thinking,
+              toolCalls: msg.toolCalls,
+              toolResults: msg.toolResults,
+              images: msg.images,
+              subtype: msg.subtype,
             });
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -145,6 +155,11 @@ async function processSessionFile(
               role: msg.role,
               content: msg.content,
               timestamp: msg.timestamp,
+              thinking: msg.thinking,
+              toolCalls: msg.toolCalls,
+              toolResults: msg.toolResults,
+              images: msg.images,
+              subtype: msg.subtype,
             }, errMsg);
           }
         }
@@ -160,11 +175,16 @@ async function processSessionFile(
       for (const msg of messages) {
         pendingMessages[sessionId].push({
           uuid: msg.uuid,
-          role: msg.role === "user" ? "human" : "assistant",
+          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
           content: redactSecrets(msg.content),
           timestamp: msg.timestamp,
           filePath,
           fileSize: stats.size,
+          thinking: msg.thinking,
+          toolCalls: msg.toolCalls,
+          toolResults: msg.toolResults,
+          images: msg.images,
+          subtype: msg.subtype,
         });
       }
 
@@ -191,9 +211,14 @@ async function processSessionFile(
       await syncService.addMessage({
         conversationId,
         messageUuid: msg.uuid,
-        role: msg.role === "user" ? "human" : "assistant",
+        role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
         content: redactSecrets(msg.content),
         timestamp: msg.timestamp,
+        thinking: msg.thinking,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        images: msg.images,
+        subtype: msg.subtype,
       });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -222,9 +247,14 @@ async function processSessionFile(
           await syncService.addMessage({
             conversationId,
             messageUuid: msg.uuid,
-            role: msg.role === "user" ? "human" : "assistant",
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
             content: redactSecrets(msg.content),
             timestamp: msg.timestamp,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
           });
         } catch (retryErr) {
           const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
@@ -235,9 +265,14 @@ async function processSessionFile(
         retryQueue.add("addMessage", {
           conversationId,
           messageUuid: msg.uuid,
-          role: msg.role === "user" ? "human" : "assistant",
+          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
           content: redactSecrets(msg.content),
           timestamp: msg.timestamp,
+          thinking: msg.thinking,
+          toolCalls: msg.toolCalls,
+          toolResults: msg.toolResults,
+          images: msg.images,
+          subtype: msg.subtype,
         }, errMsg);
       }
     }
@@ -310,6 +345,11 @@ async function main(): Promise<void> {
               role: msg.role,
               content: msg.content,
               timestamp: msg.timestamp,
+              thinking: msg.thinking,
+              toolCalls: msg.toolCalls,
+              toolResults: msg.toolResults,
+              images: msg.images,
+              subtype: msg.subtype,
             });
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -320,6 +360,11 @@ async function main(): Promise<void> {
               role: msg.role,
               content: msg.content,
               timestamp: msg.timestamp,
+              thinking: msg.thinking,
+              toolCalls: msg.toolCalls,
+              toolResults: msg.toolResults,
+              images: msg.images,
+              subtype: msg.subtype,
             }, errMsg);
           }
         }
@@ -332,9 +377,14 @@ async function main(): Promise<void> {
       const params = op.params as {
         conversationId: string;
         messageUuid?: string;
-        role: "human" | "assistant";
+        role: "human" | "assistant" | "system";
         content: string;
         timestamp: number;
+        thinking?: string;
+        toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+        toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
+        images?: Array<{ mediaType: string; data: string }>;
+        subtype?: string;
       };
       await syncService.addMessage(params);
       return true;
