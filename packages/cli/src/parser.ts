@@ -102,9 +102,16 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         } else if (block.type === "tool_use") {
           toolCalls.push({ id: block.id, name: block.name, input: block.input });
         } else if (block.type === "tool_result") {
+          let toolResultContent = block.content;
+          if (Array.isArray(block.content)) {
+            toolResultContent = (block.content as Array<{ type: string; text?: string }>)
+              .filter((c) => c.type === "text" && c.text)
+              .map((c) => c.text)
+              .join("");
+          }
           toolResults.push({
             toolUseId: block.tool_use_id,
-            content: block.content,
+            content: toolResultContent,
             isError: block.is_error,
           });
         } else if (block.type === "image") {

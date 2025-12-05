@@ -122,7 +122,9 @@ codecast private <conversation-id>
 
 ## Web Dashboard
 
-The web dashboard runs locally on your machine alongside the CLI daemon. Start it with:
+The hosted dashboard is available at [codecast.sh](https://codecast.sh).
+
+For local development, the web dashboard runs alongside the CLI daemon. Start it with:
 
 ```bash
 cd packages/web
@@ -183,7 +185,7 @@ Config is stored at `~/.codecast/config.json`:
 
 ```json
 {
-  "web_url": "http://localhost:3000",
+  "web_url": "https://codecast.sh",
   "convex_url": "https://your-project.convex.cloud",
   "auth_token": "...",
   "team_id": "..."
