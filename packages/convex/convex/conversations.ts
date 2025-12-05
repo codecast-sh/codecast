@@ -139,16 +139,23 @@ export const listConversations = query({
       });
     }
 
-    return conversations
-      .sort((a, b) => b.updated_at - a.updated_at)
-      .map((c) => ({
-        _id: c._id,
-        title: c.title || `Session ${c.session_id.slice(0, 8)}`,
-        agent_type: c.agent_type,
-        started_at: c.started_at,
-        updated_at: c.updated_at,
-        message_count: c.message_count,
-        status: c.status,
-      }));
+    const conversationsWithUsers = await Promise.all(
+      conversations.map(async (c) => {
+        const conversationUser = await ctx.db.get(c.user_id);
+        return {
+          _id: c._id,
+          title: c.title || `Session ${c.session_id.slice(0, 8)}`,
+          agent_type: c.agent_type,
+          started_at: c.started_at,
+          updated_at: c.updated_at,
+          message_count: c.message_count,
+          status: c.status,
+          author_name: conversationUser?.name || "Unknown",
+          is_own: c.user_id.toString() === userId.toString(),
+        };
+      })
+    );
+
+    return conversationsWithUsers.sort((a, b) => b.updated_at - a.updated_at);
   },
 });
