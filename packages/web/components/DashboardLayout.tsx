@@ -6,9 +6,11 @@ import { GlobalSearch } from "./GlobalSearch";
 
 interface DashboardLayoutProps {
   children: ReactNode;
+  filter?: "my" | "team";
+  onFilterChange?: (filter: "my" | "team") => void;
 }
 
-export function DashboardLayout({ children }: DashboardLayoutProps) {
+export function DashboardLayout({ children, filter, onFilterChange }: DashboardLayoutProps) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
       <header className="border-b border-slate-700 bg-slate-800/50 backdrop-blur sticky top-0 z-20">
@@ -21,7 +23,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         </div>
       </header>
       <div className="flex">
-        <Sidebar />
+        <Sidebar filter={filter} onFilterChange={onFilterChange} />
         <main className="flex-1 max-w-5xl mx-auto px-4 py-8">
           {children}
         </main>

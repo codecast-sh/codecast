@@ -154,7 +154,7 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
         </span>
       </div>
 
-      {isEdit && !expanded && parsedInput.old_string && parsedInput.new_string && (
+      {isEdit && !expanded && !!parsedInput.old_string && !!parsedInput.new_string && (
         <div className="mt-2 bg-slate-900/50 rounded p-2 max-h-40 overflow-hidden">
           <DiffView
             oldStr={String(parsedInput.old_string)}
@@ -168,7 +168,7 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
         <div className="mt-2 space-y-2">
           <div className="bg-slate-900/50 rounded p-2">
             <div className="text-[10px] text-slate-500 mb-1">Input</div>
-            {isEdit && parsedInput.old_string && parsedInput.new_string ? (
+            {isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
               <DiffView
                 oldStr={String(parsedInput.old_string)}
                 newStr={String(parsedInput.new_string)}
@@ -244,14 +244,26 @@ function ImageBlock({ image }: { image: ImageData }) {
   );
 }
 
+function UserIcon() {
+  return (
+    <div className="w-6 h-6 rounded bg-blue-600 flex items-center justify-center shrink-0">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>
+    </div>
+  );
+}
+
 function UserPrompt({ content, timestamp }: { content: string; timestamp: number }) {
   return (
-    <div className="mb-6">
+    <div className="mb-6 bg-blue-950/20 border border-blue-900/30 rounded-lg p-4">
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-slate-400 text-xs font-medium">You</span>
+        <UserIcon />
+        <span className="text-blue-300 text-xs font-medium">You</span>
         <span className="text-slate-600 text-xs">{formatTimestamp(timestamp)}</span>
       </div>
-      <div className="text-slate-200 text-sm whitespace-pre-wrap pl-4 border-l-2 border-slate-600">
+      <div className="text-slate-100 text-sm whitespace-pre-wrap pl-8">
         {content}
       </div>
     </div>
@@ -321,26 +333,43 @@ function AssistantBlock({
   );
 }
 
-function ToolResultMessage({ toolResults, timestamp }: { toolResults: ToolResult[]; timestamp: number }) {
+function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[]; toolName?: string }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!toolResults.length) return null;
+
+  const result = toolResults[0];
+  const truncated = truncateLines(result.content, expanded ? 50 : 8);
+
   return (
-    <div className="mb-4 pl-8">
-      {toolResults.map((result) => (
+    <div className="mb-3 pl-8">
+      <div className="border-l-2 border-slate-700 pl-3">
         <div
-          key={result.tool_use_id}
-          className={`rounded p-2 mb-2 ${result.is_error ? "bg-red-950/30 border-l-2 border-red-700" : "bg-slate-900/30 border-l-2 border-slate-700"}`}
+          className="flex items-center gap-2 cursor-pointer group"
+          onClick={() => setExpanded(!expanded)}
         >
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`text-[10px] font-medium ${result.is_error ? "text-red-400" : "text-slate-500"}`}>
-              {result.is_error ? "error" : "output"}
-            </span>
-          </div>
-          <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto ${
+          <span className="font-mono text-xs font-medium text-slate-500">
+            {toolName || "Result"}
+          </span>
+          <span className="text-slate-600 text-[10px] ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+            {expanded ? "collapse" : "expand"}
+          </span>
+        </div>
+        <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-red-950/30" : "bg-slate-900/30"}`}>
+          <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto ${
             result.is_error ? "text-red-300" : "text-slate-400"
           }`}>
-            {truncateLines(result.content, 12).text}
+            {truncated.text}
           </pre>
+          {truncated.truncated && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+              className="text-[10px] text-slate-500 hover:text-slate-400 mt-1"
+            >
+              {expanded ? "show less" : `+${truncated.totalLines - 8} more lines`}
+            </button>
+          )}
         </div>
-      ))}
+      </div>
     </div>
   );
 }
@@ -430,6 +459,20 @@ export default function ConversationPage() {
 
   const title = conversation?.title || `Session ${conversation?.session_id?.slice(0, 8) || "..."}`;
 
+  const toolCallMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (conversation?.messages) {
+      for (const msg of conversation.messages) {
+        if (msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            map[tc.id] = tc.name;
+          }
+        }
+      }
+    }
+    return map;
+  }, [conversation?.messages]);
+
   const renderMessage = (msg: {
     _id: string;
     role: string;
@@ -447,7 +490,10 @@ export default function ConversationPage() {
 
     if (msg.role === "user") {
       if (msg.tool_results && msg.tool_results.length > 0) {
-        return <ToolResultMessage key={msg._id} toolResults={msg.tool_results} timestamp={msg.timestamp} />;
+        const toolName = msg.tool_results[0]?.tool_use_id
+          ? toolCallMap[msg.tool_results[0].tool_use_id]
+          : undefined;
+        return <ToolResultMessage key={msg._id} toolResults={msg.tool_results} toolName={toolName} />;
       }
       if (msg.content && msg.content.trim()) {
         return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
@@ -486,8 +532,14 @@ export default function ConversationPage() {
             <h1 className="text-sm font-medium text-slate-200 truncate">{title}</h1>
             {conversation && (
               <>
-                <span className="text-[10px] text-slate-600 ml-auto font-mono">
-                  {conversation.agent_type}
+                <span className="ml-auto text-amber-500">
+                  {conversation.agent_type === "claude_code" ? (
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M4.709 15.955l4.72-2.647.08-.08 2.726-4.721c.398-.65 1.063-1.063 1.808-1.063h.08c.744 0 1.409.413 1.807 1.063l2.727 4.72.079.08 4.72 2.728c.65.398 1.063 1.063 1.063 1.808v.08c0 .744-.413 1.409-1.063 1.807l-4.72 2.727-.08.08-2.727 4.72c-.398.65-1.063 1.063-1.808 1.063h-.08c-.744 0-1.409-.413-1.807-1.063l-2.727-4.72-.079-.08-4.72-2.727c-.65-.398-1.063-1.063-1.063-1.808v-.08c0-.744.413-1.409 1.063-1.807zm7.248-1.41l-1.33 2.302 2.302 1.33c.16.08.319.08.479 0l2.302-1.33-1.33-2.302c-.08-.16-.08-.319 0-.479l1.33-2.302-2.302-1.33c-.16-.08-.319-.08-.479 0l-2.302 1.33 1.33 2.302c.08.16.08.319 0 .479z" />
+                    </svg>
+                  ) : (
+                    <span className="text-[10px] text-slate-600 font-mono">{conversation.agent_type}</span>
+                  )}
                 </span>
                 <div className="flex items-center gap-2">
                   {!shareUrl ? (

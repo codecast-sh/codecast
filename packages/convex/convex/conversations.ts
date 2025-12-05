@@ -215,6 +215,7 @@ export const listConversations = query({
           title,
           preview,
           agent_type: c.agent_type,
+          slug: c.slug || null,
           started_at: c.started_at,
           updated_at: c.updated_at,
           message_count: c.message_count,

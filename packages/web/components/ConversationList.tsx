@@ -11,6 +11,7 @@ type Conversation = {
   title: string;
   preview?: string;
   agent_type: string;
+  slug?: string | null;
   started_at: number;
   updated_at: number;
   message_count: number;
@@ -18,6 +19,14 @@ type Conversation = {
   author_name: string;
   is_own: boolean;
 };
+
+function ClaudeLogo({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M4.709 15.955l4.72-2.647.08-.08 2.726-4.721c.398-.65 1.063-1.063 1.808-1.063h.08c.744 0 1.409.413 1.807 1.063l2.727 4.72.079.08 4.72 2.728c.65.398 1.063 1.063 1.063 1.808v.08c0 .744-.413 1.409-1.063 1.807l-4.72 2.727-.08.08-2.727 4.72c-.398.65-1.063 1.063-1.808 1.063h-.08c-.744 0-1.409-.413-1.807-1.063l-2.727-4.72-.079-.08-4.72-2.727c-.65-.398-1.063-1.063-1.063-1.808v-.08c0-.744.413-1.409 1.063-1.807zm7.248-1.41l-1.33 2.302 2.302 1.33c.16.08.319.08.479 0l2.302-1.33-1.33-2.302c-.08-.16-.08-.319 0-.479l1.33-2.302-2.302-1.33c-.16-.08-.319-.08-.479 0l-2.302 1.33 1.33 2.302c.08.16.08.319 0 .479z" />
+    </svg>
+  );
+}
 
 type TimeGroup = {
   label: string;
@@ -129,11 +138,25 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                 <div className="relative bg-slate-900/60 border border-slate-800/80 rounded-xl p-4 hover:border-amber-500/30 transition-all duration-200 backdrop-blur-sm">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-slate-100 font-medium text-base mb-1 truncate group-hover:text-amber-50 transition-colors">
-                        {conv.title}
-                      </h3>
+                      <div className="flex items-center gap-2 mb-1">
+                        {conv.agent_type === "claude_code" ? (
+                          <span className="text-amber-500">
+                            <ClaudeLogo className="w-4 h-4" />
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-500 font-mono">{conv.agent_type}</span>
+                        )}
+                        <h3 className="text-slate-100 font-medium text-base truncate group-hover:text-amber-50 transition-colors">
+                          {conv.title}
+                        </h3>
+                      </div>
+                      {conv.slug && (
+                        <p className="text-slate-500 text-xs font-mono mb-1.5 truncate">
+                          {conv.slug}
+                        </p>
+                      )}
                       {conv.preview && (
-                        <p className="text-slate-400 text-sm mb-2 line-clamp-2">
+                        <p className="text-slate-400 text-sm mb-2 line-clamp-1">
                           {conv.preview}
                         </p>
                       )}
@@ -155,11 +178,6 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                           </span>
                         )}
                       </div>
-                    </div>
-                    <div className="flex-shrink-0">
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-slate-800/80 text-slate-300 border border-slate-700/50">
-                        {conv.agent_type}
-                      </span>
                     </div>
                   </div>
                 </div>
