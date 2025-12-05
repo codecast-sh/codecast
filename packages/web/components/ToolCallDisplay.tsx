@@ -8,6 +8,42 @@ interface ToolCallDisplayProps {
   timestamp: number;
 }
 
+function CollapsibleContent({ content, label }: { content: string; label: string }) {
+  const [contentExpanded, setContentExpanded] = useState(false);
+  const lines = content.split('\n');
+  const lineCount = lines.length;
+  const COLLAPSE_THRESHOLD = 12;
+  const shouldCollapse = lineCount > COLLAPSE_THRESHOLD;
+
+  const displayContent = shouldCollapse && !contentExpanded
+    ? lines.slice(0, COLLAPSE_THRESHOLD).join('\n')
+    : content;
+
+  return (
+    <div>
+      <div className="text-xs text-slate-400 mb-1 flex items-center justify-between">
+        <span>{label}</span>
+        {shouldCollapse && (
+          <span className="text-slate-500">
+            {lineCount} lines
+          </span>
+        )}
+      </div>
+      <pre className="text-slate-300 font-mono text-xs overflow-x-auto">
+        {displayContent}
+      </pre>
+      {shouldCollapse && (
+        <button
+          onClick={() => setContentExpanded(!contentExpanded)}
+          className="mt-2 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+        >
+          {contentExpanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ToolCallDisplay({ name, input, output, timestamp }: ToolCallDisplayProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -15,7 +51,7 @@ export function ToolCallDisplay({ name, input, output, timestamp }: ToolCallDisp
     <div className="my-2 border border-slate-700 rounded-lg overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-2 bg-slate-800/50 flex items-center justify-between text-left hover:bg-slate-800"
+        className="w-full px-4 py-2 bg-slate-800/50 flex items-center justify-between text-left hover:bg-slate-800 transition-colors"
       >
         <div className="flex items-center gap-2">
           <span className="text-xs bg-slate-700 px-2 py-0.5 rounded text-slate-300">
@@ -28,22 +64,12 @@ export function ToolCallDisplay({ name, input, output, timestamp }: ToolCallDisp
         </span>
       </button>
       {expanded && (
-        <div className="p-4 bg-slate-900/50 text-sm">
+        <div className="p-4 bg-slate-900/50 text-sm space-y-3">
           {input && (
-            <div className="mb-3">
-              <div className="text-xs text-slate-400 mb-1">Input</div>
-              <pre className="text-slate-300 font-mono text-xs overflow-x-auto">
-                {input}
-              </pre>
-            </div>
+            <CollapsibleContent content={input} label="Input" />
           )}
           {output && (
-            <div>
-              <div className="text-xs text-slate-400 mb-1">Output</div>
-              <pre className="text-slate-300 font-mono text-xs overflow-x-auto max-h-48 overflow-y-auto">
-                {output.substring(0, 2000)}{output.length > 2000 ? "..." : ""}
-              </pre>
-            </div>
+            <CollapsibleContent content={output} label="Output" />
           )}
         </div>
       )}
