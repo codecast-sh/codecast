@@ -9,16 +9,42 @@ import { useEffect, useState } from "react";
 type Conversation = {
   _id: string;
   title: string;
-  preview?: string;
+  first_user_message?: string;
+  first_assistant_message?: string;
+  tool_names?: string[];
   agent_type: string;
+  model?: string | null;
   slug?: string | null;
   started_at: number;
   updated_at: number;
+  duration_ms: number;
   message_count: number;
-  status: string;
+  tool_call_count: number;
+  is_active: boolean;
   author_name: string;
   is_own: boolean;
 };
+
+function formatDuration(ms: number): string {
+  if (ms < 60000) return "<1m";
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+function formatModel(model: string | null | undefined): string | null {
+  if (!model) return null;
+  if (model.includes("opus")) return "Opus";
+  if (model.includes("sonnet")) return "Sonnet";
+  if (model.includes("haiku")) return "Haiku";
+  if (model.includes("gpt-4")) return "GPT-4";
+  if (model.includes("gpt-3")) return "GPT-3.5";
+  return model.split("/").pop()?.split("-")[0] || model;
+}
 
 function ClaudeLogo({ className = "w-4 h-4" }: { className?: string }) {
   return (
@@ -138,7 +164,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                 <div className="relative bg-slate-900/60 border border-slate-800/80 rounded-xl p-4 hover:border-amber-500/30 transition-all duration-200 backdrop-blur-sm">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1.5">
                         {conv.agent_type === "claude_code" ? (
                           <span className="text-amber-500">
                             <ClaudeLogo className="w-4 h-4" />
@@ -149,18 +175,47 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                         <h3 className="text-slate-100 font-medium text-base truncate group-hover:text-amber-50 transition-colors">
                           {conv.title}
                         </h3>
+                        {conv.is_active && (
+                          <span className="flex-shrink-0 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Active" />
+                        )}
                       </div>
-                      {conv.slug && (
-                        <p className="text-slate-500 text-xs font-mono mb-1.5 truncate">
-                          {conv.slug}
-                        </p>
+
+                      {(conv.first_user_message || conv.first_assistant_message) && (
+                        <div className="mb-2.5 space-y-1 text-sm">
+                          {conv.first_user_message && (
+                            <p className="text-slate-300 line-clamp-2 flex items-start gap-2">
+                              <span className="text-blue-400 flex-shrink-0 text-xs mt-0.5">you:</span>
+                              <span>{conv.first_user_message}</span>
+                            </p>
+                          )}
+                          {conv.first_assistant_message && (
+                            <p className="text-slate-400 line-clamp-2 flex items-start gap-2">
+                              <span className="text-amber-400/70 flex-shrink-0 text-xs mt-0.5">ai:</span>
+                              <span>{conv.first_assistant_message}</span>
+                            </p>
+                          )}
+                        </div>
                       )}
-                      {conv.preview && (
-                        <p className="text-slate-400 text-sm mb-2 line-clamp-1">
-                          {conv.preview}
-                        </p>
+
+                      {conv.tool_names && conv.tool_names.length > 0 && (
+                        <div className="flex items-center gap-1.5 mb-2.5 flex-wrap">
+                          {conv.tool_names.slice(0, 4).map((name) => (
+                            <span
+                              key={name}
+                              className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-800/80 text-slate-400 text-[10px] font-mono border border-slate-700/40"
+                            >
+                              {name}
+                            </span>
+                          ))}
+                          {conv.tool_names.length > 4 && (
+                            <span className="text-[10px] text-slate-500">
+                              +{conv.tool_names.length - 4}
+                            </span>
+                          )}
+                        </div>
                       )}
-                      <div className="flex items-center gap-3 text-xs">
+
+                      <div className="flex items-center gap-2 text-xs flex-wrap">
                         {!conv.is_own && (
                           <span className="text-slate-400 font-medium">
                             {conv.author_name}
@@ -169,12 +224,33 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                         <span className="text-slate-500">
                           {getRelativeTime(conv.updated_at)}
                         </span>
-                        {conv.message_count > 0 && (
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-800/60 text-slate-400 border border-slate-700/50">
+                        {conv.duration_ms > 60000 && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-500 border border-slate-700/40">
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            {formatDuration(conv.duration_ms)}
+                          </span>
+                        )}
+                        {conv.message_count > 0 && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-500 border border-slate-700/40">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                             </svg>
                             {conv.message_count}
+                          </span>
+                        )}
+                        {conv.tool_call_count > 0 && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-500 border border-slate-700/40">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
+                            </svg>
+                            {conv.tool_call_count}
+                          </span>
+                        )}
+                        {formatModel(conv.model) && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/40 text-[10px]">
+                            {formatModel(conv.model)}
                           </span>
                         )}
                       </div>

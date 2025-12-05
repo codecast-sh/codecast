@@ -188,38 +188,64 @@ export const listConversations = query({
             q.eq("conversation_id", c._id)
           )
           .order("asc")
-          .take(5);
+          .take(20);
 
-        let firstMessage = "";
-        let preview = "";
+        let firstUserMessage = "";
+        let firstAssistantMessage = "";
+        let toolCallCount = 0;
+        const toolNames: string[] = [];
+
         for (const msg of messages) {
-          if (msg.content && msg.content.trim()) {
-            if (!firstMessage) {
-              firstMessage = msg.content.slice(0, 60);
-              if (msg.content.length > 60) firstMessage += "...";
+          if (msg.tool_calls) {
+            toolCallCount += msg.tool_calls.length;
+            for (const tc of msg.tool_calls) {
+              if (toolNames.length < 5 && !toolNames.includes(tc.name)) {
+                toolNames.push(tc.name);
+              }
             }
-            if (!preview) {
-              preview = msg.content.slice(0, 100);
-              if (msg.content.length > 100) preview += "...";
+          }
+          // Real user messages have content but no tool_results
+          const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+          if (msg.role === "user" && !firstUserMessage && !hasToolResults) {
+            const text = msg.content?.trim();
+            if (text) {
+              firstUserMessage = text.slice(0, 120);
+              if (text.length > 120) firstUserMessage += "...";
             }
-            if (firstMessage && preview) break;
+          }
+          // Assistant messages - prefer text content, fall back to thinking
+          if (msg.role === "assistant" && !firstAssistantMessage) {
+            let text = msg.content?.trim();
+            if (!text && msg.thinking) {
+              text = msg.thinking.trim();
+            }
+            if (text) {
+              firstAssistantMessage = text.slice(0, 120);
+              if (text.length > 120) firstAssistantMessage += "...";
+            }
           }
         }
 
-        const title = c.slug
-          ? formatSlugAsTitle(c.slug)
-          : c.title || firstMessage || `Session ${c.session_id.slice(0, 8)}`;
+        const title = c.title || firstUserMessage || `Session ${c.session_id.slice(0, 8)}`;
+        const durationMs = c.updated_at - c.started_at;
+        const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+        const isActive = c.status === "active" && c.updated_at > fiveMinutesAgo;
 
         return {
           _id: c._id,
           title,
-          preview,
+          first_user_message: firstUserMessage,
+          first_assistant_message: firstAssistantMessage,
+          tool_names: toolNames,
           agent_type: c.agent_type,
+          model: c.model || null,
           slug: c.slug || null,
           started_at: c.started_at,
           updated_at: c.updated_at,
+          duration_ms: durationMs,
           message_count: c.message_count,
-          status: c.status,
+          tool_call_count: toolCallCount,
+          is_active: isActive,
           author_name: conversationUser?.name || "Unknown",
           is_own: c.user_id.toString() === userId.toString(),
         };

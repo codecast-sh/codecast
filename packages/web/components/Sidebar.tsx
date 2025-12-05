@@ -57,12 +57,12 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
   };
 
   return (
-    <nav className="w-64 border-r border-slate-700 bg-slate-900/50 min-h-screen p-4 hidden md:flex flex-col">
+    <nav className="w-64 border-r border-slate-700 bg-slate-900/50 h-[calc(100vh-52px)] p-4 hidden md:flex flex-col sticky top-[52px]">
       <div className="flex-1">
         <div className="text-xs font-medium text-slate-500 uppercase tracking-wide px-3 mb-2">
           Conversations
         </div>
-        <div className="space-y-1 mb-6">
+        <div className="space-y-1">
           <button
             onClick={() => handleFilterClick("my")}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
@@ -92,7 +92,10 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
         </div>
       </div>
 
-      <div className="border-t border-slate-700 pt-4 space-y-1">
+      <div className="mt-auto pt-4 space-y-1">
+        <div className="text-xs font-medium text-slate-500 uppercase tracking-wide px-3 mb-2">
+          Configuration
+        </div>
         {bottomNavItems.map((item) => (
           <Link
             key={item.href}
