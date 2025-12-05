@@ -2,7 +2,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
-import { parseSessionFile, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, extractSlug, type ParsedMessage } from "./parser.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { SyncService } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
@@ -106,11 +106,15 @@ async function processSessionFile(
 
   if (!conversationId) {
     try {
+      const fullContent = fs.readFileSync(filePath, "utf-8");
+      const slug = extractSlug(fullContent);
+
       conversationId = await syncService.createConversation({
         userId,
         sessionId,
         agentType: "claude_code",
         projectPath,
+        slug,
       });
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
@@ -155,11 +159,15 @@ async function processSessionFile(
         });
       }
 
+      const fullContent = fs.readFileSync(filePath, "utf-8");
+      const slug = extractSlug(fullContent);
+
       retryQueue.add("createConversation", {
         userId,
         sessionId,
         agentType: "claude_code",
         projectPath,
+        slug,
       }, errMsg);
 
       setPosition(filePath, stats.size);
@@ -234,6 +242,7 @@ async function main(): Promise<void> {
         sessionId: string;
         agentType: "claude_code" | "codex" | "cursor";
         projectPath: string;
+        slug?: string;
       };
       const conversationId = await syncService.createConversation(params);
       conversationCache[params.sessionId] = conversationId;

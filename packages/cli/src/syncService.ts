@@ -16,6 +16,7 @@ export interface CreateConversationParams {
   sessionId: string;
   agentType: AgentType;
   projectPath?: string;
+  slug?: string;
 }
 
 export class SyncService {
@@ -46,6 +47,7 @@ export class SyncService {
         agent_type: params.agentType,
         session_id: params.sessionId,
         project_hash: projectHash,
+        slug: params.slug,
       }
     );
     return result as string;

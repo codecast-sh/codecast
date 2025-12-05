@@ -8,6 +8,7 @@ export interface ClaudeSessionEntry {
   uuid?: string;
   parentUuid?: string;
   sessionId?: string;
+  slug?: string;
   timestamp?: string;
   message?: {
     role: "user" | "assistant";
@@ -78,6 +79,17 @@ export function parseSessionFile(content: string): ParsedMessage[] {
     .map(parseSessionLine)
     .filter((e): e is ClaudeSessionEntry => e !== null);
   return extractMessages(entries);
+}
+
+export function extractSlug(content: string): string | undefined {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const entry = parseSessionLine(line);
+    if (entry?.slug) {
+      return entry.slug;
+    }
+  }
+  return undefined;
 }
 
 export interface ClaudeMessage {

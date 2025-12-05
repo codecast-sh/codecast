@@ -6,6 +6,13 @@ function generateShareToken(): string {
   return crypto.randomUUID();
 }
 
+function formatSlugAsTitle(slug: string): string {
+  return slug
+    .split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 export const createConversation = mutation({
   args: {
     user_id: v.id("users"),
@@ -17,6 +24,7 @@ export const createConversation = mutation({
     ),
     session_id: v.string(),
     project_hash: v.optional(v.string()),
+    slug: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -29,6 +37,7 @@ export const createConversation = mutation({
       team_id: args.team_id,
       agent_type: args.agent_type,
       session_id: args.session_id,
+      slug: args.slug,
       project_hash: args.project_hash,
       started_at: now,
       updated_at: now,
@@ -146,9 +155,36 @@ export const listConversations = query({
     const conversationsWithUsers = await Promise.all(
       conversations.map(async (c) => {
         const conversationUser = await ctx.db.get(c.user_id);
+
+        const title = c.slug
+          ? formatSlugAsTitle(c.slug)
+          : c.title || `Session ${c.session_id.slice(0, 8)}`;
+
+        const messages = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_id", (q) =>
+            q.eq("conversation_id", c._id)
+          )
+          .order("asc")
+          .take(5);
+
+        let preview = "";
+        for (const msg of messages) {
+          if (msg.role === "user" && msg.content) {
+            preview = msg.content.slice(0, 100);
+            if (msg.content.length > 100) preview += "...";
+            break;
+          }
+        }
+        if (!preview && messages.length > 0 && messages[0].content) {
+          preview = messages[0].content.slice(0, 100);
+          if (messages[0].content.length > 100) preview += "...";
+        }
+
         return {
           _id: c._id,
-          title: c.title || `Session ${c.session_id.slice(0, 8)}`,
+          title,
+          preview,
           agent_type: c.agent_type,
           started_at: c.started_at,
           updated_at: c.updated_at,

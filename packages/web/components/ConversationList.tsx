@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 type Conversation = {
   _id: string;
   title: string;
+  preview?: string;
   agent_type: string;
   started_at: number;
   updated_at: number;
@@ -111,11 +112,10 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
     <div className="space-y-8">
       {groups.map((group, groupIdx) => (
         <div key={group.label}>
-          <div className="sticky top-0 z-10 bg-gradient-to-b from-slate-950 to-slate-950/80 backdrop-blur-sm pb-3 mb-4">
-            <h2 className="text-xs font-bold tracking-widest uppercase text-amber-400/80 px-1">
+          <div className="pb-3 mb-4">
+            <h2 className="text-xs font-medium tracking-wide uppercase text-slate-500 px-1">
               {group.label}
             </h2>
-            <div className="h-px bg-gradient-to-r from-amber-400/20 via-amber-400/5 to-transparent mt-2"></div>
           </div>
 
           <div className="space-y-3">
@@ -132,6 +132,11 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                       <h3 className="text-slate-100 font-medium text-base mb-1 truncate group-hover:text-amber-50 transition-colors">
                         {conv.title}
                       </h3>
+                      {conv.preview && (
+                        <p className="text-slate-400 text-sm mb-2 line-clamp-2">
+                          {conv.preview}
+                        </p>
+                      )}
                       <div className="flex items-center gap-3 text-xs">
                         {!conv.is_own && (
                           <span className="text-slate-400 font-medium">
