@@ -9,10 +9,10 @@
       },
     },
     "packages/cli": {
-      "name": "@code-chat-sync/cli",
+      "name": "@codecast/cli",
       "version": "0.1.0",
       "bin": {
-        "code-chat-sync": "./dist/index.js",
+        "codecast": "./dist/index.js",
       },
       "dependencies": {
         "chokidar": "^4.0.1",
@@ -27,7 +27,7 @@
       },
     },
     "packages/convex": {
-      "name": "@code-chat-sync/convex",
+      "name": "@codecast/convex",
       "version": "0.1.0",
       "dependencies": {
         "@auth/core": "^0.37.2",
@@ -39,7 +39,7 @@
       },
     },
     "packages/web": {
-      "name": "@code-chat-sync/web",
+      "name": "@codecast/web",
       "version": "0.1.0",
       "dependencies": {
         "convex": "^1.17.4",
@@ -66,11 +66,11 @@
 
     "@auth/core": ["@auth/core@0.37.4", "", { "dependencies": { "@panva/hkdf": "^1.2.1", "jose": "^5.9.6", "oauth4webapi": "^3.1.1", "preact": "10.24.3", "preact-render-to-string": "6.5.11" }, "peerDependencies": { "@simplewebauthn/browser": "^9.0.1", "@simplewebauthn/server": "^9.0.2", "nodemailer": "^6.8.0" }, "optionalPeers": ["@simplewebauthn/browser", "@simplewebauthn/server", "nodemailer"] }, "sha512-HOXJwXWXQRhbBDHlMU0K/6FT1v+wjtzdKhsNg0ZN7/gne6XPsIrjZ4daMcFnbq0Z/vsAbYBinQhhua0d77v7qw=="],
 
-    "@code-chat-sync/cli": ["@code-chat-sync/cli@workspace:packages/cli"],
+    "@codecast/cli": ["@codecast/cli@workspace:packages/cli"],
 
-    "@code-chat-sync/convex": ["@code-chat-sync/convex@workspace:packages/convex"],
+    "@codecast/convex": ["@codecast/convex@workspace:packages/convex"],
 
-    "@code-chat-sync/web": ["@code-chat-sync/web@workspace:packages/web"],
+    "@codecast/web": ["@codecast/web@workspace:packages/web"],
 
     "@convex-dev/auth": ["@convex-dev/auth@0.0.79", "", { "dependencies": { "arctic": "^1.2.0", "cookie": "^1.0.1", "jose": "^5.2.2", "jwt-decode": "^4.0.0", "lucia": "^3.2.0", "oauth4webapi": "^3.1.2", "oslo": "^1.1.2", "path-to-regexp": "^6.3.0", "server-only": "^0.0.1" }, "peerDependencies": { "@auth/core": "^0.37.0", "convex": "^1.17.0", "react": "^18.2.0 || ^19.0.0-0" }, "optionalPeers": ["react"], "bin": { "auth": "dist/bin.cjs" } }, "sha512-BkZmixBfG3Z1A5ol3SFt3ENkRvdEESqhsa9v6Y+kt7F2mCC4mdsW4ifx+D5qK1d9TpGyxrN1uowr0Smw0rgHKw=="],
 
