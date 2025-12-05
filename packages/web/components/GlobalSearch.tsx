@@ -113,7 +113,7 @@ export function GlobalSearch() {
   };
 
   return (
-    <div className="relative flex-1 max-w-md mx-4">
+    <div className="relative flex-1 max-w-2xl mx-8">
       <div
         className={`relative transition-all duration-200 ${
           isOpen ? "scale-105" : ""
