@@ -39,10 +39,12 @@ export default defineSchema({
     message_count: v.number(),
     is_private: v.boolean(),
     status: v.union(v.literal("active"), v.literal("completed")),
+    share_token: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
-    .index("by_agent_type", ["agent_type"]),
+    .index("by_agent_type", ["agent_type"])
+    .index("by_share_token", ["share_token"]),
 
   messages: defineTable({
     conversation_id: v.id("conversations"),

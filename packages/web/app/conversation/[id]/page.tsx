@@ -1,9 +1,9 @@
 "use client";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@code-chat-sync/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { Id } from "@code-chat-sync/convex/convex/_generated/dataModel";
 import ReactMarkdown from "react-markdown";
@@ -144,10 +144,14 @@ export default function ConversationPage() {
   const id = params.id as string;
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevMessageCount = useRef<number>(0);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [showShareCopied, setShowShareCopied] = useState(false);
 
   const conversation = useQuery(api.conversations.getConversation, {
     conversation_id: id as Id<"conversations">,
   });
+
+  const generateShareLink = useMutation(api.conversations.generateShareLink);
 
   const messageCount = conversation?.messages.length ?? 0;
 
@@ -157,6 +161,34 @@ export default function ConversationPage() {
     }
     prevMessageCount.current = messageCount;
   }, [messageCount]);
+
+  useEffect(() => {
+    if (conversation?.share_token) {
+      const url = `${window.location.origin}/share/${conversation.share_token}`;
+      setShareUrl(url);
+    }
+  }, [conversation?.share_token]);
+
+  const handleShare = async () => {
+    try {
+      const token = await generateShareLink({ conversation_id: id as Id<"conversations"> });
+      const url = `${window.location.origin}/share/${token}`;
+      setShareUrl(url);
+      await navigator.clipboard.writeText(url);
+      setShowShareCopied(true);
+      setTimeout(() => setShowShareCopied(false), 2000);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Failed to generate share link");
+    }
+  };
+
+  const handleCopyShareUrl = async () => {
+    if (shareUrl) {
+      await navigator.clipboard.writeText(shareUrl);
+      setShowShareCopied(true);
+      setTimeout(() => setShowShareCopied(false), 2000);
+    }
+  };
 
   const title =
     conversation?.title || `Session ${conversation?.session_id?.slice(0, 8) || "..."}`;
@@ -174,9 +206,28 @@ export default function ConversationPage() {
             </Link>
             <h1 className="text-lg font-medium text-white truncate">{title}</h1>
             {conversation && (
-              <span className="text-xs text-slate-500 ml-auto">
-                {conversation.agent_type}
-              </span>
+              <>
+                <span className="text-xs text-slate-500 ml-auto">
+                  {conversation.agent_type}
+                </span>
+                <div className="flex items-center gap-2">
+                  {!shareUrl ? (
+                    <button
+                      onClick={handleShare}
+                      className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
+                    >
+                      Share
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleCopyShareUrl}
+                      className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded-md transition-colors relative"
+                    >
+                      {showShareCopied ? "Copied!" : "Copy Link"}
+                    </button>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </header>

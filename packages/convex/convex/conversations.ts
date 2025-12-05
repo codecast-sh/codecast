@@ -2,6 +2,10 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
+function generateShareToken(): string {
+  return crypto.randomUUID();
+}
+
 export const createConversation = mutation({
   args: {
     user_id: v.id("users"),
@@ -157,5 +161,74 @@ export const listConversations = query({
     );
 
     return conversationsWithUsers.sort((a, b) => b.updated_at - a.updated_at);
+  },
+});
+
+export const generateShareLink = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized: must be logged in");
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      throw new Error("Unauthorized: can only share your own conversations");
+    }
+    if (conversation.is_private) {
+      throw new Error("Cannot share private conversations");
+    }
+    if (conversation.share_token) {
+      return conversation.share_token;
+    }
+    const shareToken = generateShareToken();
+    await ctx.db.patch(args.conversation_id, {
+      share_token: shareToken,
+    });
+    return shareToken;
+  },
+});
+
+export const getSharedConversation = query({
+  args: {
+    share_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_share_token", (q) => q.eq("share_token", args.share_token))
+      .collect();
+
+    if (conversations.length === 0) {
+      return null;
+    }
+
+    const conversation = conversations[0];
+
+    if (conversation.is_private) {
+      return null;
+    }
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) =>
+        q.eq("conversation_id", conversation._id)
+      )
+      .collect();
+
+    const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
+    const user = await ctx.db.get(conversation.user_id);
+
+    return {
+      ...conversation,
+      messages: sortedMessages,
+      user: user ? { name: user.name, email: user.email } : null,
+    };
   },
 });
