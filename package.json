@@ -1,6 +1,7 @@
 {
   "name": "code-chat-sync",
   "private": true,
+  "packageManager": "bun@1.1.38",
   "workspaces": [
     "packages/*"
   ],
