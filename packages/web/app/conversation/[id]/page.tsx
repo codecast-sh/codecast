@@ -67,6 +67,11 @@ function MessageBubble({
 
   const hasContent = content && content.trim().length > 0;
   const hasTool = toolName || toolInput || toolOutput;
+  const hasThinking = thinking && thinking.trim().length > 0;
+
+  if (!hasContent && !hasTool && !hasThinking) {
+    return null;
+  }
 
   if (isAssistant && !hasContent && hasTool) {
     return (

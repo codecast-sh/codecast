@@ -156,10 +156,6 @@ export const listConversations = query({
       conversations.map(async (c) => {
         const conversationUser = await ctx.db.get(c.user_id);
 
-        const title = c.slug
-          ? formatSlugAsTitle(c.slug)
-          : c.title || `Session ${c.session_id.slice(0, 8)}`;
-
         const messages = await ctx.db
           .query("messages")
           .withIndex("by_conversation_id", (q) =>
@@ -168,18 +164,25 @@ export const listConversations = query({
           .order("asc")
           .take(5);
 
+        let firstMessage = "";
         let preview = "";
         for (const msg of messages) {
-          if (msg.role === "user" && msg.content) {
-            preview = msg.content.slice(0, 100);
-            if (msg.content.length > 100) preview += "...";
-            break;
+          if (msg.content && msg.content.trim()) {
+            if (!firstMessage) {
+              firstMessage = msg.content.slice(0, 60);
+              if (msg.content.length > 60) firstMessage += "...";
+            }
+            if (!preview) {
+              preview = msg.content.slice(0, 100);
+              if (msg.content.length > 100) preview += "...";
+            }
+            if (firstMessage && preview) break;
           }
         }
-        if (!preview && messages.length > 0 && messages[0].content) {
-          preview = messages[0].content.slice(0, 100);
-          if (messages[0].content.length > 100) preview += "...";
-        }
+
+        const title = c.slug
+          ? formatSlugAsTitle(c.slug)
+          : c.title || firstMessage || `Session ${c.session_id.slice(0, 8)}`;
 
         return {
           _id: c._id,
@@ -266,5 +269,28 @@ export const getSharedConversation = query({
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
     };
+  },
+});
+
+export const updateSlug = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    slug: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized");
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Unauthorized: can only update your own conversations");
+    }
+    await ctx.db.patch(args.conversation_id, {
+      slug: args.slug,
+    });
   },
 });
