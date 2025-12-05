@@ -97,9 +97,11 @@ export const getConversation = query({
       )
       .collect();
     const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
+    const user = await ctx.db.get(conversation.user_id);
     return {
       ...conversation,
       messages: sortedMessages,
+      user: user ? { name: user.name, email: user.email } : null,
     };
   },
 });
