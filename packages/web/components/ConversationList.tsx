@@ -4,7 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 
 type Conversation = {
   _id: string;
@@ -12,6 +12,7 @@ type Conversation = {
   first_user_message?: string;
   first_assistant_message?: string;
   tool_names?: string[];
+  subagent_types?: string[];
   agent_type: string;
   model?: string | null;
   slug?: string | null;
@@ -36,14 +37,21 @@ function formatDuration(ms: number): string {
   return `${days}d`;
 }
 
-function formatModel(model: string | null | undefined): string | null {
-  if (!model) return null;
-  if (model.includes("opus")) return "Opus";
-  if (model.includes("sonnet")) return "Sonnet";
-  if (model.includes("haiku")) return "Haiku";
-  if (model.includes("gpt-4")) return "GPT-4";
-  if (model.includes("gpt-3")) return "GPT-3.5";
-  return model.split("/").pop()?.split("-")[0] || model;
+function getDurationColor(ms: number): string {
+  const minutes = ms / 60000;
+  if (minutes < 5) return "text-slate-500 border-slate-700/40";
+  if (minutes < 20) return "text-slate-400 border-slate-600/50";
+  if (minutes < 60) return "text-amber-500/80 border-amber-600/40";
+  if (minutes < 120) return "text-amber-400 border-amber-500/50";
+  return "text-orange-400 border-orange-500/50";
+}
+
+function getMessageCountColor(count: number): string {
+  if (count < 10) return "text-slate-500 border-slate-700/40";
+  if (count < 30) return "text-slate-400 border-slate-600/50";
+  if (count < 100) return "text-blue-400/80 border-blue-600/40";
+  if (count < 200) return "text-blue-400 border-blue-500/50";
+  return "text-indigo-400 border-indigo-500/50";
 }
 
 function ClaudeLogo({ className = "w-4 h-4" }: { className?: string }) {
@@ -111,11 +119,16 @@ function groupByTime(conversations: Conversation[]): TimeGroup[] {
   return groups.filter((g) => g.conversations.length > 0);
 }
 
+type TimeFilter = "all" | "long" | "active";
+type SubagentFilter = "all" | "main" | "subagent";
+
 export function ConversationList({ filter }: { filter: "my" | "team" }) {
   const conversations = useQuery(api.conversations.listConversations, {
     filter,
   });
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
+  const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("all");
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -123,6 +136,37 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
     }, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  const { filteredConversations, counts } = useMemo(() => {
+    if (!conversations) return { filteredConversations: [], counts: { long: 0, active: 0, subagent: 0, main: 0 } };
+    const convs = conversations as Conversation[];
+
+    const isSubagent = (c: Conversation) =>
+      c.title?.startsWith("Session agent-") ?? false;
+
+    const counts = {
+      long: convs.filter(c => c.duration_ms >= 20 * 60 * 1000).length,
+      active: convs.filter(c => c.is_active).length,
+      subagent: convs.filter(c => isSubagent(c)).length,
+      main: convs.filter(c => !isSubagent(c)).length,
+    };
+
+    let filtered = convs;
+
+    if (timeFilter === "long") {
+      filtered = filtered.filter(c => c.duration_ms >= 20 * 60 * 1000);
+    } else if (timeFilter === "active") {
+      filtered = filtered.filter(c => c.is_active);
+    }
+
+    if (subagentFilter === "main") {
+      filtered = filtered.filter(c => !isSubagent(c));
+    } else if (subagentFilter === "subagent") {
+      filtered = filtered.filter(c => isSubagent(c));
+    }
+
+    return { filteredConversations: filtered, counts };
+  }, [conversations, timeFilter, subagentFilter]);
 
   if (!conversations) {
     return <LoadingSkeleton />;
@@ -135,16 +179,80 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         description="Your synced conversations will appear here. Start a conversation in Claude Code or Cursor to see it listed."
         action={{
           label: "Learn how to sync",
-          href: "/docs/sync",
+          href: "/cli",
         }}
       />
     );
   }
 
-  const groups = groupByTime(conversations as Conversation[]);
+  const groups = groupByTime(filteredConversations);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      {/* Filter bar */}
+      <div className="flex flex-wrap gap-2">
+        {/* Time filters */}
+        <button
+          onClick={() => setTimeFilter("all")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+            timeFilter === "all"
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+          }`}
+        >
+          All
+        </button>
+        <button
+          onClick={() => setTimeFilter("long")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+            timeFilter === "long"
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+          }`}
+        >
+          Long (&gt;20m){counts.long > 0 && ` (${counts.long})`}
+        </button>
+        <button
+          onClick={() => setTimeFilter("active")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+            timeFilter === "active"
+              ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+          }`}
+        >
+          Active{counts.active > 0 && ` (${counts.active})`}
+        </button>
+
+        <div className="w-px bg-slate-700/50 mx-1" />
+
+        {/* Subagent filters */}
+        <button
+          onClick={() => setSubagentFilter(subagentFilter === "main" ? "all" : "main")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+            subagentFilter === "main"
+              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+          }`}
+        >
+          Main{counts.main > 0 && ` (${counts.main})`}
+        </button>
+        <button
+          onClick={() => setSubagentFilter(subagentFilter === "subagent" ? "all" : "subagent")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+            subagentFilter === "subagent"
+              ? "bg-slate-500/20 text-slate-300 border border-slate-500/40"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+          }`}
+        >
+          Subagent{counts.subagent > 0 && ` (${counts.subagent})`}
+        </button>
+      </div>
+
+      {groups.length === 0 && (
+        <div className="text-center py-8 text-slate-500">
+          No conversations match these filters
+        </div>
+      )}
       {groups.map((group, groupIdx) => (
         <div key={group.label}>
           <div className="pb-3 mb-4">
@@ -225,7 +333,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                           {getRelativeTime(conv.updated_at)}
                         </span>
                         {conv.duration_ms > 60000 && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-500 border border-slate-700/40">
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 border ${getDurationColor(conv.duration_ms)}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
@@ -233,7 +341,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                           </span>
                         )}
                         {conv.message_count > 0 && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-500 border border-slate-700/40">
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 border ${getMessageCountColor(conv.message_count)}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                             </svg>
@@ -248,9 +356,17 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                             {conv.tool_call_count}
                           </span>
                         )}
-                        {formatModel(conv.model) && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/30 text-violet-400 border border-violet-700/40 text-[10px]">
-                            {formatModel(conv.model)}
+                        {conv.subagent_types && conv.subagent_types.length > 0 && conv.subagent_types.map((type) => (
+                          <span
+                            key={type}
+                            className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400 border border-emerald-700/40 text-[10px] font-mono"
+                          >
+                            {type}
+                          </span>
+                        ))}
+                        {conv.title?.startsWith("Session agent-") && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400 border border-slate-600/40 text-[10px]">
+                            subagent
                           </span>
                         )}
                       </div>

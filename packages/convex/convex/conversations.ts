@@ -153,7 +153,7 @@ export const listConversations = query({
       return [];
     }
 
-    const limit = args.limit ?? 100;
+    const limit = args.limit ?? 400;
 
     let conversations;
     if (args.filter === "my") {
@@ -194,6 +194,7 @@ export const listConversations = query({
         let firstAssistantMessage = "";
         let toolCallCount = 0;
         const toolNames: string[] = [];
+        const subagentTypes: string[] = [];
 
         for (const msg of messages) {
           if (msg.tool_calls) {
@@ -201,6 +202,14 @@ export const listConversations = query({
             for (const tc of msg.tool_calls) {
               if (toolNames.length < 5 && !toolNames.includes(tc.name)) {
                 toolNames.push(tc.name);
+              }
+              if (tc.name === "Task" && tc.input) {
+                try {
+                  const input = JSON.parse(tc.input);
+                  if (input.subagent_type && !subagentTypes.includes(input.subagent_type)) {
+                    subagentTypes.push(input.subagent_type);
+                  }
+                } catch {}
               }
             }
           }
@@ -237,6 +246,7 @@ export const listConversations = query({
           first_user_message: firstUserMessage,
           first_assistant_message: firstAssistantMessage,
           tool_names: toolNames,
+          subagent_types: subagentTypes,
           agent_type: c.agent_type,
           model: c.model || null,
           slug: c.slug || null,
@@ -350,7 +360,7 @@ export const searchConversations = query({
     const allConversations = await ctx.db
       .query("conversations")
       .order("desc")
-      .take(200);
+      .take(50);
 
     const accessibleConversations = allConversations.filter((c) => {
       const isOwn = c.user_id.toString() === userId.toString();
@@ -382,7 +392,7 @@ export const searchConversations = query({
         .withIndex("by_conversation_id", (q) =>
           q.eq("conversation_id", conv._id)
         )
-        .collect();
+        .take(30);
 
       const matchingMessages = messages.filter(
         (m) => m.content && m.content.toLowerCase().includes(searchTerm)
@@ -397,12 +407,21 @@ export const searchConversations = query({
         results.push({
           conversationId: conv._id,
           title,
-          matches: matchingMessages.slice(0, 3).map((m) => ({
-            messageId: m._id,
-            content: m.content || "",
-            role: m.role,
-            timestamp: m.timestamp,
-          })),
+          matches: matchingMessages.slice(0, 3).map((m) => {
+            const content = m.content || "";
+            const idx = content.toLowerCase().indexOf(searchTerm);
+            const start = Math.max(0, idx - 100);
+            const end = Math.min(content.length, idx + searchTerm.length + 150);
+            let snippet = content.slice(start, end);
+            if (start > 0) snippet = "..." + snippet;
+            if (end < content.length) snippet = snippet + "...";
+            return {
+              messageId: m._id,
+              content: snippet,
+              role: m.role,
+              timestamp: m.timestamp,
+            };
+          }),
           updatedAt: conv.updated_at,
           authorName: conversationUser?.name || "Unknown",
           isOwn: conv.user_id.toString() === userId.toString(),

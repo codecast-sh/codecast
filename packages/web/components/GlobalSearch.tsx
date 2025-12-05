@@ -52,7 +52,7 @@ export function GlobalSearch() {
 
   const searchResults = useQuery(
     api.conversations.searchConversations,
-    query.length >= 2 ? { query, limit: 10 } : "skip"
+    query.length >= 2 ? { query, limit: 15 } : "skip"
   );
 
   const flatResults = searchResults?.flatMap((r) =>
@@ -61,11 +61,25 @@ export function GlobalSearch() {
       title: r.title,
       content: m.content,
       role: m.role,
+      timestamp: m.timestamp,
       authorName: r.authorName,
       isOwn: r.isOwn,
       key: `${r.conversationId}-${i}`,
     }))
   ) || [];
+
+  const formatTimestamp = (ts: number) => {
+    const date = new Date(ts);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const isYesterday = date.toDateString() === yesterday.toDateString();
+    const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (isToday) return timeStr;
+    if (isYesterday) return `Yesterday ${timeStr}`;
+    return date.toLocaleDateString([], { month: "short", day: "numeric" }) + ` ${timeStr}`;
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -173,7 +187,7 @@ export function GlobalSearch() {
                 No results for "{query}"
               </div>
             ) : (
-              <div className="max-h-[400px] overflow-y-auto">
+              <div className="max-h-[600px] overflow-y-auto">
                 {flatResults.map((result, index) => (
                   <button
                     key={result.key}
@@ -201,6 +215,9 @@ export function GlobalSearch() {
                         }`}
                       >
                         {result.role}
+                      </span>
+                      <span className="text-[10px] text-slate-500 ml-auto">
+                        {formatTimestamp(result.timestamp)}
                       </span>
                     </div>
                     <p className="text-sm text-slate-300 leading-relaxed">

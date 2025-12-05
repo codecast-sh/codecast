@@ -42,6 +42,7 @@
       "name": "@codecast/web",
       "version": "0.1.0",
       "dependencies": {
+        "@convex-dev/auth": "^0.0.79",
         "convex": "^1.17.4",
         "next": "^15.0.3",
         "react": "^19.0.0",
