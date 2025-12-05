@@ -11,7 +11,7 @@ import { ConvexHttpClient } from "convex/browser";
 
 const program = new Command();
 
-const CONFIG_DIR = process.env.HOME + "/.code-chat-sync";
+const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 
@@ -264,7 +264,7 @@ async function promptForChoice(message: string, choices: string[]): Promise<numb
 }
 
 async function runSetup(): Promise<void> {
-  console.log("\n=== code-chat-sync Setup ===\n");
+  console.log("\n=== codecast Setup ===\n");
 
   const agents = detectAgents();
   if (agents.length > 0) {
@@ -280,7 +280,7 @@ async function runSetup(): Promise<void> {
     console.log("Supported agents: Claude Code (~/.claude), Codex CLI (~/.codex), Cursor (~/.cursor)\n");
   }
 
-  console.log("To use code-chat-sync, you need to authenticate with your account.");
+  console.log("To use codecast, you need to authenticate with your account.");
   console.log("This will open a browser window where you can sign in or create an account.\n");
 
   const cliUrl = `${WEB_URL}/cli`;
@@ -390,18 +390,18 @@ async function runSetup(): Promise<void> {
 
   console.log(`\nConfiguration stored in: ${CONFIG_FILE}`);
   console.log("\nNext steps:");
-  console.log("  1. Run 'code-chat-sync start' to begin syncing conversations");
+  console.log("  1. Run 'codecast start' to begin syncing conversations");
   console.log("  2. Visit the web dashboard to view your synced conversations\n");
 }
 
 program
-  .name("code-chat-sync")
+  .name("codecast")
   .description("Sync coding agent conversations to a shared Convex database")
   .version("0.1.0");
 
 program
   .command("setup")
-  .description("Configure code-chat-sync with authentication and team settings")
+  .description("Configure codecast with authentication and team settings")
   .action(async () => {
     await runSetup();
   });
@@ -454,7 +454,7 @@ program
         if (config.created_at) console.log(`  created_at: ${config.created_at}`);
         if (config.updated_at) console.log(`  updated_at: ${config.updated_at}`);
       } else {
-        console.log("  (no configuration found - run 'code-chat-sync setup')");
+        console.log("  (no configuration found - run 'codecast setup')");
       }
       return;
     }

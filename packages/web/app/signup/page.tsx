@@ -53,7 +53,7 @@ export default function SignUpPage() {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-semibold text-white tracking-tight">
-            code-chat-sync
+            codecast
           </h1>
           <p className="text-slate-400 mt-2 text-sm">
             Create your account

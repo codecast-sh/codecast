@@ -8,7 +8,7 @@ import { SyncService } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
 
-const CONFIG_DIR = process.env.HOME + "/.code-chat-sync";
+const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 
@@ -206,8 +206,8 @@ async function main(): Promise<void> {
 
   const config = readConfig();
   if (!config?.user_id) {
-    log("No user_id configured. Run 'code-chat-sync setup' first.");
-    console.error("No user_id configured. Run 'code-chat-sync setup' first.");
+    log("No user_id configured. Run 'codecast setup' first.");
+    console.error("No user_id configured. Run 'codecast setup' first.");
     process.exit(1);
   }
 
@@ -224,7 +224,10 @@ async function main(): Promise<void> {
     log(`Auth token: ${maskToken(config.auth_token)}`);
   }
 
-  const syncService = new SyncService({ convexUrl });
+  const syncService = new SyncService({
+    convexUrl,
+    userId: config.user_id,
+  });
   const conversationCache = readConversationCache();
   const pendingMessages: PendingMessages = {};
 

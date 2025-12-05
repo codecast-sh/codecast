@@ -13,7 +13,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       <header className="border-b border-slate-700 bg-slate-800/50 backdrop-blur sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="text-xl font-semibold text-white tracking-tight">
-            code-chat-sync
+            codecast
           </h1>
           <UserMenu />
         </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useConvexAuth, useQuery } from "convex/react";
-import { api } from "@code-chat-sync/convex/convex/_generated/api";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { useState } from "react";
@@ -40,7 +40,7 @@ export default function CliPage() {
             CLI Setup
           </h1>
           <p className="text-slate-400 mb-8">
-            Connect the code-chat-sync daemon to your account.
+            Connect the codecast daemon to your account.
           </p>
 
           {!currentUser ? (
@@ -56,7 +56,7 @@ export default function CliPage() {
                 <p className="text-slate-400 text-sm mb-4">
                   Copy this configuration to{" "}
                   <code className="bg-slate-900 px-2 py-0.5 rounded text-blue-400">
-                    ~/.code-chat-sync/config.json
+                    ~/.codecast/config.json
                   </code>
                 </p>
                 <div className="relative">
@@ -121,7 +121,7 @@ export default function CliPage() {
                 <div className="space-y-3 text-sm">
                   <div className="flex items-start gap-3">
                     <code className="bg-slate-900 px-3 py-1.5 rounded text-green-400 whitespace-nowrap">
-                      code-chat-sync start
+                      codecast start
                     </code>
                     <span className="text-slate-400 pt-1">
                       Start the sync daemon
@@ -129,7 +129,7 @@ export default function CliPage() {
                   </div>
                   <div className="flex items-start gap-3">
                     <code className="bg-slate-900 px-3 py-1.5 rounded text-green-400 whitespace-nowrap">
-                      code-chat-sync stop
+                      codecast stop
                     </code>
                     <span className="text-slate-400 pt-1">
                       Stop the sync daemon
@@ -137,7 +137,7 @@ export default function CliPage() {
                   </div>
                   <div className="flex items-start gap-3">
                     <code className="bg-slate-900 px-3 py-1.5 rounded text-green-400 whitespace-nowrap">
-                      code-chat-sync status
+                      codecast status
                     </code>
                     <span className="text-slate-400 pt-1">
                       Check daemon status

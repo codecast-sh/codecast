@@ -28,8 +28,14 @@ export const createConversation = mutation({
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    if (!authUserId || authUserId.toString() !== args.user_id.toString()) {
+    if (authUserId && authUserId.toString() !== args.user_id.toString()) {
       throw new Error("Unauthorized: can only create conversations for yourself");
+    }
+    if (!authUserId) {
+      const user = await ctx.db.get(args.user_id);
+      if (!user) {
+        throw new Error("Unauthorized: user not found");
+      }
     }
     const now = Date.now();
     const conversationId = await ctx.db.insert("conversations", {

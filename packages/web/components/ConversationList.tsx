@@ -1,6 +1,6 @@
 "use client";
 import { useQuery } from "convex/react";
-import { api } from "@code-chat-sync/convex/convex/_generated/api";
+import { api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";

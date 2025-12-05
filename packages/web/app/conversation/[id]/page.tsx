@@ -1,11 +1,11 @@
 "use client";
 import { useQuery, useMutation } from "convex/react";
-import { api } from "@code-chat-sync/convex/convex/_generated/api";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { AuthGuard } from "../../../components/AuthGuard";
-import { Id } from "@code-chat-sync/convex/convex/_generated/dataModel";
+import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { ToolCallDisplay } from "../../../components/ToolCallDisplay";

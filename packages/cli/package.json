@@ -1,10 +1,10 @@
 {
-  "name": "@code-chat-sync/cli",
+  "name": "@codecast/cli",
   "version": "0.1.0",
   "description": "Sync coding agent conversations to a shared Convex database",
   "type": "module",
   "bin": {
-    "code-chat-sync": "./dist/index.js"
+    "codecast": "./dist/index.js"
   },
   "scripts": {
     "dev": "bun run src/index.ts",

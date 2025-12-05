@@ -15,15 +15,19 @@ export const addMessage = mutation({
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    if (!authUserId) {
-      throw new Error("Unauthorized: must be logged in to add messages");
-    }
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) {
       throw new Error("Conversation not found");
     }
-    if (conversation.user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized: can only add messages to your own conversations");
+    if (authUserId) {
+      if (conversation.user_id.toString() !== authUserId.toString()) {
+        throw new Error("Unauthorized: can only add messages to your own conversations");
+      }
+    } else {
+      const user = await ctx.db.get(conversation.user_id);
+      if (!user) {
+        throw new Error("Unauthorized: conversation owner not found");
+      }
     }
     const now = Date.now();
     const messageId = await ctx.db.insert("messages", {

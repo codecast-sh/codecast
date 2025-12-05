@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 
-const CONFIG_DIR = process.env.HOME + "/.code-chat-sync";
+const CONFIG_DIR = process.env.HOME + "/.codecast";
 const POSITIONS_FILE = path.join(CONFIG_DIR, "positions.json");
 
 interface Positions {

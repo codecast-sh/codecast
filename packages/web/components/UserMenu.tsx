@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useQuery } from "convex/react";
-import { api } from "@code-chat-sync/convex/convex/_generated/api";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 
 export function UserMenu() {

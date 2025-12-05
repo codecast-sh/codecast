@@ -3,7 +3,7 @@ import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "code-chat-sync",
+  title: "codecast",
   description: "Sync coding agent conversations to a shared database",
 };
 

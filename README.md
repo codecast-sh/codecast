@@ -1,4 +1,4 @@
-# code-chat-sync
+# codecast
 
 Sync your coding agent conversations (Claude Code, Codex CLI, Cursor) to a shared team database in real-time.
 
@@ -13,8 +13,8 @@ Sync your coding agent conversations (Claude Code, Codex CLI, Cursor) to a share
 ## Quick Start
 
 ```bash
-git clone https://github.com/ashot/code-chat-sync.git
-cd code-chat-sync
+git clone https://github.com/ashot/codecast.git
+cd codecast
 ./dev.sh
 ```
 
@@ -31,8 +31,8 @@ This installs dependencies and starts both Convex backend and web dashboard. Ope
 ### 1. Clone and install dependencies
 
 ```bash
-git clone https://github.com/ashot/code-chat-sync.git
-cd code-chat-sync
+git clone https://github.com/ashot/codecast.git
+cd codecast
 bun install
 ```
 
@@ -80,7 +80,7 @@ bun link
 Run the setup wizard:
 
 ```bash
-code-chat-sync setup
+codecast setup
 ```
 
 This will:
@@ -91,7 +91,7 @@ This will:
 ### Start the daemon
 
 ```bash
-code-chat-sync start
+codecast start
 ```
 
 The daemon runs in the background, watching your history files and syncing new conversations.
@@ -99,25 +99,25 @@ The daemon runs in the background, watching your history files and syncing new c
 ### Check status
 
 ```bash
-code-chat-sync status
+codecast status
 ```
 
 ### Stop the daemon
 
 ```bash
-code-chat-sync stop
+codecast stop
 ```
 
 ### View logs
 
 ```bash
-code-chat-sync logs
+codecast logs
 ```
 
 ### Mark a conversation as private
 
 ```bash
-code-chat-sync private <conversation-id>
+codecast private <conversation-id>
 ```
 
 ## Web Dashboard
@@ -138,7 +138,7 @@ Then open [http://localhost:3000](http://localhost:3000) to:
 ## Project Structure
 
 ```
-code-chat-sync/
+codecast/
 ├── packages/
 │   ├── cli/          # CLI daemon and commands
 │   ├── convex/       # Convex backend (schema, functions)
@@ -163,7 +163,7 @@ code-chat-sync/
 ./dev.sh
 ```
 
-This starts Convex backend and Next.js web dashboard. The CLI is not run in dev mode (it's a daemon you start separately with `code-chat-sync start`).
+This starts Convex backend and Next.js web dashboard. The CLI is not run in dev mode (it's a daemon you start separately with `codecast start`).
 
 ### Type check
 
@@ -179,7 +179,7 @@ bun run build
 
 ## Configuration
 
-Config is stored at `~/.code-chat-sync/config.json`:
+Config is stored at `~/.codecast/config.json`:
 
 ```json
 {

@@ -1,5 +1,5 @@
 {
-  "name": "code-chat-sync",
+  "name": "codecast",
   "private": true,
   "packageManager": "bun@1.1.38",
   "workspaces": [
