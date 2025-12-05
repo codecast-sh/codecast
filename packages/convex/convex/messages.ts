@@ -5,6 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 export const addMessage = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    message_uuid: v.optional(v.string()),
     role: v.union(
       v.literal("user"),
       v.literal("assistant"),
@@ -12,6 +13,7 @@ export const addMessage = mutation({
       v.literal("tool")
     ),
     content: v.optional(v.string()),
+    timestamp: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -29,16 +31,32 @@ export const addMessage = mutation({
         throw new Error("Unauthorized: conversation owner not found");
       }
     }
-    const now = Date.now();
+
+    const msgTimestamp = args.timestamp || Date.now();
+
+    if (args.message_uuid) {
+      const existing = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_uuid", (q) =>
+          q.eq("conversation_id", args.conversation_id).eq("message_uuid", args.message_uuid)
+        )
+        .first();
+
+      if (existing) {
+        return existing._id;
+      }
+    }
+
     const messageId = await ctx.db.insert("messages", {
       conversation_id: args.conversation_id,
+      message_uuid: args.message_uuid,
       role: args.role,
       content: args.content,
-      timestamp: now,
+      timestamp: msgTimestamp,
     });
     await ctx.db.patch(args.conversation_id, {
       message_count: conversation.message_count + 1,
-      updated_at: now,
+      updated_at: msgTimestamp,
     });
     return messageId;
   },

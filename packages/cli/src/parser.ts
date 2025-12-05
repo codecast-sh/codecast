@@ -19,6 +19,7 @@ export interface ClaudeSessionEntry {
 }
 
 export interface ParsedMessage {
+  uuid?: string;
   role: "user" | "assistant";
   content: string;
   timestamp: number;
@@ -62,6 +63,7 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
 
     if (textContent || toolCalls.length > 0) {
       messages.push({
+        uuid: entry.uuid,
         role,
         content: textContent,
         timestamp,

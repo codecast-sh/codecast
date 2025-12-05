@@ -25,6 +25,7 @@ export const createConversation = mutation({
     session_id: v.string(),
     project_hash: v.optional(v.string()),
     slug: v.optional(v.string()),
+    started_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -37,7 +38,19 @@ export const createConversation = mutation({
         throw new Error("Unauthorized: user not found");
       }
     }
+
+    const existing = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
+      .filter((q) => q.eq(q.field("user_id"), args.user_id))
+      .first();
+
+    if (existing) {
+      return existing._id;
+    }
+
     const now = Date.now();
+    const startedAt = args.started_at ?? now;
     const conversationId = await ctx.db.insert("conversations", {
       user_id: args.user_id,
       team_id: args.team_id,
@@ -45,8 +58,8 @@ export const createConversation = mutation({
       session_id: args.session_id,
       slug: args.slug,
       project_hash: args.project_hash,
-      started_at: now,
-      updated_at: now,
+      started_at: startedAt,
+      updated_at: startedAt,
       message_count: 0,
       is_private: false,
       status: "active",
@@ -128,6 +141,7 @@ export const getConversation = query({
 export const listConversations = query({
   args: {
     filter: v.union(v.literal("my"), v.literal("team")),
+    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -139,14 +153,20 @@ export const listConversations = query({
       return [];
     }
 
+    const limit = args.limit ?? 100;
+
     let conversations;
     if (args.filter === "my") {
       conversations = await ctx.db
         .query("conversations")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
+        .order("desc")
+        .take(limit);
     } else {
-      const allConversations = await ctx.db.query("conversations").collect();
+      const allConversations = await ctx.db
+        .query("conversations")
+        .order("desc")
+        .take(limit * 2);
       conversations = allConversations.filter((c) => {
         const isOwn = c.user_id.toString() === userId.toString();
         if (isOwn) return true;
@@ -155,7 +175,7 @@ export const listConversations = query({
           return true;
         }
         return false;
-      });
+      }).slice(0, limit);
     }
 
     const conversationsWithUsers = await Promise.all(

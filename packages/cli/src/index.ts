@@ -492,8 +492,33 @@ program
   .command("logs")
   .description("View daemon logs")
   .option("-n, --lines <number>", "Number of lines to show", "50")
+  .option("-f, --follow", "Follow log output (like tail -f)")
   .action((options) => {
-    console.log("Logs command - not yet implemented");
+    const logFile = path.join(CONFIG_DIR, "daemon.log");
+
+    if (!fs.existsSync(logFile)) {
+      console.log("No log file found. Daemon may not have been started yet.");
+      console.log(`Expected at: ${logFile}`);
+      return;
+    }
+
+    if (options.follow) {
+      console.log(`Following ${logFile} (Ctrl+C to stop)\n`);
+      const tail = spawn("tail", ["-f", "-n", options.lines, logFile], {
+        stdio: "inherit",
+      });
+
+      process.on("SIGINT", () => {
+        tail.kill();
+        process.exit(0);
+      });
+    } else {
+      const lines = parseInt(options.lines, 10);
+      const content = fs.readFileSync(logFile, "utf-8");
+      const allLines = content.trim().split("\n");
+      const lastLines = allLines.slice(-lines);
+      console.log(lastLines.join("\n"));
+    }
   });
 
 program

@@ -24,6 +24,7 @@ interface ConversationCache {
 
 interface PendingMessages {
   [sessionId: string]: Array<{
+    uuid?: string;
     role: "human" | "assistant";
     content: string;
     timestamp: number;
@@ -31,6 +32,9 @@ interface PendingMessages {
     fileSize: number;
   }>;
 }
+
+const processingLocks: { [filePath: string]: boolean } = {};
+const pendingProcess: { [filePath: string]: boolean } = {};
 
 function log(message: string): void {
   const timestamp = new Date().toISOString();
@@ -108,6 +112,7 @@ async function processSessionFile(
     try {
       const fullContent = fs.readFileSync(filePath, "utf-8");
       const slug = extractSlug(fullContent);
+      const firstMessageTimestamp = messages[0]?.timestamp;
 
       conversationId = await syncService.createConversation({
         userId,
@@ -115,6 +120,7 @@ async function processSessionFile(
         agentType: "claude_code",
         projectPath,
         slug,
+        startedAt: firstMessageTimestamp,
       });
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
@@ -125,6 +131,7 @@ async function processSessionFile(
           try {
             await syncService.addMessage({
               conversationId,
+              messageUuid: msg.uuid,
               role: msg.role,
               content: msg.content,
               timestamp: msg.timestamp,
@@ -134,6 +141,7 @@ async function processSessionFile(
             log(`Failed to add pending message, queueing for retry: ${errMsg}`);
             retryQueue.add("addMessage", {
               conversationId,
+              messageUuid: msg.uuid,
               role: msg.role,
               content: msg.content,
               timestamp: msg.timestamp,
@@ -151,6 +159,7 @@ async function processSessionFile(
       }
       for (const msg of messages) {
         pendingMessages[sessionId].push({
+          uuid: msg.uuid,
           role: msg.role === "user" ? "human" : "assistant",
           content: redactSecrets(msg.content),
           timestamp: msg.timestamp,
@@ -161,6 +170,7 @@ async function processSessionFile(
 
       const fullContent = fs.readFileSync(filePath, "utf-8");
       const slug = extractSlug(fullContent);
+      const firstMsgTimestamp = messages[0]?.timestamp;
 
       retryQueue.add("createConversation", {
         userId,
@@ -168,6 +178,7 @@ async function processSessionFile(
         agentType: "claude_code",
         projectPath,
         slug,
+        startedAt: firstMsgTimestamp,
       }, errMsg);
 
       setPosition(filePath, stats.size);
@@ -179,19 +190,56 @@ async function processSessionFile(
     try {
       await syncService.addMessage({
         conversationId,
+        messageUuid: msg.uuid,
         role: msg.role === "user" ? "human" : "assistant",
         content: redactSecrets(msg.content),
         timestamp: msg.timestamp,
       });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      log(`Failed to add message, queueing for retry: ${errMsg}`);
-      retryQueue.add("addMessage", {
-        conversationId,
-        role: msg.role === "user" ? "human" : "assistant",
-        content: redactSecrets(msg.content),
-        timestamp: msg.timestamp,
-      }, errMsg);
+      if (errMsg.includes("Conversation not found")) {
+        log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+        delete conversationCache[sessionId];
+        saveConversationCache(conversationCache);
+
+        const fullContent = fs.readFileSync(filePath, "utf-8");
+        const slug = extractSlug(fullContent);
+        const firstMessageTimestamp = messages[0]?.timestamp;
+
+        try {
+          conversationId = await syncService.createConversation({
+            userId,
+            sessionId,
+            agentType: "claude_code",
+            projectPath,
+            slug,
+            startedAt: firstMessageTimestamp,
+          });
+          conversationCache[sessionId] = conversationId;
+          saveConversationCache(conversationCache);
+          log(`Recreated conversation ${conversationId} for session ${sessionId}`);
+
+          await syncService.addMessage({
+            conversationId,
+            messageUuid: msg.uuid,
+            role: msg.role === "user" ? "human" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+          });
+        } catch (retryErr) {
+          const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          log(`Failed to recreate conversation and add message: ${retryErrMsg}`);
+        }
+      } else {
+        log(`Failed to add message, queueing for retry: ${errMsg}`);
+        retryQueue.add("addMessage", {
+          conversationId,
+          messageUuid: msg.uuid,
+          role: msg.role === "user" ? "human" : "assistant",
+          content: redactSecrets(msg.content),
+          timestamp: msg.timestamp,
+        }, errMsg);
+      }
     }
   }
 
@@ -246,6 +294,7 @@ async function main(): Promise<void> {
         agentType: "claude_code" | "codex" | "cursor";
         projectPath: string;
         slug?: string;
+        startedAt?: number;
       };
       const conversationId = await syncService.createConversation(params);
       conversationCache[params.sessionId] = conversationId;
@@ -257,6 +306,7 @@ async function main(): Promise<void> {
           try {
             await syncService.addMessage({
               conversationId,
+              messageUuid: msg.uuid,
               role: msg.role,
               content: msg.content,
               timestamp: msg.timestamp,
@@ -266,6 +316,7 @@ async function main(): Promise<void> {
             log(`Failed to add pending message during retry: ${errMsg}`);
             retryQueue.add("addMessage", {
               conversationId,
+              messageUuid: msg.uuid,
               role: msg.role,
               content: msg.content,
               timestamp: msg.timestamp,
@@ -280,6 +331,7 @@ async function main(): Promise<void> {
     if (op.type === "addMessage") {
       const params = op.params as {
         conversationId: string;
+        messageUuid?: string;
         role: "human" | "assistant";
         content: string;
         timestamp: number;
@@ -298,20 +350,34 @@ async function main(): Promise<void> {
   });
 
   watcher.on("session", async (event: SessionEvent) => {
-    log(`Session ${event.eventType}: ${event.sessionId} (${event.filePath})`);
+    const filePath = event.filePath;
+
+    if (processingLocks[filePath]) {
+      pendingProcess[filePath] = true;
+      return;
+    }
+
+    processingLocks[filePath] = true;
+
     try {
-      await processSessionFile(
-        event.filePath,
-        event.sessionId,
-        event.projectPath,
-        syncService,
-        config.user_id!,
-        conversationCache,
-        retryQueue,
-        pendingMessages
-      );
+      do {
+        pendingProcess[filePath] = false;
+        await processSessionFile(
+          filePath,
+          event.sessionId,
+          event.projectPath,
+          syncService,
+          config.user_id!,
+          conversationCache,
+          retryQueue,
+          pendingMessages
+        );
+      } while (pendingProcess[filePath]);
     } catch (err) {
       log(`Error processing session: ${err}`);
+    } finally {
+      delete processingLocks[filePath];
+      delete pendingProcess[filePath];
     }
   });
 

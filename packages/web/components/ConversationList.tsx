@@ -62,11 +62,11 @@ function groupByTime(conversations: Conversation[]): TimeGroup[] {
   ];
 
   conversations.forEach((conv) => {
-    if (conv.started_at >= todayMs) {
+    if (conv.updated_at >= todayMs) {
       groups[0].conversations.push(conv);
-    } else if (conv.started_at >= yesterdayMs) {
+    } else if (conv.updated_at >= yesterdayMs) {
       groups[1].conversations.push(conv);
-    } else if (conv.started_at >= weekAgoMs) {
+    } else if (conv.updated_at >= weekAgoMs) {
       groups[2].conversations.push(conv);
     } else {
       groups[3].conversations.push(conv);
@@ -144,7 +144,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                           </span>
                         )}
                         <span className="text-slate-500">
-                          {getRelativeTime(conv.started_at)}
+                          {getRelativeTime(conv.updated_at)}
                         </span>
                         {conv.message_count > 0 && (
                           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-800/60 text-slate-400 border border-slate-700/50">

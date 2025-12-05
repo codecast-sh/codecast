@@ -45,10 +45,12 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
     .index("by_agent_type", ["agent_type"])
-    .index("by_share_token", ["share_token"]),
+    .index("by_share_token", ["share_token"])
+    .index("by_session_id", ["session_id"]),
 
   messages: defineTable({
     conversation_id: v.id("conversations"),
+    message_uuid: v.optional(v.string()),
     role: v.union(
       v.literal("user"),
       v.literal("assistant"),
@@ -62,7 +64,9 @@ export default defineSchema({
     thinking: v.optional(v.string()),
     timestamp: v.number(),
     tokens_used: v.optional(v.number()),
-  }).index("by_conversation_id", ["conversation_id"]),
+  })
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_conversation_uuid", ["conversation_id", "message_uuid"]),
 
   sync_cursors: defineTable({
     user_id: v.id("users"),

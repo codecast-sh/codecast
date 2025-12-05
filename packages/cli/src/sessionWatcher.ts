@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "chokidar";
+import { Client } from "fb-watchman";
 import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
@@ -27,9 +27,24 @@ export declare interface SessionWatcher {
   ): boolean;
 }
 
+interface WatchmanFile {
+  name: string;
+  exists: boolean;
+  new: boolean;
+}
+
+interface WatchmanSubscription {
+  root: string;
+  subscription: string;
+  files: WatchmanFile[];
+}
+
 export class SessionWatcher extends EventEmitter {
-  private watcher: FSWatcher | null = null;
+  private client: Client | null = null;
   private projectsPath: string;
+  private watchPath: string | null = null;
+  private relativePath: string = "";
+  private subscriptionName = "codecast-sessions";
 
   constructor(projectsPath?: string) {
     super();
@@ -39,7 +54,7 @@ export class SessionWatcher extends EventEmitter {
   }
 
   start(): void {
-    if (this.watcher) {
+    if (this.client) {
       return;
     }
 
@@ -47,42 +62,125 @@ export class SessionWatcher extends EventEmitter {
       fs.mkdirSync(this.projectsPath, { recursive: true });
     }
 
-    this.watcher = watch(this.projectsPath, {
-      persistent: true,
-      ignoreInitial: false,
-      awaitWriteFinish: {
-        stabilityThreshold: 100,
-        pollInterval: 50,
-      },
-      depth: 2,
+    this.client = new Client();
+
+    this.client.on("error", (err: Error) => {
+      this.emit("error", err);
     });
 
-    this.watcher.on("add", (filePath) => {
-      if (filePath.endsWith(".jsonl")) {
-        this.handleFileEvent(filePath, "add");
+    this.client.on("end", () => {
+      this.client = null;
+    });
+
+    this.client.on("subscription", (resp: WatchmanSubscription) => {
+      if (resp.subscription !== this.subscriptionName) return;
+
+      for (const file of resp.files) {
+        if (!file || !file.name) continue;
+        if (!file.name.endsWith(".jsonl")) continue;
+        if (!file.exists) continue;
+
+        const filePath = path.join(this.projectsPath, file.name);
+        const eventType = file.new ? "add" : "change";
+        this.handleFileEvent(filePath, eventType);
       }
     });
 
-    this.watcher.on("change", (filePath) => {
-      if (filePath.endsWith(".jsonl")) {
-        this.handleFileEvent(filePath, "change");
+    this.client.capabilityCheck(
+      { optional: [], required: ["relative_root"] },
+      (err) => {
+        if (err) {
+          this.emit("error", err);
+          return;
+        }
+        this.setupWatch();
       }
-    });
+    );
+  }
 
-    this.watcher.on("error", (err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.emit("error", error);
-    });
+  private setupWatch(): void {
+    if (!this.client) return;
 
-    this.watcher.on("ready", () => {
-      this.emit("ready");
+    this.client.command(["watch-project", this.projectsPath], (err, resp) => {
+      if (err) {
+        this.emit("error", err);
+        return;
+      }
+
+      this.watchPath = resp.watch;
+      this.relativePath = resp.relative_path || "";
+
+      const sub = {
+        expression: [
+          "allof",
+          ["match", "*.jsonl"],
+          ["type", "f"],
+        ],
+        fields: ["name", "exists", "new"],
+        relative_root: this.relativePath || undefined,
+      };
+
+      this.client!.command(
+        ["subscribe", this.watchPath, this.subscriptionName, sub],
+        (subErr) => {
+          if (subErr) {
+            this.emit("error", subErr);
+            return;
+          }
+          this.emitInitialFiles();
+        }
+      );
     });
   }
 
+  private emitInitialFiles(): void {
+    if (!this.client || !this.watchPath) {
+      this.emit("ready");
+      return;
+    }
+
+    const query: Record<string, unknown> = {
+      expression: ["allof", ["match", "*.jsonl"], ["type", "f"]],
+      fields: ["name"],
+    };
+    if (this.relativePath) {
+      query.relative_root = this.relativePath;
+    }
+
+    this.client.command(
+      ["query", this.watchPath, query],
+      (err, resp) => {
+        if (err) {
+          this.emit("error", err);
+          this.emit("ready");
+          return;
+        }
+
+        if (resp.files) {
+          for (const file of resp.files) {
+            if (!file || !file.name) continue;
+            const filePath = path.join(this.projectsPath, file.name);
+            this.handleFileEvent(filePath, "add");
+          }
+        }
+
+        this.emit("ready");
+      }
+    );
+  }
+
   stop(): void {
-    if (this.watcher) {
-      this.watcher.close();
-      this.watcher = null;
+    if (this.client) {
+      if (this.watchPath) {
+        this.client.command(
+          ["unsubscribe", this.watchPath, this.subscriptionName],
+          () => {}
+        );
+      }
+      this.client.end();
+      this.client = null;
+      this.watchPath = null;
+      this.relativePath = "";
     }
   }
 

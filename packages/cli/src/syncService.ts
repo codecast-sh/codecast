@@ -17,6 +17,7 @@ export interface CreateConversationParams {
   agentType: AgentType;
   projectPath?: string;
   slug?: string;
+  startedAt?: number;
 }
 
 export class SyncService {
@@ -48,6 +49,7 @@ export class SyncService {
         session_id: params.sessionId,
         project_hash: projectHash,
         slug: params.slug,
+        started_at: params.startedAt,
       }
     );
     return result as string;
@@ -59,6 +61,7 @@ export class SyncService {
 
   async addMessage(params: {
     conversationId: string;
+    messageUuid?: string;
     role: "human" | "assistant" | "tool_use" | "tool_result";
     content: string;
     timestamp: number;
@@ -76,8 +79,10 @@ export class SyncService {
       "messages:addMessage" as any,
       {
         conversation_id: params.conversationId,
+        message_uuid: params.messageUuid,
         role: roleMap[params.role],
         content: redactedContent,
+        timestamp: params.timestamp,
       }
     );
     return messageId as string;
