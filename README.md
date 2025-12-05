@@ -10,6 +10,16 @@ Sync your coding agent conversations (Claude Code, Codex CLI, Cursor) to a share
 - Supports private (personal) and shared (team) conversation views
 - Runs as a background daemon with zero manual effort after setup
 
+## Quick Start
+
+```bash
+git clone https://github.com/ashot/code-chat-sync.git
+cd code-chat-sync
+./dev.sh
+```
+
+This installs dependencies and starts both Convex backend and web dashboard. Open http://localhost:3000 to view.
+
 ## Prerequisites
 
 - [Bun](https://bun.sh/) v1.0+
@@ -147,11 +157,13 @@ code-chat-sync/
 
 ## Development
 
-### Run all packages in dev mode
+### Run dev servers
 
 ```bash
-bun run dev
+./dev.sh
 ```
+
+This starts Convex backend and Next.js web dashboard. The CLI is not run in dev mode (it's a daemon you start separately with `code-chat-sync start`).
 
 ### Type check
 
