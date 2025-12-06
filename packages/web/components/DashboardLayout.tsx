@@ -24,7 +24,7 @@ export function DashboardLayout({ children, filter, onFilterChange }: DashboardL
       </header>
       <div className="flex">
         <Sidebar filter={filter} onFilterChange={onFilterChange} />
-        <main className="flex-1 max-w-5xl mx-auto px-4 py-8">
+        <main className="flex-1 min-w-0 max-w-5xl mx-auto px-4 py-8">
           {children}
         </main>
       </div>

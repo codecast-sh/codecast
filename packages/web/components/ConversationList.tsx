@@ -11,6 +11,7 @@ type Conversation = {
   title: string;
   first_user_message?: string;
   first_assistant_message?: string;
+  message_alternates?: Array<{ role: "user" | "assistant"; content: string }>;
   tool_names?: string[];
   subagent_types?: string[];
   agent_type: string;
@@ -20,10 +21,13 @@ type Conversation = {
   updated_at: number;
   duration_ms: number;
   message_count: number;
+  ai_message_count?: number;
   tool_call_count: number;
   is_active: boolean;
   author_name: string;
   is_own: boolean;
+  parent_conversation_id?: string | null;
+  children?: Conversation[];
 };
 
 function formatDuration(ms: number): string {
@@ -91,28 +95,30 @@ function getRelativeTime(timestamp: number): string {
 
 function groupByTime(conversations: Conversation[]): TimeGroup[] {
   const now = Date.now();
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const todayMs = today.getTime();
-  const yesterdayMs = todayMs - 86400000;
-  const weekAgoMs = todayMs - 7 * 86400000;
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const sixHoursAgo = now - 6 * 60 * 60 * 1000;
+  const oneDayAgo = now - 24 * 60 * 60 * 1000;
+  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
   const groups: TimeGroup[] = [
-    { label: "Today", conversations: [] },
-    { label: "Yesterday", conversations: [] },
+    { label: "Last Hour", conversations: [] },
+    { label: "Last 6 Hours", conversations: [] },
+    { label: "Last 24 Hours", conversations: [] },
     { label: "This Week", conversations: [] },
     { label: "Older", conversations: [] },
   ];
 
   conversations.forEach((conv) => {
-    if (conv.updated_at >= todayMs) {
+    if (conv.updated_at >= oneHourAgo) {
       groups[0].conversations.push(conv);
-    } else if (conv.updated_at >= yesterdayMs) {
+    } else if (conv.updated_at >= sixHoursAgo) {
       groups[1].conversations.push(conv);
-    } else if (conv.updated_at >= weekAgoMs) {
+    } else if (conv.updated_at >= oneDayAgo) {
       groups[2].conversations.push(conv);
-    } else {
+    } else if (conv.updated_at >= weekAgo) {
       groups[3].conversations.push(conv);
+    } else {
+      groups[4].conversations.push(conv);
     }
   });
 
@@ -128,7 +134,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
   });
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
-  const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("all");
+  const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -143,15 +149,26 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
     const isSubagent = (c: Conversation) =>
       c.title?.startsWith("Session agent-") ?? false;
-
-    const counts = {
-      long: convs.filter(c => c.duration_ms >= 20 * 60 * 1000).length,
-      active: convs.filter(c => c.is_active).length,
-      subagent: convs.filter(c => isSubagent(c)).length,
-      main: convs.filter(c => !isSubagent(c)).length,
+    const isTrivialSubagent = (c: Conversation) => {
+      if (!isSubagent(c)) return false;
+      const userMsgCount = c.message_alternates?.filter(m => m.role === "user").length ?? 0;
+      const aiMsgCount = c.message_alternates?.filter(m => m.role === "assistant").length ?? 0;
+      if (c.ai_message_count !== undefined) {
+        return c.ai_message_count <= 1 && userMsgCount === 0;
+      }
+      return aiMsgCount <= 1 && userMsgCount === 0;
     };
 
-    let filtered = convs;
+    const nonTrivialConvs = convs.filter(c => !isTrivialSubagent(c));
+
+    const counts = {
+      long: nonTrivialConvs.filter(c => c.duration_ms >= 20 * 60 * 1000).length,
+      active: nonTrivialConvs.filter(c => c.is_active).length,
+      subagent: nonTrivialConvs.filter(c => isSubagent(c)).length,
+      main: nonTrivialConvs.filter(c => !isSubagent(c)).length,
+    };
+
+    let filtered = nonTrivialConvs;
 
     if (timeFilter === "long") {
       filtered = filtered.filter(c => c.duration_ms >= 20 * 60 * 1000);
@@ -164,6 +181,39 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
     } else if (subagentFilter === "subagent") {
       filtered = filtered.filter(c => isSubagent(c));
     }
+
+    // Build parent-child map for nesting
+    const childrenMap = new Map<string, Conversation[]>();
+    const topLevel: Conversation[] = [];
+
+    for (const conv of filtered) {
+      if (conv.parent_conversation_id) {
+        const children = childrenMap.get(conv.parent_conversation_id) || [];
+        children.push(conv);
+        childrenMap.set(conv.parent_conversation_id, children);
+      } else {
+        topLevel.push(conv);
+      }
+    }
+
+    // Attach children to parents, or promote orphans to top level
+    const withChildren = topLevel.map(conv => ({
+      ...conv,
+      children: childrenMap.get(conv._id) || [],
+    }));
+
+    // Find orphan children (parent not in current filtered set)
+    const parentIds = new Set(topLevel.map(c => c._id));
+    for (const [parentId, children] of childrenMap) {
+      if (!parentIds.has(parentId)) {
+        // Parent not visible, show children at top level
+        for (const child of children) {
+          withChildren.push({ ...child, children: [] });
+        }
+      }
+    }
+
+    filtered = withChildren as any;
 
     return { filteredConversations: filtered, counts };
   }, [conversations, timeFilter, subagentFilter]);
@@ -210,7 +260,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
               : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
           }`}
         >
-          Long (&gt;20m){counts.long > 0 && ` (${counts.long})`}
+          Long Running{counts.long > 0 && ` (${counts.long})`}
         </button>
         <button
           onClick={() => setTimeFilter("active")}
@@ -270,60 +320,66 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-slate-800/40 to-slate-900/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
                 <div className="relative bg-slate-900/60 border border-slate-800/80 rounded-xl p-4 hover:border-amber-500/30 transition-all duration-200 backdrop-blur-sm">
-                  <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start justify-between gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1.5">
-                        {conv.agent_type === "claude_code" ? (
-                          <span className="text-amber-500">
-                            <ClaudeLogo className="w-4 h-4" />
+                      <div className="flex items-start gap-2 mb-1.5">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-slate-600 flex items-center justify-center text-[10px] font-medium text-slate-300 mt-0.5">
+                          {(conv.author_name?.charAt(0) || "U").toUpperCase()}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-slate-100 font-medium text-base group-hover:text-amber-50 transition-colors">
+                            {conv.title}
                           </span>
-                        ) : (
-                          <span className="text-xs text-slate-500 font-mono">{conv.agent_type}</span>
-                        )}
-                        <h3 className="text-slate-100 font-medium text-base truncate group-hover:text-amber-50 transition-colors">
-                          {conv.title}
-                        </h3>
-                        {conv.is_active && (
-                          <span className="flex-shrink-0 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Active" />
-                        )}
+                          {conv.is_active && (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 ml-2 rounded-md bg-emerald-500/30 border border-emerald-400/60 shadow-[0_0_8px_rgba(16,185,129,0.4)] align-middle">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(16,185,129,0.8)]" />
+                              <span className="text-xs text-emerald-300 font-semibold tracking-wide">LIVE</span>
+                            </span>
+                          )}
+                        </div>
                       </div>
 
-                      {(conv.first_user_message || conv.first_assistant_message) && (
-                        <div className="mb-2.5 space-y-1 text-sm">
-                          {conv.first_user_message && (
-                            <p className="text-slate-300 line-clamp-2 flex items-start gap-2">
-                              <span className="text-blue-400 flex-shrink-0 text-xs mt-0.5">you:</span>
-                              <span>{conv.first_user_message}</span>
-                            </p>
-                          )}
-                          {conv.first_assistant_message && (
-                            <p className="text-slate-400 line-clamp-2 flex items-start gap-2">
-                              <span className="text-amber-400/70 flex-shrink-0 text-xs mt-0.5">ai:</span>
-                              <span>{conv.first_assistant_message}</span>
-                            </p>
-                          )}
-                        </div>
-                      )}
+                      {(() => {
+                        let messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+                        if (conv.message_alternates && conv.message_alternates.length > 0) {
+                          const titleNorm = conv.title?.toLowerCase().trim().slice(0, 80) || "";
+                          messages = conv.message_alternates
+                            .filter((m) => {
+                              if (m.content.startsWith("[Using:")) return false;
+                              if (m.role === "user") {
+                                const msgNorm = m.content.toLowerCase().trim().slice(0, 80);
+                                if (msgNorm === titleNorm) return false;
+                              }
+                              return true;
+                            })
+                            .slice(0, 4);
+                        } else if (conv.first_assistant_message && !conv.first_assistant_message.startsWith("[Using:")) {
+                          messages.push({ role: "assistant", content: conv.first_assistant_message });
+                        }
 
-                      {conv.tool_names && conv.tool_names.length > 0 && (
-                        <div className="flex items-center gap-1.5 mb-2.5 flex-wrap">
-                          {conv.tool_names.slice(0, 4).map((name) => (
-                            <span
-                              key={name}
-                              className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-800/80 text-slate-400 text-[10px] font-mono border border-slate-700/40"
-                            >
-                              {name}
-                            </span>
-                          ))}
-                          {conv.tool_names.length > 4 && (
-                            <span className="text-[10px] text-slate-500">
-                              +{conv.tool_names.length - 4}
-                            </span>
-                          )}
-                        </div>
-                      )}
+                        if (messages.length === 0) return null;
+                        return (
+                          <div className="mb-2 space-y-1 text-xs overflow-hidden">
+                            {messages.map((m, idx) => (
+                              <div key={idx} className="flex items-start gap-2 text-slate-500 min-w-0">
+                                {m.role === "assistant" ? (
+                                  <span className="flex-shrink-0 w-4 h-4 rounded-full bg-amber-600 flex items-center justify-center mt-0.5">
+                                    <ClaudeLogo className="w-2.5 h-2.5 text-white" />
+                                  </span>
+                                ) : (
+                                  <span className="flex-shrink-0 w-4 h-4 rounded-full bg-slate-600 flex items-center justify-center mt-0.5 text-[8px] font-medium text-slate-300">
+                                    {(conv.author_name?.charAt(0) || "U").toUpperCase()}
+                                  </span>
+                                )}
+                                <span className="truncate min-w-0">{m.content}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
 
-                      <div className="flex items-center gap-2 text-xs flex-wrap">
+
+                      <div className="flex items-center gap-2 text-xs flex-wrap opacity-70">
                         {!conv.is_own && (
                           <span className="text-slate-400 font-medium">
                             {conv.author_name}
@@ -365,8 +421,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                           </span>
                         ))}
                         {conv.title?.startsWith("Session agent-") && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400 border border-slate-600/40 text-[10px]">
-                            subagent
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
+                            Subagent
                           </span>
                         )}
                       </div>
@@ -375,6 +431,41 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                 </div>
               </Link>
             ))}
+            {/* Render children (subagents) indented */}
+            {group.conversations.map((conv) =>
+              conv.children && conv.children.length > 0 && (
+                <div key={`children-${conv._id}`} className="ml-6 border-l-2 border-violet-600/30 pl-3 space-y-2">
+                  {conv.children.map((child) => (
+                    <Link
+                      key={child._id}
+                      href={`/conversation/${child._id}`}
+                      className="group block relative"
+                    >
+                      <div className="relative bg-slate-900/40 border border-slate-800/60 rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
+                            Subagent
+                          </span>
+                          <h4 className="text-slate-300 text-sm truncate flex-1">
+                            {child.title}
+                          </h4>
+                          {child.is_active && (
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                          <span>{getRelativeTime(child.updated_at)}</span>
+                          {child.duration_ms > 60000 && (
+                            <span>{formatDuration(child.duration_ms)}</span>
+                          )}
+                          <span>{child.message_count} msgs</span>
+                        </div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )
+            )}
           </div>
         </div>
       ))}

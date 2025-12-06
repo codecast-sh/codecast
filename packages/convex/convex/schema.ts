@@ -41,6 +41,7 @@ export default defineSchema({
     is_private: v.boolean(),
     status: v.union(v.literal("active"), v.literal("completed")),
     share_token: v.optional(v.string()),
+    parent_message_uuid: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
@@ -78,7 +79,8 @@ export default defineSchema({
     tokens_used: v.optional(v.number()),
   })
     .index("by_conversation_id", ["conversation_id"])
-    .index("by_conversation_uuid", ["conversation_id", "message_uuid"]),
+    .index("by_conversation_uuid", ["conversation_id", "message_uuid"])
+    .index("by_message_uuid", ["message_uuid"]),
 
   sync_cursors: defineTable({
     user_id: v.id("users"),

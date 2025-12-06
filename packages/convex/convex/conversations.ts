@@ -26,6 +26,7 @@ export const createConversation = mutation({
     project_hash: v.optional(v.string()),
     slug: v.optional(v.string()),
     started_at: v.optional(v.number()),
+    parent_message_uuid: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -63,6 +64,7 @@ export const createConversation = mutation({
       message_count: 0,
       is_private: false,
       status: "active",
+      parent_message_uuid: args.parent_message_uuid,
     });
     return conversationId;
   },
@@ -207,13 +209,13 @@ export const listConversations = query({
             q.eq("conversation_id", c._id)
           )
           .order("asc")
-          .take(20);
+          .take(50);
 
-        let firstUserMessage = "";
-        let firstAssistantMessage = "";
         let toolCallCount = 0;
         const toolNames: string[] = [];
         const subagentTypes: string[] = [];
+        let aiMessageCount = 0;
+        const messageAlternates: Array<{ role: "user" | "assistant"; content: string }> = [];
 
         for (const msg of messages) {
           if (msg.tool_calls) {
@@ -232,38 +234,56 @@ export const listConversations = query({
               }
             }
           }
-          // Real user messages have content but no tool_results
-          const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
-          if (msg.role === "user" && !firstUserMessage && !hasToolResults) {
+          if (msg.role === "user") {
             const text = msg.content?.trim();
             if (text) {
-              firstUserMessage = text.slice(0, 120);
-              if (text.length > 120) firstUserMessage += "...";
+              const truncated = text.length > 120 ? text.slice(0, 120) + "..." : text;
+              messageAlternates.push({ role: "user", content: truncated });
             }
           }
-          // Assistant messages - prefer text content, fall back to thinking
-          if (msg.role === "assistant" && !firstAssistantMessage) {
+          if (msg.role === "assistant") {
+            aiMessageCount++;
             let text = msg.content?.trim();
             if (!text && msg.thinking) {
               text = msg.thinking.trim();
             }
+            if (!text && msg.tool_calls && msg.tool_calls.length > 0) {
+              const toolNames = msg.tool_calls.map(tc => tc.name).join(", ");
+              text = `[Using: ${toolNames}]`;
+            }
             if (text) {
-              firstAssistantMessage = text.slice(0, 120);
-              if (text.length > 120) firstAssistantMessage += "...";
+              const truncated = text.length > 120 ? text.slice(0, 120) + "..." : text;
+              messageAlternates.push({ role: "assistant", content: truncated });
             }
           }
         }
+
+        console.log('messageAlternates', messageAlternates);
+        const firstUserMessage = messageAlternates.find(m => m.role === "user")?.content || "";
+        const firstAssistantMessage = messageAlternates.find(m => m.role === "assistant")?.content || "";
 
         const title = c.title || firstUserMessage || `Session ${c.session_id.slice(0, 8)}`;
         const durationMs = c.updated_at - c.started_at;
         const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
         const isActive = c.status === "active" && c.updated_at > fiveMinutesAgo;
 
+        let parentConversationId: string | null = null;
+        if (c.parent_message_uuid) {
+          const parentMsg = await ctx.db
+            .query("messages")
+            .withIndex("by_message_uuid", (q) => q.eq("message_uuid", c.parent_message_uuid))
+            .first();
+          if (parentMsg) {
+            parentConversationId = parentMsg.conversation_id;
+          }
+        }
+
         return {
           _id: c._id,
           title,
           first_user_message: firstUserMessage,
           first_assistant_message: firstAssistantMessage,
+          message_alternates: messageAlternates,
           tool_names: toolNames,
           subagent_types: subagentTypes,
           agent_type: c.agent_type,
@@ -273,10 +293,12 @@ export const listConversations = query({
           updated_at: c.updated_at,
           duration_ms: durationMs,
           message_count: c.message_count,
+          ai_message_count: aiMessageCount,
           tool_call_count: toolCallCount,
           is_active: isActive,
-          author_name: conversationUser?.name || "Unknown",
+          author_name: conversationUser?.name || conversationUser?.email?.split("@")[0] || "Unknown",
           is_own: c.user_id.toString() === userId.toString(),
+          parent_conversation_id: parentConversationId,
         };
       })
     );

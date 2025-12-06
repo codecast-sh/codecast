@@ -2,7 +2,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
-import { parseSessionFile, extractSlug, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, extractSlug, extractParentUuid, type ParsedMessage } from "./parser.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { SyncService } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
@@ -117,6 +117,7 @@ async function processSessionFile(
     try {
       const fullContent = fs.readFileSync(filePath, "utf-8");
       const slug = extractSlug(fullContent);
+      const parentMessageUuid = extractParentUuid(fullContent);
       const firstMessageTimestamp = messages[0]?.timestamp;
 
       conversationId = await syncService.createConversation({
@@ -126,6 +127,7 @@ async function processSessionFile(
         projectPath,
         slug,
         startedAt: firstMessageTimestamp,
+        parentMessageUuid,
       });
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);

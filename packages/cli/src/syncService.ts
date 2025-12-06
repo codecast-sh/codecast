@@ -18,6 +18,7 @@ export interface CreateConversationParams {
   projectPath?: string;
   slug?: string;
   startedAt?: number;
+  parentMessageUuid?: string;
 }
 
 export class SyncService {
@@ -50,6 +51,7 @@ export class SyncService {
         project_hash: projectHash,
         slug: params.slug,
         started_at: params.startedAt,
+        parent_message_uuid: params.parentMessageUuid,
       }
     );
     return result as string;
