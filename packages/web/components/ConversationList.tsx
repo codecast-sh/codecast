@@ -359,19 +359,19 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
                         if (messages.length === 0) return null;
                         return (
-                          <div className="mb-2 space-y-1 text-xs overflow-hidden">
+                          <div className="mb-2 space-y-0.5 text-xs overflow-hidden opacity-60">
                             {messages.map((m, idx) => (
-                              <div key={idx} className="flex items-start gap-2 text-slate-500 min-w-0">
+                              <div key={idx} className="flex items-start gap-1.5 text-slate-500 min-w-0">
                                 {m.role === "assistant" ? (
-                                  <span className="flex-shrink-0 w-4 h-4 rounded-full bg-amber-600 flex items-center justify-center mt-0.5">
-                                    <ClaudeLogo className="w-2.5 h-2.5 text-white" />
+                                  <span className="flex-shrink-0 w-3.5 h-3.5 rounded-full bg-amber-700/70 flex items-center justify-center mt-0.5">
+                                    <ClaudeLogo className="w-2 h-2 text-white/80" />
                                   </span>
                                 ) : (
-                                  <span className="flex-shrink-0 w-4 h-4 rounded-full bg-slate-600 flex items-center justify-center mt-0.5 text-[8px] font-medium text-slate-300">
+                                  <span className="flex-shrink-0 w-3.5 h-3.5 rounded-full bg-slate-700 flex items-center justify-center mt-0.5 text-[7px] font-medium text-slate-400">
                                     {(conv.author_name?.charAt(0) || "U").toUpperCase()}
                                   </span>
                                 )}
-                                <span className="truncate min-w-0">{m.content}</span>
+                                <span className="truncate min-w-0 text-slate-500">{m.content}</span>
                               </div>
                             ))}
                           </div>
