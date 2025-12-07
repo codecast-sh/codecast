@@ -1,76 +1,57 @@
 "use client";
 import { useState } from "react";
+import { getToolConfig, getToolColor } from "@/lib/toolRegistry";
 
 interface ToolCallDisplayProps {
   name: string;
-  input?: string;
-  output?: string;
+  input?: any;
+  output?: any;
   timestamp: number;
-}
-
-function CollapsibleContent({ content, label }: { content: string; label: string }) {
-  const [contentExpanded, setContentExpanded] = useState(false);
-  const lines = content.split('\n');
-  const lineCount = lines.length;
-  const COLLAPSE_THRESHOLD = 12;
-  const shouldCollapse = lineCount > COLLAPSE_THRESHOLD;
-
-  const displayContent = shouldCollapse && !contentExpanded
-    ? lines.slice(0, COLLAPSE_THRESHOLD).join('\n')
-    : content;
-
-  return (
-    <div>
-      <div className="text-xs text-sol-base0 mb-1 flex items-center justify-between">
-        <span>{label}</span>
-        {shouldCollapse && (
-          <span className="text-sol-base00">
-            {lineCount} lines
-          </span>
-        )}
-      </div>
-      <pre className="text-sol-base1 font-mono text-xs overflow-x-auto">
-        {displayContent}
-      </pre>
-      {shouldCollapse && (
-        <button
-          onClick={() => setContentExpanded(!contentExpanded)}
-          className="mt-2 text-xs text-blue-400 hover:text-blue-300 transition-colors"
-        >
-          {contentExpanded ? "Show less" : "Show more"}
-        </button>
-      )}
-    </div>
-  );
 }
 
 export function ToolCallDisplay({ name, input, output, timestamp }: ToolCallDisplayProps) {
   const [expanded, setExpanded] = useState(false);
+  const toolConfig = getToolConfig(name);
+  const ToolIcon = toolConfig.icon;
+  const colorClasses = getToolColor(toolConfig.color);
+  const ToolComponent = toolConfig.component;
+
+  const parsedInput = typeof input === 'string' ? JSON.parse(input || '{}') : input;
+  const parsedOutput = typeof output === 'string' ? JSON.parse(output || '{}') : output;
+
+  const summary = toolConfig.extractSummary?.(parsedInput, parsedOutput) || toolConfig.title;
 
   return (
-    <div className="my-2 border border-sol-base01 rounded-lg overflow-hidden">
+    <div className="my-2 border border-border rounded-lg overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-2 bg-sol-base02/50 flex items-center justify-between text-left hover:bg-sol-base02 transition-colors"
+        className="w-full px-4 py-2 bg-muted/30 flex items-center justify-between text-left hover:bg-muted/50 transition-colors"
       >
-        <div className="flex items-center gap-2">
-          <span className="text-xs bg-slate-700 px-2 py-0.5 rounded text-sol-base1">
-            Tool
-          </span>
-          <span className="text-sm font-medium text-white">{name}</span>
+        <div className="flex items-center gap-3">
+          <div className={`p-1.5 rounded border ${colorClasses}`}>
+            <ToolIcon className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-sm font-medium text-foreground">
+              {summary}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {name}
+            </div>
+          </div>
         </div>
-        <span className="text-sol-base0 text-xs">
+        <span className="text-muted-foreground text-xs">
           {expanded ? "▼" : "▶"}
         </span>
       </button>
       {expanded && (
-        <div className="p-4 bg-sol-base02/50 text-sm space-y-3">
-          {input && (
-            <CollapsibleContent content={input} label="Input" />
-          )}
-          {output && (
-            <CollapsibleContent content={output} label="Output" />
-          )}
+        <div className="bg-muted/20 border-t border-border">
+          <ToolComponent
+            name={name}
+            input={parsedInput}
+            output={parsedOutput}
+            timestamp={timestamp}
+          />
         </div>
       )}
     </div>
