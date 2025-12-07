@@ -7,6 +7,7 @@ import { getPosition, setPosition } from "./positionTracker.js";
 import { SyncService } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
+import { InvalidateSync } from "./invalidateSync.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -38,8 +39,6 @@ interface PendingMessages {
   }>;
 }
 
-const processingLocks: { [filePath: string]: boolean } = {};
-const pendingProcess: { [filePath: string]: boolean } = {};
 
 function log(message: string): void {
   const timestamp = new Date().toISOString();
@@ -396,24 +395,18 @@ async function main(): Promise<void> {
   });
 
   const watcher = new SessionWatcher();
+  const fileSyncs = new Map<string, InvalidateSync>();
 
   watcher.on("ready", () => {
     log("Session watcher ready");
   });
 
-  watcher.on("session", async (event: SessionEvent) => {
+  watcher.on("session", (event: SessionEvent) => {
     const filePath = event.filePath;
 
-    if (processingLocks[filePath]) {
-      pendingProcess[filePath] = true;
-      return;
-    }
-
-    processingLocks[filePath] = true;
-
-    try {
-      do {
-        pendingProcess[filePath] = false;
+    let sync = fileSyncs.get(filePath);
+    if (!sync) {
+      sync = new InvalidateSync(async () => {
         await processSessionFile(
           filePath,
           event.sessionId,
@@ -424,13 +417,11 @@ async function main(): Promise<void> {
           retryQueue,
           pendingMessages
         );
-      } while (pendingProcess[filePath]);
-    } catch (err) {
-      log(`Error processing session: ${err}`);
-    } finally {
-      delete processingLocks[filePath];
-      delete pendingProcess[filePath];
+      });
+      fileSyncs.set(filePath, sync);
     }
+
+    sync.invalidate();
   });
 
   watcher.on("error", (error: Error) => {
@@ -447,6 +438,9 @@ async function main(): Promise<void> {
     }
     retryQueue.stop();
     watcher.stop();
+    for (const sync of fileSyncs.values()) {
+      sync.stop();
+    }
     process.exit(0);
   };
 
