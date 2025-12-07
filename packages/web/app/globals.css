@@ -25,3 +25,33 @@
   --text-muted: theme('colors.slate.600');
   --text-dimmed: theme('colors.slate.500');
 }
+
+.prose table {
+  @apply w-full border-collapse text-sm;
+}
+
+.prose th,
+.prose td {
+  @apply border border-slate-700 px-3 py-2 text-left;
+}
+
+.prose th {
+  @apply bg-slate-800 font-medium;
+}
+
+.prose tr:nth-child(even) {
+  @apply bg-slate-900/50;
+}
+
+.light .prose th,
+.light .prose td {
+  @apply border-slate-300;
+}
+
+.light .prose th {
+  @apply bg-slate-100;
+}
+
+.light .prose tr:nth-child(even) {
+  @apply bg-slate-50;
+}

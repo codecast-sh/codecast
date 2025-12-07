@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
+import remarkGfm from "remark-gfm";
 import "highlight.js/styles/github-dark.css";
 
 type ToolCall = {
@@ -210,7 +211,9 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
 }
 
 function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+  const isAgentOutput = tool.name === "AgentOutputTool";
   const [expanded, setExpanded] = useState(false);
+  const [resultExpanded, setResultExpanded] = useState(!isAgentOutput);
   const isEdit = tool.name === "Edit" || tool.name === "Write";
   const isRead = tool.name === "Read";
   const isBash = tool.name === "Bash";
@@ -308,18 +311,37 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
 
       {result && resultTruncated && (
         <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-red-950/30" : "bg-slate-900/30"}`}>
-          <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto ${
-            result.is_error ? "text-red-300" : "text-slate-400"
-          }`}>
-            {resultTruncated.text}
-          </pre>
-          {resultTruncated.truncated && (
+          {!resultExpanded ? (
             <button
-              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-              className="text-[10px] text-slate-500 hover:text-slate-400 mt-1"
+              onClick={(e) => { e.stopPropagation(); setResultExpanded(true); }}
+              className="text-[10px] text-slate-500 hover:text-slate-400"
             >
-              {expanded ? "show less" : `+${resultTruncated.totalLines - 8} more lines`}
+              show result ({resultTruncated.totalLines} lines)
             </button>
+          ) : (
+            <>
+              <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
+                result.is_error ? "text-red-300" : "text-slate-400"
+              }`}>
+                {resultTruncated.text}
+              </pre>
+              {resultTruncated.truncated && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+                  className="text-[10px] text-slate-500 hover:text-slate-400 mt-1"
+                >
+                  {expanded ? "show less" : `+${resultTruncated.totalLines - 8} more lines`}
+                </button>
+              )}
+              {isAgentOutput && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setResultExpanded(false); }}
+                  className="text-[10px] text-slate-500 hover:text-slate-400 mt-1 ml-2"
+                >
+                  hide
+                </button>
+              )}
+            </>
           )}
         </div>
       )}
@@ -378,7 +400,49 @@ function UserIcon() {
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, collapsed }: { content: string; timestamp: number; messageId: string; collapsed?: boolean }) {
+function isCommandMessage(content: string): boolean {
+  const trimmed = content.trim();
+  return /^<(command-name|command-message|local-command-stdout|local-command-stderr)>/.test(trimmed) ||
+    trimmed.startsWith("Caveat:");
+}
+
+function parseCommandMessage(content: string): { type: string; value: string } | null {
+  const match = content.match(/<(command-name|command-message)>([^<]*)<\/\1>/);
+  if (match) {
+    return { type: match[1], value: match[2] };
+  }
+  if (content.includes("<local-command-stdout>")) {
+    return { type: "command-output", value: "command output" };
+  }
+  if (content.trim().startsWith("Caveat:")) {
+    return { type: "caveat", value: content.trim().slice(0, 80) + (content.length > 80 ? "..." : "") };
+  }
+  return null;
+}
+
+function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
+  const parsed = parseCommandMessage(content);
+  const displayText = parsed?.value || content.replace(/<[^>]+>/g, "").slice(0, 100);
+
+  const typeLabels: Record<string, string> = {
+    "command-name": "cmd",
+    "command-message": "msg",
+    "command-output": "output",
+    "caveat": "note",
+  };
+
+  return (
+    <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-slate-500">
+      <span className="text-slate-600">{formatTimestamp(timestamp)}</span>
+      <span className="px-1.5 py-0.5 rounded bg-slate-800/50 text-slate-400 font-mono text-[10px]">
+        {typeLabels[parsed?.type || ""] || "status"}
+      </span>
+      <span className="font-mono truncate">{displayText}</span>
+    </div>
+  );
+}
+
+function UserPrompt({ content, timestamp, messageId, collapsed, userName }: { content: string; timestamp: number; messageId: string; collapsed?: boolean; userName?: string }) {
   const truncated = collapsed ? content.split("\n").slice(0, 2).join("\n") : content;
   const wasTruncated = collapsed && content.split("\n").length > 2;
 
@@ -386,7 +450,7 @@ function UserPrompt({ content, timestamp, messageId, collapsed }: { content: str
     <div id={`msg-${messageId}`} className={`bg-blue-950/20 border border-blue-900/30 rounded-lg p-4 scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"}`}>
       <div className="flex items-center gap-2 mb-2">
         <UserIcon />
-        <span className="text-blue-300 text-xs font-medium">You</span>
+        <span className="text-blue-300 text-xs font-medium">{userName || "You"}</span>
         <a href={`#msg-${messageId}`} className="text-slate-600 hover:text-slate-400 text-xs transition-colors">{formatTimestamp(timestamp)}</a>
       </div>
       <div className={`text-slate-100 text-sm pl-8 ${collapsed ? "line-clamp-2" : "whitespace-pre-wrap"}`}>
@@ -475,7 +539,7 @@ function AssistantBlock({
             {collapsed ? (
               <span>{truncatedContent}{wasTruncated && "..."}</span>
             ) : (
-              <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                 {content}
               </ReactMarkdown>
             )}
@@ -487,7 +551,9 @@ function AssistantBlock({
 }
 
 function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[]; toolName?: string }) {
+  const isAgentOutput = toolName === "AgentOutputTool";
   const [expanded, setExpanded] = useState(false);
+  const [showContent, setShowContent] = useState(!isAgentOutput);
   if (!toolResults.length) return null;
 
   const result = toolResults[0];
@@ -498,30 +564,37 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
       <div className="border-l-2 border-slate-700 pl-3">
         <div
           className="flex items-center gap-2 cursor-pointer group"
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => isAgentOutput ? setShowContent(!showContent) : setExpanded(!expanded)}
         >
           <span className="font-mono text-xs font-medium text-slate-500">
             {toolName || "Result"}
           </span>
+          {!showContent && (
+            <span className="text-slate-600 text-[10px]">
+              ({truncated.totalLines} lines)
+            </span>
+          )}
           <span className="text-slate-600 text-[10px] ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
-            {expanded ? "collapse" : "expand"}
+            {isAgentOutput ? (showContent ? "hide" : "show") : (expanded ? "collapse" : "expand")}
           </span>
         </div>
-        <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-red-950/30" : "bg-slate-900/30"}`}>
-          <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto ${
-            result.is_error ? "text-red-300" : "text-slate-400"
-          }`}>
-            {truncated.text}
-          </pre>
-          {truncated.truncated && (
-            <button
-              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-              className="text-[10px] text-slate-500 hover:text-slate-400 mt-1"
-            >
-              {expanded ? "show less" : `+${truncated.totalLines - 8} more lines`}
-            </button>
-          )}
-        </div>
+        {showContent && (
+          <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-red-950/30" : "bg-slate-900/30"}`}>
+            <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
+              result.is_error ? "text-red-300" : "text-slate-400"
+            }`}>
+              {truncated.text}
+            </pre>
+            {truncated.truncated && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+                className="text-[10px] text-slate-500 hover:text-slate-400 mt-1"
+              >
+                {expanded ? "show less" : `+${truncated.totalLines - 8} more lines`}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -635,7 +708,12 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
         return <ToolResultMessage key={msg._id} toolResults={msg.tool_results} toolName={toolName} />;
       }
       if (msg.content && msg.content.trim()) {
-        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} collapsed={collapsed} />;
+        if (isCommandMessage(msg.content)) {
+          if (collapsed) return null;
+          return <CommandStatusLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
+        }
+        const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
+        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} collapsed={collapsed} userName={userName} />;
       }
       return null;
     }
