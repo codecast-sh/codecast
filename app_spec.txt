@@ -357,4 +357,75 @@
     - Convex dev server for local development
     - CLI can point to local or production Convex
   </development_setup>
+  <changelog>
+    <entry date="2025-12-07" title="Pivot: Launch readiness + Happy-inspired UX">
+      <trigger>Analysis of Happy Coder mobile app revealed architectural patterns that could significantly improve Codecast</trigger>
+
+      <added>
+        - Landing page: Littlebird-style marketing page with one-command install CTA
+        - One-command install: curl | sh installer, no npm dependency
+        - Auto-auth handoff: CLI opens browser, receives token automatically without copy-paste
+        - InvalidateSync: Request deduplication pattern for daemon
+        - Tool Registry: Extensible tool visualization with per-tool custom views
+        - Message Reducer: Client-side tool lifecycle tracking (pending→running→completed)
+        - Todo extraction: Parse and display TodoWrite task progress
+        - Token usage tracking: Show context size and consumption
+        - Project-based grouping: Group conversations by project, not just time
+        - Git status: Capture at sync-time + show live when daemon connected
+        - Virtualization: Handle long conversations efficiently
+        - Zustand UI layer: Local state for expand/collapse, derived data
+        - Discoverable shares: Opt-in public directory of shared conversations
+        - Public directory: Browse publicly shared conversations
+        - Phase 2 designs: Comments, forking, remote permissions, remote messaging
+      </added>
+
+      <modified>
+        - Installation flow: Changed from npm install to curl | sh + auto-auth
+        - Privacy default: Flipped from team-visible to private-by-default
+        - Theme: Extending to full site with subtle pastel palette (warm, not blue)
+      </modified>
+
+      <superseded>
+        - Debounce rapid writes (replaced by InvalidateSync)
+        - Network retry queue (replaced by InvalidateSync)
+        - Conversation list pagination (replaced by virtualization)
+        - Dark mode support (replaced by comprehensive theme overhaul)
+        - Privacy default setting (replaced by default-private feature)
+      </superseded>
+
+      <deprioritized>
+        - Accessibility features (P1→P2)
+        - Filter by agent type/date range/team member (P1→P2)
+        - Remove team member, non-admin invite check (P1→P2)
+      </deprioritized>
+
+      <rationale>
+        Pre-launch focus on: (1) frictionless onboarding to maximize conversion,
+        (2) better visualization to showcase value, (3) privacy-first for enterprise trust.
+        Happy Coder patterns provide proven solutions for real-time sync UX challenges.
+      </rationale>
+    </entry>
+  </changelog>
+
+  <new_installation_flow>
+    1. User visits codecast.sh (beautiful landing page)
+    2. User runs: curl -fsSL codecast.sh/install | sh
+       - Downloads pre-built binary for platform
+       - No npm/node dependency
+    3. Installer immediately runs: codecast setup
+       - Opens browser to /auth/cli?token=xxx
+       - User logs in or signs up
+       - Browser completes auth, CLI receives token automatically
+       - Shows "Authenticated! Starting sync..."
+    4. Daemon auto-starts in background
+    5. User immediately sees conversations syncing
+    6. Optional: Join team via invite code or create team
+  </new_installation_flow>
+
+  <phase_2_interactive>
+    - Remote permission approval from web dashboard
+    - Remote message sending to agent from web
+    - Real-time bidirectional daemon ↔ web communication
+    - Reference architecture: Happy Coder's sessionRPC pattern
+  </phase_2_interactive>
 </project_specification>
