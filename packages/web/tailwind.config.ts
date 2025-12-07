@@ -7,7 +7,30 @@ const config: Config = {
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      fontFamily: {
+        mono: ["var(--font-mono)", "monospace"],
+        sans: ["var(--font-mono)", "monospace"],
+      },
+      typography: {
+        DEFAULT: {
+          css: {
+            fontFamily: "var(--font-mono), monospace",
+            code: {
+              fontFamily: "var(--font-mono), monospace",
+            },
+            pre: {
+              fontFamily: "var(--font-mono), monospace",
+            },
+          },
+        },
+        invert: {
+          css: {
+            fontFamily: "var(--font-mono), monospace",
+          },
+        },
+      },
+    },
   },
   plugins: [
     require("@tailwindcss/typography"),
