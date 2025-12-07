@@ -14,8 +14,8 @@ export default function SharedConversationPage() {
 
   if (conversation === null) {
     return (
-      <main className="h-screen flex flex-col bg-slate-950 items-center justify-center">
-        <div className="text-slate-400 text-center py-8">
+      <main className="h-screen flex flex-col bg-sol-base03 items-center justify-center">
+        <div className="text-sol-base0 text-center py-8">
           This conversation is not available. It may be private or the link may be invalid.
         </div>
       </main>
@@ -28,7 +28,7 @@ export default function SharedConversationPage() {
       backHref="/"
       backLabel="Home"
       headerExtra={
-        <span className="text-[10px] text-slate-500 px-2 py-1 bg-slate-800 rounded">
+        <span className="text-[10px] text-sol-base00 px-2 py-1 bg-sol-base02 rounded">
           Shared
         </span>
       }

@@ -52,14 +52,14 @@ export default function ConversationPage() {
       {!shareUrl ? (
         <button
           onClick={handleShare}
-          className="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors"
+          className="px-2 py-1 text-xs bg-sol-base02 hover:bg-slate-700 text-sol-base1 rounded transition-colors"
         >
           Share
         </button>
       ) : (
         <button
           onClick={handleCopyShareUrl}
-          className="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors"
+          className="px-2 py-1 text-xs bg-sol-base02 hover:bg-slate-700 text-sol-base1 rounded transition-colors"
         >
           {showShareCopied ? "Copied!" : "Copy Link"}
         </button>

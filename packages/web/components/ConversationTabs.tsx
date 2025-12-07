@@ -14,13 +14,13 @@ export function ConversationTabs({ onFilterChange }: ConversationTabsProps) {
   };
 
   return (
-    <div className="flex gap-6 border-b border-slate-700 mb-6">
+    <div className="flex gap-6 border-b border-sol-base01 mb-6">
       <button
         onClick={() => handleTabChange("my")}
         className={`pb-3 text-sm font-medium transition-colors ${
           activeTab === "my"
             ? "text-white border-b-2 border-blue-500"
-            : "text-slate-400 hover:text-white"
+            : "text-sol-base0 hover:text-white"
         }`}
       >
         My Conversations
@@ -30,7 +30,7 @@ export function ConversationTabs({ onFilterChange }: ConversationTabsProps) {
         className={`pb-3 text-sm font-medium transition-colors ${
           activeTab === "team"
             ? "text-white border-b-2 border-blue-500"
-            : "text-slate-400 hover:text-white"
+            : "text-sol-base0 hover:text-white"
         }`}
       >
         Team

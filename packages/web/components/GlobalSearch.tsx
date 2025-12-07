@@ -20,7 +20,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   return (
     <>
       {before}
-      <mark className="bg-amber-400/30 text-amber-200 light:text-amber-700 light:bg-amber-200/50 rounded px-0.5">{match}</mark>
+      <mark className="bg-amber-400/30 text-amber-200 rounded px-0.5">{match}</mark>
       {after}
     </>
   );
@@ -135,7 +135,7 @@ export function GlobalSearch() {
       >
         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
           <svg
-            className="w-4 h-4 text-slate-500"
+            className="w-4 h-4 text-sol-base00"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -159,10 +159,10 @@ export function GlobalSearch() {
           onFocus={() => setIsOpen(true)}
           onKeyDown={handleKeyDown}
           placeholder="Search conversations..."
-          className="w-full pl-10 pr-16 py-2 bg-slate-900/60 light:bg-slate-100 border border-slate-700/60 light:border-slate-300 rounded-lg text-sm text-slate-200 light:text-slate-800 placeholder-slate-500 light:placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all"
+          className="w-full pl-10 pr-16 py-2 bg-sol-base02/60 bg-sol-bg-alt border border-sol-base01/60 border-sol-border rounded-lg text-sm text-sol-base2 text-sol-text placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all"
         />
         <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-          <kbd className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 light:text-slate-400 bg-slate-800 light:bg-slate-200 rounded border border-slate-700 light:border-slate-300">
+          <kbd className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-sol-base00 bg-sol-base02 bg-sol-bg-alt rounded border border-sol-base01 border-sol-border">
             <span className="text-xs">&#8984;</span>K
           </kbd>
         </div>
@@ -177,13 +177,13 @@ export function GlobalSearch() {
               setQuery("");
             }}
           />
-          <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-slate-900 light:bg-white border border-slate-700/80 light:border-slate-200 rounded-xl shadow-2xl shadow-black/40 light:shadow-slate-300/50 overflow-hidden">
+          <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-sol-base02 bg-sol-bg border border-sol-base01/80 border-sol-border rounded-xl shadow-2xl shadow-black/40 overflow-hidden">
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
-                <div className="inline-block w-5 h-5 border-2 border-slate-600 border-t-amber-500 rounded-full animate-spin" />
+                <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
               </div>
             ) : flatResults.length === 0 ? (
-              <div className="px-4 py-8 text-center text-slate-500 text-sm">
+              <div className="px-4 py-8 text-center text-sol-base00 text-sm">
                 No results for "{query}"
               </div>
             ) : (
@@ -192,18 +192,18 @@ export function GlobalSearch() {
                   <button
                     key={result.key}
                     onClick={() => handleResultClick(result.conversationId)}
-                    className={`w-full text-left px-4 py-3 border-b border-slate-800/50 last:border-0 transition-colors ${
+                    className={`w-full text-left px-4 py-3 border-b border-sol-base02/50 last:border-0 transition-colors ${
                       index === selectedIndex
-                        ? "bg-slate-800/80"
-                        : "hover:bg-slate-800/40"
+                        ? "bg-sol-base02/80"
+                        : "hover:bg-sol-base02/40"
                     }`}
                   >
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-medium text-slate-400 truncate max-w-[200px]">
+                      <span className="text-xs font-medium text-sol-base0 truncate max-w-[200px]">
                         {result.title}
                       </span>
                       {!result.isOwn && (
-                        <span className="text-[10px] text-slate-500 px-1.5 py-0.5 bg-slate-800 rounded">
+                        <span className="text-[10px] text-sol-base00 px-1.5 py-0.5 bg-sol-base02 rounded">
                           {result.authorName}
                         </span>
                       )}
@@ -216,31 +216,31 @@ export function GlobalSearch() {
                       >
                         {result.role}
                       </span>
-                      <span className="text-[10px] text-slate-500 ml-auto">
+                      <span className="text-[10px] text-sol-base00 ml-auto">
                         {formatTimestamp(result.timestamp)}
                       </span>
                     </div>
-                    <p className="text-sm text-slate-300 leading-relaxed">
+                    <p className="text-sm text-sol-base1 leading-relaxed">
                       {highlightMatch(getSnippet(result.content, query), query)}
                     </p>
                   </button>
                 ))}
               </div>
             )}
-            <div className="px-3 py-2 bg-slate-800/50 border-t border-slate-700/50 flex items-center justify-between text-[10px] text-slate-500">
+            <div className="px-3 py-2 bg-sol-base02/50 border-t border-sol-base01/50 flex items-center justify-between text-[10px] text-sol-base00">
               <div className="flex items-center gap-3">
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1 py-0.5 bg-slate-700 rounded text-slate-400">&#8593;</kbd>
-                  <kbd className="px-1 py-0.5 bg-slate-700 rounded text-slate-400">&#8595;</kbd>
+                  <kbd className="px-1 py-0.5 bg-slate-700 rounded text-sol-base0">&#8593;</kbd>
+                  <kbd className="px-1 py-0.5 bg-slate-700 rounded text-sol-base0">&#8595;</kbd>
                   navigate
                 </span>
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1 py-0.5 bg-slate-700 rounded text-slate-400">&#9166;</kbd>
+                  <kbd className="px-1 py-0.5 bg-slate-700 rounded text-sol-base0">&#9166;</kbd>
                   open
                 </span>
               </div>
               <span className="flex items-center gap-1">
-                <kbd className="px-1 py-0.5 bg-slate-700 rounded text-slate-400">esc</kbd>
+                <kbd className="px-1 py-0.5 bg-slate-700 rounded text-sol-base0">esc</kbd>
                 close
               </span>
             </div>

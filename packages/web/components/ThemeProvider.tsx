@@ -38,7 +38,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   };
 
   if (!mounted) {
-    return <div className="min-h-screen bg-slate-900" />;
+    return <div className="min-h-screen bg-sol-base02" />;
   }
 
   return (

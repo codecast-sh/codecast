@@ -24,8 +24,8 @@ export default function LoginPage() {
 
   if (isLoading || isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900">
-        <div className="text-slate-400">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-sol-base02">
+        <div className="text-sol-base0">Loading...</div>
       </div>
     );
   }
@@ -56,26 +56,26 @@ export default function LoginPage() {
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center px-4">
+    <main className="min-h-screen bg-gradient-to-br from-sol-base03 via-sol-base02 to-sol-base03 flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-semibold text-white tracking-tight">
             codecast
           </h1>
-          <p className="text-slate-400 mt-2 text-sm">
+          <p className="text-sol-base0 mt-2 text-sm">
             Sign in to access your conversations
           </p>
         </div>
 
         <form
           onSubmit={handleSubmit}
-          className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-xl p-8 shadow-2xl"
+          className="bg-sol-base02/50 backdrop-blur border border-sol-base01 rounded-xl p-8 shadow-2xl"
         >
           <div className="space-y-5">
             <div>
               <label
                 htmlFor="email"
-                className="block text-sm font-medium text-slate-300 mb-2"
+                className="block text-sm font-medium text-sol-base1 mb-2"
               >
                 Email
               </label>
@@ -87,7 +87,7 @@ export default function LoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-base02/50 border border-sol-base01 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 placeholder="you@example.com"
               />
             </div>
@@ -95,7 +95,7 @@ export default function LoginPage() {
             <div>
               <label
                 htmlFor="password"
-                className="block text-sm font-medium text-slate-300 mb-2"
+                className="block text-sm font-medium text-sol-base1 mb-2"
               >
                 Password
               </label>
@@ -107,7 +107,7 @@ export default function LoginPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-base02/50 border border-sol-base01 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 placeholder="Enter your password"
               />
             </div>
@@ -125,7 +125,7 @@ export default function LoginPage() {
             {loading ? "Signing in..." : "Sign In"}
           </button>
 
-          <p className="mt-6 text-center text-sm text-slate-400">
+          <p className="mt-6 text-center text-sm text-sol-base0">
             Don&apos;t have an account?{" "}
             <Link
               href="/signup"

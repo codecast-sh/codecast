@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
-import "highlight.js/styles/github-dark.css";
+import "highlight.js/styles/base16/solarized-dark.css";
 
 type ToolCall = {
   id: string;
@@ -65,7 +65,7 @@ function formatTimestamp(ts: number) {
 
 function ClaudeIcon() {
   return (
-    <div className="w-6 h-6 rounded bg-amber-600 flex items-center justify-center shrink-0">
+    <div className="w-6 h-6 rounded bg-sol-yellow flex items-center justify-center shrink-0">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
         <path
           d="M7 8.5C7 7.67 7.67 7 8.5 7H11C11.83 7 12.5 7.67 12.5 8.5V11C12.5 11.83 11.83 12.5 11 12.5H8.5C7.67 12.5 7 11.83 7 11V8.5Z"
@@ -98,16 +98,16 @@ function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string
 
   return (
     <div className="font-mono text-xs">
-      <div className="text-slate-400 mb-2 text-[11px]">{filePath}</div>
+      <div className="text-sol-text-muted mb-2 text-[11px]">{filePath}</div>
       <div className="space-y-0">
         {oldLines.map((line, i) => (
-          <div key={`old-${i}`} className="bg-red-950/40 text-red-300 px-2 py-0.5">
-            <span className="text-red-500 mr-2">-</span>{line}
+          <div key={`old-${i}`} className="bg-sol-red/20 text-sol-red px-2 py-0.5">
+            <span className="text-sol-red mr-2">-</span>{line}
           </div>
         ))}
         {newLines.map((line, i) => (
-          <div key={`new-${i}`} className="bg-emerald-950/40 text-emerald-300 px-2 py-0.5">
-            <span className="text-emerald-500 mr-2">+</span>{line}
+          <div key={`new-${i}`} className="bg-sol-green/20 text-sol-green px-2 py-0.5">
+            <span className="text-sol-green mr-2">+</span>{line}
           </div>
         ))}
       </div>
@@ -130,17 +130,17 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
   const runInBackground = Boolean(parsedInput.run_in_background);
 
   const subagentColors: Record<string, { bg: string; border: string; text: string }> = {
-    Explore: { bg: "bg-emerald-950/40", border: "border-emerald-700/50", text: "text-emerald-400" },
-    Plan: { bg: "bg-blue-950/40", border: "border-blue-700/50", text: "text-blue-400" },
-    implementor: { bg: "bg-amber-950/40", border: "border-amber-700/50", text: "text-amber-400" },
-    "general-purpose": { bg: "bg-slate-800/60", border: "border-slate-600/50", text: "text-slate-300" },
-    "claude-code-guide": { bg: "bg-violet-950/40", border: "border-violet-700/50", text: "text-violet-400" },
-    "code-reviewer": { bg: "bg-rose-950/40", border: "border-rose-700/50", text: "text-rose-400" },
-    "code-explorer": { bg: "bg-cyan-950/40", border: "border-cyan-700/50", text: "text-cyan-400" },
-    "code-architect": { bg: "bg-indigo-950/40", border: "border-indigo-700/50", text: "text-indigo-400" },
+    Explore: { bg: "bg-sol-green/20", border: "border-sol-green/50", text: "text-sol-green" },
+    Plan: { bg: "bg-sol-blue/20", border: "border-sol-blue/50", text: "text-sol-blue" },
+    implementor: { bg: "bg-sol-orange/20", border: "border-sol-orange/50", text: "text-sol-orange" },
+    "general-purpose": { bg: "bg-sol-bg-alt/60", border: "border-sol-border/50", text: "text-sol-text-secondary" },
+    "claude-code-guide": { bg: "bg-sol-violet/20", border: "border-sol-violet/50", text: "text-sol-violet" },
+    "code-reviewer": { bg: "bg-sol-red/20", border: "border-sol-red/50", text: "text-sol-red" },
+    "code-explorer": { bg: "bg-sol-cyan/20", border: "border-sol-cyan/50", text: "text-sol-cyan" },
+    "code-architect": { bg: "bg-sol-magenta/20", border: "border-sol-magenta/50", text: "text-sol-magenta" },
   };
 
-  const colors = subagentColors[subagentType] || { bg: "bg-slate-800/60", border: "border-slate-600/50", text: "text-slate-400" };
+  const colors = subagentColors[subagentType] || { bg: "bg-sol-bg-alt/60", border: "border-sol-border/50", text: "text-sol-text-muted" };
   const truncatedPrompt = prompt.length > 300 && !expanded ? prompt.slice(0, 300) + "..." : prompt;
 
   return (
@@ -156,40 +156,40 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
           {subagentType}
         </span>
         {description && (
-          <span className="text-slate-400 text-xs truncate flex-1">
+          <span className="text-sol-text-muted text-xs truncate flex-1">
             {description}
           </span>
         )}
         {model && (
-          <span className="text-slate-600 text-[10px] font-mono">
+          <span className="text-sol-text-dim text-[10px] font-mono">
             {model}
           </span>
         )}
         {runInBackground && (
-          <span className="text-slate-500 text-[10px]">background</span>
+          <span className="text-sol-text-dim text-[10px]">background</span>
         )}
         {childConversationId && (
           <Link
             href={`/conversation/${childConversationId}`}
             onClick={(e) => e.stopPropagation()}
-            className="text-cyan-500 hover:text-cyan-400 text-[10px] font-medium underline underline-offset-2"
+            className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
           >
             view
           </Link>
         )}
-        <span className="text-slate-600 text-[10px] ml-auto">
+        <span className="text-sol-text-dim text-[10px] ml-auto">
           {expanded ? "collapse" : "expand"}
         </span>
       </div>
 
       <div className="px-3 pb-2">
-        <div className="text-slate-300 text-xs font-mono whitespace-pre-wrap leading-relaxed">
+        <div className="text-sol-text-secondary text-xs font-mono whitespace-pre-wrap leading-relaxed">
           {truncatedPrompt}
         </div>
         {prompt.length > 300 && !expanded && (
           <button
             onClick={() => setExpanded(true)}
-            className="text-[10px] text-slate-500 hover:text-slate-400 mt-1"
+            className="text-[10px] text-sol-text-dim hover:text-sol-text-muted mt-1"
           >
             show more
           </button>
@@ -197,10 +197,10 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
       </div>
 
       {expanded && result && (
-        <div className="border-t border-slate-700/50 px-3 py-2">
-          <div className="text-[10px] text-slate-500 mb-1">Result</div>
+        <div className="border-t border-sol-border/50 px-3 py-2">
+          <div className="text-[10px] text-sol-text-dim mb-1">Result</div>
           <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
-            result.is_error ? "text-red-300" : "text-slate-400"
+            result.is_error ? "text-sol-red" : "text-sol-text-muted"
           }`}>
             {result.content}
           </pre>
@@ -249,20 +249,20 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
   const resultTruncated = result ? truncateLines(result.content, expanded ? 100 : 8) : null;
 
   const toolColors: Record<string, string> = {
-    Edit: "text-amber-400",
-    Write: "text-amber-400",
-    Read: "text-blue-400",
-    Bash: "text-emerald-400",
-    Glob: "text-purple-400",
-    Grep: "text-purple-400",
-    Task: "text-cyan-400",
-    TodoWrite: "text-pink-400",
+    Edit: "text-sol-orange",
+    Write: "text-sol-orange",
+    Read: "text-sol-blue",
+    Bash: "text-sol-green",
+    Glob: "text-sol-violet",
+    Grep: "text-sol-violet",
+    Task: "text-sol-cyan",
+    TodoWrite: "text-sol-magenta",
   };
 
-  const toolColor = toolColors[tool.name] || "text-slate-400";
+  const toolColor = toolColors[tool.name] || "text-sol-text-muted";
 
   return (
-    <div className="my-3 border-l-2 border-slate-700 pl-3">
+    <div className="my-3 border-l-2 border-sol-border pl-3">
       <div
         className="flex items-center gap-2 cursor-pointer group"
         onClick={() => setExpanded(!expanded)}
@@ -271,17 +271,17 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
           {tool.name}
         </span>
         {summary && (
-          <span className="text-slate-500 text-xs font-mono truncate max-w-md">
+          <span className="text-sol-text-dim text-xs font-mono truncate max-w-md">
             {summary}
           </span>
         )}
-        <span className="text-slate-600 text-[10px] ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+        <span className="text-sol-text-dim text-[10px] ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
           {expanded ? "collapse" : "expand"}
         </span>
       </div>
 
       {isEdit && !expanded && !!parsedInput.old_string && !!parsedInput.new_string && (
-        <div className="mt-2 bg-slate-900/50 rounded p-2 max-h-40 overflow-hidden">
+        <div className="mt-2 bg-sol-bg-alt/50 rounded p-2 max-h-40 overflow-hidden">
           <DiffView
             oldStr={String(parsedInput.old_string)}
             newStr={String(parsedInput.new_string)}
@@ -292,8 +292,8 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
 
       {expanded && (
         <div className="mt-2 space-y-2">
-          <div className="bg-slate-900/50 rounded p-2">
-            <div className="text-[10px] text-slate-500 mb-1">Input</div>
+          <div className="bg-sol-bg-alt/50 rounded p-2">
+            <div className="text-[10px] text-sol-text-dim mb-1">Input</div>
             {isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
               <DiffView
                 oldStr={String(parsedInput.old_string)}
@@ -301,7 +301,7 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
                 filePath={String(parsedInput.file_path || "")}
               />
             ) : (
-              <pre className="text-xs text-slate-300 font-mono whitespace-pre-wrap overflow-x-auto">
+              <pre className="text-xs text-sol-text-secondary font-mono whitespace-pre-wrap overflow-x-auto">
                 {JSON.stringify(parsedInput, null, 2)}
               </pre>
             )}
@@ -310,25 +310,25 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
       )}
 
       {result && resultTruncated && (
-        <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-red-950/30" : "bg-slate-900/30"}`}>
+        <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-sol-red/20" : "bg-sol-bg-alt/30"}`}>
           {!resultExpanded ? (
             <button
               onClick={(e) => { e.stopPropagation(); setResultExpanded(true); }}
-              className="text-[10px] text-slate-500 hover:text-slate-400"
+              className="text-[10px] text-sol-text-dim hover:text-sol-text-muted"
             >
               show result ({resultTruncated.totalLines} lines)
             </button>
           ) : (
             <>
               <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
-                result.is_error ? "text-red-300" : "text-slate-400"
+                result.is_error ? "text-sol-red" : "text-sol-text-muted"
               }`}>
                 {resultTruncated.text}
               </pre>
               {resultTruncated.truncated && (
                 <button
                   onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-                  className="text-[10px] text-slate-500 hover:text-slate-400 mt-1"
+                  className="text-[10px] text-sol-text-dim hover:text-sol-text-muted mt-1"
                 >
                   {expanded ? "show less" : `+${resultTruncated.totalLines - 8} more lines`}
                 </button>
@@ -336,7 +336,7 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
               {isAgentOutput && (
                 <button
                   onClick={(e) => { e.stopPropagation(); setResultExpanded(false); }}
-                  className="text-[10px] text-slate-500 hover:text-slate-400 mt-1 ml-2"
+                  className="text-[10px] text-sol-text-dim hover:text-sol-text-muted mt-1 ml-2"
                 >
                   hide
                 </button>
@@ -354,21 +354,21 @@ function ThinkingBlock({ content }: { content: string }) {
   const truncated = truncateLines(content, expanded ? 50 : 3);
 
   return (
-    <div className="my-3 border-l-2 border-amber-800/50 pl-3">
+    <div className="my-3 border-l-2 border-sol-yellow/50 pl-3">
       <div
         className="flex items-center gap-2 cursor-pointer"
         onClick={() => setExpanded(!expanded)}
       >
-        <span className="text-amber-600 text-xs font-medium">thinking</span>
+        <span className="text-sol-yellow text-xs font-medium">thinking</span>
       </div>
-      <div className="mt-1 text-slate-500 text-xs italic font-mono whitespace-pre-wrap">
+      <div className="mt-1 text-sol-text-dim text-xs italic font-mono whitespace-pre-wrap">
         {truncated.text}
         {truncated.truncated && !expanded && "..."}
       </div>
       {truncated.truncated && (
         <button
           onClick={() => setExpanded(!expanded)}
-          className="text-[10px] text-slate-600 hover:text-slate-500 mt-1"
+          className="text-[10px] text-sol-text-dim hover:text-sol-text-dim mt-1"
         >
           {expanded ? "collapse" : "expand"}
         </button>
@@ -383,7 +383,7 @@ function ImageBlock({ image }: { image: ImageData }) {
       <img
         src={`data:${image.media_type};base64,${image.data}`}
         alt="User provided image"
-        className="max-w-md rounded border border-slate-700"
+        className="max-w-md rounded border border-sol-border"
       />
     </div>
   );
@@ -391,7 +391,7 @@ function ImageBlock({ image }: { image: ImageData }) {
 
 function UserIcon() {
   return (
-    <div className="w-6 h-6 rounded bg-blue-600 flex items-center justify-center shrink-0">
+    <div className="w-6 h-6 rounded bg-sol-blue flex items-center justify-center shrink-0">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
         <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
         <circle cx="12" cy="7" r="4" />
@@ -432,9 +432,9 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   };
 
   return (
-    <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-slate-500">
-      <span className="text-slate-600">{formatTimestamp(timestamp)}</span>
-      <span className="px-1.5 py-0.5 rounded bg-slate-800/50 text-slate-400 font-mono text-[10px]">
+    <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-sol-text-dim">
+      <span className="text-sol-text-dim">{formatTimestamp(timestamp)}</span>
+      <span className="px-1.5 py-0.5 rounded bg-sol-bg-alt/50 text-sol-text-muted font-mono text-[10px]">
         {typeLabels[parsed?.type || ""] || "status"}
       </span>
       <span className="font-mono truncate">{displayText}</span>
@@ -447,13 +447,13 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName }: { co
   const wasTruncated = collapsed && content.split("\n").length > 2;
 
   return (
-    <div id={`msg-${messageId}`} className={`bg-blue-950/20 border border-blue-900/30 rounded-lg p-4 scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"}`}>
+    <div id={`msg-${messageId}`} className={`bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4 scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"}`}>
       <div className="flex items-center gap-2 mb-2">
         <UserIcon />
-        <span className="text-blue-300 text-xs font-medium">{userName || "You"}</span>
-        <a href={`#msg-${messageId}`} className="text-slate-600 hover:text-slate-400 text-xs transition-colors">{formatTimestamp(timestamp)}</a>
+        <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
+        <a href={`#msg-${messageId}`} className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors">{formatTimestamp(timestamp)}</a>
       </div>
-      <div className={`text-slate-100 text-sm pl-8 ${collapsed ? "line-clamp-2" : "whitespace-pre-wrap"}`}>
+      <div className={`text-sol-text text-sm pl-8 ${collapsed ? "line-clamp-2" : "whitespace-pre-wrap"}`}>
         {truncated}{wasTruncated && "..."}
       </div>
     </div>
@@ -509,10 +509,10 @@ function AssistantBlock({
     <div id={`msg-${messageId}`} className={`scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"}`}>
       <div className="flex items-center gap-2 mb-2">
         <ClaudeIcon />
-        <span className="text-slate-300 text-xs font-medium">Claude</span>
-        <a href={`#msg-${messageId}`} className="text-slate-600 hover:text-slate-400 text-xs transition-colors">{formatTimestamp(timestamp)}</a>
+        <span className="text-sol-text-secondary text-xs font-medium">Claude</span>
+        <a href={`#msg-${messageId}`} className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors">{formatTimestamp(timestamp)}</a>
         {collapsed && hasToolCalls && (
-          <span className="text-slate-600 text-xs">[{toolCalls!.length} tool{toolCalls!.length > 1 ? "s" : ""}]</span>
+          <span className="text-sol-text-dim text-xs">[{toolCalls!.length} tool{toolCalls!.length > 1 ? "s" : ""}]</span>
         )}
       </div>
 
@@ -535,7 +535,7 @@ function AssistantBlock({
         ))}
 
         {hasContent && (
-          <div className={`text-slate-200 ${collapsed ? "text-sm line-clamp-2" : "prose prose-invert prose-sm max-w-none"}`}>
+          <div className={`text-sol-text-secondary ${collapsed ? "text-sm line-clamp-2" : "prose prose-invert prose-sm max-w-none"}`}>
             {collapsed ? (
               <span>{truncatedContent}{wasTruncated && "..."}</span>
             ) : (
@@ -561,34 +561,34 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
 
   return (
     <div className="mb-3 pl-8">
-      <div className="border-l-2 border-slate-700 pl-3">
+      <div className="border-l-2 border-sol-border pl-3">
         <div
           className="flex items-center gap-2 cursor-pointer group"
           onClick={() => isAgentOutput ? setShowContent(!showContent) : setExpanded(!expanded)}
         >
-          <span className="font-mono text-xs font-medium text-slate-500">
+          <span className="font-mono text-xs font-medium text-sol-text-dim">
             {toolName || "Result"}
           </span>
           {!showContent && (
-            <span className="text-slate-600 text-[10px]">
+            <span className="text-sol-text-dim text-[10px]">
               ({truncated.totalLines} lines)
             </span>
           )}
-          <span className="text-slate-600 text-[10px] ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+          <span className="text-sol-text-dim text-[10px] ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
             {isAgentOutput ? (showContent ? "hide" : "show") : (expanded ? "collapse" : "expand")}
           </span>
         </div>
         {showContent && (
-          <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-red-950/30" : "bg-slate-900/30"}`}>
+          <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-sol-red/20" : "bg-sol-bg-alt/30"}`}>
             <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
-              result.is_error ? "text-red-300" : "text-slate-400"
+              result.is_error ? "text-sol-red" : "text-sol-text-muted"
             }`}>
               {truncated.text}
             </pre>
             {truncated.truncated && (
               <button
                 onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-                className="text-[10px] text-slate-500 hover:text-slate-400 mt-1"
+                className="text-[10px] text-sol-text-dim hover:text-sol-text-muted mt-1"
               >
                 {expanded ? "show less" : `+${truncated.totalLines - 8} more lines`}
               </button>
@@ -608,11 +608,11 @@ function SystemBlock({ content, subtype }: { content: string; subtype?: string }
   };
 
   return (
-    <div className="mb-4 px-3 py-2 bg-slate-800/20 border-l-2 border-slate-600 text-xs">
-      <span className="text-slate-500 text-[10px] mr-2">
+    <div className="mb-4 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-sol-border text-xs">
+      <span className="text-sol-text-dim text-[10px] mr-2">
         {subtypeLabels[subtype || ""] || "system"}
       </span>
-      <span className="text-slate-400 font-mono">
+      <span className="text-sol-text-muted font-mono">
         {content.replace(/<[^>]+>/g, "").slice(0, 200)}
         {content.length > 200 && "..."}
       </span>
@@ -740,22 +740,22 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
   };
 
   return (
-    <main className="h-screen flex flex-col bg-slate-950">
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur shrink-0">
+    <main className="h-screen flex flex-col bg-sol-bg">
+      <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
         <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-4">
           <Link
             href={backHref}
-            className="text-slate-500 hover:text-slate-300 transition-colors text-sm"
+            className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm"
           >
             &larr; {backLabel}
           </Link>
-          <h1 className="text-sm font-medium text-slate-200 truncate">{truncatedTitle}</h1>
+          <h1 className="text-sm font-medium text-sol-text-secondary truncate">{truncatedTitle}</h1>
           {conversation && (
             <>
               {conversation.parent_conversation_id && (
                 <Link
                   href={`/conversation/${conversation.parent_conversation_id}`}
-                  className="text-violet-400 hover:text-violet-300 text-xs flex items-center gap-1"
+                  className="text-sol-violet hover:text-sol-violet text-xs flex items-center gap-1"
                 >
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
@@ -764,23 +764,23 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
                 </Link>
               )}
               {conversation.child_conversations && conversation.child_conversations.length > 0 && (
-                <span className="text-cyan-400 text-xs">
+                <span className="text-sol-cyan text-xs">
                   {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? "s" : ""}
                 </span>
               )}
-              <span className="ml-auto text-amber-500">
+              <span className="ml-auto text-sol-yellow">
                 {conversation.agent_type === "claude_code" ? (
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M4.709 15.955l4.72-2.647.08-.08 2.726-4.721c.398-.65 1.063-1.063 1.808-1.063h.08c.744 0 1.409.413 1.807 1.063l2.727 4.72.079.08 4.72 2.728c.65.398 1.063 1.063 1.063 1.808v.08c0 .744-.413 1.409-1.063 1.807l-4.72 2.727-.08.08-2.727 4.72c-.398.65-1.063 1.063-1.808 1.063h-.08c-.744 0-1.409-.413-1.807-1.063l-2.727-4.72-.079-.08-4.72-2.727c-.65-.398-1.063-1.063-1.063-1.808v-.08c0-.744.413-1.409 1.063-1.807zm7.248-1.41l-1.33 2.302 2.302 1.33c.16.08.319.08.479 0l2.302-1.33-1.33-2.302c-.08-.16-.08-.319 0-.479l1.33-2.302-2.302-1.33c-.16-.08-.319-.08-.479 0l-2.302 1.33 1.33 2.302c.08.16.08.319 0 .479z" />
                   </svg>
                 ) : (
-                  <span className="text-[10px] text-slate-600 font-mono">{conversation.agent_type}</span>
+                  <span className="text-[10px] text-sol-text-dim font-mono">{conversation.agent_type}</span>
                 )}
               </span>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setCollapsed((c) => !c)}
-                  className={`px-2 py-1 text-xs rounded transition-colors ${collapsed ? "bg-amber-800 text-amber-200" : "bg-slate-800 hover:bg-slate-700 text-slate-300"}`}
+                  className={`px-2 py-1 text-xs rounded transition-colors ${collapsed ? "bg-amber-800 text-amber-200" : "bg-sol-bg-alt hover:bg-slate-700 text-sol-text-secondary"}`}
                   title="Toggle collapse (Cmd+Shift+C)"
                 >
                   {collapsed ? "Expand" : "Collapse"}
@@ -795,9 +795,9 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
       <div ref={containerRef} className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto px-4 py-6">
           {!conversation ? (
-            <div className="text-slate-500 text-center py-8 text-sm">Loading...</div>
+            <div className="text-sol-text-dim text-center py-8 text-sm">Loading...</div>
           ) : conversation.messages.length === 0 ? (
-            <div className="text-slate-500 text-center py-8 text-sm">
+            <div className="text-sol-text-dim text-center py-8 text-sm">
               No messages in this conversation
             </div>
           ) : (

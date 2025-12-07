@@ -3,27 +3,23 @@
 @tailwind utilities;
 
 :root {
-  --bg-primary: theme('colors.slate.900');
-  --bg-secondary: theme('colors.slate.800');
-  --bg-card: rgba(15, 23, 42, 0.6);
-  --border-primary: theme('colors.slate.700');
-  --border-secondary: theme('colors.slate.800');
-  --text-primary: theme('colors.white');
-  --text-secondary: theme('colors.slate.100');
-  --text-muted: theme('colors.slate.400');
-  --text-dimmed: theme('colors.slate.500');
+  --sol-bg: #002b36;
+  --sol-bg-alt: #073642;
+  --sol-border: #586e75;
+  --sol-text: #fdf6e3;
+  --sol-text-secondary: #eee8d5;
+  --sol-text-muted: #839496;
+  --sol-text-dim: #657b83;
 }
 
 .light {
-  --bg-primary: theme('colors.white');
-  --bg-secondary: theme('colors.slate.50');
-  --bg-card: rgba(248, 250, 252, 0.8);
-  --border-primary: theme('colors.slate.200');
-  --border-secondary: theme('colors.slate.100');
-  --text-primary: theme('colors.slate.900');
-  --text-secondary: theme('colors.slate.800');
-  --text-muted: theme('colors.slate.600');
-  --text-dimmed: theme('colors.slate.500');
+  --sol-bg: #fdf6e3;
+  --sol-bg-alt: #eee8d5;
+  --sol-border: #93a1a1;
+  --sol-text: #002b36;
+  --sol-text-secondary: #073642;
+  --sol-text-muted: #657b83;
+  --sol-text-dim: #93a1a1;
 }
 
 .prose table {
@@ -32,26 +28,23 @@
 
 .prose th,
 .prose td {
-  @apply border border-slate-700 px-3 py-2 text-left;
+  @apply border px-3 py-2 text-left;
+  border-color: var(--sol-border);
 }
 
 .prose th {
-  @apply bg-slate-800 font-medium;
+  background-color: var(--sol-bg-alt);
+  @apply font-medium;
 }
 
 .prose tr:nth-child(even) {
-  @apply bg-slate-900/50;
+  background-color: color-mix(in srgb, var(--sol-bg-alt) 50%, transparent);
 }
 
-.light .prose th,
-.light .prose td {
-  @apply border-slate-300;
-}
-
-.light .prose th {
-  @apply bg-slate-100;
-}
-
-.light .prose tr:nth-child(even) {
-  @apply bg-slate-50;
+.light .prose {
+  --tw-prose-body: #073642;
+  --tw-prose-headings: #002b36;
+  --tw-prose-links: #268bd2;
+  --tw-prose-code: #002b36;
+  --tw-prose-pre-bg: #eee8d5;
 }

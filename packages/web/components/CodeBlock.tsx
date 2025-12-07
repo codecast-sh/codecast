@@ -20,18 +20,18 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
       <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={handleCopy}
-          className="px-2 py-1 text-xs bg-slate-600 text-slate-200 rounded hover:bg-slate-500"
+          className="px-2 py-1 text-xs bg-slate-600 text-sol-base2 rounded hover:bg-slate-500"
         >
           {copied ? "Copied!" : "Copy"}
         </button>
       </div>
       {language && (
-        <div className="text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-t border-b border-slate-700">
+        <div className="text-xs text-sol-base0 bg-sol-base02 px-3 py-1 rounded-t border-b border-sol-base01">
           {language}
         </div>
       )}
-      <pre className={`bg-slate-800 p-4 overflow-x-auto text-sm ${language ? "rounded-b" : "rounded"}`}>
-        <code className="text-slate-200 font-mono">{code}</code>
+      <pre className={`bg-sol-base02 p-4 overflow-x-auto text-sm ${language ? "rounded-b" : "rounded"}`}>
+        <code className="text-sol-base2 font-mono">{code}</code>
       </pre>
     </div>
   );
