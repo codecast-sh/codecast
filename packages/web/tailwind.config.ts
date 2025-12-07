@@ -85,6 +85,11 @@ const config: Config = {
   			sans: [
   				'var(--font-mono)',
   				'monospace'
+  			],
+  			serif: [
+  				'var(--font-serif)',
+  				'Georgia',
+  				'serif'
   			]
   		},
   		typography: {
