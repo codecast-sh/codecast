@@ -5,7 +5,7 @@ import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { useEffect, useState, useMemo } from "react";
-import { cleanMessageContent, isCommandMessage } from "../lib/messageUtils";
+import { getConversationPreview, cleanTitle } from "../lib/conversationProcessor";
 
 type Conversation = {
   _id: string;
@@ -274,15 +274,15 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           Active{counts.active > 0 && ` (${counts.active})`}
         </button>
 
-        <div className="w-px bg-slate-700/50 bg-sol-bg-alt mx-1" />
+        <div className="w-px bg-sol-border/30 mx-1" />
 
         {/* Subagent filters */}
         <button
           onClick={() => setSubagentFilter(subagentFilter === "main" ? "all" : "main")}
           className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             subagentFilter === "main"
-              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+              ? "bg-sol-blue/20 text-sol-blue border border-sol-blue/40"
+              : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
           }`}
         >
           Main{counts.main > 0 && ` (${counts.main})`}
@@ -291,8 +291,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           onClick={() => setSubagentFilter(subagentFilter === "subagent" ? "all" : "subagent")}
           className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             subagentFilter === "subagent"
-              ? "bg-slate-500/20 text-sol-text-secondary border border-slate-500/40 bg-sol-bg-alt text-sol-text border-sol-border"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+              ? "bg-sol-violet/20 text-sol-violet border border-sol-violet/40"
+              : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
           }`}
         >
           Subagent{counts.subagent > 0 && ` (${counts.subagent})`}
@@ -320,59 +320,47 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                 className="group block relative"
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                <div className="relative bg-sol-bg-alt/60 bg-sol-bg/80 border border-sol-border/80 border-sol-border rounded-xl p-4 hover:border-amber-500/30 transition-all duration-200 backdrop-blur-sm">
+                <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-xl p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm">
                   <div className="flex items-start justify-between gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start gap-2 mb-1.5">
-                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-sol-bg-alt bg-sol-bg-alt flex items-center justify-center text-[10px] font-medium text-sol-text-secondary mt-0.5">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-sol-bg-alt flex items-center justify-center text-[10px] font-medium text-sol-text-secondary mt-0.5">
                           {(conv.author_name?.charAt(0) || "U").toUpperCase()}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <span className="text-sol-text text-sol-text font-medium text-base group-hover:text-amber-50 transition-colors">
-                            {conv.title}
+                          <span className="text-sol-text font-medium text-base group-hover:text-sol-yellow transition-colors">
+                            {cleanTitle(conv.title)}
                           </span>
                           {conv.is_active && (
-                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 ml-2 rounded-md bg-emerald-500/30 border border-emerald-400/60 shadow-[0_0_8px_rgba(16,185,129,0.4)] align-middle">
-                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(16,185,129,0.8)]" />
-                              <span className="text-xs text-emerald-300 font-semibold tracking-wide">LIVE</span>
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 ml-2 rounded-md bg-sol-green/20 border border-sol-green/60 align-middle">
+                              <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
+                              <span className="text-xs text-sol-green font-semibold tracking-wide">LIVE</span>
                             </span>
                           )}
                         </div>
                       </div>
 
                       {(() => {
-                        let messages: Array<{ role: "user" | "assistant"; content: string }> = [];
-                        if (conv.message_alternates && conv.message_alternates.length > 0) {
-                          const titleNorm = conv.title?.toLowerCase().trim().slice(0, 80) || "";
-                          messages = conv.message_alternates
-                            .filter((m) => {
-                              if (m.content.startsWith("[Using:")) return false;
-                              if (m.role === "user") {
-                                const msgNorm = m.content.toLowerCase().trim().slice(0, 80);
-                                if (msgNorm === titleNorm) return false;
-                              }
-                              return true;
-                            })
-                            .slice(0, 4);
-                        } else if (conv.first_assistant_message && !conv.first_assistant_message.startsWith("[Using:")) {
-                          messages.push({ role: "assistant", content: conv.first_assistant_message });
+                        const messages = getConversationPreview(conv.message_alternates, conv.title, 4);
+                        if (messages.length === 0 && conv.first_assistant_message && !conv.first_assistant_message.startsWith("[Using:")) {
+                          messages.push({ role: "assistant", content: conv.first_assistant_message, cleanContent: conv.first_assistant_message, isCommand: false });
                         }
 
                         if (messages.length === 0) return null;
                         return (
                           <div className="mb-2 space-y-0.5 text-xs overflow-hidden opacity-60">
                             {messages.map((m, idx) => (
-                              <div key={idx} className="flex items-start gap-1.5 text-sol-text-muted0 min-w-0">
+                              <div key={idx} className="flex items-start gap-1.5 min-w-0">
                                 {m.role === "assistant" ? (
-                                  <span className="flex-shrink-0 w-3.5 h-3.5 rounded-full bg-amber-700/70 flex items-center justify-center mt-0.5">
+                                  <span className="flex-shrink-0 w-3.5 h-3.5 rounded-full bg-sol-yellow/70 flex items-center justify-center mt-0.5">
                                     <ClaudeLogo className="w-2 h-2 text-sol-text/80" />
                                   </span>
                                 ) : (
-                                  <span className="flex-shrink-0 w-3.5 h-3.5 rounded-full bg-slate-700 flex items-center justify-center mt-0.5 text-[7px] font-medium text-sol-text-muted">
+                                  <span className="flex-shrink-0 w-3.5 h-3.5 rounded-full bg-sol-bg-alt flex items-center justify-center mt-0.5 text-[7px] font-medium text-sol-text-muted">
                                     {(conv.author_name?.charAt(0) || "U").toUpperCase()}
                                   </span>
                                 )}
-                                <span className="truncate min-w-0 text-sol-text-muted0">{m.content}</span>
+                                <span className="truncate min-w-0 text-sol-text-muted">{m.cleanContent}</span>
                               </div>
                             ))}
                           </div>
@@ -416,7 +404,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                         {conv.subagent_types && conv.subagent_types.length > 0 && conv.subagent_types.map((type) => (
                           <span
                             key={type}
-                            className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400 border border-emerald-700/40 text-[10px] font-mono"
+                            className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-cyan/20 text-sol-cyan border border-sol-cyan/40 text-[10px] font-mono"
                           >
                             {type}
                           </span>

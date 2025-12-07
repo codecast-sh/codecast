@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import "highlight.js/styles/base16/solarized-dark.css";
+import { isCommandMessage, getCommandType, cleanContent } from "../lib/conversationProcessor";
 
 type ToolCall = {
   id: string;
@@ -400,42 +401,15 @@ function UserIcon() {
   );
 }
 
-function isCommandMessage(content: string): boolean {
-  const trimmed = content.trim();
-  return /^<(command-name|command-message|local-command-stdout|local-command-stderr)>/.test(trimmed) ||
-    trimmed.startsWith("Caveat:");
-}
-
-function parseCommandMessage(content: string): { type: string; value: string } | null {
-  const match = content.match(/<(command-name|command-message)>([^<]*)<\/\1>/);
-  if (match) {
-    return { type: match[1], value: match[2] };
-  }
-  if (content.includes("<local-command-stdout>")) {
-    return { type: "command-output", value: "command output" };
-  }
-  if (content.trim().startsWith("Caveat:")) {
-    return { type: "caveat", value: content.trim().slice(0, 80) + (content.length > 80 ? "..." : "") };
-  }
-  return null;
-}
-
 function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
-  const parsed = parseCommandMessage(content);
-  const displayText = parsed?.value || content.replace(/<[^>]+>/g, "").slice(0, 100);
-
-  const typeLabels: Record<string, string> = {
-    "command-name": "cmd",
-    "command-message": "msg",
-    "command-output": "output",
-    "caveat": "note",
-  };
+  const cmdType = getCommandType(content);
+  const displayText = cleanContent(content).slice(0, 100) || content.replace(/<[^>]+>/g, "").slice(0, 100);
 
   return (
     <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-sol-text-dim">
       <span className="text-sol-text-dim">{formatTimestamp(timestamp)}</span>
       <span className="px-1.5 py-0.5 rounded bg-sol-bg-alt/50 text-sol-text-muted font-mono text-[10px]">
-        {typeLabels[parsed?.type || ""] || "status"}
+        {cmdType || "status"}
       </span>
       <span className="font-mono truncate">{displayText}</span>
     </div>
