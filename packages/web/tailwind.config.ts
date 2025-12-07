@@ -28,6 +28,7 @@ const config: Config = {
           green: "#859900",
           bg: "var(--sol-bg)",
           "bg-alt": "var(--sol-bg-alt)",
+          "bg-highlight": "var(--sol-bg-highlight)",
           border: "var(--sol-border)",
           text: "var(--sol-text)",
           "text-secondary": "var(--sol-text-secondary)",

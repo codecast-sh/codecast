@@ -5,6 +5,7 @@ import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { useEffect, useState, useMemo } from "react";
+import { cleanMessageContent, isCommandMessage } from "../lib/messageUtils";
 
 type Conversation = {
   _id: string;

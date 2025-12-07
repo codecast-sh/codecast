@@ -5,21 +5,89 @@
 :root {
   --sol-bg: #002b36;
   --sol-bg-alt: #073642;
+  --sol-bg-highlight: #094552;
   --sol-border: #586e75;
   --sol-text: #fdf6e3;
   --sol-text-secondary: #eee8d5;
-  --sol-text-muted: #839496;
-  --sol-text-dim: #657b83;
+  --sol-text-muted: #93a1a1;
+  --sol-text-dim: #839496;
 }
 
 .light {
   --sol-bg: #fdf6e3;
   --sol-bg-alt: #eee8d5;
+  --sol-bg-highlight: #ddd6c3;
   --sol-border: #93a1a1;
   --sol-text: #002b36;
   --sol-text-secondary: #073642;
-  --sol-text-muted: #657b83;
-  --sol-text-dim: #93a1a1;
+  --sol-text-muted: #586e75;
+  --sol-text-dim: #657b83;
+}
+
+@layer components {
+  .sol-card {
+    @apply bg-sol-bg-alt/60 border border-sol-border/40 rounded-xl;
+  }
+
+  .sol-card-hover {
+    @apply hover:border-sol-yellow/40 transition-all duration-200;
+  }
+
+  .sol-header {
+    @apply border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur;
+  }
+
+  .sol-sidebar {
+    @apply border-r border-sol-border bg-sol-bg-alt/50;
+  }
+
+  .sol-btn {
+    @apply px-3 py-1.5 rounded-lg text-sm font-medium transition-colors;
+  }
+
+  .sol-btn-primary {
+    @apply sol-btn bg-sol-bg-alt text-sol-text hover:bg-sol-bg-highlight;
+  }
+
+  .sol-btn-ghost {
+    @apply sol-btn text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50;
+  }
+
+  .sol-badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border;
+  }
+
+  .sol-badge-live {
+    @apply sol-badge bg-sol-green/20 text-sol-green border-sol-green/40;
+  }
+
+  .sol-badge-active {
+    @apply sol-badge bg-sol-yellow/20 text-sol-yellow border-sol-yellow/40;
+  }
+
+  .sol-badge-info {
+    @apply sol-badge bg-sol-blue/20 text-sol-blue border-sol-blue/40;
+  }
+
+  .sol-badge-muted {
+    @apply sol-badge bg-sol-bg-alt text-sol-text-muted border-sol-border/40;
+  }
+
+  .sol-link {
+    @apply text-sol-blue hover:text-sol-cyan transition-colors;
+  }
+
+  .sol-input {
+    @apply bg-sol-bg border border-sol-border rounded-lg px-3 py-2 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue;
+  }
+}
+
+.prose {
+  --tw-prose-body: var(--sol-text-secondary);
+  --tw-prose-headings: var(--sol-text);
+  --tw-prose-links: #268bd2;
+  --tw-prose-code: var(--sol-text);
+  --tw-prose-pre-bg: var(--sol-bg-alt);
 }
 
 .prose table {
@@ -39,12 +107,4 @@
 
 .prose tr:nth-child(even) {
   background-color: color-mix(in srgb, var(--sol-bg-alt) 50%, transparent);
-}
-
-.light .prose {
-  --tw-prose-body: #073642;
-  --tw-prose-headings: #002b36;
-  --tw-prose-links: #268bd2;
-  --tw-prose-code: #002b36;
-  --tw-prose-pre-bg: #eee8d5;
 }
