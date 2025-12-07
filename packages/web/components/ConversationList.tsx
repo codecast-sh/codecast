@@ -246,8 +246,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           onClick={() => setTimeFilter("all")}
           className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             timeFilter === "all"
-              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
-              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40 light:bg-amber-100 light:text-amber-700 light:border-amber-300"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600 light:bg-slate-100 light:text-slate-600 light:border-slate-200 light:hover:border-slate-300"
           }`}
         >
           All
@@ -256,8 +256,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           onClick={() => setTimeFilter("long")}
           className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             timeFilter === "long"
-              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
-              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40 light:bg-amber-100 light:text-amber-700 light:border-amber-300"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600 light:bg-slate-100 light:text-slate-600 light:border-slate-200 light:hover:border-slate-300"
           }`}
         >
           Long Running{counts.long > 0 && ` (${counts.long})`}
@@ -266,22 +266,22 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           onClick={() => setTimeFilter("active")}
           className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             timeFilter === "active"
-              ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
-              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+              ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 light:bg-emerald-100 light:text-emerald-700 light:border-emerald-300"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600 light:bg-slate-100 light:text-slate-600 light:border-slate-200 light:hover:border-slate-300"
           }`}
         >
           Active{counts.active > 0 && ` (${counts.active})`}
         </button>
 
-        <div className="w-px bg-slate-700/50 mx-1" />
+        <div className="w-px bg-slate-700/50 light:bg-slate-300 mx-1" />
 
         {/* Subagent filters */}
         <button
           onClick={() => setSubagentFilter(subagentFilter === "main" ? "all" : "main")}
           className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             subagentFilter === "main"
-              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
-              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40 light:bg-blue-100 light:text-blue-700 light:border-blue-300"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600 light:bg-slate-100 light:text-slate-600 light:border-slate-200 light:hover:border-slate-300"
           }`}
         >
           Main{counts.main > 0 && ` (${counts.main})`}
@@ -290,8 +290,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           onClick={() => setSubagentFilter(subagentFilter === "subagent" ? "all" : "subagent")}
           className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             subagentFilter === "subagent"
-              ? "bg-slate-500/20 text-slate-300 border border-slate-500/40"
-              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600"
+              ? "bg-slate-500/20 text-slate-300 border border-slate-500/40 light:bg-slate-200 light:text-slate-700 light:border-slate-400"
+              : "bg-slate-800/60 text-slate-400 border border-slate-700/40 hover:border-slate-600 light:bg-slate-100 light:text-slate-600 light:border-slate-200 light:hover:border-slate-300"
           }`}
         >
           Subagent{counts.subagent > 0 && ` (${counts.subagent})`}
@@ -305,8 +305,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
       )}
       {groups.map((group, groupIdx) => (
         <div key={group.label}>
-          <div className="pb-3 mb-4">
-            <h2 className="text-xs font-medium tracking-wide uppercase text-slate-500 px-1">
+          <div className="pb-2 mb-3">
+            <h2 className="text-xs font-medium tracking-wide uppercase text-slate-500 light:text-slate-400">
               {group.label}
             </h2>
           </div>
@@ -318,16 +318,16 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                 href={`/conversation/${conv._id}`}
                 className="group block relative"
               >
-                <div className="absolute inset-0 bg-gradient-to-br from-slate-800/40 to-slate-900/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                <div className="relative bg-slate-900/60 border border-slate-800/80 rounded-xl p-4 hover:border-amber-500/30 transition-all duration-200 backdrop-blur-sm">
+                <div className="absolute inset-0 bg-gradient-to-br from-slate-800/40 to-slate-900/40 light:from-slate-200/40 light:to-slate-100/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                <div className="relative bg-slate-900/60 light:bg-white/80 border border-slate-800/80 light:border-slate-200 rounded-xl p-4 hover:border-amber-500/30 light:hover:border-amber-400/50 transition-all duration-200 backdrop-blur-sm light:shadow-sm">
                   <div className="flex items-start justify-between gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start gap-2 mb-1.5">
-                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-slate-600 flex items-center justify-center text-[10px] font-medium text-slate-300 mt-0.5">
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-slate-600 light:bg-slate-300 flex items-center justify-center text-[10px] font-medium text-slate-300 light:text-slate-600 mt-0.5">
                           {(conv.author_name?.charAt(0) || "U").toUpperCase()}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <span className="text-slate-100 font-medium text-base group-hover:text-amber-50 transition-colors">
+                          <span className="text-slate-100 light:text-slate-900 font-medium text-base group-hover:text-amber-50 light:group-hover:text-amber-600 transition-colors">
                             {conv.title}
                           </span>
                           {conv.is_active && (
@@ -381,15 +381,15 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
                       <div className="flex items-center gap-2 text-xs flex-wrap opacity-70">
                         {!conv.is_own && (
-                          <span className="text-slate-400 font-medium">
+                          <span className="text-slate-400 light:text-slate-600 font-medium">
                             {conv.author_name}
                           </span>
                         )}
-                        <span className="text-slate-500">
+                        <span className="text-slate-500 light:text-slate-500">
                           {getRelativeTime(conv.updated_at)}
                         </span>
                         {conv.duration_ms > 60000 && (
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 border ${getDurationColor(conv.duration_ms)}`}>
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 light:bg-slate-100 border ${getDurationColor(conv.duration_ms)}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
@@ -397,7 +397,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                           </span>
                         )}
                         {conv.message_count > 0 && (
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 border ${getMessageCountColor(conv.message_count)}`}>
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 light:bg-slate-100 border ${getMessageCountColor(conv.message_count)}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                             </svg>
@@ -405,7 +405,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                           </span>
                         )}
                         {conv.tool_call_count > 0 && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 text-slate-500 border border-slate-700/40">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/60 light:bg-slate-100 text-slate-500 border border-slate-700/40 light:border-slate-200">
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
                             </svg>
@@ -415,13 +415,13 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                         {conv.subagent_types && conv.subagent_types.length > 0 && conv.subagent_types.map((type) => (
                           <span
                             key={type}
-                            className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400 border border-emerald-700/40 text-[10px] font-mono"
+                            className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-900/30 light:bg-emerald-100 text-emerald-400 light:text-emerald-700 border border-emerald-700/40 light:border-emerald-300 text-[10px] font-mono"
                           >
                             {type}
                           </span>
                         ))}
                         {conv.title?.startsWith("Session agent-") && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 light:bg-violet-100 text-violet-300 light:text-violet-700 border border-violet-600/50 light:border-violet-300 text-[10px] font-medium">
                             Subagent
                           </span>
                         )}

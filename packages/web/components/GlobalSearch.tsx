@@ -20,7 +20,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   return (
     <>
       {before}
-      <mark className="bg-amber-400/30 text-amber-200 rounded px-0.5">{match}</mark>
+      <mark className="bg-amber-400/30 text-amber-200 light:text-amber-700 light:bg-amber-200/50 rounded px-0.5">{match}</mark>
       {after}
     </>
   );
@@ -159,10 +159,10 @@ export function GlobalSearch() {
           onFocus={() => setIsOpen(true)}
           onKeyDown={handleKeyDown}
           placeholder="Search conversations..."
-          className="w-full pl-10 pr-16 py-2 bg-slate-900/60 border border-slate-700/60 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all"
+          className="w-full pl-10 pr-16 py-2 bg-slate-900/60 light:bg-slate-100 border border-slate-700/60 light:border-slate-300 rounded-lg text-sm text-slate-200 light:text-slate-800 placeholder-slate-500 light:placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all"
         />
         <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-          <kbd className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 bg-slate-800 rounded border border-slate-700">
+          <kbd className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 light:text-slate-400 bg-slate-800 light:bg-slate-200 rounded border border-slate-700 light:border-slate-300">
             <span className="text-xs">&#8984;</span>K
           </kbd>
         </div>
@@ -177,7 +177,7 @@ export function GlobalSearch() {
               setQuery("");
             }}
           />
-          <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl shadow-black/40 overflow-hidden">
+          <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-slate-900 light:bg-white border border-slate-700/80 light:border-slate-200 rounded-xl shadow-2xl shadow-black/40 light:shadow-slate-300/50 overflow-hidden">
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
                 <div className="inline-block w-5 h-5 border-2 border-slate-600 border-t-amber-500 rounded-full animate-spin" />

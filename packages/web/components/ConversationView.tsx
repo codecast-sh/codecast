@@ -24,6 +24,7 @@ type ImageData = {
 
 type Message = {
   _id: string;
+  message_uuid?: string;
   role: string;
   content?: string;
   timestamp: number;
@@ -42,6 +43,9 @@ export type ConversationData = {
   share_token?: string;
   messages: Message[];
   user?: { name?: string; email?: string } | null;
+  parent_conversation_id?: string | null;
+  child_conversations?: Array<{ _id: string; title: string }>;
+  child_conversation_map?: Record<string, string>;
 };
 
 type ConversationViewProps = {
@@ -106,6 +110,101 @@ function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; result?: ToolResult; childConversationId?: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  let parsedInput: Record<string, unknown> = {};
+  try {
+    parsedInput = JSON.parse(tool.input);
+  } catch {}
+
+  const subagentType = String(parsedInput.subagent_type || "unknown");
+  const description = String(parsedInput.description || "");
+  const prompt = String(parsedInput.prompt || "");
+  const model = parsedInput.model ? String(parsedInput.model) : null;
+  const runInBackground = Boolean(parsedInput.run_in_background);
+
+  const subagentColors: Record<string, { bg: string; border: string; text: string }> = {
+    Explore: { bg: "bg-emerald-950/40", border: "border-emerald-700/50", text: "text-emerald-400" },
+    Plan: { bg: "bg-blue-950/40", border: "border-blue-700/50", text: "text-blue-400" },
+    implementor: { bg: "bg-amber-950/40", border: "border-amber-700/50", text: "text-amber-400" },
+    "general-purpose": { bg: "bg-slate-800/60", border: "border-slate-600/50", text: "text-slate-300" },
+    "claude-code-guide": { bg: "bg-violet-950/40", border: "border-violet-700/50", text: "text-violet-400" },
+    "code-reviewer": { bg: "bg-rose-950/40", border: "border-rose-700/50", text: "text-rose-400" },
+    "code-explorer": { bg: "bg-cyan-950/40", border: "border-cyan-700/50", text: "text-cyan-400" },
+    "code-architect": { bg: "bg-indigo-950/40", border: "border-indigo-700/50", text: "text-indigo-400" },
+  };
+
+  const colors = subagentColors[subagentType] || { bg: "bg-slate-800/60", border: "border-slate-600/50", text: "text-slate-400" };
+  const truncatedPrompt = prompt.length > 300 && !expanded ? prompt.slice(0, 300) + "..." : prompt;
+
+  return (
+    <div className={`my-3 rounded-lg ${colors.bg} border ${colors.border} overflow-hidden`}>
+      <div
+        className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-white/5 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className={`font-mono text-xs font-semibold ${colors.text}`}>
+          Task
+        </span>
+        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
+          {subagentType}
+        </span>
+        {description && (
+          <span className="text-slate-400 text-xs truncate flex-1">
+            {description}
+          </span>
+        )}
+        {model && (
+          <span className="text-slate-600 text-[10px] font-mono">
+            {model}
+          </span>
+        )}
+        {runInBackground && (
+          <span className="text-slate-500 text-[10px]">background</span>
+        )}
+        {childConversationId && (
+          <Link
+            href={`/conversation/${childConversationId}`}
+            onClick={(e) => e.stopPropagation()}
+            className="text-cyan-500 hover:text-cyan-400 text-[10px] font-medium underline underline-offset-2"
+          >
+            view
+          </Link>
+        )}
+        <span className="text-slate-600 text-[10px] ml-auto">
+          {expanded ? "collapse" : "expand"}
+        </span>
+      </div>
+
+      <div className="px-3 pb-2">
+        <div className="text-slate-300 text-xs font-mono whitespace-pre-wrap leading-relaxed">
+          {truncatedPrompt}
+        </div>
+        {prompt.length > 300 && !expanded && (
+          <button
+            onClick={() => setExpanded(true)}
+            className="text-[10px] text-slate-500 hover:text-slate-400 mt-1"
+          >
+            show more
+          </button>
+        )}
+      </div>
+
+      {expanded && result && (
+        <div className="border-t border-slate-700/50 px-3 py-2">
+          <div className="text-[10px] text-slate-500 mb-1">Result</div>
+          <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
+            result.is_error ? "text-red-300" : "text-slate-400"
+          }`}>
+            {result.content}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
@@ -305,7 +404,9 @@ function AssistantBlock({
   toolResults,
   images,
   messageId,
+  messageUuid,
   collapsed,
+  childConversationMap,
 }: {
   content?: string;
   timestamp: number;
@@ -314,7 +415,9 @@ function AssistantBlock({
   toolResults?: ToolResult[];
   images?: ImageData[];
   messageId: string;
+  messageUuid?: string;
   collapsed?: boolean;
+  childConversationMap?: Record<string, string>;
 }) {
   const hasContent = content && content.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
@@ -355,7 +458,16 @@ function AssistantBlock({
         {!collapsed && hasThinking && <ThinkingBlock content={thinking!} />}
 
         {!collapsed && hasToolCalls && toolCalls?.map((tc) => (
-          <ToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+          tc.name === "Task" ? (
+            <TaskToolBlock
+              key={tc.id}
+              tool={tc}
+              result={toolResultMap[tc.id]}
+              childConversationId={messageUuid && childConversationMap ? childConversationMap[messageUuid] : undefined}
+            />
+          ) : (
+            <ToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+          )
         ))}
 
         {hasContent && (
@@ -539,7 +651,9 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
           toolResults={msg.tool_results}
           images={msg.images}
           messageId={msg._id}
+          messageUuid={msg.message_uuid}
           collapsed={collapsed}
+          childConversationMap={conversation?.child_conversation_map}
         />
       );
     }
@@ -560,6 +674,22 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
           <h1 className="text-sm font-medium text-slate-200 truncate">{truncatedTitle}</h1>
           {conversation && (
             <>
+              {conversation.parent_conversation_id && (
+                <Link
+                  href={`/conversation/${conversation.parent_conversation_id}`}
+                  className="text-violet-400 hover:text-violet-300 text-xs flex items-center gap-1"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
+                  </svg>
+                  Parent
+                </Link>
+              )}
+              {conversation.child_conversations && conversation.child_conversations.length > 0 && (
+                <span className="text-cyan-400 text-xs">
+                  {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? "s" : ""}
+                </span>
+              )}
               <span className="ml-auto text-amber-500">
                 {conversation.agent_type === "claude_code" ? (
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">

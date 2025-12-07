@@ -57,9 +57,9 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
   };
 
   return (
-    <nav className="w-64 border-r border-slate-700 bg-slate-900/50 h-[calc(100vh-52px)] p-4 hidden md:flex flex-col sticky top-[52px]">
+    <nav className="w-64 border-r border-slate-700 light:border-slate-200 bg-slate-900/50 light:bg-slate-50/80 h-[calc(100vh-52px)] p-4 hidden md:flex flex-col sticky top-[52px]">
       <div className="flex-1">
-        <div className="text-xs font-medium text-slate-500 uppercase tracking-wide px-3 mb-2">
+        <div className="text-xs font-medium text-slate-500 light:text-slate-400 uppercase tracking-wide px-3 mb-2">
           Conversations
         </div>
         <div className="space-y-1">
@@ -67,8 +67,8 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
             onClick={() => handleFilterClick("my")}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
               isDashboard && filter === "my"
-                ? "bg-slate-800 text-white"
-                : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                ? "bg-slate-800 light:bg-slate-200 text-white light:text-slate-900"
+                : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900 hover:bg-slate-800/50 light:hover:bg-slate-200/50"
             }`}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -80,8 +80,8 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
             onClick={() => handleFilterClick("team")}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
               isDashboard && filter === "team"
-                ? "bg-slate-800 text-white"
-                : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                ? "bg-slate-800 light:bg-slate-200 text-white light:text-slate-900"
+                : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900 hover:bg-slate-800/50 light:hover:bg-slate-200/50"
             }`}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -93,7 +93,7 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
       </div>
 
       <div className="mt-auto pt-4 space-y-1">
-        <div className="text-xs font-medium text-slate-500 uppercase tracking-wide px-3 mb-2">
+        <div className="text-xs font-medium text-slate-500 light:text-slate-400 uppercase tracking-wide px-3 mb-2">
           Configuration
         </div>
         {bottomNavItems.map((item) => (
@@ -102,8 +102,8 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
             href={item.href}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
               pathname === item.href || pathname?.startsWith(item.href + "/")
-                ? "bg-slate-800 text-white"
-                : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                ? "bg-slate-800 light:bg-slate-200 text-white light:text-slate-900"
+                : "text-slate-400 light:text-slate-600 hover:text-white light:hover:text-slate-900 hover:bg-slate-800/50 light:hover:bg-slate-200/50"
             }`}
           >
             {item.icon}

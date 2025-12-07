@@ -34,22 +34,22 @@ export function UserMenu() {
     <div className="relative" ref={menuRef}>
       <button
         onClick={() => setOpen(!open)}
-        className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-white hover:bg-slate-600 transition-colors"
+        className="w-8 h-8 rounded-full bg-slate-700 light:bg-slate-300 flex items-center justify-center text-white light:text-slate-700 hover:bg-slate-600 light:hover:bg-slate-400 transition-colors"
         aria-label="User menu"
       >
         <span className="text-sm font-medium">{initials}</span>
       </button>
       {open && (
-        <div className="absolute right-0 mt-2 w-56 bg-slate-800 border border-slate-700 rounded-lg shadow-lg py-1 z-50">
-          <div className="px-4 py-3 border-b border-slate-700">
-            <p className="text-sm font-medium text-white">{displayName}</p>
+        <div className="absolute right-0 mt-2 w-56 bg-slate-800 light:bg-white border border-slate-700 light:border-slate-200 rounded-lg shadow-lg py-1 z-50">
+          <div className="px-4 py-3 border-b border-slate-700 light:border-slate-200">
+            <p className="text-sm font-medium text-white light:text-slate-900">{displayName}</p>
             {user?.email && (
-              <p className="text-xs text-slate-400 truncate">{user.email}</p>
+              <p className="text-xs text-slate-400 light:text-slate-500 truncate">{user.email}</p>
             )}
           </div>
           <button
             onClick={handleLogout}
-            className="w-full px-4 py-2 text-left text-sm text-slate-300 hover:bg-slate-700 transition-colors"
+            className="w-full px-4 py-2 text-left text-sm text-slate-300 light:text-slate-700 hover:bg-slate-700 light:hover:bg-slate-100 transition-colors"
           >
             Sign out
           </button>

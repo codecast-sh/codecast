@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { Id } from "./_generated/dataModel";
 
 function generateShareToken(): string {
   return crypto.randomUUID();
@@ -150,11 +151,50 @@ export const getConversation = query({
       ? formatSlugAsTitle(conversation.slug)
       : conversation.title || firstUserMessage || `Session ${conversation.session_id.slice(0, 8)}`;
 
+    let parentConversationId: string | null = null;
+    if (conversation.parent_message_uuid) {
+      console.log("Looking for parent with message_uuid:", conversation.parent_message_uuid);
+      const parentMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
+        .first();
+      console.log("Found parent message:", parentMsg?._id, "in conversation:", parentMsg?.conversation_id);
+      if (parentMsg) {
+        parentConversationId = parentMsg.conversation_id;
+      }
+    }
+
+    const messageUuids = sortedMessages
+      .filter((m) => m.message_uuid)
+      .map((m) => m.message_uuid!);
+
+    const childConversations: Array<{ _id: string; title: string }> = [];
+    if (messageUuids.length > 0) {
+      const allConversations = await ctx.db.query("conversations").collect();
+      for (const conv of allConversations) {
+        if (conv.parent_message_uuid && messageUuids.includes(conv.parent_message_uuid)) {
+          const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+          childConversations.push({ _id: conv._id, title: childTitle });
+        }
+      }
+    }
+
+    const childConversationMap: Record<string, string> = {};
+    for (const child of childConversations) {
+      const childConv = await ctx.db.get(child._id as Id<"conversations">);
+      if (childConv && "parent_message_uuid" in childConv && childConv.parent_message_uuid) {
+        childConversationMap[childConv.parent_message_uuid] = child._id;
+      }
+    }
+
     return {
       ...conversation,
       title,
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
+      parent_conversation_id: parentConversationId,
+      child_conversations: childConversations,
+      child_conversation_map: childConversationMap,
     };
   },
 });
