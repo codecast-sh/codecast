@@ -8,6 +8,7 @@ import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { ConvexHttpClient } from "convex/browser";
+import { AuthServer } from "./authServer.js";
 
 const program = new Command();
 
@@ -283,38 +284,67 @@ async function runSetup(): Promise<void> {
   console.log("To use codecast, you need to authenticate with your account.");
   console.log("This will open a browser window where you can sign in or create an account.\n");
 
-  const cliUrl = `${WEB_URL}/cli`;
+  const authServer = new AuthServer({ port: 42424, timeout: 300000 });
+  const nonce = authServer.getNonce();
+  const port = authServer.getPort();
+
+  const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}`;
 
   console.log("Opening browser for authentication...");
-  console.log(`\nIf the browser doesn't open, visit this URL manually:\n  ${cliUrl}\n`);
+  console.log("Waiting for authentication (timeout: 5 minutes)...\n");
+  console.log(`If the browser doesn't open, visit this URL manually:\n  ${cliUrl}\n`);
 
   try {
     await open(cliUrl);
   } catch {
     console.log("Could not open browser automatically.");
-    console.log(`Please visit: ${cliUrl}\n`);
   }
 
-  await promptForEnter("Press Enter after you've signed in...");
+  const authPromise = authServer.start();
+  const authResult = await authPromise;
 
-  console.log("\nPlease copy your User ID from the CLI Setup page in your browser.");
-  const userId = await promptForInput("User ID: ");
+  if (!authResult) {
+    console.log("\nAuthentication timed out or failed.");
+    console.log("\nFalling back to manual setup...");
+    console.log(`Please visit: ${WEB_URL}/cli\n`);
 
-  if (!userId) {
-    console.error("User ID is required. Please run setup again.");
-    process.exit(1);
+    await promptForEnter("Press Enter after you've signed in...");
+
+    console.log("\nPlease copy your User ID from the CLI Setup page in your browser.");
+    const userId = await promptForInput("User ID: ");
+
+    if (!userId) {
+      console.error("User ID is required. Please run setup again.");
+      process.exit(1);
+    }
+
+    const existingConfig = readConfig();
+    const config: Config = {
+      ...existingConfig,
+      user_id: userId,
+      convex_url: CONVEX_URL,
+      web_url: WEB_URL,
+    };
+
+    await continueTeamSetup(config);
+    return;
   }
 
-  const convexUrl = CONVEX_URL;
-  const client = new ConvexHttpClient(convexUrl);
+  console.log("\nAuthenticated successfully!");
 
   const existingConfig = readConfig();
   const config: Config = {
     ...existingConfig,
-    user_id: userId,
-    convex_url: convexUrl,
+    user_id: authResult.userId,
+    convex_url: CONVEX_URL,
     web_url: WEB_URL,
   };
+
+  await continueTeamSetup(config);
+}
+
+async function continueTeamSetup(config: Config): Promise<void> {
+  const client = new ConvexHttpClient(config.convex_url || CONVEX_URL);
 
   console.log("\n=== Team Setup ===\n");
 
@@ -334,7 +364,7 @@ async function runSetup(): Promise<void> {
     try {
       const teamId = await client.mutation("teams:createTeam" as any, {
         name: teamName,
-        user_id: userId,
+        user_id: config.user_id,
       });
       config.team_id = teamId;
 
@@ -363,7 +393,7 @@ async function runSetup(): Promise<void> {
     try {
       const teamId = await client.mutation("teams:joinTeam" as any, {
         invite_code: inviteCode.toUpperCase(),
-        user_id: userId,
+        user_id: config.user_id,
       });
       config.team_id = teamId;
 
