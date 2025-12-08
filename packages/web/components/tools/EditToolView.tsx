@@ -1,16 +1,6 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import type { ToolViewProps } from "@/lib/toolRegistry";
-import * as Prism from "prismjs";
-import "prismjs/themes/prism-tomorrow.css";
-import "prismjs/components/prism-typescript";
-import "prismjs/components/prism-tsx";
-import "prismjs/components/prism-javascript";
-import "prismjs/components/prism-jsx";
-import "prismjs/components/prism-python";
-import "prismjs/components/prism-json";
-import "prismjs/components/prism-css";
-import "prismjs/components/prism-markdown";
 
 function detectLanguage(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() || '';
@@ -27,21 +17,10 @@ function detectLanguage(filePath: string): string {
   return langMap[ext] || 'javascript';
 }
 
-function HighlightedCode({ code, language }: { code: string; language: string }) {
-  const [highlighted, setHighlighted] = useState("");
-
-  useEffect(() => {
-    try {
-      const grammar = Prism.languages[language] || Prism.languages.javascript;
-      setHighlighted(Prism.highlight(code, grammar, language));
-    } catch {
-      setHighlighted(code);
-    }
-  }, [code, language]);
-
+function HighlightedCode({ code, language: _language }: { code: string; language: string }) {
   return (
     <pre className="text-xs font-mono overflow-x-auto p-2 m-0">
-      <code dangerouslySetInnerHTML={{ __html: highlighted || code }} />
+      <code>{code}</code>
     </pre>
   );
 }
