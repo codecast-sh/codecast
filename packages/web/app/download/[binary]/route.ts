@@ -6,9 +6,9 @@ const ALLOWED_BINARIES = ["codecast-darwin-arm64"];
 
 export async function GET(
   request: Request,
-  { params }: { params: { binary: string } }
+  { params }: { params: Promise<{ binary: string }> }
 ) {
-  const { binary } = params;
+  const { binary } = await params;
 
   if (!ALLOWED_BINARIES.includes(binary)) {
     return new NextResponse("Binary not found", { status: 404 });
