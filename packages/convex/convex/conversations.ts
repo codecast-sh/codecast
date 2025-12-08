@@ -63,7 +63,7 @@ export const createConversation = mutation({
       started_at: startedAt,
       updated_at: startedAt,
       message_count: 0,
-      is_private: false,
+      is_private: true,
       status: "active",
       parent_message_uuid: args.parent_message_uuid,
     });
@@ -553,6 +553,30 @@ export const updateSlug = mutation({
     }
     await ctx.db.patch(args.conversation_id, {
       slug: args.slug,
+    });
+  },
+});
+
+export const setPrivacy = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    is_private: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized: must be logged in");
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      throw new Error("Unauthorized: can only change privacy of your own conversations");
+    }
+    await ctx.db.patch(args.conversation_id, {
+      is_private: args.is_private,
     });
   },
 });
