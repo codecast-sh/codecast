@@ -1,45 +1,86 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ToolViewProps } from "@/lib/toolRegistry";
+import * as Prism from "prismjs";
+import "prismjs/themes/prism-tomorrow.css";
+import "prismjs/components/prism-typescript";
+import "prismjs/components/prism-tsx";
+import "prismjs/components/prism-javascript";
+import "prismjs/components/prism-jsx";
+import "prismjs/components/prism-python";
+import "prismjs/components/prism-json";
+import "prismjs/components/prism-css";
+import "prismjs/components/prism-markdown";
 
-function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
+function detectLanguage(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  const langMap: Record<string, string> = {
+    'ts': 'typescript',
+    'tsx': 'tsx',
+    'js': 'javascript',
+    'jsx': 'jsx',
+    'py': 'python',
+    'json': 'json',
+    'css': 'css',
+    'md': 'markdown',
+  };
+  return langMap[ext] || 'javascript';
+}
+
+function HighlightedCode({ code, language }: { code: string; language: string }) {
+  const [highlighted, setHighlighted] = useState("");
+
+  useEffect(() => {
+    try {
+      const grammar = Prism.languages[language] || Prism.languages.javascript;
+      setHighlighted(Prism.highlight(code, grammar, language));
+    } catch {
+      setHighlighted(code);
+    }
+  }, [code, language]);
+
+  return (
+    <pre className="text-xs font-mono overflow-x-auto p-2 m-0">
+      <code dangerouslySetInnerHTML={{ __html: highlighted || code }} />
+    </pre>
+  );
+}
+
+function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath: string }) {
   const [expanded, setExpanded] = useState(false);
   const oldLines = oldStr.split('\n');
   const newLines = newStr.split('\n');
   const totalLines = Math.max(oldLines.length, newLines.length);
   const COLLAPSE_THRESHOLD = 10;
   const shouldCollapse = totalLines > COLLAPSE_THRESHOLD;
+  const language = detectLanguage(filePath);
 
-  const displayOldLines = shouldCollapse && !expanded
-    ? oldLines.slice(0, COLLAPSE_THRESHOLD)
-    : oldLines;
+  const displayOldStr = shouldCollapse && !expanded
+    ? oldLines.slice(0, COLLAPSE_THRESHOLD).join('\n')
+    : oldStr;
 
-  const displayNewLines = shouldCollapse && !expanded
-    ? newLines.slice(0, COLLAPSE_THRESHOLD)
-    : newLines;
+  const displayNewStr = shouldCollapse && !expanded
+    ? newLines.slice(0, COLLAPSE_THRESHOLD).join('\n')
+    : newStr;
 
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-2">
         <div>
           <div className="text-xs text-red-500 mb-1 font-semibold">- Removed</div>
-          <pre className="text-xs font-mono overflow-x-auto bg-red-500/10 border border-red-500/20 rounded p-2">
-            {displayOldLines.map((line, i) => (
-              <div key={i} className="text-red-400">
-                {line || ' '}
-              </div>
-            ))}
-          </pre>
+          <div className="bg-red-500/10 border border-red-500/20 rounded overflow-hidden">
+            <div className="overflow-x-auto">
+              <HighlightedCode code={displayOldStr} language={language} />
+            </div>
+          </div>
         </div>
         <div>
           <div className="text-xs text-emerald-500 mb-1 font-semibold">+ Added</div>
-          <pre className="text-xs font-mono overflow-x-auto bg-emerald-500/10 border border-emerald-500/20 rounded p-2">
-            {displayNewLines.map((line, i) => (
-              <div key={i} className="text-emerald-400">
-                {line || ' '}
-              </div>
-            ))}
-          </pre>
+          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded overflow-hidden">
+            <div className="overflow-x-auto">
+              <HighlightedCode code={displayNewStr} language={language} />
+            </div>
+          </div>
         </div>
       </div>
       {shouldCollapse && (
@@ -57,6 +98,7 @@ function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
 export function EditToolView({ input, output }: ToolViewProps) {
   const filePath = input?.file_path || '';
   const fileName = filePath.split('/').pop() || 'file';
+  const language = detectLanguage(filePath);
 
   if (input?.old_string && input?.new_string) {
     return (
@@ -64,7 +106,7 @@ export function EditToolView({ input, output }: ToolViewProps) {
         <div className="text-sm text-muted-foreground">
           <span className="font-semibold">File:</span> {fileName}
         </div>
-        <DiffView oldStr={input.old_string} newStr={input.new_string} />
+        <DiffView oldStr={input.old_string} newStr={input.new_string} filePath={filePath} />
       </div>
     );
   }
@@ -79,9 +121,11 @@ export function EditToolView({ input, output }: ToolViewProps) {
           <span className="font-semibold">File:</span> {fileName} ({lineCount} lines)
         </div>
         <div className="text-xs text-emerald-500 mb-1 font-semibold">+ Created</div>
-        <pre className="text-xs font-mono overflow-x-auto bg-emerald-500/10 border border-emerald-500/20 rounded p-2 max-h-64">
-          <code className="text-emerald-400">{input.content}</code>
-        </pre>
+        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded overflow-hidden max-h-64">
+          <div className="overflow-auto">
+            <HighlightedCode code={input.content} language={language} />
+          </div>
+        </div>
       </div>
     );
   }

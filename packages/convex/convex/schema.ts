@@ -42,6 +42,7 @@ export default defineSchema({
     status: v.union(v.literal("active"), v.literal("completed")),
     share_token: v.optional(v.string()),
     parent_message_uuid: v.optional(v.string()),
+    git_commit_hash: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])

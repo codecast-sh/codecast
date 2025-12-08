@@ -28,6 +28,7 @@ export const createConversation = mutation({
     slug: v.optional(v.string()),
     started_at: v.optional(v.number()),
     parent_message_uuid: v.optional(v.string()),
+    git_commit_hash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -66,6 +67,7 @@ export const createConversation = mutation({
       is_private: true,
       status: "active",
       parent_message_uuid: args.parent_message_uuid,
+      git_commit_hash: args.git_commit_hash,
     });
     return conversationId;
   },

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as fs from "fs";
 import * as path from "path";
+import { execSync } from "child_process";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { parseSessionFile, extractSlug, extractParentUuid, type ParsedMessage } from "./parser.js";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -80,6 +81,19 @@ function saveConversationCache(cache: ConversationCache): void {
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
 }
 
+function getGitCommitHash(projectPath: string): string | undefined {
+  try {
+    const result = execSync("git rev-parse HEAD", {
+      cwd: projectPath,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    return result.trim();
+  } catch {
+    return undefined;
+  }
+}
+
 async function processSessionFile(
   filePath: string,
   sessionId: string,
@@ -118,6 +132,7 @@ async function processSessionFile(
       const slug = extractSlug(fullContent);
       const parentMessageUuid = extractParentUuid(fullContent);
       const firstMessageTimestamp = messages[0]?.timestamp;
+      const gitCommitHash = projectPath ? getGitCommitHash(projectPath) : undefined;
 
       conversationId = await syncService.createConversation({
         userId,
@@ -127,6 +142,7 @@ async function processSessionFile(
         slug,
         startedAt: firstMessageTimestamp,
         parentMessageUuid,
+        gitCommitHash,
       });
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
@@ -192,6 +208,7 @@ async function processSessionFile(
       const fullContent = fs.readFileSync(filePath, "utf-8");
       const slug = extractSlug(fullContent);
       const firstMsgTimestamp = messages[0]?.timestamp;
+      const gitCommitHash = projectPath ? getGitCommitHash(projectPath) : undefined;
 
       retryQueue.add("createConversation", {
         userId,
@@ -200,6 +217,7 @@ async function processSessionFile(
         projectPath,
         slug,
         startedAt: firstMsgTimestamp,
+        gitCommitHash,
       }, errMsg);
 
       setPosition(filePath, stats.size);
@@ -231,6 +249,7 @@ async function processSessionFile(
         const fullContent = fs.readFileSync(filePath, "utf-8");
         const slug = extractSlug(fullContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
+        const gitCommitHash = projectPath ? getGitCommitHash(projectPath) : undefined;
 
         try {
           conversationId = await syncService.createConversation({
@@ -240,6 +259,7 @@ async function processSessionFile(
             projectPath,
             slug,
             startedAt: firstMessageTimestamp,
+            gitCommitHash,
           });
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);

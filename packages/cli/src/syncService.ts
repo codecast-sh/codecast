@@ -19,6 +19,7 @@ export interface CreateConversationParams {
   slug?: string;
   startedAt?: number;
   parentMessageUuid?: string;
+  gitCommitHash?: string;
 }
 
 export class SyncService {
@@ -52,6 +53,7 @@ export class SyncService {
         slug: params.slug,
         started_at: params.startedAt,
         parent_message_uuid: params.parentMessageUuid,
+        git_commit_hash: params.gitCommitHash,
       }
     );
     return result as string;
