@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts src/daemon.ts --outdir dist --target node",
+    "build:binary": "bun build src/index.ts --compile --outfile codecast",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
