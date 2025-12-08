@@ -3,25 +3,25 @@
 @tailwind utilities;
 
 :root {
-  --sol-bg: #002b36;
-  --sol-bg-alt: #073642;
-  --sol-bg-highlight: #094552;
-  --sol-border: #586e75;
+  --sol-bg: #2a2520;
+  --sol-bg-alt: #3a3128;
+  --sol-bg-highlight: #4a3d30;
+  --sol-border: #6b5d50;
   --sol-text: #fdf6e3;
   --sol-text-secondary: #eee8d5;
-  --sol-text-muted: #b8c4c4;
-  --sol-text-dim: #93a1a1;
+  --sol-text-muted: #c4b8a8;
+  --sol-text-dim: #a1938a;
 }
 
 .light {
   --sol-bg: #fdf6e3;
-  --sol-bg-alt: #eee8d5;
-  --sol-bg-highlight: #ddd6c3;
-  --sol-border: #93a1a1;
-  --sol-text: #002b36;
-  --sol-text-secondary: #073642;
-  --sol-text-muted: #586e75;
-  --sol-text-dim: #657b83;
+  --sol-bg-alt: #f5f0e8;
+  --sol-bg-highlight: #ebe4d8;
+  --sol-border: #a1938a;
+  --sol-text: #2a2520;
+  --sol-text-secondary: #3a3128;
+  --sol-text-muted: #6b5d50;
+  --sol-text-dim: #8a7d73;
 }
 
 @layer components {
@@ -30,7 +30,7 @@
   }
 
   .sol-card-hover {
-    @apply hover:border-sol-yellow/40 transition-all duration-200;
+    @apply hover:border-amber-500/40 transition-all duration-200;
   }
 
   .sol-header {
@@ -58,15 +58,15 @@
   }
 
   .sol-badge-live {
-    @apply sol-badge bg-sol-green/20 text-sol-green border-sol-green/40;
+    @apply sol-badge bg-green-500/20 text-green-500 border-green-500/40;
   }
 
   .sol-badge-active {
-    @apply sol-badge bg-sol-yellow/20 text-sol-yellow border-sol-yellow/40;
+    @apply sol-badge bg-amber-500/20 text-amber-500 border-amber-500/40;
   }
 
   .sol-badge-info {
-    @apply sol-badge bg-sol-blue/20 text-sol-blue border-sol-blue/40;
+    @apply sol-badge bg-orange-500/20 text-orange-500 border-orange-500/40;
   }
 
   .sol-badge-muted {
@@ -74,18 +74,18 @@
   }
 
   .sol-link {
-    @apply text-sol-blue hover:text-sol-cyan transition-colors;
+    @apply text-amber-600 hover:text-amber-500 transition-colors;
   }
 
   .sol-input {
-    @apply bg-sol-bg border border-sol-border rounded-lg px-3 py-2 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue;
+    @apply bg-sol-bg border border-sol-border rounded-lg px-3 py-2 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-amber-500;
   }
 }
 
 .prose {
   --tw-prose-body: var(--sol-text-secondary);
   --tw-prose-headings: var(--sol-text);
-  --tw-prose-links: #268bd2;
+  --tw-prose-links: #d97706;
   --tw-prose-code: var(--sol-text);
   --tw-prose-pre-bg: var(--sol-bg-alt);
 }
@@ -113,57 +113,57 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 0 0% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 0 0% 96.1%;
-    --accent-foreground: 0 0% 9%;
+    --background: 30 20% 98%;
+    --foreground: 30 15% 15%;
+    --card: 30 20% 100%;
+    --card-foreground: 30 15% 15%;
+    --popover: 30 20% 100%;
+    --popover-foreground: 30 15% 15%;
+    --primary: 30 15% 20%;
+    --primary-foreground: 30 20% 98%;
+    --secondary: 30 20% 95%;
+    --secondary-foreground: 30 15% 20%;
+    --muted: 30 20% 95%;
+    --muted-foreground: 30 10% 50%;
+    --accent: 38 90% 60%;
+    --accent-foreground: 30 15% 20%;
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
+    --destructive-foreground: 30 20% 98%;
+    --border: 30 15% 85%;
+    --input: 30 15% 85%;
+    --ring: 30 15% 15%;
+    --chart-1: 38 90% 60%;
+    --chart-2: 30 70% 50%;
+    --chart-3: 25 60% 45%;
     --chart-4: 43 74% 66%;
     --chart-5: 27 87% 67%;
     --radius: 0.5rem;
   }
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
+    --background: 30 15% 12%;
+    --foreground: 30 20% 95%;
+    --card: 30 15% 12%;
+    --card-foreground: 30 20% 95%;
+    --popover: 30 15% 12%;
+    --popover-foreground: 30 20% 95%;
+    --primary: 30 20% 95%;
+    --primary-foreground: 30 15% 20%;
+    --secondary: 30 12% 18%;
+    --secondary-foreground: 30 20% 95%;
+    --muted: 30 12% 18%;
+    --muted-foreground: 30 15% 60%;
+    --accent: 38 85% 55%;
+    --accent-foreground: 30 20% 95%;
     --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    --destructive-foreground: 30 20% 95%;
+    --border: 30 12% 22%;
+    --input: 30 12% 22%;
+    --ring: 30 20% 80%;
+    --chart-1: 38 85% 55%;
+    --chart-2: 30 70% 50%;
+    --chart-3: 25 60% 45%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
   }
 }
 

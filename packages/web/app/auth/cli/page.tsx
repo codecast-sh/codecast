@@ -76,11 +76,11 @@ function CliAuthContent() {
 
   if (isLoading || !isAuthenticated) {
     return (
-      <div className="min-h-screen bg-sol-base03 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-sol-base02/50 rounded-lg p-8 border border-sol-base01">
+      <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-400 mx-auto mb-4"></div>
-            <p className="text-sol-base0">Redirecting to login...</p>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-400 mx-auto mb-4"></div>
+            <p className="text-sol-text-muted">Redirecting to login...</p>
           </div>
         </div>
       </div>
@@ -89,14 +89,14 @@ function CliAuthContent() {
 
   if (status === "waiting" || status === "sending") {
     return (
-      <div className="min-h-screen bg-sol-base03 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-sol-base02/50 rounded-lg p-8 border border-sol-base01">
+      <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-400 mx-auto mb-4"></div>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-400 mx-auto mb-4"></div>
             <h1 className="text-2xl font-semibold text-white mb-2">
               Authenticating CLI
             </h1>
-            <p className="text-sol-base0">
+            <p className="text-sol-text-muted">
               Sending authentication to your terminal...
             </p>
           </div>
@@ -107,8 +107,8 @@ function CliAuthContent() {
 
   if (status === "error") {
     return (
-      <div className="min-h-screen bg-sol-base03 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-sol-base02/50 rounded-lg p-8 border border-sol-base01">
+      <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
           <div className="text-center">
             <div className="mb-4">
               <svg
@@ -128,8 +128,8 @@ function CliAuthContent() {
             <h1 className="text-2xl font-semibold text-white mb-2">
               Authentication Failed
             </h1>
-            <p className="text-sol-base0 mb-4">{errorMessage}</p>
-            <p className="text-sol-base0 text-sm">
+            <p className="text-sol-text-muted mb-4">{errorMessage}</p>
+            <p className="text-sol-text-muted text-sm">
               Please return to your terminal and try the manual setup option.
             </p>
           </div>
@@ -139,8 +139,8 @@ function CliAuthContent() {
   }
 
   return (
-    <div className="min-h-screen bg-sol-base03 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-sol-base02/50 rounded-lg p-8 border border-sol-base01">
+    <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
+      <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
         <div className="text-center">
           <div className="mb-4">
             <svg
@@ -160,10 +160,10 @@ function CliAuthContent() {
           <h1 className="text-2xl font-semibold text-white mb-2">
             Authenticated Successfully!
           </h1>
-          <p className="text-sol-base0 mb-4">
+          <p className="text-sol-text-muted mb-4">
             You can now return to your terminal to continue setup.
           </p>
-          <p className="text-sol-base0 text-sm">
+          <p className="text-sol-text-muted text-sm">
             This window can be closed.
           </p>
         </div>
@@ -176,11 +176,11 @@ export default function CliAuthPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-sol-base03 flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-sol-base02/50 rounded-lg p-8 border border-sol-base01">
+        <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
             <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-400 mx-auto mb-4"></div>
-              <p className="text-sol-base0">Loading...</p>
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-400 mx-auto mb-4"></div>
+              <p className="text-sol-text-muted">Loading...</p>
             </div>
           </div>
         </div>
