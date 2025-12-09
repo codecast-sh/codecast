@@ -177,6 +177,7 @@ function buildProjectGroups(conversations: Conversation[]): ConversationGroup[] 
 type TimeFilter = "all" | "long" | "active";
 type SubagentFilter = "all" | "main" | "subagent";
 type AgentTypeFilter = "all" | "claude_code" | "codex" | "cursor";
+type DateFilter = "all" | "7days" | "30days" | "custom";
 
 export function ConversationList({ filter }: { filter: "my" | "team" }) {
   const conversations = useConversationsWithError(filter);
@@ -184,6 +185,9 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
   const [agentTypeFilter, setAgentTypeFilter] = useState<AgentTypeFilter>("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [customStartDate, setCustomStartDate] = useState<string>("");
+  const [customEndDate, setCustomEndDate] = useState<string>("");
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
 
   const { collapsedSections, toggleSection } = useUIStore();
@@ -255,6 +259,19 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
       filtered = filtered.filter(c => c.agent_type === agentTypeFilter);
     }
 
+    // Date range filter
+    if (dateFilter === "7days") {
+      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      filtered = filtered.filter(c => c.updated_at > cutoff);
+    } else if (dateFilter === "30days") {
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      filtered = filtered.filter(c => c.updated_at > cutoff);
+    } else if (dateFilter === "custom" && customStartDate && customEndDate) {
+      const startMs = new Date(customStartDate).getTime();
+      const endMs = new Date(customEndDate).getTime() + 24 * 60 * 60 * 1000 - 1; // End of day
+      filtered = filtered.filter(c => c.updated_at >= startMs && c.updated_at <= endMs);
+    }
+
     // Build parent-child map for nesting
     const childrenMap = new Map<string, Conversation[]>();
     const topLevel: Conversation[] = [];
@@ -289,7 +306,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
     filtered = withChildren as any;
 
     return { filteredConversations: filtered, counts };
-  }, [conversations, timeFilter, subagentFilter, agentTypeFilter]);
+  }, [conversations, timeFilter, subagentFilter, agentTypeFilter, dateFilter, customStartDate, customEndDate]);
 
   if (!conversations) {
     return <LoadingSkeleton />;
@@ -377,7 +394,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
   useEffect(() => {
     setFocusedIndex(-1);
-  }, [timeFilter, subagentFilter, agentTypeFilter]);
+  }, [timeFilter, subagentFilter, agentTypeFilter, dateFilter, customStartDate, customEndDate]);
 
   const setItemRef = useCallback((id: string, element: HTMLAnchorElement | null) => {
     if (element) {
@@ -422,6 +439,70 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         >
           Active{counts.active > 0 && ` (${counts.active})`}
         </button>
+
+        <div className="w-px bg-sol-border/30 mx-1" />
+
+        {/* Date range filters */}
+        <button
+          onClick={() => setDateFilter("all")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+            dateFilter === "all"
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+          }`}
+        >
+          All Dates
+        </button>
+        <button
+          onClick={() => setDateFilter("7days")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+            dateFilter === "7days"
+              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
+              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+          }`}
+        >
+          Last 7 Days
+        </button>
+        <button
+          onClick={() => setDateFilter("30days")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+            dateFilter === "30days"
+              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
+              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+          }`}
+        >
+          Last 30 Days
+        </button>
+        <button
+          onClick={() => setDateFilter("custom")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+            dateFilter === "custom"
+              ? "bg-purple-500/20 text-purple-400 border border-purple-500/40"
+              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+          }`}
+        >
+          Custom Range
+        </button>
+
+        {dateFilter === "custom" && (
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={customStartDate}
+              onChange={(e) => setCustomStartDate(e.target.value)}
+              className="px-2 py-1 text-sm rounded-lg bg-sol-bg-alt border border-sol-border text-sol-text"
+              placeholder="Start date"
+            />
+            <span className="text-sol-text-muted">to</span>
+            <input
+              type="date"
+              value={customEndDate}
+              onChange={(e) => setCustomEndDate(e.target.value)}
+              className="px-2 py-1 text-sm rounded-lg bg-sol-bg-alt border border-sol-border text-sol-text"
+              placeholder="End date"
+            />
+          </div>
+        )}
 
         <div className="w-px bg-sol-border/30 mx-1" />
 
