@@ -20,6 +20,7 @@ export default defineSchema({
     name: v.string(),
     created_at: v.number(),
     invite_code: v.string(),
+    invite_code_expires_at: v.optional(v.number()),
   }).index("by_invite_code", ["invite_code"]),
 
   conversations: defineTable({

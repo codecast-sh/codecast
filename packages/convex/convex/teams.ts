@@ -17,10 +17,13 @@ export const createTeam = mutation({
   },
   handler: async (ctx, args) => {
     const inviteCode = generateInviteCode();
+    const now = Date.now();
+    const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
     const teamId = await ctx.db.insert("teams", {
       name: args.name,
-      created_at: Date.now(),
+      created_at: now,
       invite_code: inviteCode,
+      invite_code_expires_at: now + sevenDaysInMs,
     });
     await ctx.db.patch(args.user_id, {
       team_id: teamId,
@@ -42,6 +45,9 @@ export const joinTeam = mutation({
       .unique();
     if (!team) {
       throw new Error("Invalid invite code");
+    }
+    if (team.invite_code_expires_at && Date.now() > team.invite_code_expires_at) {
+      throw new Error("Invite code expired");
     }
     await ctx.db.patch(args.user_id, {
       team_id: team._id,
