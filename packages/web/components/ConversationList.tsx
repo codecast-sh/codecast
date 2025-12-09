@@ -6,6 +6,7 @@ import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { useEffect, useState, useMemo } from "react";
 import { getConversationPreview, cleanTitle } from "../lib/conversationProcessor";
+import { useUIStore } from "../store/uiStore";
 
 type Conversation = {
   _id: string;
@@ -18,6 +19,7 @@ type Conversation = {
   agent_type: string;
   model?: string | null;
   slug?: string | null;
+  project_hash?: string;
   started_at: number;
   updated_at: number;
   duration_ms: number;
@@ -68,10 +70,9 @@ function ClaudeLogo({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
-type TimeGroup = {
-  label: string;
-  conversations: Conversation[];
-};
+type ConversationGroup =
+  | { type: 'active-group'; title: string; conversations: Conversation[]; groupId: string }
+  | { type: 'project-group'; title: string; projectHash: string; displayPath: string; conversations: Conversation[]; groupId: string };
 
 function getRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -95,36 +96,64 @@ function getRelativeTime(timestamp: number): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function groupByTime(conversations: Conversation[]): TimeGroup[] {
-  const now = Date.now();
-  const oneHourAgo = now - 60 * 60 * 1000;
-  const sixHoursAgo = now - 6 * 60 * 60 * 1000;
-  const oneDayAgo = now - 24 * 60 * 60 * 1000;
-  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+function deriveDisplayPath(projectHash: string | undefined, conversations: Conversation[]): string {
+  if (!projectHash) return 'No Project';
 
-  const groups: TimeGroup[] = [
-    { label: "Last Hour", conversations: [] },
-    { label: "Last 6 Hours", conversations: [] },
-    { label: "Last 24 Hours", conversations: [] },
-    { label: "This Week", conversations: [] },
-    { label: "Older", conversations: [] },
-  ];
+  const firstConv = conversations[0];
+  if (firstConv?.title) {
+    const match = firstConv.title.match(/\[(.*?)\]/);
+    if (match) return match[1];
+  }
 
-  conversations.forEach((conv) => {
-    if (conv.updated_at >= oneHourAgo) {
-      groups[0].conversations.push(conv);
-    } else if (conv.updated_at >= sixHoursAgo) {
-      groups[1].conversations.push(conv);
-    } else if (conv.updated_at >= oneDayAgo) {
-      groups[2].conversations.push(conv);
-    } else if (conv.updated_at >= weekAgo) {
-      groups[3].conversations.push(conv);
-    } else {
-      groups[4].conversations.push(conv);
-    }
+  return `proj-${projectHash.slice(0, 6)}`;
+}
+
+function buildProjectGroups(conversations: Conversation[]): ConversationGroup[] {
+  const result: ConversationGroup[] = [];
+
+  const active = conversations.filter(c => c.is_active);
+  if (active.length > 0) {
+    result.push({
+      type: 'active-group',
+      title: 'Active',
+      conversations: active.sort((a, b) => b.updated_at - a.updated_at),
+      groupId: 'active',
+    });
+  }
+
+  const inactive = conversations.filter(c => !c.is_active);
+  const byProject = new Map<string, Conversation[]>();
+
+  for (const conv of inactive) {
+    const key = conv.project_hash || '__no_project__';
+    const existing = byProject.get(key) || [];
+    existing.push(conv);
+    byProject.set(key, existing);
+  }
+
+  const projectGroups: ConversationGroup[] = [];
+  for (const [hash, convs] of byProject) {
+    convs.sort((a, b) => b.updated_at - a.updated_at);
+
+    projectGroups.push({
+      type: 'project-group',
+      title: deriveDisplayPath(hash === '__no_project__' ? undefined : hash, convs),
+      projectHash: hash,
+      displayPath: deriveDisplayPath(hash === '__no_project__' ? undefined : hash, convs),
+      conversations: convs,
+      groupId: `project-${hash}`,
+    });
+  }
+
+  projectGroups.sort((a, b) => {
+    const aRecent = Math.max(...a.conversations.map(c => c.updated_at));
+    const bRecent = Math.max(...b.conversations.map(c => c.updated_at));
+    return bRecent - aRecent;
   });
 
-  return groups.filter((g) => g.conversations.length > 0);
+  result.push(...projectGroups);
+
+  return result;
 }
 
 type TimeFilter = "all" | "long" | "active";
@@ -137,6 +166,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
+
+  const { collapsedSections, toggleSection } = useUIStore();
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -237,7 +268,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
     );
   }
 
-  const groups = groupByTime(filteredConversations);
+  const groups = buildProjectGroups(filteredConversations);
 
   return (
     <div className="space-y-6">
@@ -305,13 +336,33 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           No conversations match these filters
         </div>
       )}
-      {groups.map((group, groupIdx) => (
-        <div key={group.label}>
-          <div className="pb-2 mb-3">
-            <h2 className="text-xs font-medium tracking-wide uppercase text-sol-text-muted0">
-              {group.label}
-            </h2>
-          </div>
+      {groups.map((group) => {
+        const isCollapsed = collapsedSections.has(group.groupId);
+        const isActiveGroup = group.type === 'active-group';
+
+        return (
+          <div key={group.groupId}>
+            <button
+              onClick={() => toggleSection(group.groupId)}
+              className="w-full pb-2 mb-3 flex items-center gap-2 hover:opacity-70 transition-opacity"
+            >
+              <svg
+                className={`w-4 h-4 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+              <h2 className="text-xs font-medium tracking-wide uppercase text-sol-text-muted0 flex-1 text-left">
+                {group.title} ({group.conversations.length})
+              </h2>
+              {isActiveGroup && (
+                <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
+              )}
+            </button>
+
+            {!isCollapsed && (
 
           <div className="space-y-3">
             {group.conversations.map((conv) => (
@@ -465,8 +516,10 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
               )
             )}
           </div>
-        </div>
-      ))}
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
