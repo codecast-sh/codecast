@@ -94,6 +94,19 @@
   --tw-prose-pre-bg: var(--sol-bg-alt);
 }
 
+.prose pre {
+  @apply rounded-md shadow-sm border-0 text-sm;
+  background-color: var(--sol-bg-alt);
+}
+
+.prose code {
+  @apply text-sm;
+}
+
+.prose pre code {
+  @apply text-sm;
+}
+
 .prose table {
   @apply w-full border-collapse text-sm;
 }
