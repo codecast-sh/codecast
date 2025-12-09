@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { toast } from "sonner";
 
 interface CodeBlockProps {
   code: string;
@@ -7,22 +7,24 @@ interface CodeBlockProps {
 }
 
 export function CodeBlock({ code, language }: CodeBlockProps) {
-  const [copied, setCopied] = useState(false);
-
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(code);
+      toast.success("Copied!");
+    } catch (err) {
+      toast.error("Failed to copy");
+    }
   };
 
   return (
     <div className="relative group my-3">
-      <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
         <button
           onClick={handleCopy}
           className="px-2 py-1 text-xs bg-slate-600 text-sol-base2 rounded hover:bg-slate-500"
+          title="Copy code"
         >
-          {copied ? "Copied!" : "Copy"}
+          Copy
         </button>
       </div>
       {language && (

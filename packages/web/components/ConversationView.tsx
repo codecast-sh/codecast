@@ -10,6 +10,7 @@ import { isCommandMessage, getCommandType, cleanContent } from "../lib/conversat
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { toast } from "sonner";
+import { CodeBlock } from "./CodeBlock";
 
 type ToolCall = {
   id: string;
@@ -560,7 +561,26 @@ function AssistantBlock({
             {collapsed ? (
               <span>{truncatedContent}{wasTruncated && "..."}</span>
             ) : (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeHighlight]}
+                components={{
+                  pre: ({ node, children, ...props }) => {
+                    const codeElement = node?.children?.[0];
+                    if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                      const className = codeElement.properties?.className as string[] | undefined;
+                      const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                      const codeContent = codeElement.children?.[0];
+                      const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+
+                      if (code) {
+                        return <CodeBlock code={code} language={language} />;
+                      }
+                    }
+                    return <pre {...props}>{children}</pre>;
+                  },
+                }}
+              >
                 {content}
               </ReactMarkdown>
             )}
