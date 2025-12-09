@@ -374,7 +374,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         {/* Time filters */}
         <button
           onClick={() => setTimeFilter("all")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
             timeFilter === "all"
               ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -384,7 +384,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         </button>
         <button
           onClick={() => setTimeFilter("long")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
             timeFilter === "long"
               ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -394,7 +394,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         </button>
         <button
           onClick={() => setTimeFilter("active")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
             timeFilter === "active"
               ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -408,7 +408,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         {/* Subagent filters */}
         <button
           onClick={() => setSubagentFilter(subagentFilter === "main" ? "all" : "main")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
             subagentFilter === "main"
               ? "bg-sol-blue/20 text-sol-blue border border-sol-blue/40"
               : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
@@ -418,7 +418,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         </button>
         <button
           onClick={() => setSubagentFilter(subagentFilter === "subagent" ? "all" : "subagent")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
             subagentFilter === "subagent"
               ? "bg-sol-violet/20 text-sol-violet border border-sol-violet/40"
               : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
@@ -448,10 +448,10 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           <div key={group.groupId}>
             <button
               onClick={() => toggleSection(group.groupId)}
-              className="w-full pb-2 mb-3 flex items-center gap-2 hover:opacity-70 transition-opacity"
+              className="w-full pb-2 mb-3 flex items-center gap-2 hover:opacity-70 transition-opacity motion-reduce:transition-none"
             >
               <svg
-                className={`w-4 h-4 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                className={`w-4 h-4 transition-transform motion-reduce:transition-none ${isCollapsed ? '-rotate-90' : ''}`}
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -462,7 +462,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                 {group.title} ({group.conversations.length})
               </h2>
               {isActiveGroup && (
-                <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
+                <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
               )}
             </button>
 
@@ -479,8 +479,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                 tabIndex={-1}
                 className="group block relative focus:outline-none focus:ring-2 focus:ring-sol-yellow/60 rounded-xl"
               >
-                <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-xl p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm">
+                <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300 motion-reduce:transition-none"></div>
+                <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-xl p-4 hover:border-sol-yellow/40 transition-all duration-200 motion-reduce:transition-none backdrop-blur-sm">
                   <div className="flex items-start justify-between gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start gap-2 mb-1.5">
@@ -488,12 +488,12 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                           {(conv.author_name?.charAt(0) || "U").toUpperCase()}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <span className="text-sol-text font-medium text-base group-hover:text-sol-yellow transition-colors">
+                          <span className="text-sol-text font-medium text-base group-hover:text-sol-yellow transition-colors motion-reduce:transition-none">
                             {cleanTitle(conv.title)}
                           </span>
                           {conv.is_active && (
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 ml-2 rounded-md bg-sol-green/20 border border-sol-green/60 align-middle">
-                              <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
+                              <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
                               <span className="text-xs text-sol-green font-semibold tracking-wide">LIVE</span>
                             </span>
                           )}
@@ -613,7 +613,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                       tabIndex={-1}
                       className="group block relative focus:outline-none focus:ring-2 focus:ring-violet-500/60 rounded-lg"
                     >
-                      <div className="relative bg-sol-bg-alt/40 border border-sol-border/60 rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200">
+                      <div className="relative bg-sol-bg-alt/40 border border-sol-border/60 rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200 motion-reduce:transition-none">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
                             Subagent
@@ -622,7 +622,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                             {child.title}
                           </h4>
                           {child.is_active && (
-                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse motion-reduce:animate-none" />
                           )}
                         </div>
                         <div className="flex items-center gap-2 text-xs text-sol-text-muted0">

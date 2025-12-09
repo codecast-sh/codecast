@@ -65,7 +65,7 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
         <div className="space-y-1">
           <button
             onClick={() => handleFilterClick("my")}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
               isDashboard && filter === "my"
                 ? "bg-sol-bg-alt text-sol-text"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
@@ -78,7 +78,7 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
           </button>
           <button
             onClick={() => handleFilterClick("team")}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
               isDashboard && filter === "team"
                 ? "bg-sol-bg-alt text-sol-text"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
@@ -100,7 +100,7 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
           <Link
             key={item.href}
             href={item.href}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
               pathname === item.href || pathname?.startsWith(item.href + "/")
                 ? "bg-sol-bg-alt text-sol-text"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"

@@ -30,7 +30,7 @@
   }
 
   .sol-card-hover {
-    @apply hover:border-amber-500/40 transition-all duration-200;
+    @apply hover:border-amber-500/40 transition-all duration-200 motion-reduce:transition-none;
   }
 
   .sol-header {
@@ -42,7 +42,7 @@
   }
 
   .sol-btn {
-    @apply px-3 py-1.5 rounded-lg text-sm font-medium transition-colors;
+    @apply px-3 py-1.5 rounded-lg text-sm font-medium transition-colors motion-reduce:transition-none;
   }
 
   .sol-btn-primary {
@@ -74,7 +74,7 @@
   }
 
   .sol-link {
-    @apply text-amber-600 hover:text-amber-500 transition-colors;
+    @apply text-amber-600 hover:text-amber-500 transition-colors motion-reduce:transition-none;
   }
 
   .sol-input {
@@ -175,6 +175,17 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
