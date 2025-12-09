@@ -222,32 +222,43 @@ export const listConversations = query({
   args: {
     filter: v.union(v.literal("my"), v.literal("team")),
     limit: v.optional(v.number()),
+    cursor: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) {
-      return [];
+      return { conversations: [], nextCursor: null };
     }
     const user = await ctx.db.get(userId);
     if (!user) {
-      return [];
+      return { conversations: [], nextCursor: null };
     }
 
-    const limit = args.limit ?? 100;
+    const limit = args.limit ?? 50;
+    const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
     let conversations;
     if (args.filter === "my") {
-      conversations = await ctx.db
+      let query = ctx.db
         .query("conversations")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .order("desc")
-        .take(limit);
+        .order("desc");
+
+      const allResults = await query.take(limit + 1 + (cursorTimestamp ? 500 : 0));
+
+      let filtered = allResults;
+      if (cursorTimestamp) {
+        filtered = allResults.filter(c => c.updated_at < cursorTimestamp);
+      }
+      conversations = filtered.slice(0, limit + 1);
     } else {
+      const fetchLimit = cursorTimestamp ? 500 : (limit + 1) * 2;
       const allConversations = await ctx.db
         .query("conversations")
         .order("desc")
-        .take(limit * 2);
-      conversations = allConversations.filter((c) => {
+        .take(fetchLimit);
+
+      let filtered = allConversations.filter((c) => {
         const isOwn = c.user_id.toString() === userId.toString();
         if (isOwn) return true;
         if (c.is_private) return false;
@@ -255,11 +266,20 @@ export const listConversations = query({
           return true;
         }
         return false;
-      }).slice(0, limit);
+      });
+
+      if (cursorTimestamp) {
+        filtered = filtered.filter(c => c.updated_at < cursorTimestamp);
+      }
+      conversations = filtered.slice(0, limit + 1);
     }
 
+    const hasMore = conversations.length > limit;
+    const resultConversations = hasMore ? conversations.slice(0, limit) : conversations;
+    const nextCursor = hasMore ? String(resultConversations[resultConversations.length - 1].updated_at) : null;
+
     const conversationsWithUsers = await Promise.all(
-      conversations.map(async (c) => {
+      resultConversations.map(async (c) => {
         const conversationUser = await ctx.db.get(c.user_id);
 
         const messages = await ctx.db
@@ -381,7 +401,10 @@ export const listConversations = query({
       })
     );
 
-    return conversationsWithUsers.sort((a, b) => b.updated_at - a.updated_at);
+    return {
+      conversations: conversationsWithUsers.sort((a, b) => b.updated_at - a.updated_at),
+      nextCursor,
+    };
   },
 });
 
@@ -487,27 +510,28 @@ export const searchConversations = query({
       return [];
     }
 
-    const searchTerm = args.query.toLowerCase().trim();
+    const searchTerm = args.query.trim();
     if (!searchTerm || searchTerm.length < 2) {
       return [];
     }
 
     const limit = args.limit ?? 20;
 
-    const allConversations = await ctx.db
-      .query("conversations")
-      .order("desc")
-      .take(50);
+    // Use full-text search on messages
+    const searchResults = await ctx.db
+      .query("messages")
+      .withSearchIndex("search_content", (q) => q.search("content", searchTerm))
+      .take(100);
 
-    const accessibleConversations = allConversations.filter((c) => {
-      const isOwn = c.user_id.toString() === userId.toString();
-      if (isOwn) return true;
-      if (c.is_private) return false;
-      if (user.team_id && c.team_id?.toString() === user.team_id.toString()) {
-        return true;
+    // Group by conversation and check access
+    const conversationMatches = new Map<string, typeof searchResults>();
+    for (const msg of searchResults) {
+      const convId = msg.conversation_id.toString();
+      if (!conversationMatches.has(convId)) {
+        conversationMatches.set(convId, []);
       }
-      return false;
-    });
+      conversationMatches.get(convId)!.push(msg);
+    }
 
     const results: Array<{
       conversationId: string;
@@ -523,49 +547,49 @@ export const searchConversations = query({
       isOwn: boolean;
     }> = [];
 
-    for (const conv of accessibleConversations) {
-      const messages = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q) =>
-          q.eq("conversation_id", conv._id)
-        )
-        .take(30);
+    for (const [convId, messages] of conversationMatches) {
+      if (results.length >= limit) break;
 
-      const matchingMessages = messages.filter(
-        (m) => m.content && m.content.toLowerCase().includes(searchTerm)
-      );
+      const conv = await ctx.db.get(messages[0].conversation_id);
+      if (!conv) continue;
 
-      if (matchingMessages.length > 0) {
-        const conversationUser = await ctx.db.get(conv.user_id);
-        const title = conv.slug
-          ? formatSlugAsTitle(conv.slug)
-          : conv.title || `Session ${conv.session_id.slice(0, 8)}`;
-
-        results.push({
-          conversationId: conv._id,
-          title,
-          matches: matchingMessages.slice(0, 3).map((m) => {
-            const content = m.content || "";
-            const idx = content.toLowerCase().indexOf(searchTerm);
-            const start = Math.max(0, idx - 100);
-            const end = Math.min(content.length, idx + searchTerm.length + 150);
-            let snippet = content.slice(start, end);
-            if (start > 0) snippet = "..." + snippet;
-            if (end < content.length) snippet = snippet + "...";
-            return {
-              messageId: m._id,
-              content: snippet,
-              role: m.role,
-              timestamp: m.timestamp,
-            };
-          }),
-          updatedAt: conv.updated_at,
-          authorName: conversationUser?.name || "Unknown",
-          isOwn: conv.user_id.toString() === userId.toString(),
-        });
-
-        if (results.length >= limit) break;
+      // Check access
+      const isOwn = conv.user_id.toString() === userId.toString();
+      if (!isOwn) {
+        if (conv.is_private) continue;
+        if (!user.team_id || conv.team_id?.toString() !== user.team_id.toString()) {
+          continue;
+        }
       }
+
+      const conversationUser = await ctx.db.get(conv.user_id);
+      const title = conv.slug
+        ? formatSlugAsTitle(conv.slug)
+        : conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+
+      const searchTermLower = searchTerm.toLowerCase();
+      results.push({
+        conversationId: conv._id,
+        title,
+        matches: messages.slice(0, 3).map((m) => {
+          const content = m.content || "";
+          const idx = content.toLowerCase().indexOf(searchTermLower);
+          const start = Math.max(0, idx > -1 ? idx - 100 : 0);
+          const end = Math.min(content.length, idx > -1 ? idx + searchTerm.length + 150 : 250);
+          let snippet = content.slice(start, end);
+          if (start > 0) snippet = "..." + snippet;
+          if (end < content.length) snippet = snippet + "...";
+          return {
+            messageId: m._id,
+            content: snippet,
+            role: m.role,
+            timestamp: m.timestamp,
+          };
+        }),
+        updatedAt: conv.updated_at,
+        authorName: conversationUser?.name || "Unknown",
+        isOwn,
+      });
     }
 
     return results.sort((a, b) => b.updatedAt - a.updatedAt);

@@ -95,7 +95,11 @@ export default defineSchema({
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_uuid", ["conversation_id", "message_uuid"])
-    .index("by_message_uuid", ["message_uuid"]),
+    .index("by_message_uuid", ["message_uuid"])
+    .searchIndex("search_content", {
+      searchField: "content",
+      filterFields: ["conversation_id"],
+    }),
 
   sync_cursors: defineTable({
     user_id: v.id("users"),
