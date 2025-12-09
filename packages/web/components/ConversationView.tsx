@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import "highlight.js/styles/base16/solarized-dark.css";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent } from "../lib/conversationProcessor";
 
 type ToolCall = {
@@ -595,10 +596,43 @@ function SystemBlock({ content, subtype }: { content: string; subtype?: string }
 }
 
 export function ConversationView({ conversation, backHref, backLabel = "Back", headerExtra }: ConversationViewProps) {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+
+  const messages = conversation?.messages || [];
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: (index) => {
+      const msg = messages[index];
+      if (!msg) return 100;
+
+      if (collapsed) {
+        if (msg.role === "system") return 0;
+        if (msg.role === "user" && msg.tool_results) return 0;
+        if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return 0;
+        return 80;
+      }
+
+      if (msg.role === "system") return 60;
+      if (msg.role === "user") {
+        if (msg.tool_results) return 120;
+        if (msg.content && isCommandMessage(msg.content)) return 50;
+        const lines = (msg.content || "").split("\n").length;
+        return Math.max(100, lines * 20 + 60);
+      }
+      if (msg.role === "assistant") {
+        const toolCount = msg.tool_calls?.length || 0;
+        const hasThinking = msg.thinking && msg.thinking.trim().length > 0;
+        const contentLines = (msg.content || "").split("\n").length;
+        return Math.max(120, toolCount * 150 + (hasThinking ? 100 : 0) + contentLines * 20 + 60);
+      }
+      return 100;
+    },
+    overscan: 5,
+  });
 
   useEffect(() => {
     const container = containerRef.current;
@@ -615,20 +649,21 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
   }, []);
 
   useEffect(() => {
-    if (!userScrolled && messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    if (!userScrolled && messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: "end", behavior: "smooth" });
     }
-  }, [conversation?.messages.length, userScrolled]);
+  }, [messages.length, userScrolled, virtualizer]);
 
   useEffect(() => {
-    if (conversation?.messages.length && window.location.hash) {
-      const el = document.getElementById(window.location.hash.slice(1));
-      if (el) {
+    if (messages.length && window.location.hash) {
+      const targetId = window.location.hash.slice(1);
+      const msgIndex = messages.findIndex(m => `msg-${m._id}` === targetId);
+      if (msgIndex >= 0) {
         setUserScrolled(true);
-        setTimeout(() => el.scrollIntoView({ behavior: "smooth" }), 100);
+        setTimeout(() => virtualizer.scrollToIndex(msgIndex, { align: "center", behavior: "smooth" }), 100);
       }
     }
-  }, [conversation?.messages.length]);
+  }, [messages.length, virtualizer]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -767,20 +802,43 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
       </header>
 
       <div ref={containerRef} className="flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto px-4 py-6">
-          {!conversation ? (
-            <div className="text-sol-text-dim text-center py-8 text-sm">Loading...</div>
-          ) : conversation.messages.length === 0 ? (
-            <div className="text-sol-text-dim text-center py-8 text-sm">
-              No messages in this conversation
-            </div>
-          ) : (
-            <>
-              {conversation.messages.map(renderMessage)}
-              <div ref={messagesEndRef} />
-            </>
-          )}
-        </div>
+        {!conversation ? (
+          <div className="text-sol-text-dim text-center py-8 text-sm">Loading...</div>
+        ) : messages.length === 0 ? (
+          <div className="text-sol-text-dim text-center py-8 text-sm">
+            No messages in this conversation
+          </div>
+        ) : (
+          <div
+            style={{
+              height: virtualizer.getTotalSize(),
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {virtualizer.getVirtualItems().map((virtualItem) => {
+              const msg = messages[virtualItem.index];
+              return (
+                <div
+                  key={virtualItem.key}
+                  data-index={virtualItem.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualItem.start}px)`,
+                  }}
+                >
+                  <div className="max-w-4xl mx-auto px-4 py-1">
+                    {renderMessage(msg)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </main>
   );
