@@ -1,4 +1,5 @@
 {
   "ccs-1l5": "tests/e2e/ccs-1l5.test.ts",
-  "ccs-04g": "tests/e2e/ccs-04g.test.ts"
+  "ccs-04g": "tests/e2e/ccs-04g.test.ts",
+  "ccs-ns8": "tests/e2e/ccs-ns8.test.ts"
 }
