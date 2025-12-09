@@ -9,6 +9,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
+import { toast } from "sonner";
 
 type ToolCall = {
   id: string;
@@ -428,8 +429,26 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName }: { co
   const truncated = collapsed ? content.split("\n").slice(0, 2).join("\n") : content;
   const wasTruncated = collapsed && content.split("\n").length > 2;
 
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast.success("Copied!");
+    } catch (err) {
+      toast.error("Failed to copy");
+    }
+  };
+
   return (
-    <div id={`msg-${messageId}`} className={`bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4 scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"}`}>
+    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4 scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"} relative`}>
+      <button
+        onClick={handleCopy}
+        className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
+        title="Copy message"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+      </button>
       <div className="flex items-center gap-2 mb-2">
         <UserIcon />
         <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
@@ -487,8 +506,28 @@ function AssistantBlock({
   const truncatedContent = collapsed && content ? content.split("\n").slice(0, 2).join("\n") : content;
   const wasTruncated = collapsed && content && content.split("\n").length > 2;
 
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content || "");
+      toast.success("Copied!");
+    } catch (err) {
+      toast.error("Failed to copy");
+    }
+  };
+
   return (
-    <div id={`msg-${messageId}`} className={`scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"}`}>
+    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"} relative`}>
+      {hasContent && (
+        <button
+          onClick={handleCopy}
+          className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary z-10"
+          title="Copy message"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        </button>
+      )}
       <div className="flex items-center gap-2 mb-2">
         <ClaudeIcon />
         <span className="text-sol-text-secondary text-xs font-medium">Claude</span>
