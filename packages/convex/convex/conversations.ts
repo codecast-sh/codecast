@@ -282,13 +282,38 @@ export const listConversations = query({
       resultConversations.map(async (c) => {
         const conversationUser = await ctx.db.get(c.user_id);
 
-        const messages = await ctx.db
+        const firstMessages = await ctx.db
           .query("messages")
           .withIndex("by_conversation_id", (q) =>
             q.eq("conversation_id", c._id)
           )
           .order("asc")
           .take(20);
+
+        // Also fetch recent messages to get latest todos
+        const recentMessages = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_id", (q) =>
+            q.eq("conversation_id", c._id)
+          )
+          .order("desc")
+          .take(10);
+
+        // Combine and dedupe
+        const messageIds = new Set<string>();
+        const messages = [];
+        for (const m of firstMessages) {
+          if (!messageIds.has(m._id)) {
+            messageIds.add(m._id);
+            messages.push(m);
+          }
+        }
+        for (const m of recentMessages) {
+          if (!messageIds.has(m._id)) {
+            messageIds.add(m._id);
+            messages.push(m);
+          }
+        }
 
         let toolCallCount = 0;
         const toolNames: string[] = [];

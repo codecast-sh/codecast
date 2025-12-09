@@ -462,11 +462,11 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                           </span>
                         )}
                         {conv.latest_todos && conv.latest_todos.todos.length > 0 && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt/60 bg-sol-bg-alt text-emerald-400 border border-emerald-500/40">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/50 font-medium">
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                             </svg>
-                            {conv.latest_todos.todos.filter(t => t.status === 'completed').length}/{conv.latest_todos.todos.length} tasks
+                            {conv.latest_todos.todos.filter(t => t.status === 'completed').length}/{conv.latest_todos.todos.length}
                           </span>
                         )}
                         {conv.latest_usage && (
