@@ -49,6 +49,7 @@ export type ReducerState = {
   messages: Map<string, ProcessedMessage>;
   latestTodos?: { todos: any[]; timestamp: number };
   latestUsage?: UsageData;
+  orphanToolResults: Map<string, Array<{ content: any; isError: boolean; timestamp: number }>>
 };
 
 type RawMessage = {
@@ -82,6 +83,7 @@ export function createReducer(): ReducerState {
     messageUuids: new Set(),
     toolIdToMessageId: new Map(),
     messages: new Map(),
+    orphanToolResults: new Map(),
   };
 }
 
@@ -208,6 +210,15 @@ export function reducer(state: ReducerState, rawMessages: RawMessage[]): Process
           state.messages.set(mid, processedMsg);
           state.toolIdToMessageId.set(toolCall.id, mid);
           changed.add(mid);
+
+          const orphans = state.orphanToolResults.get(toolCall.id);
+          if (orphans && orphans.length > 0) {
+            const orphan = orphans[0];
+            tool.state = orphan.isError ? 'error' : 'completed';
+            tool.result = orphan.content;
+            tool.completedAt = orphan.timestamp;
+            state.orphanToolResults.delete(toolCall.id);
+          }
         }
       }
     }
@@ -221,6 +232,20 @@ export function reducer(state: ReducerState, rawMessages: RawMessage[]): Process
       for (const result of msg.tool_results) {
         const messageId = state.toolIdToMessageId.get(result.tool_use_id);
         if (!messageId) {
+          let parsedResult: any;
+          try {
+            parsedResult = JSON.parse(result.content);
+          } catch {
+            parsedResult = result.content;
+          }
+
+          const orphans = state.orphanToolResults.get(result.tool_use_id) || [];
+          orphans.push({
+            content: parsedResult,
+            isError: result.is_error ?? false,
+            timestamp: msg.timestamp,
+          });
+          state.orphanToolResults.set(result.tool_use_id, orphans);
           continue;
         }
 
