@@ -3,25 +3,29 @@
 @tailwind utilities;
 
 :root {
-  --sol-bg: #2a2520;
-  --sol-bg-alt: #3a3128;
-  --sol-bg-highlight: #4a3d30;
-  --sol-border: #6b5d50;
+  /* Solarized Dark */
+  --sol-bg: #002b36;
+  --sol-bg-alt: #073642;
+  --sol-bg-highlight: #094959;
+  --sol-border: #586e75;
   --sol-text: #fdf6e3;
   --sol-text-secondary: #eee8d5;
-  --sol-text-muted: #c4b8a8;
-  --sol-text-dim: #a1938a;
+  --sol-text-muted: #93a1a1;
+  --sol-text-dim: #657b83;
+  --sol-text-muted0: #839496;
 }
 
 .light {
-  --sol-bg: #fdf6e3;
-  --sol-bg-alt: #f5f0e8;
-  --sol-bg-highlight: #ebe4d8;
-  --sol-border: #a1938a;
-  --sol-text: #2a2520;
-  --sol-text-secondary: #3a3128;
-  --sol-text-muted: #6b5d50;
-  --sol-text-dim: #8a7d73;
+  /* Solarized Light */
+  --sol-bg: #FBF5E2;
+  --sol-bg-alt: #eee8d5;
+  --sol-bg-highlight: #e4ddc8;
+  --sol-border: #93a1a1;
+  --sol-text: #002b36;
+  --sol-text-secondary: #073642;
+  --sol-text-muted: #586e75;
+  --sol-text-dim: #657b83;
+  --sol-text-muted0: #839496;
 }
 
 @layer components {
@@ -113,57 +117,59 @@
 
 @layer base {
   :root {
-    --background: 30 20% 98%;
-    --foreground: 30 15% 15%;
-    --card: 30 20% 100%;
-    --card-foreground: 30 15% 15%;
-    --popover: 30 20% 100%;
-    --popover-foreground: 30 15% 15%;
-    --primary: 30 15% 20%;
-    --primary-foreground: 30 20% 98%;
-    --secondary: 30 20% 95%;
-    --secondary-foreground: 30 15% 20%;
-    --muted: 30 20% 95%;
-    --muted-foreground: 30 10% 50%;
-    --accent: 38 90% 60%;
-    --accent-foreground: 30 15% 20%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 30 20% 98%;
-    --border: 30 15% 85%;
-    --input: 30 15% 85%;
-    --ring: 30 15% 15%;
-    --chart-1: 38 90% 60%;
-    --chart-2: 30 70% 50%;
-    --chart-3: 25 60% 45%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
+    /* Solarized Light - base3 #fdf6e3 = 44 87% 94% */
+    --background: 44 87% 94%;
+    --foreground: 192 81% 14%;
+    --card: 44 87% 94%;
+    --card-foreground: 192 81% 14%;
+    --popover: 44 87% 94%;
+    --popover-foreground: 192 81% 14%;
+    --primary: 192 81% 14%;
+    --primary-foreground: 44 87% 94%;
+    --secondary: 44 50% 91%;
+    --secondary-foreground: 192 81% 14%;
+    --muted: 44 50% 91%;
+    --muted-foreground: 194 14% 40%;
+    --accent: 45 100% 35%;
+    --accent-foreground: 44 87% 94%;
+    --destructive: 1 71% 52%;
+    --destructive-foreground: 44 87% 94%;
+    --border: 44 20% 80%;
+    --input: 44 20% 80%;
+    --ring: 192 81% 14%;
+    --chart-1: 45 100% 35%;
+    --chart-2: 18 89% 46%;
+    --chart-3: 331 64% 52%;
+    --chart-4: 237 43% 60%;
+    --chart-5: 175 59% 40%;
     --radius: 0.5rem;
   }
   .dark {
-    --background: 30 15% 12%;
-    --foreground: 30 20% 95%;
-    --card: 30 15% 12%;
-    --card-foreground: 30 20% 95%;
-    --popover: 30 15% 12%;
-    --popover-foreground: 30 20% 95%;
-    --primary: 30 20% 95%;
-    --primary-foreground: 30 15% 20%;
-    --secondary: 30 12% 18%;
-    --secondary-foreground: 30 20% 95%;
-    --muted: 30 12% 18%;
-    --muted-foreground: 30 15% 60%;
-    --accent: 38 85% 55%;
-    --accent-foreground: 30 20% 95%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 30 20% 95%;
-    --border: 30 12% 22%;
-    --input: 30 12% 22%;
-    --ring: 30 20% 80%;
-    --chart-1: 38 85% 55%;
-    --chart-2: 30 70% 50%;
-    --chart-3: 25 60% 45%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
+    /* Solarized Dark - base03 #002b36 = 192 100% 11% */
+    --background: 192 100% 11%;
+    --foreground: 44 87% 94%;
+    --card: 192 81% 14%;
+    --card-foreground: 44 87% 94%;
+    --popover: 192 81% 14%;
+    --popover-foreground: 44 87% 94%;
+    --primary: 44 87% 94%;
+    --primary-foreground: 192 100% 11%;
+    --secondary: 192 81% 14%;
+    --secondary-foreground: 44 87% 94%;
+    --muted: 192 81% 14%;
+    --muted-foreground: 186 8% 55%;
+    --accent: 45 100% 35%;
+    --accent-foreground: 44 87% 94%;
+    --destructive: 1 71% 52%;
+    --destructive-foreground: 44 87% 94%;
+    --border: 192 44% 22%;
+    --input: 192 44% 22%;
+    --ring: 44 87% 94%;
+    --chart-1: 45 100% 35%;
+    --chart-2: 18 89% 46%;
+    --chart-3: 331 64% 52%;
+    --chart-4: 237 43% 60%;
+    --chart-5: 175 59% 40%;
   }
 }
 
