@@ -243,16 +243,15 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
 
   const getToolSummary = () => {
     if (isEdit && parsedInput.file_path) {
-      const fileName = String(parsedInput.file_path).split("/").pop();
-      return fileName;
+      return String(parsedInput.file_path);
     }
     if (isRead && parsedInput.file_path) {
-      const fileName = String(parsedInput.file_path).split("/").pop();
-      return fileName;
+      const lines = parsedInput.limit ? ` (${parsedInput.limit} lines)` : "";
+      return String(parsedInput.file_path) + lines;
     }
     if (isBash && parsedInput.command) {
       const cmd = String(parsedInput.command);
-      return cmd.length > 60 ? cmd.slice(0, 60) + "..." : cmd;
+      return cmd.length > 80 ? cmd.slice(0, 80) + "..." : cmd;
     }
     if (tool.name === "Glob" && parsedInput.pattern) {
       return String(parsedInput.pattern);
@@ -263,43 +262,76 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
     return null;
   };
 
+  const getResultSummary = () => {
+    if (!result) return null;
+    if (isEdit) {
+      if (result.content.includes("has been updated")) {
+        const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
+        if (match) return `+${match[1]} -${match[2]}`;
+        return "updated";
+      }
+      return result.is_error ? "failed" : "done";
+    }
+    if (isRead) {
+      const lines = result.content.split("\n").length;
+      return `${lines} lines`;
+    }
+    return null;
+  };
+
   const summary = getToolSummary();
+  const resultSummary = getResultSummary();
   const resultTruncated = result ? truncateLines(result.content, expanded ? 100 : 8) : null;
 
   const toolColors: Record<string, string> = {
-    Edit: "text-sol-orange",
-    Write: "text-sol-orange",
-    Read: "text-sol-blue",
-    Bash: "text-sol-green",
-    Glob: "text-sol-violet",
-    Grep: "text-sol-violet",
-    Task: "text-sol-cyan",
-    TodoWrite: "text-sol-magenta",
+    Edit: "text-amber-600 dark:text-sol-orange",
+    Write: "text-amber-600 dark:text-sol-orange",
+    Read: "text-blue-600 dark:text-sol-blue",
+    Bash: "text-green-600 dark:text-sol-green",
+    Glob: "text-violet-600 dark:text-sol-violet",
+    Grep: "text-violet-600 dark:text-sol-violet",
+    Task: "text-cyan-600 dark:text-sol-cyan",
+    TodoWrite: "text-pink-600 dark:text-sol-magenta",
+  };
+
+  const bulletColors: Record<string, string> = {
+    Edit: "bg-amber-500",
+    Write: "bg-amber-500",
+    Read: "bg-blue-500",
+    Bash: "bg-green-500",
+    Glob: "bg-violet-500",
+    Grep: "bg-violet-500",
+    Task: "bg-cyan-500",
+    TodoWrite: "bg-pink-500",
   };
 
   const toolColor = toolColors[tool.name] || "text-sol-text-muted";
+  const bulletColor = bulletColors[tool.name] || "bg-sol-text-muted";
 
   return (
-    <div className="my-3 border-l-2 border-sol-border pl-3">
+    <div className="my-1">
       <div
-        className="flex items-center gap-2 cursor-pointer group"
+        className="flex items-start gap-2 cursor-pointer group py-0.5"
         onClick={() => setExpanded(!expanded)}
       >
-        <span className={`font-mono text-xs font-medium ${toolColor}`}>
+        <span className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${bulletColor}`} />
+        <span className={`font-mono text-sm font-medium ${toolColor}`}>
           {tool.name}
         </span>
         {summary && (
-          <span className="text-sol-text-dim text-xs font-mono truncate max-w-md">
+          <span className="text-sol-text-muted text-sm font-mono truncate">
             {summary}
           </span>
         )}
-        <span className="text-sol-text-dim text-[10px] ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
-          {expanded ? "collapse" : "expand"}
-        </span>
+        {resultSummary && (
+          <span className="text-sol-text-dim text-sm font-mono ml-auto flex-shrink-0">
+            {resultSummary}
+          </span>
+        )}
       </div>
 
       {isEdit && !expanded && !!parsedInput.old_string && !!parsedInput.new_string && (
-        <div className="mt-2 bg-sol-bg-alt/50 rounded p-2 max-h-40 overflow-hidden">
+        <div className="ml-3.5 mt-1 rounded overflow-hidden" style={{ backgroundColor: '#002b36' }}>
           <DiffView
             oldStr={String(parsedInput.old_string)}
             newStr={String(parsedInput.new_string)}
@@ -309,9 +341,8 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
       )}
 
       {expanded && (
-        <div className="mt-2 space-y-2">
-          <div className="bg-sol-bg-alt/50 rounded p-2">
-            <div className="text-[10px] text-sol-text-dim mb-1">Input</div>
+        <div className="ml-3.5 mt-1 space-y-2">
+          <div className="rounded p-2" style={{ backgroundColor: '#002b36' }}>
             {isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
               <DiffView
                 oldStr={String(parsedInput.old_string)}
@@ -319,7 +350,7 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
                 filePath={String(parsedInput.file_path || "")}
               />
             ) : (
-              <pre className="text-xs text-sol-text-secondary font-mono whitespace-pre-wrap overflow-x-auto">
+              <pre className="text-sm font-mono whitespace-pre-wrap overflow-x-auto" style={{ color: '#93a1a1' }}>
                 {JSON.stringify(parsedInput, null, 2)}
               </pre>
             )}
@@ -327,42 +358,77 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
         </div>
       )}
 
-      {result && resultTruncated && (
-        <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-sol-red/20" : "bg-sol-bg-alt/30"}`}>
-          {!resultExpanded ? (
+      {result && resultTruncated && resultExpanded && (
+        <div className={`ml-3.5 mt-1 rounded p-2 ${result.is_error ? "bg-red-900/20" : ""}`} style={result.is_error ? {} : { backgroundColor: '#002b36' }}>
+          <pre className={`text-sm font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
+            result.is_error ? "text-red-400" : ""
+          }`} style={result.is_error ? {} : { color: '#93a1a1' }}>
+            {resultTruncated.text}
+          </pre>
+          {resultTruncated.truncated && (
             <button
-              onClick={(e) => { e.stopPropagation(); setResultExpanded(true); }}
-              className="text-[10px] text-sol-text-dim hover:text-sol-text-muted"
+              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+              className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1"
             >
-              show result ({resultTruncated.totalLines} lines)
+              {expanded ? "show less" : `+${resultTruncated.totalLines - 8} more lines`}
             </button>
-          ) : (
-            <>
-              <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
-                result.is_error ? "text-sol-red" : "text-sol-text-muted"
-              }`}>
-                {resultTruncated.text}
-              </pre>
-              {resultTruncated.truncated && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-                  className="text-[10px] text-sol-text-dim hover:text-sol-text-muted mt-1"
-                >
-                  {expanded ? "show less" : `+${resultTruncated.totalLines - 8} more lines`}
-                </button>
-              )}
-              {isAgentOutput && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); setResultExpanded(false); }}
-                  className="text-[10px] text-sol-text-dim hover:text-sol-text-muted mt-1 ml-2"
-                >
-                  hide
-                </button>
-              )}
-            </>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function TodoWriteBlock({ tool }: { tool: ToolCall }) {
+  let parsedInput: { todos?: Array<{ content: string; status: string; activeForm?: string }> } = {};
+  try {
+    parsedInput = JSON.parse(tool.input);
+  } catch {}
+
+  const todos = parsedInput.todos || [];
+  if (todos.length === 0) return null;
+
+  const completed = todos.filter(t => t.status === 'completed').length;
+  const inProgress = todos.filter(t => t.status === 'in_progress').length;
+
+  return (
+    <div className="my-2">
+      <div className="flex items-center gap-2 py-0.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0" />
+        <span className="font-mono text-sm font-medium text-pink-600 dark:text-sol-magenta">
+          TodoWrite
+        </span>
+        <span className="text-sol-text-dim text-sm font-mono">
+          {completed}/{todos.length} done
+          {inProgress > 0 && `, ${inProgress} in progress`}
+        </span>
+      </div>
+      <div className="ml-3.5 mt-1 space-y-0.5">
+        {todos.map((todo, i) => (
+          <div key={i} className="flex items-start gap-2 text-sm">
+            {todo.status === 'completed' ? (
+              <svg className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : todo.status === 'in_progress' ? (
+              <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4 text-sol-text-dim flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <circle cx="12" cy="12" r="9" strokeWidth={2} />
+              </svg>
+            )}
+            <span className={`${
+              todo.status === 'completed' ? 'text-sol-text-dim line-through' :
+              todo.status === 'in_progress' ? 'text-sol-text-secondary' :
+              'text-sol-text-muted'
+            }`}>
+              {todo.status === 'in_progress' ? (todo.activeForm || todo.content) : todo.content}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -560,6 +626,8 @@ function AssistantBlock({
               result={toolResultMap[tc.id]}
               childConversationId={messageUuid && childConversationMap ? childConversationMap[messageUuid] : undefined}
             />
+          ) : tc.name === "TodoWrite" ? (
+            <TodoWriteBlock key={tc.id} tool={tc} />
           ) : (
             <ToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           )
