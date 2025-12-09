@@ -177,9 +177,27 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
 
     const nonTrivialConvs = convs.filter(c => !isTrivialSubagent(c));
 
+    // Derive git root from project_path if git_root is not set
+    // Common patterns: /Users/x/src/repo, /home/x/projects/repo, etc.
+    const deriveGitRoot = (c: Conversation): string | null => {
+      if (c.git_root) return c.git_root;
+      if (!c.project_path) return null;
+
+      // Try to find repo root from path
+      const parts = c.project_path.split('/');
+      // Look for common source directories
+      const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
+      if (srcIndex >= 0 && srcIndex < parts.length - 1) {
+        // Return path up to and including the first directory after src/
+        return parts.slice(0, srcIndex + 2).join('/');
+      }
+      // Fallback: use project_path as-is
+      return c.project_path;
+    };
+
     const dirLastUpdated = new Map<string, number>();
     for (const c of nonTrivialConvs) {
-      const dir = c.git_root || c.project_path;
+      const dir = deriveGitRoot(c);
       if (dir) {
         const existing = dirLastUpdated.get(dir) || 0;
         if (c.updated_at > existing) {
@@ -201,7 +219,7 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
     let filtered = nonTrivialConvs;
 
     if (directoryFilter) {
-      filtered = filtered.filter(c => (c.git_root || c.project_path) === directoryFilter);
+      filtered = filtered.filter(c => deriveGitRoot(c) === directoryFilter);
     }
 
     if (timeFilter === "long") {
