@@ -9,6 +9,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
+import { toast } from "sonner";
 
 type ToolCall = {
   id: string;
@@ -706,6 +707,34 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
 
   const messages = conversation?.messages || [];
 
+  const handleCopyAll = async () => {
+    if (!conversation || messages.length === 0) {
+      toast.error("No messages to copy");
+      return;
+    }
+
+    const formattedMessages = messages
+      .filter((msg) => {
+        if (msg.role === "system") return false;
+        if (msg.role === "user" && msg.tool_results) return false;
+        if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return false;
+        return msg.content && msg.content.trim().length > 0;
+      })
+      .map((msg) => {
+        const timestamp = new Date(msg.timestamp).toLocaleString();
+        const label = msg.role === "user" ? "User" : "Assistant";
+        return `[${timestamp}] ${label}:\n${msg.content}\n`;
+      })
+      .join("\n");
+
+    try {
+      await navigator.clipboard.writeText(formattedMessages);
+      toast.success("Conversation copied to clipboard");
+    } catch (err) {
+      toast.error("Failed to copy to clipboard");
+    }
+  };
+
   // Extract todos and usage from messages using reducer
   const { latestTodos, latestUsage } = useMemo(() => {
     if (!messages || messages.length === 0) {
@@ -938,6 +967,13 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
                   title="Toggle collapse (Cmd+Shift+C)"
                 >
                   {collapsed ? "Expand" : "Collapse"}
+                </button>
+                <button
+                  onClick={handleCopyAll}
+                  className="px-2 py-1 text-xs rounded bg-sol-bg-alt hover:bg-slate-700 text-sol-text-secondary transition-colors"
+                  title="Copy all messages to clipboard"
+                >
+                  Copy All
                 </button>
                 {headerExtra}
               </div>
