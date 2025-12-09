@@ -216,3 +216,44 @@ export function parseCodexLines(content: string): CodexMessage[] {
     .map(parseCodexLine)
     .filter((m): m is CodexMessage => m !== null);
 }
+
+export interface CursorPrompt {
+  id: string;
+  timestamp: number;
+  text: string;
+  role: "user" | "assistant";
+}
+
+export function parseCursorPrompts(dbValue: string): ParsedMessage[] {
+  try {
+    const data = JSON.parse(dbValue);
+    const messages: ParsedMessage[] = [];
+
+    if (!Array.isArray(data)) {
+      return messages;
+    }
+
+    for (const item of data) {
+      if (!item || typeof item !== "object") continue;
+
+      const timestamp = item.timestamp
+        ? new Date(item.timestamp).getTime()
+        : Date.now();
+
+      const role = item.role === "user" ? "user" : "assistant";
+      const content = typeof item.text === "string" ? item.text : "";
+
+      if (content) {
+        messages.push({
+          role,
+          content,
+          timestamp,
+        });
+      }
+    }
+
+    return messages;
+  } catch {
+    return [];
+  }
+}

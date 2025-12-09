@@ -3,7 +3,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
+import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { parseSessionFile, extractSlug, extractParentUuid, type ParsedMessage } from "./parser.js";
+import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { SyncService } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
@@ -303,6 +305,198 @@ async function processSessionFile(
   log(`Synced ${messages.length} messages for session ${sessionId}`);
 }
 
+async function processCursorSession(
+  dbPath: string,
+  sessionId: string,
+  workspacePath: string,
+  syncService: SyncService,
+  userId: string,
+  conversationCache: ConversationCache,
+  retryQueue: RetryQueue,
+  pendingMessages: PendingMessages
+): Promise<void> {
+  const lastRowId = getPosition(dbPath);
+
+  let result: { messages: ParsedMessage[]; maxRowId: number };
+  try {
+    result = extractMessagesFromCursorDb(dbPath, lastRowId);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log(`Failed to extract messages from Cursor DB: ${errMsg}`);
+    return;
+  }
+
+  const { messages, maxRowId } = result;
+
+  if (messages.length === 0) {
+    if (maxRowId > lastRowId) {
+      setPosition(dbPath, maxRowId);
+    }
+    return;
+  }
+
+  let conversationId = conversationCache[sessionId];
+
+  if (!conversationId) {
+    try {
+      const firstMessageTimestamp = messages[0]?.timestamp;
+
+      conversationId = await syncService.createConversation({
+        userId,
+        sessionId,
+        agentType: "cursor",
+        projectPath: workspacePath,
+        startedAt: firstMessageTimestamp,
+      });
+      conversationCache[sessionId] = conversationId;
+      saveConversationCache(conversationCache);
+      log(`Created conversation ${conversationId} for Cursor session ${sessionId}`);
+
+      if (pendingMessages[sessionId]) {
+        for (const msg of pendingMessages[sessionId]) {
+          try {
+            await syncService.addMessage({
+              conversationId,
+              messageUuid: msg.uuid,
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.timestamp,
+              thinking: msg.thinking,
+              toolCalls: msg.toolCalls,
+              toolResults: msg.toolResults,
+              images: msg.images,
+              subtype: msg.subtype,
+            });
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            log(`Failed to add pending message, queueing for retry: ${errMsg}`);
+            retryQueue.add("addMessage", {
+              conversationId,
+              messageUuid: msg.uuid,
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.timestamp,
+              thinking: msg.thinking,
+              toolCalls: msg.toolCalls,
+              toolResults: msg.toolResults,
+              images: msg.images,
+              subtype: msg.subtype,
+            }, errMsg);
+          }
+        }
+        delete pendingMessages[sessionId];
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log(`Failed to create Cursor conversation, queueing for retry: ${errMsg}`);
+
+      if (!pendingMessages[sessionId]) {
+        pendingMessages[sessionId] = [];
+      }
+      for (const msg of messages) {
+        pendingMessages[sessionId].push({
+          uuid: msg.uuid,
+          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+          content: redactSecrets(msg.content),
+          timestamp: msg.timestamp,
+          filePath: dbPath,
+          fileSize: maxRowId,
+          thinking: msg.thinking,
+          toolCalls: msg.toolCalls,
+          toolResults: msg.toolResults,
+          images: msg.images,
+          subtype: msg.subtype,
+        });
+      }
+
+      const firstMsgTimestamp = messages[0]?.timestamp;
+
+      retryQueue.add("createConversation", {
+        userId,
+        sessionId,
+        agentType: "cursor",
+        projectPath: workspacePath,
+        startedAt: firstMsgTimestamp,
+      }, errMsg);
+
+      setPosition(dbPath, maxRowId);
+      return;
+    }
+  }
+
+  for (const msg of messages) {
+    try {
+      await syncService.addMessage({
+        conversationId,
+        messageUuid: msg.uuid,
+        role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+        content: redactSecrets(msg.content),
+        timestamp: msg.timestamp,
+        thinking: msg.thinking,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        images: msg.images,
+        subtype: msg.subtype,
+      });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes("Conversation not found")) {
+        log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+        delete conversationCache[sessionId];
+        saveConversationCache(conversationCache);
+
+        const firstMessageTimestamp = messages[0]?.timestamp;
+
+        try {
+          conversationId = await syncService.createConversation({
+            userId,
+            sessionId,
+            agentType: "cursor",
+            projectPath: workspacePath,
+            startedAt: firstMessageTimestamp,
+          });
+          conversationCache[sessionId] = conversationId;
+          saveConversationCache(conversationCache);
+          log(`Recreated conversation ${conversationId} for Cursor session ${sessionId}`);
+
+          await syncService.addMessage({
+            conversationId,
+            messageUuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+          });
+        } catch (retryErr) {
+          const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          log(`Failed to recreate conversation and add message: ${retryErrMsg}`);
+        }
+      } else {
+        log(`Failed to add message, queueing for retry: ${errMsg}`);
+        retryQueue.add("addMessage", {
+          conversationId,
+          messageUuid: msg.uuid,
+          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+          content: redactSecrets(msg.content),
+          timestamp: msg.timestamp,
+          thinking: msg.thinking,
+          toolCalls: msg.toolCalls,
+          toolResults: msg.toolResults,
+          images: msg.images,
+          subtype: msg.subtype,
+        }, errMsg);
+      }
+    }
+  }
+
+  setPosition(dbPath, maxRowId);
+  log(`Synced ${messages.length} Cursor messages for session ${sessionId}`);
+}
+
 async function main(): Promise<void> {
   ensureConfigDir();
   log("Daemon started");
@@ -450,6 +644,42 @@ async function main(): Promise<void> {
 
   watcher.start();
 
+  const cursorWatcher = new CursorWatcher();
+  const cursorSyncs = new Map<string, InvalidateSync>();
+
+  cursorWatcher.on("ready", () => {
+    log("Cursor watcher ready");
+  });
+
+  cursorWatcher.on("session", (event: CursorSessionEvent) => {
+    const dbPath = event.dbPath;
+
+    let sync = cursorSyncs.get(dbPath);
+    if (!sync) {
+      sync = new InvalidateSync(async () => {
+        await processCursorSession(
+          dbPath,
+          event.sessionId,
+          event.workspacePath,
+          syncService,
+          config.user_id!,
+          conversationCache,
+          retryQueue,
+          pendingMessages
+        );
+      });
+      cursorSyncs.set(dbPath, sync);
+    }
+
+    sync.invalidate();
+  });
+
+  cursorWatcher.on("error", (error: Error) => {
+    log(`Cursor watcher error: ${error.message}`);
+  });
+
+  cursorWatcher.start();
+
   const shutdown = () => {
     log("Shutting down");
     const pendingOps = retryQueue.getQueueSize();
@@ -458,7 +688,11 @@ async function main(): Promise<void> {
     }
     retryQueue.stop();
     watcher.stop();
+    cursorWatcher.stop();
     for (const sync of fileSyncs.values()) {
+      sync.stop();
+    }
+    for (const sync of cursorSyncs.values()) {
       sync.stop();
     }
     process.exit(0);
