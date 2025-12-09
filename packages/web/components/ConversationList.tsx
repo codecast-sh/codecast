@@ -1,6 +1,4 @@
 "use client";
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
@@ -8,6 +6,7 @@ import { useEffect, useState, useMemo } from "react";
 import { getConversationPreview, cleanTitle } from "../lib/conversationProcessor";
 import { useUIStore } from "../store/uiStore";
 import { UsageBadge } from "./UsageDisplay";
+import { useConversationsWithError } from "../hooks/useConversationsWithError";
 
 type Conversation = {
   _id: string;
@@ -169,9 +168,7 @@ type TimeFilter = "all" | "long" | "active";
 type SubagentFilter = "all" | "main" | "subagent";
 
 export function ConversationList({ filter }: { filter: "my" | "team" }) {
-  const conversations = useQuery(api.conversations.listConversations, {
-    filter,
-  });
+  const conversations = useConversationsWithError(filter);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");

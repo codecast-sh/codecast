@@ -1,1 +1,3 @@
-{}
+{
+  "ccs-1l5": "tests/e2e/ccs-1l5.test.ts"
+}

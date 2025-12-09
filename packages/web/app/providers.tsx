@@ -4,6 +4,7 @@ import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ReactNode } from "react";
 import { ThemeProvider } from "../components/ThemeProvider";
 import { NavigationProgress } from "../components/NavigationProgress";
+import { Toaster } from "sonner";
 
 const convex = new ConvexReactClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
 
@@ -13,6 +14,7 @@ export function Providers({ children }: { children: ReactNode }) {
       <ThemeProvider>
         <NavigationProgress />
         {children}
+        <Toaster position="top-right" richColors />
       </ThemeProvider>
     </ConvexAuthProvider>
   );
