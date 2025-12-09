@@ -95,8 +95,8 @@
 }
 
 .prose pre {
-  @apply rounded-md shadow-sm text-sm;
-  background-color: var(--sol-bg-alt);
+  @apply rounded-md text-sm;
+  background-color: #002b36 !important;
   border: none !important;
   outline: none !important;
   box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
