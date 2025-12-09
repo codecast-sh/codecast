@@ -83,3 +83,32 @@ export const getTeamMembers = query({
       }));
   },
 });
+
+export const removeMember = mutation({
+  args: {
+    requesting_user_id: v.id("users"),
+    member_user_id: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const requestingUser = await ctx.db.get(args.requesting_user_id);
+    if (!requestingUser) {
+      throw new Error("Requesting user not found");
+    }
+    if (requestingUser.role !== "admin") {
+      throw new Error("Only admins can remove members");
+    }
+    if (args.requesting_user_id === args.member_user_id) {
+      const teamMembers = await ctx.db.query("users").collect();
+      const adminCount = teamMembers.filter(
+        (u) => u.team_id?.toString() === requestingUser.team_id?.toString() && u.role === "admin"
+      ).length;
+      if (adminCount <= 1) {
+        throw new Error("Cannot remove yourself as the last admin");
+      }
+    }
+    await ctx.db.patch(args.member_user_id, {
+      team_id: undefined,
+      role: undefined,
+    });
+  },
+});
