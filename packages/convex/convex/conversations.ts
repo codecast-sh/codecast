@@ -233,7 +233,7 @@ export const listConversations = query({
       return [];
     }
 
-    const limit = args.limit ?? 400;
+    const limit = args.limit ?? 100;
 
     let conversations;
     if (args.filter === "my") {
@@ -268,7 +268,7 @@ export const listConversations = query({
             q.eq("conversation_id", c._id)
           )
           .order("asc")
-          .take(50);
+          .take(20);
 
         let toolCallCount = 0;
         const toolNames: string[] = [];
@@ -332,7 +332,6 @@ export const listConversations = query({
           }
         }
 
-        console.log('messageAlternates', messageAlternates);
         const firstUserMessage = messageAlternates.find(m => m.role === "user")?.content || "";
         const firstAssistantMessage = messageAlternates.find(m => m.role === "assistant")?.content || "";
 
