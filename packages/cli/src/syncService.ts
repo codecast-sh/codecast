@@ -10,6 +10,15 @@ export interface SyncConfig {
   userId?: string;
 }
 
+export interface GitInfo {
+  commitHash?: string;
+  branch?: string;
+  remoteUrl?: string;
+  status?: string;
+  diff?: string;
+  diffStaged?: string;
+}
+
 export interface CreateConversationParams {
   userId: string;
   teamId?: string;
@@ -20,6 +29,7 @@ export interface CreateConversationParams {
   startedAt?: number;
   parentMessageUuid?: string;
   gitCommitHash?: string;
+  gitInfo?: GitInfo;
 }
 
 export class SyncService {
@@ -42,6 +52,7 @@ export class SyncService {
     const projectHash = params.projectPath
       ? hashPath(params.projectPath)
       : undefined;
+    const gitInfo = params.gitInfo;
     const result = await this.client.mutation(
       "conversations:createConversation" as any,
       {
@@ -50,10 +61,16 @@ export class SyncService {
         agent_type: params.agentType,
         session_id: params.sessionId,
         project_hash: projectHash,
+        project_path: params.projectPath,
         slug: params.slug,
         started_at: params.startedAt,
         parent_message_uuid: params.parentMessageUuid,
-        git_commit_hash: params.gitCommitHash,
+        git_commit_hash: gitInfo?.commitHash || params.gitCommitHash,
+        git_branch: gitInfo?.branch,
+        git_remote_url: gitInfo?.remoteUrl,
+        git_status: gitInfo?.status,
+        git_diff: gitInfo?.diff,
+        git_diff_staged: gitInfo?.diffStaged,
       }
     );
     return result as string;

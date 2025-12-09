@@ -25,10 +25,16 @@ export const createConversation = mutation({
     ),
     session_id: v.string(),
     project_hash: v.optional(v.string()),
+    project_path: v.optional(v.string()),
     slug: v.optional(v.string()),
     started_at: v.optional(v.number()),
     parent_message_uuid: v.optional(v.string()),
     git_commit_hash: v.optional(v.string()),
+    git_branch: v.optional(v.string()),
+    git_remote_url: v.optional(v.string()),
+    git_status: v.optional(v.string()),
+    git_diff: v.optional(v.string()),
+    git_diff_staged: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -61,6 +67,7 @@ export const createConversation = mutation({
       session_id: args.session_id,
       slug: args.slug,
       project_hash: args.project_hash,
+      project_path: args.project_path,
       started_at: startedAt,
       updated_at: startedAt,
       message_count: 0,
@@ -68,6 +75,11 @@ export const createConversation = mutation({
       status: "active",
       parent_message_uuid: args.parent_message_uuid,
       git_commit_hash: args.git_commit_hash,
+      git_branch: args.git_branch,
+      git_remote_url: args.git_remote_url,
+      git_status: args.git_status,
+      git_diff: args.git_diff,
+      git_diff_staged: args.git_diff_staged,
     });
     return conversationId;
   },
@@ -357,6 +369,9 @@ export const listConversations = query({
           is_own: c.user_id.toString() === userId.toString(),
           parent_conversation_id: parentConversationId,
           latest_todos: latestTodos,
+          project_path: c.project_path || null,
+          git_branch: c.git_branch || null,
+          git_remote_url: c.git_remote_url || null,
         };
       })
     );

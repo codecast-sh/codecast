@@ -34,6 +34,7 @@ export default defineSchema({
     slug: v.optional(v.string()),
     title: v.optional(v.string()),
     project_hash: v.optional(v.string()),
+    project_path: v.optional(v.string()),
     model: v.optional(v.string()),
     started_at: v.number(),
     updated_at: v.number(),
@@ -43,6 +44,11 @@ export default defineSchema({
     share_token: v.optional(v.string()),
     parent_message_uuid: v.optional(v.string()),
     git_commit_hash: v.optional(v.string()),
+    git_branch: v.optional(v.string()),
+    git_remote_url: v.optional(v.string()),
+    git_status: v.optional(v.string()),
+    git_diff: v.optional(v.string()),
+    git_diff_staged: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])

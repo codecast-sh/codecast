@@ -20,6 +20,9 @@ type Conversation = {
   model?: string | null;
   slug?: string | null;
   project_hash?: string;
+  project_path?: string | null;
+  git_branch?: string | null;
+  git_remote_url?: string | null;
   started_at: number;
   updated_at: number;
   duration_ms: number;
@@ -108,6 +111,12 @@ function deriveDisplayPath(projectHash: string | undefined, conversations: Conve
   if (!projectHash) return 'No Project';
 
   const firstConv = conversations[0];
+
+  if (firstConv?.project_path) {
+    const parts = firstConv.project_path.split('/');
+    return parts[parts.length - 1] || parts[parts.length - 2] || firstConv.project_path;
+  }
+
   if (firstConv?.title) {
     const match = firstConv.title.match(/\[(.*?)\]/);
     if (match) return match[1];
@@ -393,6 +402,14 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 ml-2 rounded-md bg-sol-green/20 border border-sol-green/60 align-middle">
                               <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
                               <span className="text-xs text-sol-green font-semibold tracking-wide">LIVE</span>
+                            </span>
+                          )}
+                          {conv.git_branch && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 ml-2 rounded bg-sol-bg-alt text-sol-text-muted text-[10px] font-mono border border-sol-border/40 align-middle">
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 3v12M18 9a3 3 0 01-3 3H9m0 0l3-3m-3 3l3 3M18 21V9" />
+                              </svg>
+                              {conv.git_branch}
                             </span>
                           )}
                         </div>

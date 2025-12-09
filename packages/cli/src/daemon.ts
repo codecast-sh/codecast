@@ -83,17 +83,48 @@ function saveConversationCache(cache: ConversationCache): void {
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
 }
 
-function getGitCommitHash(projectPath: string): string | undefined {
-  try {
-    const result = execSync("git rev-parse HEAD", {
-      cwd: projectPath,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "ignore"],
-    });
-    return result.trim();
-  } catch {
+interface GitInfo {
+  commitHash?: string;
+  branch?: string;
+  remoteUrl?: string;
+  status?: string;
+  diff?: string;
+  diffStaged?: string;
+}
+
+function getGitInfo(projectPath: string): GitInfo | undefined {
+  const execGit = (args: string): string | undefined => {
+    try {
+      return execSync(`git ${args}`, {
+        cwd: projectPath,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+        maxBuffer: 10 * 1024 * 1024,
+      }).trim();
+    } catch {
+      return undefined;
+    }
+  };
+
+  const commitHash = execGit("rev-parse HEAD");
+  if (!commitHash) {
     return undefined;
   }
+
+  const branch = execGit("rev-parse --abbrev-ref HEAD");
+  const remoteUrl = execGit("remote get-url origin");
+  const status = execGit("status --porcelain");
+  const diff = execGit("diff");
+  const diffStaged = execGit("diff --cached");
+
+  return {
+    commitHash,
+    branch,
+    remoteUrl,
+    status,
+    diff: diff ? diff.slice(0, 100000) : undefined,
+    diffStaged: diffStaged ? diffStaged.slice(0, 100000) : undefined,
+  };
 }
 
 async function processSessionFile(
@@ -134,7 +165,7 @@ async function processSessionFile(
       const slug = extractSlug(fullContent);
       const parentMessageUuid = extractParentUuid(fullContent);
       const firstMessageTimestamp = messages[0]?.timestamp;
-      const gitCommitHash = projectPath ? getGitCommitHash(projectPath) : undefined;
+      const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
 
       conversationId = await syncService.createConversation({
         userId,
@@ -144,7 +175,7 @@ async function processSessionFile(
         slug,
         startedAt: firstMessageTimestamp,
         parentMessageUuid,
-        gitCommitHash,
+        gitInfo,
       });
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
@@ -210,7 +241,7 @@ async function processSessionFile(
       const fullContent = fs.readFileSync(filePath, "utf-8");
       const slug = extractSlug(fullContent);
       const firstMsgTimestamp = messages[0]?.timestamp;
-      const gitCommitHash = projectPath ? getGitCommitHash(projectPath) : undefined;
+      const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
 
       retryQueue.add("createConversation", {
         userId,
@@ -219,7 +250,7 @@ async function processSessionFile(
         projectPath,
         slug,
         startedAt: firstMsgTimestamp,
-        gitCommitHash,
+        gitInfo,
       }, errMsg);
 
       setPosition(filePath, stats.size);
@@ -251,7 +282,7 @@ async function processSessionFile(
         const fullContent = fs.readFileSync(filePath, "utf-8");
         const slug = extractSlug(fullContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
-        const gitCommitHash = projectPath ? getGitCommitHash(projectPath) : undefined;
+        const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
 
         try {
           conversationId = await syncService.createConversation({
@@ -261,7 +292,7 @@ async function processSessionFile(
             projectPath,
             slug,
             startedAt: firstMessageTimestamp,
-            gitCommitHash,
+            gitInfo,
           });
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
@@ -545,6 +576,7 @@ async function main(): Promise<void> {
         projectPath: string;
         slug?: string;
         startedAt?: number;
+        gitInfo?: GitInfo;
       };
       const conversationId = await syncService.createConversation(params);
       conversationCache[params.sessionId] = conversationId;
