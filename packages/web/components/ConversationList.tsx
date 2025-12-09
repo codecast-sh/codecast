@@ -2,11 +2,12 @@
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { getConversationPreview, cleanTitle } from "../lib/conversationProcessor";
 import { useUIStore } from "../store/uiStore";
 import { UsageBadge } from "./UsageDisplay";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
+import { useRouter } from "next/navigation";
 
 type Conversation = {
   _id: string;
@@ -181,8 +182,12 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
+  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
 
   const { collapsedSections, toggleSection } = useUIStore();
+  const router = useRouter();
+  const listRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Map<string, HTMLAnchorElement>>(new Map());
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -285,6 +290,83 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
   const groups = buildProjectGroups(filteredConversations);
 
+  const flatConversations = useMemo(() => {
+    const flat: Array<{ conv: Conversation; isChild: boolean }> = [];
+    for (const group of groups) {
+      if (collapsedSections.has(group.groupId)) continue;
+      for (const conv of group.conversations) {
+        flat.push({ conv, isChild: false });
+        if (conv.children && conv.children.length > 0) {
+          for (const child of conv.children) {
+            flat.push({ conv: child, isChild: true });
+          }
+        }
+      }
+    }
+    return flat;
+  }, [groups, collapsedSections]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (flatConversations.length === 0) return;
+
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          setFocusedIndex((prev) => {
+            const next = prev < flatConversations.length - 1 ? prev + 1 : prev;
+            return next;
+          });
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setFocusedIndex((prev) => {
+            const next = prev > 0 ? prev - 1 : prev;
+            return next;
+          });
+          break;
+        case "Home":
+          e.preventDefault();
+          setFocusedIndex(0);
+          break;
+        case "End":
+          e.preventDefault();
+          setFocusedIndex(flatConversations.length - 1);
+          break;
+        case "Enter":
+          e.preventDefault();
+          if (focusedIndex >= 0 && focusedIndex < flatConversations.length) {
+            const { conv } = flatConversations[focusedIndex];
+            router.push(`/conversation/${conv._id}`);
+          }
+          break;
+      }
+    },
+    [flatConversations, focusedIndex, router]
+  );
+
+  useEffect(() => {
+    if (focusedIndex >= 0 && focusedIndex < flatConversations.length) {
+      const { conv } = flatConversations[focusedIndex];
+      const element = itemRefs.current.get(conv._id);
+      if (element) {
+        element.focus();
+      }
+    }
+  }, [focusedIndex, flatConversations]);
+
+  useEffect(() => {
+    setFocusedIndex(-1);
+  }, [timeFilter, subagentFilter]);
+
+  const setItemRef = useCallback((id: string, element: HTMLAnchorElement | null) => {
+    if (element) {
+      itemRefs.current.set(id, element);
+    } else {
+      itemRefs.current.delete(id);
+    }
+  }, []);
+
   return (
     <div className="space-y-6">
       {/* Filter bar */}
@@ -351,6 +433,13 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           No conversations match these filters
         </div>
       )}
+      <div
+        ref={listRef}
+        role="listbox"
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        className="space-y-6 focus:outline-none"
+      >
       {groups.map((group) => {
         const isCollapsed = collapsedSections.has(group.groupId);
         const isActiveGroup = group.type === 'active-group';
@@ -379,12 +468,16 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
             {!isCollapsed && (
 
-          <div className="space-y-3">
+          <div className="space-y-3" role="group">
             {group.conversations.map((conv) => (
               <Link
                 key={conv._id}
                 href={`/conversation/${conv._id}`}
-                className="group block relative"
+                ref={(el) => setItemRef(conv._id, el)}
+                role="option"
+                aria-selected={false}
+                tabIndex={-1}
+                className="group block relative focus:outline-none focus:ring-2 focus:ring-sol-yellow/60 rounded-xl"
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
                 <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-xl p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm">
@@ -514,7 +607,11 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                     <Link
                       key={child._id}
                       href={`/conversation/${child._id}`}
-                      className="group block relative"
+                      ref={(el) => setItemRef(child._id, el)}
+                      role="option"
+                      aria-selected={false}
+                      tabIndex={-1}
+                      className="group block relative focus:outline-none focus:ring-2 focus:ring-violet-500/60 rounded-lg"
                     >
                       <div className="relative bg-sol-bg-alt/40 border border-sol-border/60 rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200">
                         <div className="flex items-center gap-2 mb-1">
@@ -546,6 +643,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
