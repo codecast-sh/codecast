@@ -103,4 +103,12 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_file_path_hash", ["file_path_hash"]),
+
+  rate_limits: defineTable({
+    user_id: v.id("users"),
+    endpoint: v.string(),
+    window_start: v.number(),
+    request_count: v.number(),
+  })
+    .index("by_user_endpoint", ["user_id", "endpoint"]),
 });
