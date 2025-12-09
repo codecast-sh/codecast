@@ -17,23 +17,23 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   };
 
   return (
-    <div className="relative group my-3">
+    <div className="relative group my-3 rounded-md overflow-hidden shadow-sm" style={{ backgroundColor: '#002b36' }}>
       <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
         <button
           onClick={handleCopy}
-          className="px-2 py-1 text-xs bg-slate-600 text-sol-base2 rounded hover:bg-slate-500"
+          className="px-2 py-1 text-xs bg-slate-600 text-slate-100 rounded hover:bg-slate-500"
           title="Copy code"
         >
           Copy
         </button>
       </div>
       {language && (
-        <div className="text-xs text-sol-base0 bg-sol-base02 px-3 py-1 rounded-t border-b border-sol-base01">
+        <div className="text-xs px-3 py-1.5" style={{ color: '#839496', backgroundColor: '#073642' }}>
           {language}
         </div>
       )}
-      <pre className={`bg-sol-base02 p-4 overflow-x-auto text-sm ${language ? "rounded-b" : "rounded"}`}>
-        <code className="text-sol-base2 font-mono">{code}</code>
+      <pre className="p-4 overflow-x-auto text-sm" style={{ backgroundColor: '#002b36' }}>
+        <code className="font-mono" style={{ color: '#93a1a1' }}>{code}</code>
       </pre>
     </div>
   );
