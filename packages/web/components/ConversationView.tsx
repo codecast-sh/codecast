@@ -602,6 +602,35 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
 
   const messages = conversation?.messages || [];
 
+  // Extract todos from messages using reducer
+  const latestTodos = useMemo(() => {
+    if (!messages || messages.length === 0) return undefined;
+
+    let todos: { todos: any[]; timestamp: number } | undefined;
+
+    for (const msg of messages) {
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.name === "TodoWrite" && tc.input) {
+            try {
+              const input = JSON.parse(tc.input);
+              if (input.todos) {
+                if (!todos || msg.timestamp > todos.timestamp) {
+                  todos = {
+                    todos: input.todos,
+                    timestamp: msg.timestamp,
+                  };
+                }
+              }
+            } catch {}
+          }
+        }
+      }
+    }
+
+    return todos;
+  }, [messages]);
+
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => containerRef.current,
@@ -775,6 +804,14 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
               {conversation.child_conversations && conversation.child_conversations.length > 0 && (
                 <span className="text-sol-cyan text-xs">
                   {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? "s" : ""}
+                </span>
+              )}
+              {latestTodos && latestTodos.todos.length > 0 && (
+                <span className="text-emerald-400 text-xs flex items-center gap-1 px-2 py-1 rounded bg-sol-bg-alt/60 border border-emerald-500/40">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                  </svg>
+                  {latestTodos.todos.filter(t => t.status === 'completed').length}/{latestTodos.todos.length} tasks
                 </span>
               )}
               <span className="ml-auto text-sol-yellow">

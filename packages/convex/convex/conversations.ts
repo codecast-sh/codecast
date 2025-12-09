@@ -258,6 +258,7 @@ export const listConversations = query({
         const subagentTypes: string[] = [];
         let aiMessageCount = 0;
         const messageAlternates: Array<{ role: "user" | "assistant"; content: string }> = [];
+        let latestTodos: { todos: any[]; timestamp: number } | undefined;
 
         for (const msg of messages) {
           if (msg.tool_calls) {
@@ -271,6 +272,20 @@ export const listConversations = query({
                   const input = JSON.parse(tc.input);
                   if (input.subagent_type && !subagentTypes.includes(input.subagent_type)) {
                     subagentTypes.push(input.subagent_type);
+                  }
+                } catch {}
+              }
+              // Extract TodoWrite todos
+              if (tc.name === "TodoWrite" && tc.input) {
+                try {
+                  const input = JSON.parse(tc.input);
+                  if (input.todos) {
+                    if (!latestTodos || msg.timestamp > latestTodos.timestamp) {
+                      latestTodos = {
+                        todos: input.todos,
+                        timestamp: msg.timestamp,
+                      };
+                    }
                   }
                 } catch {}
               }
@@ -341,6 +356,7 @@ export const listConversations = query({
           author_name: conversationUser?.name || conversationUser?.email?.split("@")[0] || "Unknown",
           is_own: c.user_id.toString() === userId.toString(),
           parent_conversation_id: parentConversationId,
+          latest_todos: latestTodos,
         };
       })
     );
