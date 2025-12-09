@@ -39,6 +39,25 @@ export default function SettingsPage() {
     ? new Date(user.daemon_last_seen).toLocaleString()
     : "Never";
 
+  const getRelativeTime = (timestamp: number | undefined) => {
+    if (!timestamp) return "Never";
+    const now = Date.now();
+    const diff = now - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return "Just now";
+    if (minutes === 1) return "1 minute ago";
+    if (minutes < 60) return `${minutes} minutes ago`;
+    if (hours === 1) return "1 hour ago";
+    if (hours < 24) return `${hours} hours ago`;
+    if (days === 1) return "1 day ago";
+    return `${days} days ago`;
+  };
+
+  const lastSeenRelative = getRelativeTime(user.daemon_last_seen);
+
   return (
     <AuthGuard>
       <DashboardLayout>
@@ -94,12 +113,16 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <span className="text-sol-base1">Status</span>
                 <span className={`font-medium ${daemonConnected ? "text-sol-green" : "text-sol-orange"}`}>
-                  {daemonConnected ? "Connected" : "Disconnected"}
+                  {daemonConnected ? "Connected" : "Not connected"}
                 </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sol-base1">Last sync</span>
                 <span className="text-sol-text">{lastSeenText}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sol-base1">Last seen</span>
+                <span className="text-sol-text">{lastSeenRelative}</span>
               </div>
             </div>
           </Card>
