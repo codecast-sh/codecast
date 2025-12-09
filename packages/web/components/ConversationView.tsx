@@ -670,9 +670,12 @@ function AssistantBlock({
 
 function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[]; toolName?: string }) {
   const isAgentOutput = toolName === "AgentOutputTool";
+  const isTodoWrite = toolName === "TodoWrite";
   const [expanded, setExpanded] = useState(false);
   const [showContent, setShowContent] = useState(!isAgentOutput);
-  if (!toolResults.length) return null;
+
+  // Don't show result for TodoWrite - it's already rendered in the tool block
+  if (!toolResults.length || isTodoWrite) return null;
 
   const result = toolResults[0];
   const truncated = truncateLines(result.content, expanded ? 50 : 8);
