@@ -436,6 +436,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
       <div
         ref={listRef}
         role="listbox"
+        aria-label={`Conversation list, ${flatConversations.length} items`}
         tabIndex={0}
         onKeyDown={handleKeyDown}
         className="space-y-6 focus:outline-none"
@@ -469,13 +470,21 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
             {!isCollapsed && (
 
           <div className="space-y-3" role="group">
-            {group.conversations.map((conv) => (
+            {group.conversations.map((conv) => {
+              const itemIndex = flatConversations.findIndex(item => item.conv._id === conv._id && !item.isChild);
+              const isSelected = itemIndex === focusedIndex;
+              const agentTypeLabel = conv.agent_type || 'Unknown';
+              const timeLabel = getRelativeTime(conv.updated_at);
+              const ariaLabel = `Conversation: ${cleanTitle(conv.title)}, ${agentTypeLabel}, ${timeLabel}`;
+
+              return (
               <Link
                 key={conv._id}
                 href={`/conversation/${conv._id}`}
                 ref={(el) => setItemRef(conv._id, el)}
                 role="option"
-                aria-selected={false}
+                aria-label={ariaLabel}
+                aria-selected={isSelected}
                 tabIndex={-1}
                 className="group block relative focus:outline-none focus:ring-2 focus:ring-sol-yellow/60 rounded-xl"
               >
@@ -598,18 +607,27 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                   </div>
                 </div>
               </Link>
-            ))}
+              );
+            })}
             {/* Render children (subagents) indented */}
             {group.conversations.map((conv) =>
               conv.children && conv.children.length > 0 && (
                 <div key={`children-${conv._id}`} className="ml-6 border-l-2 border-violet-600/30 pl-3 space-y-2">
-                  {conv.children.map((child) => (
+                  {conv.children.map((child) => {
+                    const childIndex = flatConversations.findIndex(item => item.conv._id === child._id && item.isChild);
+                    const isChildSelected = childIndex === focusedIndex;
+                    const childAgentTypeLabel = child.agent_type || 'Unknown';
+                    const childTimeLabel = getRelativeTime(child.updated_at);
+                    const childAriaLabel = `Subagent conversation: ${child.title}, ${childAgentTypeLabel}, ${childTimeLabel}`;
+
+                    return (
                     <Link
                       key={child._id}
                       href={`/conversation/${child._id}`}
                       ref={(el) => setItemRef(child._id, el)}
                       role="option"
-                      aria-selected={false}
+                      aria-label={childAriaLabel}
+                      aria-selected={isChildSelected}
                       tabIndex={-1}
                       className="group block relative focus:outline-none focus:ring-2 focus:ring-violet-500/60 rounded-lg"
                     >
@@ -634,7 +652,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                         </div>
                       </div>
                     </Link>
-                  ))}
+                    );
+                  })}
                 </div>
               )
             )}
