@@ -10,6 +10,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Button } from "../../components/ui/button";
 import { useRouter } from "next/navigation";
+import { SettingsModal } from "../../components/SettingsModal";
 
 export default function SettingsPage() {
   const user = useQuery(api.users.getCurrentUser);
@@ -74,7 +75,16 @@ export default function SettingsPage() {
           </div>
 
           <Card className="p-6 bg-sol-bg border-sol-border">
-            <h2 className="text-lg font-semibold text-sol-text mb-4">Profile</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-sol-text">Profile</h2>
+              <SettingsModal
+                trigger={
+                  <Button variant="outline" size="sm">
+                    Edit in Modal
+                  </Button>
+                }
+              />
+            </div>
             <div className="space-y-4">
               <div>
                 <Label htmlFor="name" className="text-sol-base1">Name</Label>
