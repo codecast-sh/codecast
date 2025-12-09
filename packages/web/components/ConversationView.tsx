@@ -51,6 +51,11 @@ export type ConversationData = {
   parent_conversation_id?: string | null;
   child_conversations?: Array<{ _id: string; title: string }>;
   child_conversation_map?: Record<string, string>;
+  git_branch?: string | null;
+  git_status?: string | null;
+  git_diff?: string | null;
+  git_diff_staged?: string | null;
+  git_remote_url?: string | null;
 };
 
 type ConversationViewProps = {
@@ -597,6 +602,103 @@ function SystemBlock({ content, subtype }: { content: string; subtype?: string }
   );
 }
 
+function GitInfoSection({
+  gitBranch,
+  gitStatus,
+  gitDiff,
+  gitDiffStaged,
+  gitRemoteUrl,
+}: {
+  gitBranch?: string | null;
+  gitStatus?: string | null;
+  gitDiff?: string | null;
+  gitDiffStaged?: string | null;
+  gitRemoteUrl?: string | null;
+}) {
+  const [diffExpanded, setDiffExpanded] = useState(false);
+
+  if (!gitBranch && !gitStatus && !gitDiff && !gitDiffStaged) {
+    return null;
+  }
+
+  const isClean = gitStatus === "(clean)" || gitStatus === "clean" || !gitStatus;
+  const hasDiff = (gitDiff && gitDiff.trim().length > 0) || (gitDiffStaged && gitDiffStaged.trim().length > 0);
+
+  const githubUrl = gitRemoteUrl && gitBranch
+    ? (() => {
+        const match = gitRemoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
+        if (match) {
+          return `https://github.com/${match[1]}/tree/${gitBranch}`;
+        }
+        return null;
+      })()
+    : null;
+
+  return (
+    <div className="text-xs text-sol-text-muted flex items-center gap-3 flex-wrap">
+      {gitBranch && (
+        <div className="flex items-center gap-1.5">
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
+          </svg>
+          {githubUrl ? (
+            <a
+              href={githubUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sol-blue hover:text-sol-blue underline underline-offset-2"
+            >
+              {gitBranch}
+            </a>
+          ) : (
+            <span className="font-mono">{gitBranch}</span>
+          )}
+        </div>
+      )}
+
+      <div className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+        isClean
+          ? "bg-sol-green/20 text-sol-green border border-sol-green/50"
+          : "bg-sol-orange/20 text-sol-orange border border-sol-orange/50"
+      }`}>
+        {isClean ? "clean" : "uncommitted changes"}
+      </div>
+
+      {hasDiff && (
+        <button
+          onClick={() => setDiffExpanded(!diffExpanded)}
+          className="text-sol-text-dim hover:text-sol-text-muted transition-colors text-[10px]"
+        >
+          {diffExpanded ? "hide diff" : "show diff"}
+        </button>
+      )}
+
+      {diffExpanded && hasDiff && (
+        <div className="w-full mt-2 bg-sol-bg-alt/50 rounded border border-sol-border p-3 max-h-96 overflow-y-auto">
+          {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
+            <div className="mb-3">
+              <div className="text-sol-green text-[10px] font-semibold mb-1">Staged Changes</div>
+              <pre className="text-[11px] font-mono whitespace-pre-wrap text-sol-text-muted">
+                {gitDiffStaged}
+              </pre>
+            </div>
+          )}
+          {gitDiff && gitDiff.trim().length > 0 && (
+            <div>
+              {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
+                <div className="text-sol-orange text-[10px] font-semibold mb-1">Unstaged Changes</div>
+              )}
+              <pre className="text-[11px] font-mono whitespace-pre-wrap text-sol-text-muted">
+                {gitDiff}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ConversationView({ conversation, backHref, backLabel = "Back", headerExtra }: ConversationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -781,6 +883,17 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
           {latestUsage && (
             <div className="pl-16">
               <UsageDisplay usage={latestUsage} />
+            </div>
+          )}
+          {conversation && (conversation.git_branch || conversation.git_status || conversation.git_diff || conversation.git_diff_staged) && (
+            <div className="pl-16">
+              <GitInfoSection
+                gitBranch={conversation.git_branch}
+                gitStatus={conversation.git_status}
+                gitDiff={conversation.git_diff}
+                gitDiffStaged={conversation.git_diff_staged}
+                gitRemoteUrl={conversation.git_remote_url}
+              />
             </div>
           )}
           {conversation && (
