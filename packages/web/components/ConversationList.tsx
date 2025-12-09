@@ -2,12 +2,10 @@
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
-import { useEffect, useState, useMemo, useRef, useCallback } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { getConversationPreview, cleanTitle } from "../lib/conversationProcessor";
-import { useUIStore } from "../store/uiStore";
 import { UsageBadge } from "./UsageDisplay";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
-import { useRouter } from "next/navigation";
 
 type Conversation = {
   _id: string;
@@ -20,10 +18,6 @@ type Conversation = {
   agent_type: string;
   model?: string | null;
   slug?: string | null;
-  project_hash?: string;
-  project_path?: string | null;
-  git_branch?: string | null;
-  git_remote_url?: string | null;
   started_at: number;
   updated_at: number;
   duration_ms: number;
@@ -44,6 +38,7 @@ type Conversation = {
     contextSize: number;
     timestamp: number;
   };
+  project_path?: string | null;
 };
 
 function formatDuration(ms: number): string {
@@ -82,9 +77,10 @@ function ClaudeLogo({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
-type ConversationGroup =
-  | { type: 'active-group'; title: string; conversations: Conversation[]; groupId: string }
-  | { type: 'project-group'; title: string; projectHash: string; displayPath: string; conversations: Conversation[]; groupId: string };
+type TimeGroup = {
+  label: string;
+  conversations: Conversation[];
+};
 
 function getRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -108,92 +104,59 @@ function getRelativeTime(timestamp: number): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function deriveDisplayPath(projectHash: string | undefined, conversations: Conversation[]): string {
-  if (!projectHash) return 'No Project';
+function groupByTime(conversations: Conversation[]): TimeGroup[] {
+  const now = Date.now();
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const sixHoursAgo = now - 6 * 60 * 60 * 1000;
+  const oneDayAgo = now - 24 * 60 * 60 * 1000;
+  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-  const firstConv = conversations[0];
+  const groups: TimeGroup[] = [
+    { label: "Last Hour", conversations: [] },
+    { label: "Last 6 Hours", conversations: [] },
+    { label: "Last 24 Hours", conversations: [] },
+    { label: "This Week", conversations: [] },
+    { label: "Older", conversations: [] },
+  ];
 
-  if (firstConv?.project_path) {
-    const parts = firstConv.project_path.split('/');
-    return parts[parts.length - 1] || parts[parts.length - 2] || firstConv.project_path;
-  }
-
-  if (firstConv?.title) {
-    const match = firstConv.title.match(/\[(.*?)\]/);
-    if (match) return match[1];
-  }
-
-  return `proj-${projectHash.slice(0, 6)}`;
-}
-
-function buildProjectGroups(conversations: Conversation[]): ConversationGroup[] {
-  const result: ConversationGroup[] = [];
-
-  const active = conversations.filter(c => c.is_active);
-  if (active.length > 0) {
-    result.push({
-      type: 'active-group',
-      title: 'Active',
-      conversations: active.sort((a, b) => b.updated_at - a.updated_at),
-      groupId: 'active',
-    });
-  }
-
-  const inactive = conversations.filter(c => !c.is_active);
-  const byProject = new Map<string, Conversation[]>();
-
-  for (const conv of inactive) {
-    const key = conv.project_hash || '__no_project__';
-    const existing = byProject.get(key) || [];
-    existing.push(conv);
-    byProject.set(key, existing);
-  }
-
-  const projectGroups: ConversationGroup[] = [];
-  for (const [hash, convs] of byProject) {
-    convs.sort((a, b) => b.updated_at - a.updated_at);
-
-    projectGroups.push({
-      type: 'project-group',
-      title: deriveDisplayPath(hash === '__no_project__' ? undefined : hash, convs),
-      projectHash: hash,
-      displayPath: deriveDisplayPath(hash === '__no_project__' ? undefined : hash, convs),
-      conversations: convs,
-      groupId: `project-${hash}`,
-    });
-  }
-
-  projectGroups.sort((a, b) => {
-    const aRecent = Math.max(...a.conversations.map(c => c.updated_at));
-    const bRecent = Math.max(...b.conversations.map(c => c.updated_at));
-    return bRecent - aRecent;
+  conversations.forEach((conv) => {
+    if (conv.updated_at >= oneHourAgo) {
+      groups[0].conversations.push(conv);
+    } else if (conv.updated_at >= sixHoursAgo) {
+      groups[1].conversations.push(conv);
+    } else if (conv.updated_at >= oneDayAgo) {
+      groups[2].conversations.push(conv);
+    } else if (conv.updated_at >= weekAgo) {
+      groups[3].conversations.push(conv);
+    } else {
+      groups[4].conversations.push(conv);
+    }
   });
 
-  result.push(...projectGroups);
-
-  return result;
+  return groups.filter((g) => g.conversations.length > 0);
 }
 
 type TimeFilter = "all" | "long" | "active";
 type SubagentFilter = "all" | "main" | "subagent";
-type AgentTypeFilter = "all" | "claude_code" | "codex" | "cursor";
-type DateFilter = "all" | "7days" | "30days" | "custom";
 
-export function ConversationList({ filter }: { filter: "my" | "team" }) {
+function getShortPath(projectPath: string | null | undefined): string | null {
+  if (!projectPath) return null;
+  const parts = projectPath.split("/").filter(Boolean);
+  if (parts.length === 0) return null;
+  return parts[parts.length - 1];
+}
+
+interface ConversationListProps {
+  filter: "my" | "team";
+  directoryFilter?: string | null;
+  onDirectoriesChange?: (directories: string[]) => void;
+}
+
+export function ConversationList({ filter, directoryFilter, onDirectoriesChange }: ConversationListProps) {
   const conversations = useConversationsWithError(filter);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
-  const [agentTypeFilter, setAgentTypeFilter] = useState<AgentTypeFilter>("all");
-  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
-  const [customStartDate, setCustomStartDate] = useState<string>("");
-  const [customEndDate, setCustomEndDate] = useState<string>("");
-  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
-
-  const { collapsedSections, toggleSection } = useUIStore();
-  const router = useRouter();
-  const listRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<Map<string, HTMLAnchorElement>>(new Map());
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -202,19 +165,8 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
     return () => clearInterval(interval);
   }, []);
 
-  const { filteredConversations, counts } = useMemo(() => {
-    if (!conversations) return {
-      filteredConversations: [],
-      counts: {
-        long: 0,
-        active: 0,
-        subagent: 0,
-        main: 0,
-        claude_code: 0,
-        codex: 0,
-        cursor: 0
-      }
-    };
+  const { filteredConversations, counts, directories } = useMemo(() => {
+    if (!conversations) return { filteredConversations: [], counts: { long: 0, active: 0, subagent: 0, main: 0 }, directories: [] };
     const convs = conversations as Conversation[];
 
     const isSubagent = (c: Conversation) =>
@@ -231,17 +183,31 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
     const nonTrivialConvs = convs.filter(c => !isTrivialSubagent(c));
 
+    const dirLastUpdated = new Map<string, number>();
+    for (const c of nonTrivialConvs) {
+      if (c.project_path) {
+        const existing = dirLastUpdated.get(c.project_path) || 0;
+        if (c.updated_at > existing) {
+          dirLastUpdated.set(c.project_path, c.updated_at);
+        }
+      }
+    }
+    const directories = Array.from(dirLastUpdated.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([path]) => path);
+
     const counts = {
       long: nonTrivialConvs.filter(c => c.duration_ms >= 20 * 60 * 1000).length,
       active: nonTrivialConvs.filter(c => c.is_active).length,
       subagent: nonTrivialConvs.filter(c => isSubagent(c)).length,
       main: nonTrivialConvs.filter(c => !isSubagent(c)).length,
-      claude_code: nonTrivialConvs.filter(c => c.agent_type === "claude_code").length,
-      codex: nonTrivialConvs.filter(c => c.agent_type === "codex").length,
-      cursor: nonTrivialConvs.filter(c => c.agent_type === "cursor").length,
     };
 
     let filtered = nonTrivialConvs;
+
+    if (directoryFilter) {
+      filtered = filtered.filter(c => c.project_path === directoryFilter);
+    }
 
     if (timeFilter === "long") {
       filtered = filtered.filter(c => c.duration_ms >= 20 * 60 * 1000);
@@ -253,23 +219,6 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
       filtered = filtered.filter(c => !isSubagent(c));
     } else if (subagentFilter === "subagent") {
       filtered = filtered.filter(c => isSubagent(c));
-    }
-
-    if (agentTypeFilter !== "all") {
-      filtered = filtered.filter(c => c.agent_type === agentTypeFilter);
-    }
-
-    // Date range filter
-    if (dateFilter === "7days") {
-      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      filtered = filtered.filter(c => c.updated_at > cutoff);
-    } else if (dateFilter === "30days") {
-      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      filtered = filtered.filter(c => c.updated_at > cutoff);
-    } else if (dateFilter === "custom" && customStartDate && customEndDate) {
-      const startMs = new Date(customStartDate).getTime();
-      const endMs = new Date(customEndDate).getTime() + 24 * 60 * 60 * 1000 - 1; // End of day
-      filtered = filtered.filter(c => c.updated_at >= startMs && c.updated_at <= endMs);
     }
 
     // Build parent-child map for nesting
@@ -305,8 +254,14 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
     filtered = withChildren as any;
 
-    return { filteredConversations: filtered, counts };
-  }, [conversations, timeFilter, subagentFilter, agentTypeFilter, dateFilter, customStartDate, customEndDate]);
+    return { filteredConversations: filtered, counts, directories };
+  }, [conversations, timeFilter, subagentFilter, directoryFilter]);
+
+  useEffect(() => {
+    if (onDirectoriesChange && directories.length > 0) {
+      onDirectoriesChange(directories);
+    }
+  }, [directories, onDirectoriesChange]);
 
   if (!conversations) {
     return <LoadingSkeleton />;
@@ -325,84 +280,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
     );
   }
 
-  const groups = buildProjectGroups(filteredConversations);
-
-  const flatConversations = useMemo(() => {
-    const flat: Array<{ conv: Conversation; isChild: boolean }> = [];
-    for (const group of groups) {
-      if (collapsedSections.has(group.groupId)) continue;
-      for (const conv of group.conversations) {
-        flat.push({ conv, isChild: false });
-        if (conv.children && conv.children.length > 0) {
-          for (const child of conv.children) {
-            flat.push({ conv: child, isChild: true });
-          }
-        }
-      }
-    }
-    return flat;
-  }, [groups, collapsedSections]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (flatConversations.length === 0) return;
-
-      switch (e.key) {
-        case "ArrowDown":
-          e.preventDefault();
-          setFocusedIndex((prev) => {
-            const next = prev < flatConversations.length - 1 ? prev + 1 : prev;
-            return next;
-          });
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          setFocusedIndex((prev) => {
-            const next = prev > 0 ? prev - 1 : prev;
-            return next;
-          });
-          break;
-        case "Home":
-          e.preventDefault();
-          setFocusedIndex(0);
-          break;
-        case "End":
-          e.preventDefault();
-          setFocusedIndex(flatConversations.length - 1);
-          break;
-        case "Enter":
-          e.preventDefault();
-          if (focusedIndex >= 0 && focusedIndex < flatConversations.length) {
-            const { conv } = flatConversations[focusedIndex];
-            router.push(`/conversation/${conv._id}`);
-          }
-          break;
-      }
-    },
-    [flatConversations, focusedIndex, router]
-  );
-
-  useEffect(() => {
-    if (focusedIndex >= 0 && focusedIndex < flatConversations.length) {
-      const { conv } = flatConversations[focusedIndex];
-      const element = itemRefs.current.get(conv._id);
-      if (element) {
-        element.focus();
-      }
-    }
-  }, [focusedIndex, flatConversations]);
-
-  useEffect(() => {
-    setFocusedIndex(-1);
-  }, [timeFilter, subagentFilter, agentTypeFilter, dateFilter, customStartDate, customEndDate]);
-
-  const setItemRef = useCallback((id: string, element: HTMLAnchorElement | null) => {
-    if (element) {
-      itemRefs.current.set(id, element);
-    } else {
-      itemRefs.current.delete(id);
-    }
-  }, []);
+  const groups = groupByTime(filteredConversations);
 
   return (
     <div className="space-y-6">
@@ -411,7 +289,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         {/* Time filters */}
         <button
           onClick={() => setTimeFilter("all")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             timeFilter === "all"
               ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -421,7 +299,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         </button>
         <button
           onClick={() => setTimeFilter("long")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             timeFilter === "long"
               ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -431,7 +309,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         </button>
         <button
           onClick={() => setTimeFilter("active")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             timeFilter === "active"
               ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -442,74 +320,10 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
         <div className="w-px bg-sol-border/30 mx-1" />
 
-        {/* Date range filters */}
-        <button
-          onClick={() => setDateFilter("all")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
-            dateFilter === "all"
-              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
-          }`}
-        >
-          All Dates
-        </button>
-        <button
-          onClick={() => setDateFilter("7days")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
-            dateFilter === "7days"
-              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
-          }`}
-        >
-          Last 7 Days
-        </button>
-        <button
-          onClick={() => setDateFilter("30days")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
-            dateFilter === "30days"
-              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
-          }`}
-        >
-          Last 30 Days
-        </button>
-        <button
-          onClick={() => setDateFilter("custom")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
-            dateFilter === "custom"
-              ? "bg-purple-500/20 text-purple-400 border border-purple-500/40"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
-          }`}
-        >
-          Custom Range
-        </button>
-
-        {dateFilter === "custom" && (
-          <div className="flex items-center gap-2">
-            <input
-              type="date"
-              value={customStartDate}
-              onChange={(e) => setCustomStartDate(e.target.value)}
-              className="px-2 py-1 text-sm rounded-lg bg-sol-bg-alt border border-sol-border text-sol-text"
-              placeholder="Start date"
-            />
-            <span className="text-sol-text-muted">to</span>
-            <input
-              type="date"
-              value={customEndDate}
-              onChange={(e) => setCustomEndDate(e.target.value)}
-              className="px-2 py-1 text-sm rounded-lg bg-sol-bg-alt border border-sol-border text-sol-text"
-              placeholder="End date"
-            />
-          </div>
-        )}
-
-        <div className="w-px bg-sol-border/30 mx-1" />
-
         {/* Subagent filters */}
         <button
           onClick={() => setSubagentFilter(subagentFilter === "main" ? "all" : "main")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             subagentFilter === "main"
               ? "bg-sol-blue/20 text-sol-blue border border-sol-blue/40"
               : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
@@ -519,57 +333,13 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
         </button>
         <button
           onClick={() => setSubagentFilter(subagentFilter === "subagent" ? "all" : "subagent")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
             subagentFilter === "subagent"
               ? "bg-sol-violet/20 text-sol-violet border border-sol-violet/40"
               : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
           }`}
         >
           Subagent{counts.subagent > 0 && ` (${counts.subagent})`}
-        </button>
-
-        <div className="w-px bg-sol-border/30 mx-1" />
-
-        {/* Agent type filters */}
-        <button
-          onClick={() => setAgentTypeFilter("all")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
-            agentTypeFilter === "all"
-              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
-          }`}
-        >
-          All Agents
-        </button>
-        <button
-          onClick={() => setAgentTypeFilter("claude_code")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
-            agentTypeFilter === "claude_code"
-              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
-          }`}
-        >
-          Claude Code{counts.claude_code > 0 && ` (${counts.claude_code})`}
-        </button>
-        <button
-          onClick={() => setAgentTypeFilter("cursor")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
-            agentTypeFilter === "cursor"
-              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
-          }`}
-        >
-          Cursor{counts.cursor > 0 && ` (${counts.cursor})`}
-        </button>
-        <button
-          onClick={() => setAgentTypeFilter("codex")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
-            agentTypeFilter === "codex"
-              ? "bg-purple-500/20 text-purple-400 border border-purple-500/40"
-              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
-          }`}
-        >
-          Codex{counts.codex > 0 && ` (${counts.codex})`}
         </button>
       </div>
 
@@ -578,63 +348,23 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           No conversations match these filters
         </div>
       )}
-      <div
-        ref={listRef}
-        role="listbox"
-        aria-label={`Conversation list, ${flatConversations.length} items`}
-        tabIndex={0}
-        onKeyDown={handleKeyDown}
-        className="space-y-6 focus:outline-none"
-      >
-      {groups.map((group) => {
-        const isCollapsed = collapsedSections.has(group.groupId);
-        const isActiveGroup = group.type === 'active-group';
+      {groups.map((group) => (
+        <div key={group.label}>
+          <div className="pb-2 mb-3">
+            <h2 className="text-xs font-medium tracking-wide uppercase text-sol-text-muted0">
+              {group.label}
+            </h2>
+          </div>
 
-        return (
-          <div key={group.groupId}>
-            <button
-              onClick={() => toggleSection(group.groupId)}
-              className="w-full pb-2 mb-3 flex items-center gap-2 hover:opacity-70 transition-opacity motion-reduce:transition-none"
-            >
-              <svg
-                className={`w-4 h-4 transition-transform motion-reduce:transition-none ${isCollapsed ? '-rotate-90' : ''}`}
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-              <h2 className="text-xs font-medium tracking-wide uppercase text-sol-text-muted0 flex-1 text-left">
-                {group.title} ({group.conversations.length})
-              </h2>
-              {isActiveGroup && (
-                <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
-              )}
-            </button>
-
-            {!isCollapsed && (
-
-          <div className="space-y-3" role="group">
-            {group.conversations.map((conv) => {
-              const itemIndex = flatConversations.findIndex(item => item.conv._id === conv._id && !item.isChild);
-              const isSelected = itemIndex === focusedIndex;
-              const agentTypeLabel = conv.agent_type || 'Unknown';
-              const timeLabel = getRelativeTime(conv.updated_at);
-              const ariaLabel = `Conversation: ${cleanTitle(conv.title)}, ${agentTypeLabel}, ${timeLabel}`;
-
-              return (
+          <div className="space-y-3">
+            {group.conversations.map((conv) => (
               <Link
                 key={conv._id}
                 href={`/conversation/${conv._id}`}
-                ref={(el) => setItemRef(conv._id, el)}
-                role="option"
-                aria-label={ariaLabel}
-                aria-selected={isSelected}
-                tabIndex={-1}
-                className="group block relative focus:outline-none focus:ring-2 focus:ring-sol-yellow/60 rounded-xl"
+                className="group block relative"
               >
-                <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300 motion-reduce:transition-none"></div>
-                <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-xl p-4 hover:border-sol-yellow/40 transition-all duration-200 motion-reduce:transition-none backdrop-blur-sm">
+                <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-xl p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm">
                   <div className="flex items-start justify-between gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start gap-2 mb-1.5">
@@ -642,21 +372,13 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                           {(conv.author_name?.charAt(0) || "U").toUpperCase()}
                         </span>
                         <div className="flex-1 min-w-0">
-                          <span className="text-sol-text font-medium text-base group-hover:text-sol-yellow transition-colors motion-reduce:transition-none">
+                          <span className="text-sol-text font-medium text-base group-hover:text-sol-yellow transition-colors">
                             {cleanTitle(conv.title)}
                           </span>
                           {conv.is_active && (
                             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 ml-2 rounded-md bg-sol-green/20 border border-sol-green/60 align-middle">
-                              <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
+                              <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
                               <span className="text-xs text-sol-green font-semibold tracking-wide">LIVE</span>
-                            </span>
-                          )}
-                          {conv.git_branch && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 ml-2 rounded bg-sol-bg-alt text-sol-text-muted text-[10px] font-mono border border-sol-border/40 align-middle">
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 3v12M18 9a3 3 0 01-3 3H9m0 0l3-3m-3 3l3 3M18 21V9" />
-                              </svg>
-                              {conv.git_branch}
                             </span>
                           )}
                         </div>
@@ -699,6 +421,14 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                         <span className="text-sol-text-muted0">
                           {getRelativeTime(conv.updated_at)}
                         </span>
+                        {conv.project_path && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt/60 bg-sol-bg-alt text-sol-text-muted border border-sol-border/40" title={conv.project_path}>
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                            </svg>
+                            {getShortPath(conv.project_path)}
+                          </span>
+                        )}
                         {conv.duration_ms > 60000 && (
                           <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt/60 bg-sol-bg-alt border ${getDurationColor(conv.duration_ms)}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -752,31 +482,18 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                   </div>
                 </div>
               </Link>
-              );
-            })}
+            ))}
             {/* Render children (subagents) indented */}
             {group.conversations.map((conv) =>
               conv.children && conv.children.length > 0 && (
                 <div key={`children-${conv._id}`} className="ml-6 border-l-2 border-violet-600/30 pl-3 space-y-2">
-                  {conv.children.map((child) => {
-                    const childIndex = flatConversations.findIndex(item => item.conv._id === child._id && item.isChild);
-                    const isChildSelected = childIndex === focusedIndex;
-                    const childAgentTypeLabel = child.agent_type || 'Unknown';
-                    const childTimeLabel = getRelativeTime(child.updated_at);
-                    const childAriaLabel = `Subagent conversation: ${child.title}, ${childAgentTypeLabel}, ${childTimeLabel}`;
-
-                    return (
+                  {conv.children.map((child) => (
                     <Link
                       key={child._id}
                       href={`/conversation/${child._id}`}
-                      ref={(el) => setItemRef(child._id, el)}
-                      role="option"
-                      aria-label={childAriaLabel}
-                      aria-selected={isChildSelected}
-                      tabIndex={-1}
-                      className="group block relative focus:outline-none focus:ring-2 focus:ring-violet-500/60 rounded-lg"
+                      className="group block relative"
                     >
-                      <div className="relative bg-sol-bg-alt/40 border border-sol-border/60 rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200 motion-reduce:transition-none">
+                      <div className="relative bg-sol-bg-alt/40 border border-sol-border/60 rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
                             Subagent
@@ -785,7 +502,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                             {child.title}
                           </h4>
                           {child.is_active && (
-                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse motion-reduce:animate-none" />
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                           )}
                         </div>
                         <div className="flex items-center gap-2 text-xs text-sol-text-muted0">
@@ -797,17 +514,13 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                         </div>
                       </div>
                     </Link>
-                    );
-                  })}
+                  ))}
                 </div>
               )
             )}
           </div>
-            )}
-          </div>
-        );
-      })}
-      </div>
+        </div>
+      ))}
     </div>
   );
 }

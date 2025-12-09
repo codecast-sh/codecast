@@ -5,6 +5,9 @@ import { usePathname, useRouter } from "next/navigation";
 interface SidebarProps {
   filter?: "my" | "team";
   onFilterChange?: (filter: "my" | "team") => void;
+  directories?: string[];
+  directoryFilter?: string | null;
+  onDirectoryFilterChange?: (directory: string | null) => void;
 }
 
 const bottomNavItems = [
@@ -44,7 +47,13 @@ const bottomNavItems = [
   },
 ];
 
-export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
+function getShortPath(projectPath: string): string {
+  const parts = projectPath.split("/").filter(Boolean);
+  if (parts.length === 0) return projectPath;
+  return parts[parts.length - 1];
+}
+
+export function Sidebar({ filter = "my", onFilterChange, directories = [], directoryFilter, onDirectoryFilterChange }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
@@ -54,6 +63,13 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
       router.push("/dashboard");
     }
     onFilterChange?.(newFilter);
+  };
+
+  const handleDirectoryClick = (dir: string) => {
+    if (!isDashboard) {
+      router.push("/dashboard");
+    }
+    onDirectoryFilterChange?.(directoryFilter === dir ? null : dir);
   };
 
   return (
@@ -90,6 +106,33 @@ export function Sidebar({ filter = "my", onFilterChange }: SidebarProps) {
             <span>Team</span>
           </button>
         </div>
+
+        {directories.length > 0 && (
+          <div className="mt-6">
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
+              Projects
+            </div>
+            <div className="space-y-1 max-h-[200px] overflow-y-auto">
+              {directories.slice(0, 10).map((dir) => (
+                <button
+                  key={dir}
+                  onClick={() => handleDirectoryClick(dir)}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
+                    directoryFilter === dir
+                      ? "bg-sol-bg-alt text-sol-text"
+                      : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+                  }`}
+                  title={dir}
+                >
+                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  <span className="truncate">{getShortPath(dir)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mt-auto pt-4 space-y-1">
