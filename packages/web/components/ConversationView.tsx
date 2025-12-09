@@ -11,6 +11,13 @@ import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 
 type ToolCall = {
   id: string;
@@ -862,6 +869,16 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
     }
   }, [messages.length, userScrolled, virtualizer]);
 
+  const hasInitialScrolled = useRef(false);
+  useEffect(() => {
+    if (messages.length > 0 && !hasInitialScrolled.current && !window.location.hash) {
+      hasInitialScrolled.current = true;
+      setTimeout(() => {
+        virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
+      }, 100);
+    }
+  }, [messages.length, virtualizer]);
+
   useEffect(() => {
     if (messages.length && window.location.hash) {
       const targetId = window.location.hash.slice(1);
@@ -959,86 +976,92 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
   return (
     <main className="h-screen flex flex-col bg-sol-bg">
       <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
-        <div className="max-w-4xl mx-auto px-4 py-3 space-y-2">
-          <div className="flex items-center gap-4">
+        <div className="max-w-4xl mx-auto px-4 py-3">
+          <div className="flex items-center gap-3">
             <Link
               href={backHref}
-              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm"
+              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm flex-shrink-0"
             >
               &larr; {backLabel}
             </Link>
-            <h1 className="text-sm font-medium text-sol-text-secondary truncate">{truncatedTitle}</h1>
-          </div>
-          {latestUsage && (
-            <div className="pl-16">
-              <UsageDisplay usage={latestUsage} />
-            </div>
-          )}
-          {conversation && (conversation.git_branch || conversation.git_status || conversation.git_diff || conversation.git_diff_staged) && (
-            <div className="pl-16">
-              <GitInfoSection
-                gitBranch={conversation.git_branch}
-                gitStatus={conversation.git_status}
-                gitDiff={conversation.git_diff}
-                gitDiffStaged={conversation.git_diff_staged}
-                gitRemoteUrl={conversation.git_remote_url}
-              />
-            </div>
-          )}
-          {conversation && (
-            <div className="flex items-center gap-4">
-              {conversation.parent_conversation_id && (
-                <Link
-                  href={`/conversation/${conversation.parent_conversation_id}`}
-                  className="text-sol-violet hover:text-sol-violet text-xs flex items-center gap-1"
-                >
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
-                  </svg>
-                  Parent
-                </Link>
-              )}
-              {conversation.child_conversations && conversation.child_conversations.length > 0 && (
-                <span className="text-sol-cyan text-xs">
-                  {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? "s" : ""}
-                </span>
-              )}
-              {latestTodos && latestTodos.todos.length > 0 && (
-                <span className="text-emerald-400 text-xs flex items-center gap-1 px-2 py-1 rounded bg-sol-bg-alt/60 border border-emerald-500/40">
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                  </svg>
-                  {latestTodos.todos.filter(t => t.status === 'completed').length}/{latestTodos.todos.length} tasks
-                </span>
-              )}
-              <span className="ml-auto text-sol-yellow">
-                {conversation.agent_type === "claude_code" ? (
-                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M4.709 15.955l4.72-2.647.08-.08 2.726-4.721c.398-.65 1.063-1.063 1.808-1.063h.08c.744 0 1.409.413 1.807 1.063l2.727 4.72.079.08 4.72 2.728c.65.398 1.063 1.063 1.063 1.808v.08c0 .744-.413 1.409-1.063 1.807l-4.72 2.727-.08.08-2.727 4.72c-.398.65-1.063 1.063-1.808 1.063h-.08c-.744 0-1.409-.413-1.807-1.063l-2.727-4.72-.079-.08-4.72-2.727c-.65-.398-1.063-1.063-1.063-1.808v-.08c0-.744.413-1.409 1.063-1.807zm7.248-1.41l-1.33 2.302 2.302 1.33c.16.08.319.08.479 0l2.302-1.33-1.33-2.302c-.08-.16-.08-.319 0-.479l1.33-2.302-2.302-1.33c-.16-.08-.319-.08-.479 0l-2.302 1.33 1.33 2.302c.08.16.08.319 0 .479z" />
-                  </svg>
-                ) : (
-                  <span className="text-[10px] text-sol-text-dim font-mono">{conversation.agent_type}</span>
+            <h1 className="text-sm font-medium text-sol-text-secondary truncate flex-1">{truncatedTitle}</h1>
+
+            {conversation && (
+              <>
+                {conversation.git_branch && (
+                  <GitInfoSection
+                    gitBranch={conversation.git_branch}
+                    gitStatus={conversation.git_status}
+                    gitDiff={conversation.git_diff}
+                    gitDiffStaged={conversation.git_diff_staged}
+                    gitRemoteUrl={conversation.git_remote_url}
+                  />
                 )}
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setCollapsed((c) => !c)}
-                  className={`px-2 py-1 text-xs rounded transition-colors ${collapsed ? "bg-amber-800 text-amber-200" : "bg-sol-bg-alt hover:bg-slate-700 text-sol-text-secondary"}`}
-                  title="Toggle collapse (Cmd+Shift+C)"
-                >
-                  {collapsed ? "Expand" : "Collapse"}
-                </button>
+
+                {conversation.parent_conversation_id && (
+                  <Link
+                    href={`/conversation/${conversation.parent_conversation_id}`}
+                    className="text-sol-violet hover:text-sol-violet text-xs flex items-center gap-1 flex-shrink-0"
+                    title="Parent conversation"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
+                    </svg>
+                  </Link>
+                )}
+
+                {conversation.child_conversations && conversation.child_conversations.length > 0 && (
+                  <span className="text-sol-cyan text-xs flex-shrink-0" title={`${conversation.child_conversations.length} subagent${conversation.child_conversations.length > 1 ? "s" : ""}`}>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                    </svg>
+                  </span>
+                )}
+
+                {latestTodos && latestTodos.todos.length > 0 && (
+                  <span className="text-emerald-400 text-[10px] flex items-center gap-1 flex-shrink-0" title="Tasks">
+                    {latestTodos.todos.filter(t => t.status === 'completed').length}/{latestTodos.todos.length}
+                  </span>
+                )}
+
                 <button
                   onClick={handleCopyAll}
-                  className="px-2 py-1 text-xs rounded bg-sol-bg-alt hover:bg-slate-700 text-sol-text-secondary transition-colors"
-                  title="Copy all messages to clipboard"
+                  className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors flex-shrink-0"
+                  title="Copy all messages"
                 >
-                  Copy All
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
                 </button>
+
                 {headerExtra}
-              </div>
-            </div>
-          )}
+
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors flex-shrink-0">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                      </svg>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setCollapsed((c) => !c)}>
+                      {collapsed ? "Expand messages" : "Collapse messages"}
+                      <span className="ml-auto text-[10px] text-sol-text-dim">Cmd+Shift+C</span>
+                    </DropdownMenuItem>
+                    {latestUsage && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <div className="px-2 py-1.5">
+                          <UsageDisplay usage={latestUsage} />
+                        </div>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )}
+          </div>
         </div>
       </header>
 

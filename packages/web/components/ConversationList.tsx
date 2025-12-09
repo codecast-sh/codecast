@@ -247,6 +247,9 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
       }
     }
 
+    // Sort by updated_at descending
+    withChildren.sort((a, b) => b.updated_at - a.updated_at);
+
     filtered = withChildren as any;
 
     return { filteredConversations: filtered, counts, directories };

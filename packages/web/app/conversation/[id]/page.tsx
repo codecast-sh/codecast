@@ -65,51 +65,37 @@ export default function ConversationPage() {
   };
 
   const shareControls = (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1">
       {conversation?.is_private ? (
-        <>
-          <span className="px-2 py-1 text-xs bg-sol-base02 text-sol-base1 rounded flex items-center gap-1">
-            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
-            </svg>
-            Private
-          </span>
-          <button
-            onClick={handleShareWithTeam}
-            className="px-2 py-1 text-xs bg-sol-green hover:bg-green-700 text-white rounded transition-colors"
-          >
-            Share with team
-          </button>
-        </>
+        <button
+          onClick={handleShareWithTeam}
+          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-green transition-colors"
+          title="Share with team"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+        </button>
       ) : (
         <>
-          <span className="px-2 py-1 text-xs bg-sol-base02 text-sol-base1 rounded flex items-center gap-1">
-            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
-            </svg>
-            Team visible
-          </span>
           <button
             onClick={handleMakePrivate}
-            className="px-2 py-1 text-xs bg-sol-base02 hover:bg-slate-700 text-sol-base1 rounded transition-colors"
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-green hover:text-sol-text-secondary transition-colors"
+            title="Make private"
           >
-            Make private
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+            </svg>
           </button>
-          {!shareUrl ? (
-            <button
-              onClick={handleShare}
-              className="px-2 py-1 text-xs bg-sol-base02 hover:bg-slate-700 text-sol-base1 rounded transition-colors"
-            >
-              Share publicly
-            </button>
-          ) : (
-            <button
-              onClick={handleCopyShareUrl}
-              className="px-2 py-1 text-xs bg-sol-base02 hover:bg-slate-700 text-sol-base1 rounded transition-colors"
-            >
-              {showShareCopied ? "Copied!" : "Copy Link"}
-            </button>
-          )}
+          <button
+            onClick={shareUrl ? handleCopyShareUrl : handleShare}
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+            title={shareUrl ? (showShareCopied ? "Copied!" : "Copy share link") : "Share publicly"}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+            </svg>
+          </button>
         </>
       )}
     </div>
