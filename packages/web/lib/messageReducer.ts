@@ -34,12 +34,21 @@ export type ProcessedMessage = {
   timestamp: number;
 };
 
+export type UsageData = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreation: number;
+  cacheRead: number;
+  contextSize: number;
+  timestamp: number;
+};
+
 export type ReducerState = {
   messageUuids: Set<string>;
   toolIdToMessageId: Map<string, string>;
   messages: Map<string, ProcessedMessage>;
   latestTodos?: { todos: any[]; timestamp: number };
-  latestUsage?: { inputTokens: number; outputTokens: number };
+  latestUsage?: UsageData;
 };
 
 type RawMessage = {
@@ -60,6 +69,12 @@ type RawMessage = {
     is_error?: boolean;
   }>;
   tokens_used?: number;
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
 };
 
 export function createReducer(): ReducerState {
@@ -109,6 +124,25 @@ export function reducer(state: ReducerState, rawMessages: RawMessage[]): Process
       // Mark as seen
       if (msg.message_uuid) {
         state.messageUuids.add(msg.message_uuid);
+      }
+
+      // Extract usage data if present
+      if (msg.usage) {
+        const cacheCreation = msg.usage.cache_creation_input_tokens || 0;
+        const cacheRead = msg.usage.cache_read_input_tokens || 0;
+        const contextSize = cacheCreation + cacheRead + msg.usage.input_tokens;
+
+        // Only update if this is newer than current usage
+        if (!state.latestUsage || msg.timestamp > state.latestUsage.timestamp) {
+          state.latestUsage = {
+            inputTokens: msg.usage.input_tokens,
+            outputTokens: msg.usage.output_tokens,
+            cacheCreation,
+            cacheRead,
+            contextSize,
+            timestamp: msg.timestamp,
+          };
+        }
       }
 
       // Create text message if there's content

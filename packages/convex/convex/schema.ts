@@ -78,6 +78,12 @@ export default defineSchema({
     subtype: v.optional(v.string()),
     timestamp: v.number(),
     tokens_used: v.optional(v.number()),
+    usage: v.optional(v.object({
+      input_tokens: v.number(),
+      output_tokens: v.number(),
+      cache_creation_input_tokens: v.optional(v.number()),
+      cache_read_input_tokens: v.optional(v.number()),
+    })),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_uuid", ["conversation_id", "message_uuid"])

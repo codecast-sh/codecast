@@ -7,6 +7,8 @@ import remarkGfm from "remark-gfm";
 import "highlight.js/styles/base16/solarized-dark.css";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent } from "../lib/conversationProcessor";
+import { createReducer, reducer } from "../lib/messageReducer";
+import { UsageDisplay } from "./UsageDisplay";
 
 type ToolCall = {
   id: string;
@@ -602,33 +604,19 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
 
   const messages = conversation?.messages || [];
 
-  // Extract todos from messages using reducer
-  const latestTodos = useMemo(() => {
-    if (!messages || messages.length === 0) return undefined;
-
-    let todos: { todos: any[]; timestamp: number } | undefined;
-
-    for (const msg of messages) {
-      if (msg.tool_calls) {
-        for (const tc of msg.tool_calls) {
-          if (tc.name === "TodoWrite" && tc.input) {
-            try {
-              const input = JSON.parse(tc.input);
-              if (input.todos) {
-                if (!todos || msg.timestamp > todos.timestamp) {
-                  todos = {
-                    todos: input.todos,
-                    timestamp: msg.timestamp,
-                  };
-                }
-              }
-            } catch {}
-          }
-        }
-      }
+  // Extract todos and usage from messages using reducer
+  const { latestTodos, latestUsage } = useMemo(() => {
+    if (!messages || messages.length === 0) {
+      return { latestTodos: undefined, latestUsage: undefined };
     }
 
-    return todos;
+    const state = createReducer();
+    reducer(state, messages);
+
+    return {
+      latestTodos: state.latestTodos,
+      latestUsage: state.latestUsage,
+    };
   }, [messages]);
 
   const virtualizer = useVirtualizer({
@@ -780,16 +768,23 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
   return (
     <main className="h-screen flex flex-col bg-sol-bg">
       <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-4">
-          <Link
-            href={backHref}
-            className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm"
-          >
-            &larr; {backLabel}
-          </Link>
-          <h1 className="text-sm font-medium text-sol-text-secondary truncate">{truncatedTitle}</h1>
+        <div className="max-w-4xl mx-auto px-4 py-3 space-y-2">
+          <div className="flex items-center gap-4">
+            <Link
+              href={backHref}
+              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm"
+            >
+              &larr; {backLabel}
+            </Link>
+            <h1 className="text-sm font-medium text-sol-text-secondary truncate">{truncatedTitle}</h1>
+          </div>
+          {latestUsage && (
+            <div className="pl-16">
+              <UsageDisplay usage={latestUsage} />
+            </div>
+          )}
           {conversation && (
-            <>
+            <div className="flex items-center gap-4">
               {conversation.parent_conversation_id && (
                 <Link
                   href={`/conversation/${conversation.parent_conversation_id}`}
@@ -833,7 +828,7 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
                 </button>
                 {headerExtra}
               </div>
-            </>
+            </div>
           )}
         </div>
       </header>

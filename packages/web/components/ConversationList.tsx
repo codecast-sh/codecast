@@ -7,6 +7,7 @@ import { EmptyState } from "./EmptyState";
 import { useEffect, useState, useMemo } from "react";
 import { getConversationPreview, cleanTitle } from "../lib/conversationProcessor";
 import { useUIStore } from "../store/uiStore";
+import { UsageBadge } from "./UsageDisplay";
 
 type Conversation = {
   _id: string;
@@ -32,6 +33,14 @@ type Conversation = {
   parent_conversation_id?: string | null;
   children?: Conversation[];
   latest_todos?: { todos: Array<{ status: string }>; timestamp: number };
+  latest_usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreation: number;
+    cacheRead: number;
+    contextSize: number;
+    timestamp: number;
+  };
 };
 
 function formatDuration(ms: number): string {
@@ -460,6 +469,9 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
                             </svg>
                             {conv.latest_todos.todos.filter(t => t.status === 'completed').length}/{conv.latest_todos.todos.length} tasks
                           </span>
+                        )}
+                        {conv.latest_usage && (
+                          <UsageBadge usage={conv.latest_usage} />
                         )}
                         {conv.subagent_types && conv.subagent_types.length > 0 && conv.subagent_types.map((type) => (
                           <span
