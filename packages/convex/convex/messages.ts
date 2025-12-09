@@ -1,6 +1,7 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { checkRateLimit } from "./rateLimit";
 
 export const addMessage = mutation({
   args: {
@@ -47,6 +48,8 @@ export const addMessage = mutation({
         throw new Error("Unauthorized: conversation owner not found");
       }
     }
+
+    await checkRateLimit(ctx, conversation.user_id, "addMessage");
 
     const msgTimestamp = args.timestamp || Date.now();
 

@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
+import { checkRateLimit } from "./rateLimit";
 
 function generateShareToken(): string {
   return crypto.randomUUID();
@@ -47,6 +48,8 @@ export const createConversation = mutation({
         throw new Error("Unauthorized: user not found");
       }
     }
+
+    await checkRateLimit(ctx, args.user_id, "createConversation");
 
     const existing = await ctx.db
       .query("conversations")
