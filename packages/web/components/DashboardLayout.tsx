@@ -1,5 +1,7 @@
 "use client";
 import { ReactNode } from "react";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
@@ -12,12 +14,20 @@ interface DashboardLayoutProps {
 }
 
 export function DashboardLayout({ children, filter, onFilterChange }: DashboardLayoutProps) {
+  const user = useQuery(api.users.getCurrentUser);
+  const team = useQuery(
+    api.teams.getTeam,
+    user?.team_id ? { team_id: user.team_id } : "skip"
+  );
+
+  const displayName = team?.name || "codecast";
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg">
       <header className="border-b border-sol-border bg-sol-bg-alt/50 backdrop-blur sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center">
           <h1 className="text-xl font-semibold text-sol-text tracking-tight whitespace-nowrap">
-            codecast
+            {displayName}
           </h1>
           <GlobalSearch />
           <ThemeToggle />
