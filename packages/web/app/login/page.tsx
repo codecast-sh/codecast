@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth } from "convex/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -15,6 +15,8 @@ export default function LoginPage() {
   const { signIn } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const reason = searchParams.get("reason");
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
@@ -65,6 +67,13 @@ export default function LoginPage() {
           <p className="text-sol-text-muted mt-2 text-sm">
             Sign in to access your conversations
           </p>
+          {reason === "session_expired" && (
+            <div className="mt-4 p-3 bg-amber-900/30 border border-amber-700/50 rounded-lg">
+              <p className="text-amber-300 text-sm">
+                Your session has expired. Please sign in again.
+              </p>
+            </div>
+          )}
         </div>
 
         <form

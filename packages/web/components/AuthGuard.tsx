@@ -9,7 +9,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
-      router.push("/");
+      router.push("/login?reason=session_expired");
     }
   }, [isAuthenticated, isLoading, router]);
 
