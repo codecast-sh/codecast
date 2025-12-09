@@ -176,12 +176,14 @@ function buildProjectGroups(conversations: Conversation[]): ConversationGroup[] 
 
 type TimeFilter = "all" | "long" | "active";
 type SubagentFilter = "all" | "main" | "subagent";
+type AgentTypeFilter = "all" | "claude_code" | "codex" | "cursor";
 
 export function ConversationList({ filter }: { filter: "my" | "team" }) {
   const conversations = useConversationsWithError(filter);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
+  const [agentTypeFilter, setAgentTypeFilter] = useState<AgentTypeFilter>("all");
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
 
   const { collapsedSections, toggleSection } = useUIStore();
@@ -197,7 +199,18 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
   }, []);
 
   const { filteredConversations, counts } = useMemo(() => {
-    if (!conversations) return { filteredConversations: [], counts: { long: 0, active: 0, subagent: 0, main: 0 } };
+    if (!conversations) return {
+      filteredConversations: [],
+      counts: {
+        long: 0,
+        active: 0,
+        subagent: 0,
+        main: 0,
+        claude_code: 0,
+        codex: 0,
+        cursor: 0
+      }
+    };
     const convs = conversations as Conversation[];
 
     const isSubagent = (c: Conversation) =>
@@ -219,6 +232,9 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
       active: nonTrivialConvs.filter(c => c.is_active).length,
       subagent: nonTrivialConvs.filter(c => isSubagent(c)).length,
       main: nonTrivialConvs.filter(c => !isSubagent(c)).length,
+      claude_code: nonTrivialConvs.filter(c => c.agent_type === "claude_code").length,
+      codex: nonTrivialConvs.filter(c => c.agent_type === "codex").length,
+      cursor: nonTrivialConvs.filter(c => c.agent_type === "cursor").length,
     };
 
     let filtered = nonTrivialConvs;
@@ -233,6 +249,10 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
       filtered = filtered.filter(c => !isSubagent(c));
     } else if (subagentFilter === "subagent") {
       filtered = filtered.filter(c => isSubagent(c));
+    }
+
+    if (agentTypeFilter !== "all") {
+      filtered = filtered.filter(c => c.agent_type === agentTypeFilter);
     }
 
     // Build parent-child map for nesting
@@ -269,7 +289,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
     filtered = withChildren as any;
 
     return { filteredConversations: filtered, counts };
-  }, [conversations, timeFilter, subagentFilter]);
+  }, [conversations, timeFilter, subagentFilter, agentTypeFilter]);
 
   if (!conversations) {
     return <LoadingSkeleton />;
@@ -357,7 +377,7 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
 
   useEffect(() => {
     setFocusedIndex(-1);
-  }, [timeFilter, subagentFilter]);
+  }, [timeFilter, subagentFilter, agentTypeFilter]);
 
   const setItemRef = useCallback((id: string, element: HTMLAnchorElement | null) => {
     if (element) {
@@ -425,6 +445,50 @@ export function ConversationList({ filter }: { filter: "my" | "team" }) {
           }`}
         >
           Subagent{counts.subagent > 0 && ` (${counts.subagent})`}
+        </button>
+
+        <div className="w-px bg-sol-border/30 mx-1" />
+
+        {/* Agent type filters */}
+        <button
+          onClick={() => setAgentTypeFilter("all")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+            agentTypeFilter === "all"
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+          }`}
+        >
+          All Agents
+        </button>
+        <button
+          onClick={() => setAgentTypeFilter("claude_code")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+            agentTypeFilter === "claude_code"
+              ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
+              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+          }`}
+        >
+          Claude Code{counts.claude_code > 0 && ` (${counts.claude_code})`}
+        </button>
+        <button
+          onClick={() => setAgentTypeFilter("cursor")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+            agentTypeFilter === "cursor"
+              ? "bg-blue-500/20 text-blue-400 border border-blue-500/40"
+              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+          }`}
+        >
+          Cursor{counts.cursor > 0 && ` (${counts.cursor})`}
+        </button>
+        <button
+          onClick={() => setAgentTypeFilter("codex")}
+          className={`px-3 py-1.5 text-sm rounded-lg transition-colors motion-reduce:transition-none ${
+            agentTypeFilter === "codex"
+              ? "bg-purple-500/20 text-purple-400 border border-purple-500/40"
+              : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
+          }`}
+        >
+          Codex{counts.codex > 0 && ` (${counts.codex})`}
         </button>
       </div>
 
