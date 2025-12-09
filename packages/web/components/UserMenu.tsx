@@ -48,6 +48,15 @@ export function UserMenu() {
             )}
           </div>
           <button
+            onClick={() => {
+              setOpen(false);
+              router.push("/settings");
+            }}
+            className="w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors"
+          >
+            Settings
+          </button>
+          <button
             onClick={handleLogout}
             className="w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors"
           >
