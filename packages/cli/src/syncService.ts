@@ -17,6 +17,7 @@ export interface GitInfo {
   status?: string;
   diff?: string;
   diffStaged?: string;
+  root?: string;
 }
 
 export interface CreateConversationParams {
@@ -71,6 +72,7 @@ export class SyncService {
         git_status: gitInfo?.status,
         git_diff: gitInfo?.diff,
         git_diff_staged: gitInfo?.diffStaged,
+        git_root: gitInfo?.root,
       }
     );
     return result as string;

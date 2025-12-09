@@ -50,6 +50,7 @@ export default defineSchema({
     git_status: v.optional(v.string()),
     git_diff: v.optional(v.string()),
     git_diff_staged: v.optional(v.string()),
+    git_root: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])

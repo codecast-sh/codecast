@@ -39,6 +39,7 @@ type Conversation = {
     timestamp: number;
   };
   project_path?: string | null;
+  git_root?: string | null;
 };
 
 function formatDuration(ms: number): string {
@@ -139,13 +140,6 @@ function groupByTime(conversations: Conversation[]): TimeGroup[] {
 type TimeFilter = "all" | "long" | "active";
 type SubagentFilter = "all" | "main" | "subagent";
 
-function getShortPath(projectPath: string | null | undefined): string | null {
-  if (!projectPath) return null;
-  const parts = projectPath.split("/").filter(Boolean);
-  if (parts.length === 0) return null;
-  return parts[parts.length - 1];
-}
-
 interface ConversationListProps {
   filter: "my" | "team";
   directoryFilter?: string | null;
@@ -185,10 +179,11 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
 
     const dirLastUpdated = new Map<string, number>();
     for (const c of nonTrivialConvs) {
-      if (c.project_path) {
-        const existing = dirLastUpdated.get(c.project_path) || 0;
+      const dir = c.git_root || c.project_path;
+      if (dir) {
+        const existing = dirLastUpdated.get(dir) || 0;
         if (c.updated_at > existing) {
-          dirLastUpdated.set(c.project_path, c.updated_at);
+          dirLastUpdated.set(dir, c.updated_at);
         }
       }
     }
@@ -206,7 +201,7 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
     let filtered = nonTrivialConvs;
 
     if (directoryFilter) {
-      filtered = filtered.filter(c => c.project_path === directoryFilter);
+      filtered = filtered.filter(c => (c.git_root || c.project_path) === directoryFilter);
     }
 
     if (timeFilter === "long") {
@@ -421,14 +416,6 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                         <span className="text-sol-text-muted0">
                           {getRelativeTime(conv.updated_at)}
                         </span>
-                        {conv.project_path && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt/60 bg-sol-bg-alt text-sol-text-muted border border-sol-border/40" title={conv.project_path}>
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                            </svg>
-                            {getShortPath(conv.project_path)}
-                          </span>
-                        )}
                         {conv.duration_ms > 60000 && (
                           <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt/60 bg-sol-bg-alt border ${getDurationColor(conv.duration_ms)}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">

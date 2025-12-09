@@ -74,7 +74,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
 
   return (
     <nav className="w-64 border-r border-sol-border bg-sol-bg-alt/50 h-[calc(100vh-52px)] p-4 hidden md:flex flex-col sticky top-[52px]">
-      <div className="flex-1">
+      <div className="flex-1 flex flex-col min-h-0">
         <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
           Conversations
         </div>
@@ -108,12 +108,12 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
         </div>
 
         {directories.length > 0 && (
-          <div className="mt-6">
+          <div className="mt-6 flex-1 flex flex-col min-h-0">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
               Projects
             </div>
-            <div className="space-y-1 max-h-[200px] overflow-y-auto">
-              {directories.slice(0, 10).map((dir) => (
+            <div className="space-y-1 flex-1 overflow-y-auto">
+              {directories.map((dir) => (
                 <button
                   key={dir}
                   onClick={() => handleDirectoryClick(dir)}
@@ -135,7 +135,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
         )}
       </div>
 
-      <div className="mt-auto pt-4 space-y-1">
+      <div className="pt-4 space-y-1 flex-shrink-0">
         <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
           Configuration
         </div>

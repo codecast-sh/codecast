@@ -36,6 +36,7 @@ export const createConversation = mutation({
     git_status: v.optional(v.string()),
     git_diff: v.optional(v.string()),
     git_diff_staged: v.optional(v.string()),
+    git_root: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -83,6 +84,7 @@ export const createConversation = mutation({
       git_status: args.git_status,
       git_diff: args.git_diff,
       git_diff_staged: args.git_diff_staged,
+      git_root: args.git_root,
     });
     return conversationId;
   },
@@ -373,6 +375,7 @@ export const listConversations = query({
           parent_conversation_id: parentConversationId,
           latest_todos: latestTodos,
           project_path: c.project_path || null,
+          git_root: c.git_root || null,
           git_branch: c.git_branch || null,
           git_remote_url: c.git_remote_url || null,
         };

@@ -90,6 +90,7 @@ interface GitInfo {
   status?: string;
   diff?: string;
   diffStaged?: string;
+  root?: string;
 }
 
 function getGitInfo(projectPath: string): GitInfo | undefined {
@@ -116,6 +117,7 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
   const status = execGit("status --porcelain");
   const diff = execGit("diff");
   const diffStaged = execGit("diff --cached");
+  const root = execGit("rev-parse --show-toplevel");
 
   return {
     commitHash,
@@ -124,6 +126,7 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
     status,
     diff: diff ? diff.slice(0, 100000) : undefined,
     diffStaged: diffStaged ? diffStaged.slice(0, 100000) : undefined,
+    root,
   };
 }
 
