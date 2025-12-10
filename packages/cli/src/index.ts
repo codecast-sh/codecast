@@ -7,6 +7,7 @@ import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion } from "./update.js";
 
 const program = new Command();
 
@@ -300,7 +301,7 @@ async function runAuth(): Promise<void> {
 program
   .name("codecast")
   .description("Sync coding agent conversations to a shared Convex database")
-  .version("0.1.0");
+  .version(getVersion());
 
 program
   .command("auth")
@@ -435,11 +436,36 @@ program
   });
 
 program
+  .command("update")
+  .description("Update codecast to the latest version")
+  .action(async () => {
+    const available = await checkForUpdates(true);
+    if (!available) {
+      console.log(`codecast v${getVersion()} is already the latest version`);
+      return;
+    }
+    console.log(`Updating from v${getVersion()} to v${available}...`);
+    const success = await performUpdate();
+    if (success) {
+      console.log("\nRestart codecast to use the new version");
+    } else {
+      process.exit(1);
+    }
+  });
+
+program
   .command("_daemon", { hidden: true })
   .description("Run as daemon (internal use)")
   .action(async () => {
     const { runDaemon } = await import("./daemon.js");
     await runDaemon();
   });
+
+// Check for updates in background (non-blocking)
+checkForUpdates().then((available) => {
+  if (available) {
+    showUpdateNotice(available);
+  }
+});
 
 program.parse();

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO="codecast-sh/codecast"
+DOWNLOAD_HOST="https://dl.codecast.sh"
 
 echo "Installing codecast..."
 
@@ -43,8 +43,7 @@ INSTALL_DIR="${HOME}/.local/bin"
 echo "Platform: ${PLATFORM}-${ARCH_NAME}"
 echo "Install directory: ${INSTALL_DIR}"
 
-# Get latest release download URL
-DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}"
+DOWNLOAD_URL="${DOWNLOAD_HOST}/${BINARY_NAME}"
 
 mkdir -p "${INSTALL_DIR}"
 

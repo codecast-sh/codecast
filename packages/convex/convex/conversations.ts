@@ -138,6 +138,7 @@ export const getConversations = query({
 export const getConversation = query({
   args: {
     conversation_id: v.id("conversations"),
+    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -163,14 +164,20 @@ export const getConversation = query({
       }
     }
 
+    const limit = args.limit ?? 100;
+    // Fetch most recent messages (descending), then reverse for display
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q) =>
         q.eq("conversation_id", args.conversation_id)
       )
       .order("desc")
-      .take(100);
-    const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
+      .take(limit + 1);
+
+    const hasMore = messages.length > limit;
+    const resultMessages = hasMore ? messages.slice(0, limit) : messages;
+    const sortedMessages = resultMessages.sort((a, b) => a.timestamp - b.timestamp);
+    const oldestTimestamp = sortedMessages.length > 0 ? sortedMessages[0].timestamp : null;
 
     const user = await ctx.db.get(conversation.user_id);
 
@@ -196,6 +203,8 @@ export const getConversation = query({
       title,
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
+      has_more_above: hasMore,
+      oldest_timestamp: oldestTimestamp,
     };
   },
 });
@@ -319,6 +328,61 @@ export const getMoreMessages = query({
       messages,
       has_more: hasMore,
       next_cursor: nextCursor,
+    };
+  },
+});
+
+export const getOlderMessages = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    before_timestamp: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return null;
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      if (conversation.is_private) {
+        return null;
+      }
+      const authUser = await ctx.db.get(authUserId);
+      if (
+        !authUser ||
+        !authUser.team_id ||
+        authUser.team_id.toString() !== conversation.team_id?.toString()
+      ) {
+        return null;
+      }
+    }
+
+    const limit = args.limit ?? 100;
+    // Fetch messages older than the cursor, in descending order (newest of the older ones first)
+    const olderMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("desc")
+      .filter((q) => q.lt(q.field("timestamp"), args.before_timestamp))
+      .take(limit + 1);
+
+    const hasMore = olderMessages.length > limit;
+    const resultMessages = hasMore ? olderMessages.slice(0, limit) : olderMessages;
+    // Sort ascending for display (oldest first)
+    const messages = resultMessages.sort((a, b) => a.timestamp - b.timestamp);
+    const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
+
+    return {
+      messages,
+      has_more: hasMore,
+      oldest_timestamp: oldestTimestamp,
     };
   },
 });

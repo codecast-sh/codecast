@@ -72,6 +72,9 @@ type ConversationViewProps = {
   backHref: string;
   backLabel?: string;
   headerExtra?: React.ReactNode;
+  hasMoreAbove?: boolean;
+  isLoadingOlder?: boolean;
+  onLoadOlder?: () => void;
 };
 
 function formatTimestamp(ts: number) {
@@ -79,6 +82,40 @@ function formatTimestamp(ts: number) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatRelativeTime(ts: number): string {
+  const now = Date.now();
+  const diff = now - ts;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (seconds < 60) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function formatFullTimestamp(ts: number): string {
+  return new Date(ts).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function stripLineNumbers(content: string): string {
+  // Strip Claude Code's line number format: "   42→content" or "42→content"
+  return content
+    .split("\n")
+    .map((line) => line.replace(/^\s*\d+→/, ""))
+    .join("\n");
 }
 
 function ClaudeIcon() {
@@ -323,60 +360,90 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
   );
 }
 
+function getFileExtension(filePath: string): string | undefined {
+  const ext = filePath.split(".").pop()?.toLowerCase();
+  const langMap: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    py: "python", rb: "ruby", go: "go", rs: "rust", java: "java",
+    cpp: "cpp", c: "c", h: "c", hpp: "cpp", cs: "csharp",
+    json: "json", yaml: "yaml", yml: "yaml", md: "markdown",
+    html: "html", css: "css", scss: "scss", sql: "sql",
+    sh: "bash", bash: "bash", zsh: "bash",
+  };
+  return ext ? langMap[ext] : undefined;
+}
+
+function getRelativePath(fullPath: string): string {
+  // Try to extract relative path from common patterns
+  // /Users/*/src/project/path -> project/path
+  // /home/*/projects/project/path -> project/path
+  const patterns = [
+    /\/Users\/[^/]+\/src\/(.+)$/,
+    /\/Users\/[^/]+\/(.+)$/,
+    /\/home\/[^/]+\/(?:src|projects|code)\/(.+)$/,
+    /\/home\/[^/]+\/(.+)$/,
+  ];
+  for (const pattern of patterns) {
+    const match = fullPath.match(pattern);
+    if (match) return match[1];
+  }
+  // Fallback: show last 3 path components
+  const parts = fullPath.split("/").filter(Boolean);
+  return parts.slice(-3).join("/");
+}
+
 function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
-  const isAgentOutput = tool.name === "AgentOutputTool";
   const [expanded, setExpanded] = useState(false);
-  const [resultExpanded, setResultExpanded] = useState(!isAgentOutput);
   const isEdit = tool.name === "Edit" || tool.name === "Write";
   const isRead = tool.name === "Read";
   const isBash = tool.name === "Bash";
+  const isGlob = tool.name === "Glob";
+  const isGrep = tool.name === "Grep";
 
   let parsedInput: Record<string, unknown> = {};
   try {
     parsedInput = JSON.parse(tool.input);
   } catch {}
 
+  const filePath = String(parsedInput.file_path || "");
+  const relativePath = getRelativePath(filePath);
+  const language = getFileExtension(filePath);
+
   const getToolSummary = () => {
-    if (isEdit && parsedInput.file_path) {
-      return String(parsedInput.file_path);
-    }
-    if (isRead && parsedInput.file_path) {
-      const lines = parsedInput.limit ? ` (${parsedInput.limit} lines)` : "";
-      return String(parsedInput.file_path) + lines;
-    }
+    if (isEdit || isRead) return relativePath;
     if (isBash && parsedInput.command) {
       const cmd = String(parsedInput.command);
-      return cmd.length > 80 ? cmd.slice(0, 80) + "..." : cmd;
+      return cmd.length > 50 ? cmd.slice(0, 50) + "..." : cmd;
     }
-    if (tool.name === "Glob" && parsedInput.pattern) {
-      return String(parsedInput.pattern);
-    }
-    if (tool.name === "Grep" && parsedInput.pattern) {
-      return String(parsedInput.pattern);
-    }
+    if (isGlob && parsedInput.pattern) return String(parsedInput.pattern);
+    if (isGrep && parsedInput.pattern) return String(parsedInput.pattern);
     return null;
   };
 
   const getResultSummary = () => {
     if (!result) return null;
+    if (result.is_error) return "(error)";
     if (isEdit) {
-      if (result.content.includes("has been updated")) {
-        const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
-        if (match) return `+${match[1]} -${match[2]}`;
-        return "updated";
-      }
-      return result.is_error ? "failed" : "done";
+      const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
+      if (match) return `(+${match[1]} -${match[2]})`;
+      return result.content.includes("has been updated") ? "(ok)" : "";
     }
     if (isRead) {
       const lines = result.content.split("\n").length;
-      return `${lines} lines`;
+      return `(${lines} lines)`;
+    }
+    if (isGlob || isGrep) {
+      const lines = result.content.trim().split("\n").filter(l => l.trim()).length;
+      return `(${lines} matches)`;
     }
     return null;
   };
 
   const summary = getToolSummary();
   const resultSummary = getResultSummary();
-  const resultTruncated = result ? truncateLines(result.content, expanded ? 100 : 8) : null;
+
+  // Process result content - strip line numbers for Read tool
+  const processedContent = result ? (isRead ? stripLineNumbers(result.content) : result.content) : "";
 
   // Extract starting line number from Edit result (format: "   42→content")
   const getStartLine = () => {
@@ -387,94 +454,56 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
   const startLine = getStartLine();
 
   const toolColors: Record<string, string> = {
-    Edit: "text-amber-600 dark:text-sol-orange",
-    Write: "text-amber-600 dark:text-sol-orange",
-    Read: "text-blue-600 dark:text-sol-blue",
-    Bash: "text-green-600 dark:text-sol-green",
-    Glob: "text-violet-600 dark:text-sol-violet",
-    Grep: "text-violet-600 dark:text-sol-violet",
-    Task: "text-cyan-600 dark:text-sol-cyan",
-    TodoWrite: "text-pink-600 dark:text-sol-magenta",
+    Edit: "text-sol-orange/80",
+    Write: "text-sol-orange/80",
+    Read: "text-sol-blue/80",
+    Bash: "text-sol-green/80",
+    Glob: "text-sol-violet/80",
+    Grep: "text-sol-violet/80",
+    Task: "text-sol-cyan/80",
+    TodoWrite: "text-sol-magenta/80",
   };
 
-  const bulletColors: Record<string, string> = {
-    Edit: "bg-amber-500",
-    Write: "bg-amber-500",
-    Read: "bg-blue-500",
-    Bash: "bg-green-500",
-    Glob: "bg-violet-500",
-    Grep: "bg-violet-500",
-    Task: "bg-cyan-500",
-    TodoWrite: "bg-pink-500",
-  };
-
-  const toolColor = toolColors[tool.name] || "text-sol-text-muted";
-  const bulletColor = bulletColors[tool.name] || "bg-sol-text-muted";
+  const toolColor = toolColors[tool.name] || "text-sol-text-dim";
 
   return (
-    <div className="my-1">
+    <div className="my-0.5">
       <div
-        className="flex items-start gap-2 cursor-pointer group py-0.5"
+        className="flex items-center gap-1.5 cursor-pointer group text-xs"
         onClick={() => setExpanded(!expanded)}
       >
-        <span className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${bulletColor}`} />
-        <span className={`font-mono text-sm font-medium ${toolColor}`}>
-          {tool.name}
-        </span>
+        <span className={`font-mono ${toolColor}`}>{tool.name}</span>
         {summary && (
-          <span className="text-sol-text-muted text-sm font-mono truncate">
-            {summary}
-          </span>
+          <span className="text-sol-text-muted font-mono truncate">{summary}</span>
         )}
         {resultSummary && (
-          <span className="text-sol-text-dim text-sm font-mono ml-auto flex-shrink-0">
+          <span className={`font-mono ${result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"}`}>
             {resultSummary}
           </span>
         )}
       </div>
 
-      {isEdit && !expanded && !!parsedInput.old_string && !!parsedInput.new_string && (
-        <div className="ml-3.5 mt-1 rounded overflow-hidden" style={{ backgroundColor: '#002b36' }}>
-          <DiffView
-            oldStr={String(parsedInput.old_string)}
-            newStr={String(parsedInput.new_string)}
-            startLine={startLine}
-          />
-        </div>
-      )}
-
       {expanded && (
-        <div className="ml-3.5 mt-1 space-y-2">
-          <div className="rounded p-2" style={{ backgroundColor: '#002b36' }}>
-            {isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
-              <DiffView
-                oldStr={String(parsedInput.old_string)}
-                newStr={String(parsedInput.new_string)}
-                startLine={startLine}
-              />
-            ) : (
-              <pre className="text-sm font-mono whitespace-pre-wrap overflow-x-auto" style={{ color: '#93a1a1' }}>
-                {JSON.stringify(parsedInput, null, 2)}
+        <div className="mt-1 rounded overflow-hidden border border-sol-border/30" style={{ backgroundColor: '#002b36' }}>
+          {isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
+            <DiffView
+              oldStr={String(parsedInput.old_string)}
+              newStr={String(parsedInput.new_string)}
+              startLine={startLine}
+            />
+          ) : processedContent ? (
+            <div className="max-h-80 overflow-auto">
+              {language && (
+                <div className="text-[10px] px-2 py-1 border-b border-sol-border/20" style={{ color: '#586e75' }}>
+                  {language}
+                </div>
+              )}
+              <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : ""}`} style={result?.is_error ? {} : { color: '#93a1a1' }}>
+                {processedContent}
               </pre>
-            )}
-          </div>
-        </div>
-      )}
-
-      {result && resultTruncated && resultExpanded && !isEdit && (
-        <div className={`ml-3.5 mt-1 rounded p-2 ${result.is_error ? "bg-red-900/20" : ""}`} style={result.is_error ? {} : { backgroundColor: '#002b36' }}>
-          <pre className={`text-sm font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
-            result.is_error ? "text-red-400" : ""
-          }`} style={result.is_error ? {} : { color: '#93a1a1' }}>
-            {resultTruncated.text}
-          </pre>
-          {resultTruncated.truncated && (
-            <button
-              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-              className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1"
-            >
-              {expanded ? "show less" : `+${resultTruncated.totalLines - 8} more lines`}
-            </button>
+            </div>
+          ) : (
+            <div className="p-2 text-xs text-sol-text-dim">No content</div>
           )}
         </div>
       )}
@@ -593,7 +622,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
 
   return (
     <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-sol-text-dim">
-      <span className="text-sol-text-dim">{formatTimestamp(timestamp)}</span>
+      <span className="text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       <span className="px-1.5 py-0.5 rounded bg-sol-bg-alt/50 text-sol-text-muted font-mono text-[10px]">
         {cmdType || "status"}
       </span>
@@ -630,7 +659,13 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName }: { co
       <div className="flex items-center gap-2 mb-2">
         <UserIcon />
         <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
-        <a href={`#msg-${messageId}`} className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors">{formatTimestamp(timestamp)}</a>
+        <a
+          href={`#msg-${messageId}`}
+          className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
+          title={formatFullTimestamp(timestamp)}
+        >
+          {formatRelativeTime(timestamp)}
+        </a>
       </div>
       <div className={`text-sol-text text-sm pl-8 ${collapsed ? "line-clamp-2" : "whitespace-pre-wrap"}`}>
         {truncated}{wasTruncated && "..."}
@@ -693,8 +728,12 @@ function AssistantBlock({
     }
   };
 
+  // Only show Claude header for messages with actual content (not just tool calls)
+  const showHeader = hasContent || hasThinking;
+  const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
+
   return (
-    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"} relative`}>
+    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-2" : onlyToolCalls ? "mb-1" : "mb-6"} relative`}>
       {hasContent && (
         <button
           onClick={handleCopy}
@@ -707,16 +746,25 @@ function AssistantBlock({
           </svg>
         </button>
       )}
-      <div className="flex items-center gap-2 mb-2">
-        <ClaudeIcon />
-        <span className="text-sol-text-secondary text-xs font-medium">Claude</span>
-        <a href={`#msg-${messageId}`} className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors">{formatTimestamp(timestamp)}</a>
-        {collapsed && hasToolCalls && (
-          <span className="text-sol-text-dim text-xs">[{toolCalls!.length} tool{toolCalls!.length > 1 ? "s" : ""}]</span>
-        )}
-      </div>
 
-      <div className="pl-8">
+      {showHeader && (
+        <div className="flex items-center gap-2 mb-2">
+          <ClaudeIcon />
+          <span className="text-sol-text-secondary text-xs font-medium">Claude</span>
+          <a
+            href={`#msg-${messageId}`}
+            className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
+            title={formatFullTimestamp(timestamp)}
+          >
+            {formatRelativeTime(timestamp)}
+          </a>
+          {collapsed && hasToolCalls && (
+            <span className="text-sol-text-dim text-xs">[{toolCalls!.length} tool{toolCalls!.length > 1 ? "s" : ""}]</span>
+          )}
+        </div>
+      )}
+
+      <div className={showHeader ? "pl-8" : "pl-0"}>
         {!collapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
 
         {!collapsed && hasThinking && <ThinkingBlock content={thinking!} />}
@@ -737,7 +785,7 @@ function AssistantBlock({
         ))}
 
         {hasContent && (
-          <div className={`text-sol-text-secondary ${collapsed ? "text-sm line-clamp-2" : "prose prose-invert prose-sm max-w-none"}`}>
+          <div className={`text-sol-text ${collapsed ? "text-sm line-clamp-2" : "prose prose-invert prose-sm max-w-none"}`}>
             {collapsed ? (
               <span>{truncatedContent}{wasTruncated && "..."}</span>
             ) : (
@@ -772,57 +820,9 @@ function AssistantBlock({
 }
 
 function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[]; toolName?: string }) {
-  const isAgentOutput = toolName === "AgentOutputTool";
-  const isTodoWrite = toolName === "TodoWrite";
-  const isEdit = toolName === "Edit" || toolName === "Write";
-  const [expanded, setExpanded] = useState(false);
-  const [showContent, setShowContent] = useState(!isAgentOutput);
-
-  // Don't show result for TodoWrite or Edit - already rendered in the tool block
-  if (!toolResults.length || isTodoWrite || isEdit) return null;
-
-  const result = toolResults[0];
-  const truncated = truncateLines(result.content, expanded ? 50 : 8);
-
-  return (
-    <div className="mb-3 pl-8">
-      <div className="border-l-2 border-sol-border pl-3">
-        <div
-          className="flex items-center gap-2 cursor-pointer group"
-          onClick={() => isAgentOutput ? setShowContent(!showContent) : setExpanded(!expanded)}
-        >
-          <span className="font-mono text-xs font-medium text-sol-text-dim">
-            {toolName || "Result"}
-          </span>
-          {!showContent && (
-            <span className="text-sol-text-dim text-[10px]">
-              ({truncated.totalLines} lines)
-            </span>
-          )}
-          <span className="text-sol-text-dim text-[10px] ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
-            {isAgentOutput ? (showContent ? "hide" : "show") : (expanded ? "collapse" : "expand")}
-          </span>
-        </div>
-        {showContent && (
-          <div className={`mt-2 rounded p-2 ${result.is_error ? "bg-sol-red/20" : "bg-sol-bg-alt/30"}`}>
-            <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
-              result.is_error ? "text-sol-red" : "text-sol-text-muted"
-            }`}>
-              {truncated.text}
-            </pre>
-            {truncated.truncated && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-                className="text-[10px] text-sol-text-dim hover:text-sol-text-muted mt-1"
-              >
-                {expanded ? "show less" : `+${truncated.totalLines - 8} more lines`}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  // Don't render separate result messages - results are shown inline with tool calls
+  // This component was showing duplicate content with the 1→ line number format
+  return null;
 }
 
 function SystemBlock({ content, subtype }: { content: string; subtype?: string }) {
@@ -963,11 +963,13 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
-export function ConversationView({ conversation, backHref, backLabel = "Back", headerExtra }: ConversationViewProps) {
+export function ConversationView({ conversation, backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder }: ConversationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [diffExpanded, setDiffExpanded] = useState(false);
+  const prevScrollHeightRef = useRef<number>(0);
+  const shouldRestoreScrollRef = useRef(false);
 
   const messages = conversation?.messages || [];
 
@@ -1054,11 +1056,32 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
       const { scrollTop, scrollHeight, clientHeight } = container;
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
       setUserScrolled(!isNearBottom);
+
+      // Load older messages when near top (within 300px)
+      if (scrollTop < 300 && hasMoreAbove && !isLoadingOlder && onLoadOlder) {
+        prevScrollHeightRef.current = scrollHeight;
+        shouldRestoreScrollRef.current = true;
+        onLoadOlder();
+      }
     };
 
     container.addEventListener("scroll", handleScroll);
     return () => container.removeEventListener("scroll", handleScroll);
-  }, []);
+  }, [hasMoreAbove, isLoadingOlder, onLoadOlder]);
+
+  // Restore scroll position after loading older messages
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !shouldRestoreScrollRef.current) return;
+
+    // After messages are prepended, adjust scroll to maintain position
+    const newScrollHeight = container.scrollHeight;
+    const scrollDiff = newScrollHeight - prevScrollHeightRef.current;
+    if (scrollDiff > 0) {
+      container.scrollTop += scrollDiff;
+    }
+    shouldRestoreScrollRef.current = false;
+  }, [messages.length]);
 
   useEffect(() => {
     if (!userScrolled && messages.length > 0) {
@@ -1288,6 +1311,18 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
               position: "relative",
             }}
           >
+            {/* Loading indicator at top */}
+            {isLoadingOlder && (
+              <div className="sticky top-0 z-10 flex justify-center py-2">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs">
+                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Loading older messages...
+                </div>
+              </div>
+            )}
             {virtualizer.getVirtualItems().map((virtualItem) => {
               const msg = messages[virtualItem.index];
               return (

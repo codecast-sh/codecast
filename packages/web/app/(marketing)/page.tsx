@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { CopyInstallButton } from "@/components/copy-install-button";
+import { InstallTabs } from "@/components/install-tabs";
 
 export default function LandingPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -46,20 +46,16 @@ export default function LandingPage() {
       <section className="max-w-6xl mx-auto px-6 pt-20 pb-16">
         <div className="max-w-3xl">
           <h1 className="font-serif text-6xl font-bold text-black leading-[1.1] mb-6">
-            Share your AI coding sessions with your team
+            Share your AI coding sessions
           </h1>
           <p className="text-xl text-black/70 leading-relaxed mb-8 font-sans">
-            Codecast syncs Claude Code conversations automatically. See what
-            your team built, learn from their approach, build on their progress.
+            Codecast syncs <b>Claude Code</b> conversations automatically. Monitor your sessions in real-time, on any device.
+            Share your session with a link.
+            Add your team, learn from their approach, build on their progress.
           </p>
 
-          <div className="bg-black/5 border border-black/10 rounded-lg p-6 mb-8 font-mono text-sm">
-            <div className="flex items-start justify-between gap-4">
-              <code className="text-black">
-                curl -fsSL codecast.sh/install | sh
-              </code>
-              <CopyInstallButton />
-            </div>
+          <div className="mb-8">
+            <InstallTabs />
           </div>
 
           <div className="flex gap-3">

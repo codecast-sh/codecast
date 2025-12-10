@@ -13,10 +13,10 @@ if ($arch -ne "x64") {
     exit 1
 }
 
-$repo = "codecast-sh/codecast"
+$downloadHost = "https://dl.codecast.sh"
 $binaryName = "codecast-windows-x64.exe"
 $installDir = "$env:LOCALAPPDATA\codecast"
-$downloadUrl = "https://github.com/$repo/releases/latest/download/$binaryName"
+$downloadUrl = "$downloadHost/$binaryName"
 
 Write-Host "Platform: windows-$arch"
 Write-Host "Install directory: $installDir"

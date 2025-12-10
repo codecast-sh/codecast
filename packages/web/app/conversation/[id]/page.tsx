@@ -1,5 +1,5 @@
 "use client";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -7,6 +7,7 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
 import { toast } from "sonner";
+import { useConversationMessages } from "../../../hooks/useConversationMessages";
 
 export default function ConversationPage() {
   const params = useParams();
@@ -14,9 +15,7 @@ export default function ConversationPage() {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [showShareCopied, setShowShareCopied] = useState(false);
 
-  const conversation = useQuery(api.conversations.getConversation, {
-    conversation_id: id as Id<"conversations">,
-  });
+  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useConversationMessages(id);
 
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const setPrivacy = useMutation(api.conversations.setPrivacy);
@@ -115,6 +114,9 @@ export default function ConversationPage() {
         backHref="/dashboard"
         backLabel="Back"
         headerExtra={shareControls}
+        hasMoreAbove={hasMoreAbove}
+        isLoadingOlder={isLoadingOlder}
+        onLoadOlder={loadOlder}
       />
     </AuthGuard>
   );
