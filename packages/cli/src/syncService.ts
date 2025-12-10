@@ -45,17 +45,20 @@ export interface CreateConversationParams {
 export class SyncService {
   private client: ConvexHttpClient;
   private userId?: string;
+  private apiToken?: string;
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
-    if (config.authToken) {
-      this.client.setAuth(config.authToken);
-    }
     this.userId = config.userId;
+    this.apiToken = config.authToken;
   }
 
   setUserId(userId: string): void {
     this.userId = userId;
+  }
+
+  setApiToken(token: string): void {
+    this.apiToken = token;
   }
 
   async createConversation(params: CreateConversationParams): Promise<string> {
@@ -82,13 +85,10 @@ export class SyncService {
         git_diff: gitInfo?.diff,
         git_diff_staged: gitInfo?.diffStaged,
         git_root: gitInfo?.root,
+        api_token: this.apiToken,
       }
     );
     return result as string;
-  }
-
-  setAuth(token: string): void {
-    this.client.setAuth(token);
   }
 
   async addMessage(params: {
@@ -143,6 +143,7 @@ export class SyncService {
         images,
         subtype: params.subtype,
         timestamp: params.timestamp,
+        api_token: this.apiToken,
       }
     );
     return messageId as string;
@@ -160,6 +161,7 @@ export class SyncService {
       user_id: this.userId,
       file_path_hash: filePathHash,
       last_position: params.byteOffset,
+      api_token: this.apiToken,
     });
   }
 
@@ -173,19 +175,17 @@ export class SyncService {
       {
         user_id: this.userId,
         file_path_hash: filePathHash,
+        api_token: this.apiToken,
       }
     );
     return position ?? 0;
   }
 
   async updateTitle(conversationId: string, title: string): Promise<void> {
-    if (!this.userId) {
-      throw new Error("userId required for updateTitle");
-    }
     await this.client.mutation("conversations:updateTitle" as any, {
       conversation_id: conversationId,
       title,
-      user_id: this.userId,
+      api_token: this.apiToken,
     });
   }
 }

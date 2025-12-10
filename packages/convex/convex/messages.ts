@@ -2,6 +2,27 @@ import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { checkRateLimit, MESSAGE_LIMIT } from "./rateLimit";
+import { verifyApiToken } from "./apiTokens";
+import { Id } from "./_generated/dataModel";
+
+async function getAuthenticatedUserId(
+  ctx: { db: any },
+  apiToken?: string
+): Promise<Id<"users"> | null> {
+  const sessionUserId = await getAuthUserId(ctx as any);
+  if (sessionUserId) {
+    return sessionUserId;
+  }
+
+  if (apiToken) {
+    const result = await verifyApiToken(ctx, apiToken);
+    if (result) {
+      return result.userId;
+    }
+  }
+
+  return null;
+}
 
 export const addMessage = mutation({
   args: {
@@ -31,22 +52,20 @@ export const addMessage = mutation({
     }))),
     subtype: v.optional(v.string()),
     timestamp: v.optional(v.number()),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) {
       throw new Error("Conversation not found");
     }
-    if (authUserId) {
-      if (conversation.user_id.toString() !== authUserId.toString()) {
-        throw new Error("Unauthorized: can only add messages to your own conversations");
-      }
-    } else {
-      const user = await ctx.db.get(conversation.user_id);
-      if (!user) {
-        throw new Error("Unauthorized: conversation owner not found");
-      }
+
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Unauthorized: valid session or API token required");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Unauthorized: can only add messages to your own conversations");
     }
 
     await checkRateLimit(ctx, conversation.user_id, "addMessage", MESSAGE_LIMIT);

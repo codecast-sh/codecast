@@ -3,6 +3,26 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
+import { verifyApiToken } from "./apiTokens";
+
+async function getAuthenticatedUserId(
+  ctx: { db: any },
+  apiToken?: string
+): Promise<Id<"users"> | null> {
+  const sessionUserId = await getAuthUserId(ctx as any);
+  if (sessionUserId) {
+    return sessionUserId;
+  }
+
+  if (apiToken) {
+    const result = await verifyApiToken(ctx, apiToken);
+    if (result) {
+      return result.userId;
+    }
+  }
+
+  return null;
+}
 
 function generateShareToken(): string {
   return crypto.randomUUID();
@@ -37,17 +57,15 @@ export const createConversation = mutation({
     git_diff: v.optional(v.string()),
     git_diff_staged: v.optional(v.string()),
     git_root: v.optional(v.string()),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
-    if (authUserId && authUserId.toString() !== args.user_id.toString()) {
-      throw new Error("Unauthorized: can only create conversations for yourself");
-    }
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      const user = await ctx.db.get(args.user_id);
-      if (!user) {
-        throw new Error("Unauthorized: user not found");
-      }
+      throw new Error("Unauthorized: valid session or API token required");
+    }
+    if (authUserId.toString() !== args.user_id.toString()) {
+      throw new Error("Unauthorized: can only create conversations for yourself");
     }
 
     await checkRateLimit(ctx, args.user_id, "createConversation");
@@ -150,7 +168,8 @@ export const getConversation = query({
       .withIndex("by_conversation_id", (q) =>
         q.eq("conversation_id", args.conversation_id)
       )
-      .collect();
+      .order("desc")
+      .take(100);
     const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
 
     const user = await ctx.db.get(conversation.user_id);
@@ -756,7 +775,7 @@ export const updateTitle = mutation({
   args: {
     conversation_id: v.id("conversations"),
     title: v.string(),
-    user_id: v.optional(v.id("users")),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
@@ -764,12 +783,21 @@ export const updateTitle = mutation({
       throw new Error("Conversation not found");
     }
 
-    // Allow if session auth matches owner, or if user_id arg matches owner
-    const authUserId = await getAuthUserId(ctx);
-    const isSessionOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isArgOwner = args.user_id && conversation.user_id.toString() === args.user_id.toString();
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Unauthorized: valid session or API token required");
+    }
 
-    if (!isSessionOwner && !isArgOwner) {
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    let isTeamMember = false;
+    if (!isOwner && conversation.team_id) {
+      const authUser = await ctx.db.get(authUserId);
+      if (authUser?.team_id && authUser.team_id.toString() === conversation.team_id.toString()) {
+        isTeamMember = true;
+      }
+    }
+
+    if (!isOwner && !isTeamMember) {
       throw new Error("Unauthorized: can only update your own conversations");
     }
 

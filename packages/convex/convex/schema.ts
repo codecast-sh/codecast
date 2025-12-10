@@ -118,4 +118,15 @@ export default defineSchema({
     request_count: v.number(),
   })
     .index("by_user_endpoint", ["user_id", "endpoint"]),
+
+  api_tokens: defineTable({
+    user_id: v.id("users"),
+    token_hash: v.string(),
+    name: v.string(),
+    created_at: v.number(),
+    last_used_at: v.number(),
+    expires_at: v.optional(v.number()),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_token_hash", ["token_hash"]),
 });

@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 
 export interface AuthResult {
   userId: string;
+  apiToken: string;
   nonce: string;
 }
 
@@ -73,6 +74,7 @@ export class AuthServer {
               if (this.resolve) {
                 this.resolve({
                   userId: data.userId,
+                  apiToken: data.apiToken,
                   nonce: data.nonce,
                 });
               }

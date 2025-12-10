@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import open from "open";
-import * as readline from "readline";
 import * as fs from "fs";
 import * as path from "path";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
-import { ConvexHttpClient } from "convex/browser";
 import { AuthServer } from "./authServer.js";
 
 const program = new Command();
@@ -125,22 +123,30 @@ function showStatus(): void {
   const pid = getDaemonPid();
   const config = readConfig();
 
+  console.log("");
+
+  if (config?.auth_token) {
+    console.log("  Auth: authenticated");
+    if (config.user_id) {
+      console.log(`  User: ${config.user_id}`);
+    }
+  } else {
+    console.log("  Auth: not authenticated");
+    console.log("  Run 'codecast auth' to authenticate");
+  }
+
+  console.log("");
+
   if (pid) {
-    console.log(`Daemon: running (PID: ${pid})`);
+    console.log(`  Daemon: running (PID: ${pid})`);
   } else {
-    console.log("Daemon: stopped");
+    console.log("  Daemon: stopped");
+    if (config?.auth_token) {
+      console.log("  Run 'codecast start' to start syncing");
+    }
   }
 
-  console.log(`Config: ${CONFIG_FILE}`);
-
-  if (config) {
-    const authStatus = config.auth_token ? "configured" : "not configured";
-    console.log(`Auth: ${authStatus}`);
-    console.log(`Web URL: ${config.web_url || WEB_URL}`);
-  } else {
-    console.log("Auth: not configured");
-    console.log(`Web URL: ${WEB_URL}`);
-  }
+  console.log("");
 }
 
 function stopDaemon(): void {
@@ -208,91 +214,35 @@ function startDaemon(): void {
   }
 }
 
-async function promptForEnter(message: string): Promise<void> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(message, () => {
-      rl.close();
-      resolve();
-    });
-  });
+function getDeviceName(): string {
+  const os = process.platform;
+  const hostname = require("os").hostname();
+  const platformName = os === "darwin" ? "macOS" : os === "win32" ? "Windows" : "Linux";
+  return `${platformName} - ${hostname}`;
 }
 
-async function promptForInput(message: string): Promise<string> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(message, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
-
-async function promptForChoice(message: string, choices: string[]): Promise<number> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  console.log(message);
-  choices.forEach((choice, index) => {
-    console.log(`  ${index + 1}. ${choice}`);
-  });
-
-  return new Promise((resolve) => {
-    const askQuestion = () => {
-      rl.question(`Enter choice (1-${choices.length}): `, (answer) => {
-        const choice = parseInt(answer.trim(), 10);
-        if (choice >= 1 && choice <= choices.length) {
-          rl.close();
-          resolve(choice - 1);
-        } else {
-          console.log(`Please enter a number between 1 and ${choices.length}`);
-          askQuestion();
-        }
-      });
-    };
-    askQuestion();
-  });
-}
-
-async function runSetup(): Promise<void> {
-  console.log("\n=== codecast Setup ===\n");
+async function runAuth(): Promise<void> {
+  console.log("\n=== codecast Authentication ===\n");
 
   const agents = detectAgents();
   if (agents.length > 0) {
     console.log("Detected coding agents:");
     for (const agent of agents) {
       console.log(`  - ${agent.name}`);
-      console.log(`    Config: ${agent.configPath}`);
-      console.log(`    History: ${agent.historyPath}`);
     }
     console.log();
-  } else {
-    console.log("No coding agents detected.");
-    console.log("Supported agents: Claude Code (~/.claude), Codex CLI (~/.codex), Cursor (~/.cursor)\n");
   }
 
-  console.log("To use codecast, you need to authenticate with your account.");
-  console.log("This will open a browser window where you can sign in or create an account.\n");
+  console.log("Opening browser for authentication...\n");
 
   const authServer = new AuthServer({ port: 42424, timeout: 300000 });
   const nonce = authServer.getNonce();
   const port = authServer.getPort();
+  const deviceName = encodeURIComponent(getDeviceName());
 
-  const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}`;
+  const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}`;
 
-  console.log("Opening browser for authentication...");
-  console.log("Waiting for authentication (timeout: 5 minutes)...\n");
-  console.log(`If the browser doesn't open, visit this URL manually:\n  ${cliUrl}\n`);
+  console.log(`If the browser doesn't open, visit:\n  ${cliUrl}\n`);
 
   try {
     await open(cliUrl);
@@ -300,128 +250,39 @@ async function runSetup(): Promise<void> {
     console.log("Could not open browser automatically.");
   }
 
-  const authPromise = authServer.start();
-  const authResult = await authPromise;
+  console.log("Waiting for authentication...\n");
 
-  if (!authResult) {
-    console.log("\nAuthentication timed out or failed.");
-    console.log("\nFalling back to manual setup...");
-    console.log(`Please visit: ${WEB_URL}/cli\n`);
+  const authResult = await authServer.start();
 
-    await promptForEnter("Press Enter after you've signed in...");
-
-    console.log("\nPlease copy your User ID from the CLI Setup page in your browser.");
-    const userId = await promptForInput("User ID: ");
-
-    if (!userId) {
-      console.error("User ID is required. Please run setup again.");
-      process.exit(1);
-    }
-
-    const existingConfig = readConfig();
-    const config: Config = {
-      ...existingConfig,
-      user_id: userId,
-      convex_url: CONVEX_URL,
-      web_url: WEB_URL,
-    };
-
-    await continueTeamSetup(config);
-    return;
+  if (!authResult || !authResult.apiToken) {
+    console.error("\nAuthentication failed or timed out.");
+    console.error("Please try again with 'codecast auth'");
+    process.exit(1);
   }
-
-  console.log("\nAuthenticated successfully!");
 
   const existingConfig = readConfig();
   const config: Config = {
     ...existingConfig,
     user_id: authResult.userId,
+    auth_token: authResult.apiToken,
     convex_url: CONVEX_URL,
     web_url: WEB_URL,
   };
 
-  await continueTeamSetup(config);
-}
-
-async function continueTeamSetup(config: Config): Promise<void> {
-  const client = new ConvexHttpClient(config.convex_url || CONVEX_URL);
-
-  console.log("\n=== Team Setup ===\n");
-
-  const teamChoice = await promptForChoice(
-    "Would you like to create a new team or join an existing one?",
-    ["Create new team", "Join existing team"]
-  );
-
-  if (teamChoice === 0) {
-    const teamName = await promptForInput("\nTeam name: ");
-    if (!teamName) {
-      console.error("Team name is required.");
-      process.exit(1);
-    }
-
-    console.log("\nCreating team...");
-    try {
-      const teamId = await client.mutation("teams:createTeam" as any, {
-        name: teamName,
-        user_id: config.user_id,
-      });
-      config.team_id = teamId;
-
-      const team = await client.query("teams:getTeam" as any, {
-        team_id: teamId,
-      });
-      const inviteCode = team?.invite_code || "N/A";
-
-      console.log("\nTeam created successfully!");
-      console.log(`Team name: ${teamName}`);
-      console.log(`Team ID: ${teamId}`);
-      console.log(`\nInvite code: ${inviteCode}`);
-      console.log("Share this code with your teammates so they can join your team.");
-    } catch (err) {
-      console.error(`Failed to create team: ${err}`);
-      process.exit(1);
-    }
-  } else {
-    const inviteCode = await promptForInput("\nEnter invite code: ");
-    if (!inviteCode) {
-      console.error("Invite code is required.");
-      process.exit(1);
-    }
-
-    console.log("\nJoining team...");
-    try {
-      const teamId = await client.mutation("teams:joinTeam" as any, {
-        invite_code: inviteCode.toUpperCase(),
-        user_id: config.user_id,
-      });
-      config.team_id = teamId;
-
-      const team = await client.query("teams:getTeam" as any, {
-        team_id: teamId,
-      });
-      const teamName = team?.name || "Unknown";
-
-      console.log("\nSuccessfully joined team!");
-      console.log(`Team name: ${teamName}`);
-      console.log(`Team ID: ${teamId}`);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes("Invalid invite code")) {
-        console.error("\nInvalid invite code. Please check the code and try again.");
-      } else {
-        console.error(`Failed to join team: ${err}`);
-      }
-      process.exit(1);
-    }
-  }
-
   writeConfig(config);
 
-  console.log(`\nConfiguration stored in: ${CONFIG_FILE}`);
-  console.log("\nNext steps:");
-  console.log("  1. Run 'codecast start' to begin syncing conversations");
-  console.log("  2. Visit the web dashboard to view your synced conversations\n");
+  console.log("Authenticated successfully!\n");
+  console.log(`User ID: ${config.user_id}`);
+  console.log(`API Token: ${maskToken(config.auth_token || "")}`);
+  console.log(`Config: ${CONFIG_FILE}\n`);
+
+  if (!isDaemonRunning()) {
+    console.log("Starting daemon...");
+    startDaemon();
+  }
+
+  console.log("\nStatus:");
+  showStatus();
 }
 
 program
@@ -430,10 +291,10 @@ program
   .version("0.1.0");
 
 program
-  .command("setup")
-  .description("Configure codecast with authentication and team settings")
+  .command("auth")
+  .description("Authenticate with codecast (opens browser)")
   .action(async () => {
-    await runSetup();
+    await runAuth();
   });
 
 program

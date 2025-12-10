@@ -1,8 +1,8 @@
 "use client";
 
-import { useConvexAuth, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, Suspense, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 
 function CliAuthContent() {
@@ -11,13 +11,16 @@ function CliAuthContent() {
     api.users.getCurrentUser,
     isAuthenticated ? {} : "skip"
   );
+  const createToken = useMutation(api.apiTokens.createToken);
   const searchParams = useSearchParams();
   const router = useRouter();
   const [status, setStatus] = useState<"waiting" | "sending" | "success" | "error">("waiting");
   const [errorMessage, setErrorMessage] = useState<string>("");
+  const hasStartedAuth = useRef(false);
 
   const nonce = searchParams.get("nonce");
   const port = searchParams.get("port");
+  const device = searchParams.get("device") || "CLI Device";
 
   useEffect(() => {
     if (isLoading) {
@@ -26,7 +29,7 @@ function CliAuthContent() {
 
     if (!isAuthenticated) {
       const returnUrl = encodeURIComponent(
-        `/auth/cli?nonce=${nonce}&port=${port}`
+        `/auth/cli?nonce=${nonce}&port=${port}&device=${encodeURIComponent(device)}`
       );
       router.push(`/signup?return_to=${returnUrl}`);
       return;
@@ -42,10 +45,17 @@ function CliAuthContent() {
       return;
     }
 
+    if (hasStartedAuth.current) {
+      return;
+    }
+    hasStartedAuth.current = true;
+
     const sendAuth = async () => {
       setStatus("sending");
 
       try {
+        const tokenResult = await createToken({ name: decodeURIComponent(device) });
+
         const response = await fetch(`http://localhost:${port}/callback`, {
           method: "POST",
           headers: {
@@ -53,6 +63,7 @@ function CliAuthContent() {
           },
           body: JSON.stringify({
             userId: currentUser._id,
+            apiToken: tokenResult.token,
             nonce: nonce,
           }),
         });
@@ -72,7 +83,7 @@ function CliAuthContent() {
     };
 
     sendAuth();
-  }, [isAuthenticated, isLoading, currentUser, nonce, port, router]);
+  }, [isAuthenticated, isLoading, currentUser, nonce, port, device, router, createToken]);
 
   if (isLoading || !isAuthenticated) {
     return (
@@ -97,7 +108,7 @@ function CliAuthContent() {
               Authenticating CLI
             </h1>
             <p className="text-sol-text-muted">
-              Sending authentication to your terminal...
+              Generating API token for {decodeURIComponent(device)}...
             </p>
           </div>
         </div>
@@ -130,7 +141,7 @@ function CliAuthContent() {
             </h1>
             <p className="text-sol-text-muted mb-4">{errorMessage}</p>
             <p className="text-sol-text-muted text-sm">
-              Please return to your terminal and try the manual setup option.
+              Please return to your terminal and try again with &apos;codecast auth&apos;
             </p>
           </div>
         </div>
@@ -158,13 +169,16 @@ function CliAuthContent() {
             </svg>
           </div>
           <h1 className="text-2xl font-semibold text-white mb-2">
-            Authenticated Successfully!
+            CLI Authenticated
           </h1>
-          <p className="text-sol-text-muted mb-4">
-            You can now return to your terminal to continue setup.
+          <p className="text-sol-text-muted mb-2">
+            Your terminal is now connected to codecast.
+          </p>
+          <p className="text-sol-text-dim text-sm mb-6">
+            Device: {decodeURIComponent(device)}
           </p>
           <p className="text-sol-text-muted text-sm">
-            This window can be closed.
+            You can close this window and return to your terminal.
           </p>
         </div>
       </div>
