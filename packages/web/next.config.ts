@@ -1,9 +1,5 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  outputFileTracingIncludes: {
-    "/download/[binary]": ["./binaries/**/*"],
-  },
-};
+const nextConfig: NextConfig = {};
 
 export default nextConfig;

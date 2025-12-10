@@ -4,7 +4,7 @@ builder = "nixpacks"
 [build.nixpacks]
 pkgs = ["nodejs_22"]
 installCmd = "npm install -g bun && bun install"
-buildCmd = "cd packages/convex && bun run build 2>/dev/null || true && cd ../web && bun run build && cd ../cli && chmod +x scripts/build-binaries.sh && ./scripts/build-binaries.sh"
+buildCmd = "cd packages/convex && bun run build 2>/dev/null || true && cd ../web && bun run build"
 
 [deploy]
 startCommand = "cd packages/web && bun run start"

@@ -45,3 +45,7 @@ coverage/
 # Daemon files
 daemon.pid
 daemon.log
+
+# Built binaries
+packages/web/public/binaries/
+packages/web/binaries/
