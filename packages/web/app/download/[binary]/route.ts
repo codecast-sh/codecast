@@ -18,7 +18,7 @@ export async function GET(
 
   if (binary === "debug") {
     const cwd = process.cwd();
-    const binariesPath = join(cwd, "public", "binaries");
+    const binariesPath = join(cwd, "binaries");
     let files: string[] = [];
     try {
       files = await readdir(binariesPath);
@@ -33,7 +33,7 @@ export async function GET(
   }
 
   try {
-    const binaryPath = join(process.cwd(), "public", "binaries", binary);
+    const binaryPath = join(process.cwd(), "binaries", binary);
     const binaryData = await readFile(binaryPath);
 
     return new NextResponse(binaryData, {
