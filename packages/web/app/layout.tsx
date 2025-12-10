@@ -19,13 +19,23 @@ export const metadata: Metadata = {
   description: "Sync coding agent conversations to a shared database",
 };
 
+const themeScript = `
+  (function() {
+    var theme = localStorage.getItem('codecast-theme') || 'light';
+    document.documentElement.classList.add(theme);
+  })();
+`;
+
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className={`${jetbrainsMono.variable} ${fraunces.variable} ${jetbrainsMono.className}`}>
         <Providers>{children}</Providers>
       </body>

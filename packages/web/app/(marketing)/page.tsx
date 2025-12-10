@@ -1,9 +1,26 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
+import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CopyInstallButton } from "@/components/copy-install-button";
 
 export default function LandingPage() {
+  const { isAuthenticated, isLoading } = useConvexAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      router.replace("/dashboard");
+    }
+  }, [isAuthenticated, isLoading, router]);
+
+  if (isLoading || isAuthenticated) {
+    return null;
+  }
   return (
     <main className="min-h-screen bg-[#f5f5f0] w-full">
       <nav className="border-b border-black/5 bg-[#f5f5f0]/80 backdrop-blur-sm">

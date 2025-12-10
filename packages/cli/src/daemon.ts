@@ -4,7 +4,7 @@ import * as path from "path";
 import { execSync } from "child_process";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
-import { parseSessionFile, extractSlug, extractParentUuid, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, extractSlug, extractParentUuid, extractSummaryTitle, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { SyncService } from "./syncService.js";
@@ -23,6 +23,10 @@ interface Config {
 }
 
 interface ConversationCache {
+  [sessionId: string]: string;
+}
+
+interface TitleCache {
   [sessionId: string]: string;
 }
 
@@ -83,6 +87,23 @@ function saveConversationCache(cache: ConversationCache): void {
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
 }
 
+function readTitleCache(): TitleCache {
+  const cacheFile = path.join(CONFIG_DIR, "titles.json");
+  if (!fs.existsSync(cacheFile)) {
+    return {};
+  }
+  try {
+    return JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as TitleCache;
+  } catch {
+    return {};
+  }
+}
+
+function saveTitleCache(cache: TitleCache): void {
+  const cacheFile = path.join(CONFIG_DIR, "titles.json");
+  fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
+}
+
 interface GitInfo {
   commitHash?: string;
   branch?: string;
@@ -138,7 +159,8 @@ async function processSessionFile(
   userId: string,
   conversationCache: ConversationCache,
   retryQueue: RetryQueue,
-  pendingMessages: PendingMessages
+  pendingMessages: PendingMessages,
+  titleCache: TitleCache
 ): Promise<void> {
   const lastPosition = getPosition(filePath);
   const stats = fs.statSync(filePath);
@@ -155,12 +177,29 @@ async function processSessionFile(
   const newContent = buffer.toString("utf-8");
   const messages = parseSessionFile(newContent);
 
+  let conversationId = conversationCache[sessionId];
+
+  // Check for summary title even if no new messages
+  if (conversationId) {
+    const fullContent = fs.readFileSync(filePath, "utf-8");
+    const summaryTitle = extractSummaryTitle(fullContent);
+    if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
+      try {
+        await syncService.updateTitle(conversationId, summaryTitle);
+        titleCache[sessionId] = summaryTitle;
+        saveTitleCache(titleCache);
+        log(`Updated title for session ${sessionId}: ${summaryTitle}`);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log(`Failed to update title: ${errMsg}`);
+      }
+    }
+  }
+
   if (messages.length === 0) {
     setPosition(filePath, stats.size);
     return;
   }
-
-  let conversationId = conversationCache[sessionId];
 
   if (!conversationId) {
     try {
@@ -558,9 +597,11 @@ async function main(): Promise<void> {
 
   const syncService = new SyncService({
     convexUrl,
+    authToken: config.auth_token,
     userId: config.user_id,
   });
   const conversationCache = readConversationCache();
+  const titleCache = readTitleCache();
   const pendingMessages: PendingMessages = {};
 
   const retryQueue = new RetryQueue({
@@ -664,7 +705,8 @@ async function main(): Promise<void> {
           config.user_id!,
           conversationCache,
           retryQueue,
-          pendingMessages
+          pendingMessages,
+          titleCache
         );
       });
       fileSyncs.set(filePath, sync);

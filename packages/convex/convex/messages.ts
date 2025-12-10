@@ -1,7 +1,7 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { checkRateLimit } from "./rateLimit";
+import { checkRateLimit, MESSAGE_LIMIT } from "./rateLimit";
 
 export const addMessage = mutation({
   args: {
@@ -49,7 +49,7 @@ export const addMessage = mutation({
       }
     }
 
-    await checkRateLimit(ctx, conversation.user_id, "addMessage");
+    await checkRateLimit(ctx, conversation.user_id, "addMessage", MESSAGE_LIMIT);
 
     const msgTimestamp = args.timestamp || Date.now();
 

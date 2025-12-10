@@ -61,19 +61,14 @@ export default function LoginPage() {
     <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-semibold text-white tracking-tight">
+          <h1 className="text-3xl font-semibold text-sol-text tracking-tight">
             codecast
           </h1>
           <p className="text-sol-text-muted mt-2 text-sm">
-            Sign in to access your conversations
+            {reason === "session_expired"
+              ? "Your session expired. Please sign in again."
+              : "Sign in to access your conversations"}
           </p>
-          {reason === "session_expired" && (
-            <div className="mt-4 p-3 bg-amber-900/30 border border-amber-700/50 rounded-lg">
-              <p className="text-amber-300 text-sm">
-                Your session has expired. Please sign in again.
-              </p>
-            </div>
-          )}
         </div>
 
         <form
@@ -96,7 +91,7 @@ export default function LoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-white placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
                 placeholder="you@example.com"
               />
             </div>
@@ -124,7 +119,7 @@ export default function LoginPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-white placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
                 placeholder="Enter your password"
               />
             </div>

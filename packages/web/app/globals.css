@@ -3,6 +3,19 @@
 @tailwind utilities;
 
 :root {
+  /* Default to Light - Solarized Light */
+  --sol-bg: #FBF5E2;
+  --sol-bg-alt: #eee8d5;
+  --sol-bg-highlight: #e4ddc8;
+  --sol-border: #93a1a1;
+  --sol-text: #002b36;
+  --sol-text-secondary: #073642;
+  --sol-text-muted: #586e75;
+  --sol-text-dim: #657b83;
+  --sol-text-muted0: #839496;
+}
+
+.dark {
   /* Solarized Dark */
   --sol-bg: #002b36;
   --sol-bg-alt: #073642;
@@ -11,19 +24,6 @@
   --sol-text: #fdf6e3;
   --sol-text-secondary: #eee8d5;
   --sol-text-muted: #93a1a1;
-  --sol-text-dim: #657b83;
-  --sol-text-muted0: #839496;
-}
-
-.light {
-  /* Solarized Light */
-  --sol-bg: #FBF5E2;
-  --sol-bg-alt: #eee8d5;
-  --sol-bg-highlight: #e4ddc8;
-  --sol-border: #93a1a1;
-  --sol-text: #002b36;
-  --sol-text-secondary: #073642;
-  --sol-text-muted: #586e75;
   --sol-text-dim: #657b83;
   --sol-text-muted0: #839496;
 }

@@ -170,6 +170,17 @@ export function extractParentUuid(content: string): string | undefined {
   return undefined;
 }
 
+export function extractSummaryTitle(content: string): string | undefined {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const entry = parseSessionLine(line);
+    if (entry?.type === "summary" && entry?.summary) {
+      return entry.summary;
+    }
+  }
+  return undefined;
+}
+
 export interface ClaudeMessage {
   type: "human" | "assistant" | "tool_use" | "tool_result";
   message?: string;

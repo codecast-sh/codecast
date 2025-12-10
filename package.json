@@ -14,5 +14,8 @@
   "devDependencies": {
     "turbo": "^2.3.0",
     "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "convex": "^1.30.0"
   }
 }

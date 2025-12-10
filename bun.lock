@@ -3,6 +3,9 @@
   "workspaces": {
     "": {
       "name": "code-chat-sync",
+      "dependencies": {
+        "convex": "^1.30.0",
+      },
       "devDependencies": {
         "turbo": "^2.3.0",
         "typescript": "^5.7.2",

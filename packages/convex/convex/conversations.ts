@@ -144,6 +144,7 @@ export const getConversation = query({
         return null;
       }
     }
+
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q) =>
@@ -151,6 +152,7 @@ export const getConversation = query({
       )
       .collect();
     const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
+
     const user = await ctx.db.get(conversation.user_id);
 
     let firstUserMessage = "";
@@ -170,50 +172,134 @@ export const getConversation = query({
       ? formatSlugAsTitle(conversation.slug)
       : conversation.title || firstUserMessage || `Session ${conversation.session_id.slice(0, 8)}`;
 
-    let parentConversationId: string | null = null;
-    if (conversation.parent_message_uuid) {
-      console.log("Looking for parent with message_uuid:", conversation.parent_message_uuid);
-      const parentMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
-        .first();
-      console.log("Found parent message:", parentMsg?._id, "in conversation:", parentMsg?.conversation_id);
-      if (parentMsg) {
-        parentConversationId = parentMsg.conversation_id;
-      }
-    }
-
-    const messageUuids = sortedMessages
-      .filter((m) => m.message_uuid)
-      .map((m) => m.message_uuid!);
-
-    const childConversations: Array<{ _id: string; title: string }> = [];
-    if (messageUuids.length > 0) {
-      const allConversations = await ctx.db.query("conversations").collect();
-      for (const conv of allConversations) {
-        if (conv.parent_message_uuid && messageUuids.includes(conv.parent_message_uuid)) {
-          const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
-          childConversations.push({ _id: conv._id, title: childTitle });
-        }
-      }
-    }
-
-    const childConversationMap: Record<string, string> = {};
-    for (const child of childConversations) {
-      const childConv = await ctx.db.get(child._id as Id<"conversations">);
-      if (childConv && "parent_message_uuid" in childConv && childConv.parent_message_uuid) {
-        childConversationMap[childConv.parent_message_uuid] = child._id;
-      }
-    }
-
     return {
       ...conversation,
       title,
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
-      parent_conversation_id: parentConversationId,
+    };
+  },
+});
+
+export const getConversationMessages = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    after_timestamp: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return null;
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      if (conversation.is_private) {
+        return null;
+      }
+      const authUser = await ctx.db.get(authUserId);
+      if (
+        !authUser ||
+        !authUser.team_id ||
+        authUser.team_id.toString() !== conversation.team_id?.toString()
+      ) {
+        return null;
+      }
+    }
+
+    let messagesQuery = ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      );
+
+    if (args.after_timestamp) {
+      messagesQuery = messagesQuery.filter((q) =>
+        q.gt(q.field("timestamp"), args.after_timestamp!)
+      );
+    }
+
+    const messages = await messagesQuery.collect();
+    const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
+
+    const childConversations: Array<{ _id: string; title: string }> = [];
+    const childConversationMap: Record<string, string> = {};
+
+    const childConvs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
+      .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
+      .take(100);
+
+    const messageUuids = new Set(sortedMessages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
+    for (const conv of childConvs) {
+      if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
+        const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+        childConversations.push({ _id: conv._id, title: childTitle });
+        childConversationMap[conv.parent_message_uuid] = conv._id;
+      }
+    }
+
+    return {
+      messages: sortedMessages,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
+      last_timestamp: sortedMessages.length > 0 ? sortedMessages[sortedMessages.length - 1].timestamp : null,
+    };
+  },
+});
+
+export const getMoreMessages = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    cursor: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return null;
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      if (conversation.is_private) {
+        return null;
+      }
+      const authUser = await ctx.db.get(authUserId);
+      if (
+        !authUser ||
+        !authUser.team_id ||
+        authUser.team_id.toString() !== conversation.team_id?.toString()
+      ) {
+        return null;
+      }
+    }
+
+    const limit = args.limit ?? 100;
+    const allMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("asc")
+      .filter((q) => q.gt(q.field("timestamp"), args.cursor))
+      .take(limit + 1);
+
+    const hasMore = allMessages.length > limit;
+    const messages = hasMore ? allMessages.slice(0, limit) : allMessages;
+    const nextCursor = hasMore ? messages[messages.length - 1].timestamp : null;
+
+    return {
+      messages,
+      has_more: hasMore,
+      next_cursor: nextCursor,
     };
   },
 });
@@ -450,15 +536,13 @@ export const generateShareLink = mutation({
     if (!isOwner) {
       throw new Error("Unauthorized: can only share your own conversations");
     }
-    if (conversation.is_private) {
-      throw new Error("Cannot share private conversations");
-    }
     if (conversation.share_token) {
       return conversation.share_token;
     }
     const shareToken = generateShareToken();
     await ctx.db.patch(args.conversation_id, {
       share_token: shareToken,
+      is_private: false,
     });
     return shareToken;
   },
@@ -664,6 +748,33 @@ export const setPrivacy = mutation({
     }
     await ctx.db.patch(args.conversation_id, {
       is_private: args.is_private,
+    });
+  },
+});
+
+export const updateTitle = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    title: v.string(),
+    user_id: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+
+    // Allow if session auth matches owner, or if user_id arg matches owner
+    const authUserId = await getAuthUserId(ctx);
+    const isSessionOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isArgOwner = args.user_id && conversation.user_id.toString() === args.user_id.toString();
+
+    if (!isSessionOwner && !isArgOwner) {
+      throw new Error("Unauthorized: can only update your own conversations");
+    }
+
+    await ctx.db.patch(args.conversation_id, {
+      title: args.title,
     });
   },
 });

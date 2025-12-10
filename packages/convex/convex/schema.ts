@@ -14,6 +14,7 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
     daemon_last_seen: v.optional(v.number()),
+    theme: v.optional(v.union(v.literal("dark"), v.literal("light"))),
   }).index("email", ["email"]),
 
   teams: defineTable({

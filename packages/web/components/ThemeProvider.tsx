@@ -1,6 +1,8 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, ReactNode, useRef } from "react";
+import { useQuery, useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 
 type Theme = "dark" | "light";
 
@@ -11,17 +13,33 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+function getInitialTheme(): Theme {
+  if (typeof window === "undefined") return "light";
+  const stored = localStorage.getItem("codecast-theme") as Theme | null;
+  return stored || "light";
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("light");
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [mounted, setMounted] = useState(false);
+  const serverThemeApplied = useRef(false);
+
+  const user = useQuery(api.users.getCurrentUser);
+  const setThemeMutation = useMutation(api.users.setTheme);
 
   useEffect(() => {
     setMounted(true);
-    const stored = localStorage.getItem("codecast-theme") as Theme | null;
-    if (stored) {
-      setTheme(stored);
-    }
   }, []);
+
+  useEffect(() => {
+    if (user !== undefined && !serverThemeApplied.current) {
+      serverThemeApplied.current = true;
+      if (user?.theme) {
+        setTheme(user.theme);
+        localStorage.setItem("codecast-theme", user.theme);
+      }
+    }
+  }, [user]);
 
   useEffect(() => {
     if (mounted) {
@@ -32,11 +50,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme, mounted]);
 
   const toggleTheme = () => {
-    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+    const newTheme = theme === "dark" ? "light" : "dark";
+    setTheme(newTheme);
+    if (user) {
+      setThemeMutation({ theme: newTheme });
+    }
   };
 
   if (!mounted) {
-    return <div className="min-h-screen bg-sol-base02" />;
+    return null;
   }
 
   return (

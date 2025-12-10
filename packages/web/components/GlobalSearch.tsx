@@ -7,34 +7,50 @@ import { useRouter } from "next/navigation";
 function highlightMatch(text: string, query: string): React.ReactNode {
   if (!query.trim()) return text;
 
-  const lowerText = text.toLowerCase();
-  const lowerQuery = query.toLowerCase();
-  const index = lowerText.indexOf(lowerQuery);
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return text;
 
-  if (index === -1) return text;
+  const pattern = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const regex = new RegExp(`(${pattern})`, "gi");
+  const parts = text.split(regex);
 
-  const before = text.slice(0, index);
-  const match = text.slice(index, index + query.length);
-  const after = text.slice(index + query.length);
+  if (parts.length === 1) return text;
 
   return (
     <>
-      {before}
-      <mark className="bg-amber-400/30 text-amber-200 rounded px-0.5">{match}</mark>
-      {after}
+      {parts.map((part, i) => {
+        const isMatch = words.some((w) => part.toLowerCase() === w);
+        return isMatch ? (
+          <mark
+            key={i}
+            className="bg-amber-500/40 dark:bg-amber-400/30 text-amber-900 dark:text-amber-200 rounded px-0.5"
+          >
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        );
+      })}
     </>
   );
 }
 
 function getSnippet(content: string, query: string, maxLen = 120): string {
   const lowerContent = content.toLowerCase();
-  const lowerQuery = query.toLowerCase();
-  const index = lowerContent.indexOf(lowerQuery);
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
 
-  if (index === -1) return content.slice(0, maxLen);
+  let bestIndex = -1;
+  for (const word of words) {
+    const idx = lowerContent.indexOf(word);
+    if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) {
+      bestIndex = idx;
+    }
+  }
 
-  const start = Math.max(0, index - 40);
-  const end = Math.min(content.length, index + query.length + 80);
+  if (bestIndex === -1) return content.slice(0, maxLen);
+
+  const start = Math.max(0, bestIndex - 40);
+  const end = Math.min(content.length, bestIndex + 80);
   let snippet = content.slice(start, end);
 
   if (start > 0) snippet = "..." + snippet;

@@ -3,6 +3,7 @@ import { Id } from "./_generated/dataModel";
 
 const WINDOW_MS = 60 * 1000;
 const WRITE_LIMIT = 30;
+export const MESSAGE_LIMIT = 300;
 
 export class RateLimitError extends Error {
   constructor(message: string) {

@@ -2,6 +2,15 @@ import { ConvexHttpClient } from "convex/browser";
 import { redactSecrets } from "./redact.js";
 import { hashPath } from "./hash.js";
 
+const MAX_CONTENT_SIZE = 100_000;
+const MAX_TOOL_RESULT_SIZE = 50_000;
+const MAX_TOTAL_MESSAGE_SIZE = 900_000;
+
+function truncate(str: string, maxLen: number): string {
+  if (str.length <= maxLen) return str;
+  return str.slice(0, maxLen) + `\n... [truncated ${str.length - maxLen} chars]`;
+}
+
 export type AgentType = "claude_code" | "codex" | "cursor";
 
 export interface SyncConfig {
@@ -94,8 +103,10 @@ export class SyncService {
     images?: Array<{ mediaType: string; data: string }>;
     subtype?: string;
   }): Promise<string> {
-    const redactedContent = redactSecrets(params.content);
-    const redactedThinking = params.thinking ? redactSecrets(params.thinking) : undefined;
+    const redactedContent = truncate(redactSecrets(params.content), MAX_CONTENT_SIZE);
+    const redactedThinking = params.thinking
+      ? truncate(redactSecrets(params.thinking), MAX_CONTENT_SIZE)
+      : undefined;
     const roleMap: Record<string, "user" | "assistant" | "system" | "tool"> = {
       human: "user",
       assistant: "assistant",
@@ -105,19 +116,19 @@ export class SyncService {
     const toolCalls = params.toolCalls?.map(tc => ({
       id: tc.id,
       name: tc.name,
-      input: redactSecrets(JSON.stringify(tc.input)),
+      input: truncate(redactSecrets(JSON.stringify(tc.input)), MAX_TOOL_RESULT_SIZE),
     }));
 
     const toolResults = params.toolResults?.map(tr => ({
       tool_use_id: tr.toolUseId,
-      content: redactSecrets(tr.content),
+      content: truncate(redactSecrets(tr.content), MAX_TOOL_RESULT_SIZE),
       is_error: tr.isError,
     }));
 
-    const images = params.images?.map(img => ({
-      media_type: img.mediaType,
-      data: img.data,
-    }));
+    const images = params.images?.filter(img => {
+      const size = img.data.length;
+      return size < MAX_TOOL_RESULT_SIZE;
+    }).slice(0, 5);
 
     const messageId = await this.client.mutation(
       "messages:addMessage" as any,
@@ -165,5 +176,16 @@ export class SyncService {
       }
     );
     return position ?? 0;
+  }
+
+  async updateTitle(conversationId: string, title: string): Promise<void> {
+    if (!this.userId) {
+      throw new Error("userId required for updateTitle");
+    }
+    await this.client.mutation("conversations:updateTitle" as any, {
+      conversation_id: conversationId,
+      title,
+      user_id: this.userId,
+    });
   }
 }

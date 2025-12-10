@@ -110,25 +110,120 @@ function truncateLines(text: string, maxLines: number): { text: string; truncate
   };
 }
 
-function DiffView({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath: string }) {
-  const oldLines = oldStr.split("\n");
-  const newLines = newStr.split("\n");
+function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'added' | 'removed' | 'context'; content: string }> {
+  // Simple LCS-based diff
+  const m = oldLines.length;
+  const n = newLines.length;
+
+  // Build LCS table
+  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldLines[i - 1] === newLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  // Backtrack to build diff
+  const result: Array<{ type: 'added' | 'removed' | 'context'; content: string }> = [];
+  let i = m, j = n;
+  const temp: typeof result = [];
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      temp.push({ type: 'context', content: oldLines[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      temp.push({ type: 'added', content: newLines[j - 1] });
+      j--;
+    } else {
+      temp.push({ type: 'removed', content: oldLines[i - 1] });
+      i--;
+    }
+  }
+
+  return temp.reverse();
+}
+
+function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1 }: { oldStr: string; newStr: string; contextLines?: number; startLine?: number }) {
+  const oldLines = oldStr.split('\n');
+  const newLines = newStr.split('\n');
+  const changes = computeDiff(oldLines, newLines);
+
+  // Build flat list with line numbers
+  type DiffLine = { type: 'added' | 'removed' | 'context'; content: string; oldNum?: number; newNum?: number };
+  const allLines: DiffLine[] = [];
+  let oldLineNum = startLine;
+  let newLineNum = startLine;
+
+  for (const change of changes) {
+    if (change.type === 'added') {
+      allLines.push({ ...change, newNum: newLineNum++ });
+    } else if (change.type === 'removed') {
+      allLines.push({ ...change, oldNum: oldLineNum++ });
+    } else {
+      allLines.push({ ...change, oldNum: oldLineNum++, newNum: newLineNum++ });
+    }
+  }
+
+  // Mark which context lines to show (within N lines of a change)
+  const showLine = new Set<number>();
+  for (let i = 0; i < allLines.length; i++) {
+    if (allLines[i].type !== 'context') {
+      for (let j = Math.max(0, i - contextLines); j <= Math.min(allLines.length - 1, i + contextLines); j++) {
+        showLine.add(j);
+      }
+    }
+  }
+
+  // Build output with separators for gaps
+  const output: Array<DiffLine | 'separator'> = [];
+  let lastShown = -1;
+  for (let i = 0; i < allLines.length; i++) {
+    if (showLine.has(i)) {
+      if (lastShown >= 0 && i > lastShown + 1) {
+        output.push('separator');
+      }
+      output.push(allLines[i]);
+      lastShown = i;
+    }
+  }
+
+  const maxLineNum = Math.max(oldLineNum, newLineNum);
+  const lineNumWidth = String(maxLineNum).length;
 
   return (
-    <div className="font-mono text-xs">
-      <div className="text-sol-text-muted mb-2 text-[11px]">{filePath}</div>
-      <div className="space-y-0">
-        {oldLines.map((line, i) => (
-          <div key={`old-${i}`} className="bg-sol-red/20 text-sol-red px-2 py-0.5">
-            <span className="text-sol-red mr-2">-</span>{line}
+    <div className="font-mono text-xs p-2 overflow-x-auto">
+      {output.map((item, i) => {
+        if (item === 'separator') {
+          return (
+            <div key={`sep-${i}`} className="text-center py-0.5" style={{ color: '#586e75' }}>
+              ···
+            </div>
+          );
+        }
+        const { type, content, oldNum, newNum } = item;
+        // Show line number in single column: old for removed, new for added/context
+        const lineNum = type === 'removed' ? oldNum : newNum;
+        const lineNumStr = lineNum !== undefined ? String(lineNum).padStart(lineNumWidth) : ' '.repeat(lineNumWidth);
+        const prefix = type === 'added' ? '+' : type === 'removed' ? '-' : ' ';
+        const style = type === 'added'
+          ? { backgroundColor: 'rgba(133, 153, 0, 0.15)', color: '#859900' }
+          : type === 'removed'
+          ? { backgroundColor: 'rgba(220, 50, 47, 0.15)', color: '#dc322f' }
+          : { color: '#586e75' };
+
+        return (
+          <div key={i} style={style} className="whitespace-pre">
+            <span className="select-none" style={{ color: '#586e75' }}>{lineNumStr}</span>
+            <span className="select-none"> {prefix} </span>
+            {content}
           </div>
-        ))}
-        {newLines.map((line, i) => (
-          <div key={`new-${i}`} className="bg-sol-green/20 text-sol-green px-2 py-0.5">
-            <span className="text-sol-green mr-2">+</span>{line}
-          </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
@@ -283,6 +378,14 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
   const resultSummary = getResultSummary();
   const resultTruncated = result ? truncateLines(result.content, expanded ? 100 : 8) : null;
 
+  // Extract starting line number from Edit result (format: "   42→content")
+  const getStartLine = () => {
+    if (!isEdit || !result) return 1;
+    const match = result.content.match(/^\s*(\d+)→/m);
+    return match ? parseInt(match[1], 10) : 1;
+  };
+  const startLine = getStartLine();
+
   const toolColors: Record<string, string> = {
     Edit: "text-amber-600 dark:text-sol-orange",
     Write: "text-amber-600 dark:text-sol-orange",
@@ -335,7 +438,7 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
           <DiffView
             oldStr={String(parsedInput.old_string)}
             newStr={String(parsedInput.new_string)}
-            filePath={String(parsedInput.file_path || "")}
+            startLine={startLine}
           />
         </div>
       )}
@@ -347,7 +450,7 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
               <DiffView
                 oldStr={String(parsedInput.old_string)}
                 newStr={String(parsedInput.new_string)}
-                filePath={String(parsedInput.file_path || "")}
+                startLine={startLine}
               />
             ) : (
               <pre className="text-sm font-mono whitespace-pre-wrap overflow-x-auto" style={{ color: '#93a1a1' }}>
@@ -358,7 +461,7 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
         </div>
       )}
 
-      {result && resultTruncated && resultExpanded && (
+      {result && resultTruncated && resultExpanded && !isEdit && (
         <div className={`ml-3.5 mt-1 rounded p-2 ${result.is_error ? "bg-red-900/20" : ""}`} style={result.is_error ? {} : { backgroundColor: '#002b36' }}>
           <pre className={`text-sm font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
             result.is_error ? "text-red-400" : ""
@@ -671,11 +774,12 @@ function AssistantBlock({
 function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[]; toolName?: string }) {
   const isAgentOutput = toolName === "AgentOutputTool";
   const isTodoWrite = toolName === "TodoWrite";
+  const isEdit = toolName === "Edit" || toolName === "Write";
   const [expanded, setExpanded] = useState(false);
   const [showContent, setShowContent] = useState(!isAgentOutput);
 
-  // Don't show result for TodoWrite - it's already rendered in the tool block
-  if (!toolResults.length || isTodoWrite) return null;
+  // Don't show result for TodoWrite or Edit - already rendered in the tool block
+  if (!toolResults.length || isTodoWrite || isEdit) return null;
 
   const result = toolResults[0];
   const truncated = truncateLines(result.content, expanded ? 50 : 8);
@@ -741,29 +845,24 @@ function SystemBlock({ content, subtype }: { content: string; subtype?: string }
   );
 }
 
-function GitInfoSection({
+function GitBranchBadge({
   gitBranch,
   gitStatus,
-  gitDiff,
-  gitDiffStaged,
   gitRemoteUrl,
+  hasDiff,
+  diffExpanded,
+  onToggleDiff,
 }: {
-  gitBranch?: string | null;
+  gitBranch: string;
   gitStatus?: string | null;
-  gitDiff?: string | null;
-  gitDiffStaged?: string | null;
   gitRemoteUrl?: string | null;
+  hasDiff: boolean;
+  diffExpanded: boolean;
+  onToggleDiff: () => void;
 }) {
-  const [diffExpanded, setDiffExpanded] = useState(false);
-
-  if (!gitBranch && !gitStatus && !gitDiff && !gitDiffStaged) {
-    return null;
-  }
-
   const isClean = gitStatus === "(clean)" || gitStatus === "clean" || !gitStatus;
-  const hasDiff = (gitDiff && gitDiff.trim().length > 0) || (gitDiffStaged && gitDiffStaged.trim().length > 0);
 
-  const githubUrl = gitRemoteUrl && gitBranch
+  const githubUrl = gitRemoteUrl
     ? (() => {
         const match = gitRemoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
         if (match) {
@@ -774,66 +873,92 @@ function GitInfoSection({
     : null;
 
   return (
-    <div className="text-xs text-sol-text-muted flex items-center gap-3 flex-wrap">
-      {gitBranch && (
-        <div className="flex items-center gap-1.5">
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
-          </svg>
-          {githubUrl ? (
-            <a
-              href={githubUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sol-blue hover:text-sol-blue underline underline-offset-2"
-            >
-              {gitBranch}
-            </a>
-          ) : (
-            <span className="font-mono">{gitBranch}</span>
-          )}
-        </div>
-      )}
-
-      <div className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-        isClean
-          ? "bg-sol-green/20 text-sol-green border border-sol-green/50"
-          : "bg-sol-orange/20 text-sol-orange border border-sol-orange/50"
-      }`}>
-        {isClean ? "clean" : "uncommitted changes"}
-      </div>
-
-      {hasDiff && (
-        <button
-          onClick={() => setDiffExpanded(!diffExpanded)}
-          className="text-sol-text-dim hover:text-sol-text-muted transition-colors text-[10px]"
+    <button
+      onClick={() => hasDiff && onToggleDiff()}
+      className={`font-mono text-[11px] text-sol-text-muted flex-shrink-0 ${hasDiff ? "cursor-pointer hover:text-sol-text-secondary" : "cursor-default"}`}
+      title={hasDiff ? (diffExpanded ? "hide diff" : "show diff") : undefined}
+    >
+      (
+      {githubUrl ? (
+        <a
+          href={githubUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sol-green hover:underline"
+          onClick={(e) => e.stopPropagation()}
         >
-          {diffExpanded ? "hide diff" : "show diff"}
-        </button>
+          {gitBranch}
+        </a>
+      ) : (
+        <span className="text-sol-green">{gitBranch}</span>
       )}
+      {!isClean && <span className="text-sol-orange ml-0.5">*</span>})
+    </button>
+  );
+}
 
-      {diffExpanded && hasDiff && (
-        <div className="w-full mt-2 bg-sol-bg-alt/50 rounded border border-sol-border p-3 max-h-96 overflow-y-auto">
-          {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
-            <div className="mb-3">
-              <div className="text-sol-green text-[10px] font-semibold mb-1">Staged Changes</div>
-              <pre className="text-[11px] font-mono whitespace-pre-wrap text-sol-text-muted">
-                {gitDiffStaged}
-              </pre>
+function GitDiffPanel({
+  gitDiff,
+  gitDiffStaged,
+}: {
+  gitDiff?: string | null;
+  gitDiffStaged?: string | null;
+}) {
+  return (
+    <div className="border-t border-sol-border bg-sol-bg-alt/30">
+      <div className="max-w-4xl mx-auto px-4 py-2 max-h-96 overflow-y-auto">
+        {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
+          <div className="mb-2">
+            <div className="text-sol-green text-[10px] font-semibold mb-1">Staged</div>
+            <div className="rounded overflow-hidden" style={{ backgroundColor: '#002b36' }}>
+              <GitDiffView diff={gitDiffStaged} />
             </div>
-          )}
-          {gitDiff && gitDiff.trim().length > 0 && (
-            <div>
-              {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
-                <div className="text-sol-orange text-[10px] font-semibold mb-1">Unstaged Changes</div>
-              )}
-              <pre className="text-[11px] font-mono whitespace-pre-wrap text-sol-text-muted">
-                {gitDiff}
-              </pre>
+          </div>
+        )}
+        {gitDiff && gitDiff.trim().length > 0 && (
+          <div>
+            {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
+              <div className="text-sol-orange text-[10px] font-semibold mb-1">Unstaged</div>
+            )}
+            <div className="rounded overflow-hidden" style={{ backgroundColor: '#002b36' }}>
+              <GitDiffView diff={gitDiff} />
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GitDiffView({ diff }: { diff: string }) {
+  const lines = diff.split('\n');
+
+  return (
+    <div className="font-mono text-xs p-2 overflow-x-auto">
+      {lines.map((line, i) => {
+        let style: React.CSSProperties = { color: '#586e75' };
+        let prefix = ' ';
+
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          style = { backgroundColor: 'rgba(133, 153, 0, 0.15)', color: '#859900' };
+          prefix = '+';
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          style = { backgroundColor: 'rgba(220, 50, 47, 0.15)', color: '#dc322f' };
+          prefix = '-';
+        } else if (line.startsWith('@@')) {
+          style = { color: '#268bd2' };
+          prefix = '@';
+        } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
+          style = { color: '#93a1a1', fontWeight: 500 };
+          prefix = ' ';
+        }
+
+        return (
+          <div key={i} style={style} className="whitespace-pre">
+            {line}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -842,6 +967,7 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [diffExpanded, setDiffExpanded] = useState(false);
 
   const messages = conversation?.messages || [];
 
@@ -1060,12 +1186,13 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
             {conversation && (
               <>
                 {conversation.git_branch && (
-                  <GitInfoSection
+                  <GitBranchBadge
                     gitBranch={conversation.git_branch}
                     gitStatus={conversation.git_status}
-                    gitDiff={conversation.git_diff}
-                    gitDiffStaged={conversation.git_diff_staged}
                     gitRemoteUrl={conversation.git_remote_url}
+                    hasDiff={!!(conversation.git_diff?.trim() || conversation.git_diff_staged?.trim())}
+                    diffExpanded={diffExpanded}
+                    onToggleDiff={() => setDiffExpanded(!diffExpanded)}
                   />
                 )}
 
@@ -1138,6 +1265,13 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
           </div>
         </div>
       </header>
+
+      {diffExpanded && conversation && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
+        <GitDiffPanel
+          gitDiff={conversation.git_diff}
+          gitDiffStaged={conversation.git_diff_staged}
+        />
+      )}
 
       <div ref={containerRef} className="flex-1 overflow-y-auto">
         {!conversation ? (
