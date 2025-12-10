@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
@@ -42,6 +42,28 @@ export const createToken = mutation({
     });
 
     return { token, userId };
+  },
+});
+
+export const createTokenForUser = mutation({
+  args: {
+    user_id: v.id("users"),
+    name: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const token = generateToken();
+    const tokenHash = await hashToken(token);
+    const now = Date.now();
+
+    await ctx.db.insert("api_tokens", {
+      user_id: args.user_id,
+      token_hash: tokenHash,
+      name: args.name,
+      created_at: now,
+      last_used_at: now,
+    });
+
+    return { token, userId: args.user_id };
   },
 });
 

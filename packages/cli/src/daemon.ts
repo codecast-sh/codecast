@@ -781,7 +781,13 @@ async function main(): Promise<void> {
   await new Promise(() => {});
 }
 
-main().catch((err) => {
-  log(`Fatal error: ${err.message}`);
-  process.exit(1);
-});
+export async function runDaemon(): Promise<void> {
+  return main();
+}
+
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("daemon.js")) {
+  main().catch((err) => {
+    log(`Fatal error: ${err.message}`);
+    process.exit(1);
+  });
+}

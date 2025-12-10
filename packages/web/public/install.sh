@@ -94,8 +94,4 @@ fi
 
 echo "✓ codecast installed successfully!"
 echo ""
-echo "Running setup..."
-echo ""
-
-# Run setup
-codecast setup
+echo "Run 'codecast auth' to authenticate and start syncing."

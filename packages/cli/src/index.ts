@@ -197,11 +197,23 @@ function startDaemon(): void {
     return;
   }
 
-  const daemonPath = path.join(__dirname, "daemon.js");
-  const child = spawn(process.execPath, [daemonPath], {
-    detached: true,
-    stdio: "ignore",
-  });
+  // Try to find daemon.js first (for development), fall back to spawning self with _daemon
+  const daemonJsPath = path.join(__dirname, "daemon.js");
+  let child;
+
+  if (fs.existsSync(daemonJsPath)) {
+    // Development mode: use separate daemon.js file
+    child = spawn(process.execPath, [daemonJsPath], {
+      detached: true,
+      stdio: "ignore",
+    });
+  } else {
+    // Binary mode: spawn self with _daemon command
+    child = spawn(process.argv[0], ["_daemon"], {
+      detached: true,
+      stdio: "ignore",
+    });
+  }
 
   child.unref();
 
@@ -420,6 +432,14 @@ program
   .option("--remove", "Remove private flag from conversation")
   .action((sessionId, options) => {
     console.log("Private command - not yet implemented");
+  });
+
+program
+  .command("_daemon", { hidden: true })
+  .description("Run as daemon (internal use)")
+  .action(async () => {
+    const { runDaemon } = await import("./daemon.js");
+    await runDaemon();
   });
 
 program.parse();
