@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build binaries
+        run: |
+          cd packages/cli
+          chmod +x scripts/build-binaries.sh
+          ./scripts/build-binaries.sh
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/web/public/binaries/*
+          generate_release_notes: true

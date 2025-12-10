@@ -1,8 +1,7 @@
 #!/bin/sh
 set -e
 
-# Codecast installer script
-# Usage: curl -fsSL codecast.sh/install | sh
+REPO="codecast-sh/codecast"
 
 echo "Installing codecast..."
 
@@ -10,7 +9,6 @@ echo "Installing codecast..."
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
-# Map to our binary names
 case "${OS}" in
   Darwin*)
     PLATFORM="darwin"
@@ -39,24 +37,17 @@ case "${ARCH}" in
     ;;
 esac
 
-# For MVP, only support macOS ARM
-if [ "${PLATFORM}" != "darwin" ] || [ "${ARCH_NAME}" != "arm64" ]; then
-  echo "Error: Currently only macOS ARM (Apple Silicon) is supported"
-  echo "Detected: ${PLATFORM}-${ARCH_NAME}"
-  exit 1
-fi
-
 BINARY_NAME="codecast-${PLATFORM}-${ARCH_NAME}"
 INSTALL_DIR="${HOME}/.local/bin"
-DOWNLOAD_URL="https://codecast.sh/download/${BINARY_NAME}"
 
 echo "Platform: ${PLATFORM}-${ARCH_NAME}"
 echo "Install directory: ${INSTALL_DIR}"
 
-# Create install directory if it doesn't exist
+# Get latest release download URL
+DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}"
+
 mkdir -p "${INSTALL_DIR}"
 
-# Download binary
 echo "Downloading codecast..."
 TEMP_FILE="$(mktemp)"
 if command -v curl >/dev/null 2>&1; then
@@ -68,30 +59,25 @@ else
   exit 1
 fi
 
-# Install binary
 echo "Installing to ${INSTALL_DIR}/codecast..."
 mv "${TEMP_FILE}" "${INSTALL_DIR}/codecast"
 chmod +x "${INSTALL_DIR}/codecast"
 
-# Check if in PATH
 if ! echo "${PATH}" | grep -q "${INSTALL_DIR}"; then
   echo ""
-  echo "⚠️  ${INSTALL_DIR} is not in your PATH"
+  echo "Warning: ${INSTALL_DIR} is not in your PATH"
   echo "Add this to your shell profile (~/.zshrc or ~/.bashrc):"
   echo "  export PATH=\"\${HOME}/.local/bin:\${PATH}\""
   echo ""
-
-  # Add to PATH for this session
   export PATH="${INSTALL_DIR}:${PATH}"
 fi
 
-# Verify installation
 if ! command -v codecast >/dev/null 2>&1; then
   echo "Error: codecast command not found after installation"
   echo "Try running: export PATH=\"\${HOME}/.local/bin:\${PATH}\""
   exit 1
 fi
 
-echo "✓ codecast installed successfully!"
+echo "codecast installed successfully!"
 echo ""
 echo "Run 'codecast auth' to authenticate and start syncing."
