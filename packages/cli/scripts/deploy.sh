@@ -8,6 +8,7 @@ cd "$(dirname "$0")/.."
 
 R2_BUCKET="codecast"
 R2_ENDPOINT="https://518bafbd08199d43fe9080a12a7ac1b7.r2.cloudflarestorage.com"
+export AWS_DEFAULT_REGION="auto"
 BINARIES_DIR="../web/public/binaries"
 
 VERSION=$(jq -r '.version' package.json)
