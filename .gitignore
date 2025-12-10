@@ -49,3 +49,6 @@ daemon.log
 # Built binaries
 packages/web/public/binaries/
 packages/web/binaries/
+
+# Deploy secrets
+.env.deploy
