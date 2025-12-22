@@ -198,12 +198,18 @@ function startDaemon(): void {
     return;
   }
 
-  // Try to find daemon.js first (for development), fall back to spawning self with _daemon
-  const daemonJsPath = path.join(__dirname, "daemon.js");
   let child;
+  const daemonTsPath = path.join(__dirname, "daemon.ts");
+  const daemonJsPath = path.join(__dirname, "daemon.js");
 
-  if (fs.existsSync(daemonJsPath)) {
-    // Development mode: use separate daemon.js file
+  if (fs.existsSync(daemonTsPath)) {
+    // Dev mode: run daemon.ts with bun
+    child = spawn(process.execPath, [daemonTsPath], {
+      detached: true,
+      stdio: "ignore",
+    });
+  } else if (fs.existsSync(daemonJsPath)) {
+    // Built JS mode: run daemon.js
     child = spawn(process.execPath, [daemonJsPath], {
       detached: true,
       stdio: "ignore",
