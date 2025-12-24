@@ -16,6 +16,7 @@ import type * as conversations from "../conversations.js";
 import type * as health from "../health.js";
 import type * as http from "../http.js";
 import type * as messages from "../messages.js";
+import type * as notifications from "../notifications.js";
 import type * as pendingMessages from "../pendingMessages.js";
 import type * as pull_requests from "../pull_requests.js";
 import type * as rateLimit from "../rateLimit.js";
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   health: typeof health;
   http: typeof http;
   messages: typeof messages;
+  notifications: typeof notifications;
   pendingMessages: typeof pendingMessages;
   pull_requests: typeof pull_requests;
   rateLimit: typeof rateLimit;
