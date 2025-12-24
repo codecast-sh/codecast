@@ -7,5 +7,6 @@
   "ccs-2ao": "tests/e2e/ccs-2ao.test.ts",
   "ccs-mik": "tests/e2e/ccs-mik.test.ts",
   "ccs-2bz": "tests/e2e/ccs-2bz.test.ts",
-  "ccs-ov0": "tests/e2e/ccs-ov0.test.ts"
+  "ccs-ov0": "tests/e2e/ccs-ov0.test.ts",
+  "ccs-69o": "tests/e2e/ccs-69o.test.ts"
 }

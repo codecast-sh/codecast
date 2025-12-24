@@ -26,6 +26,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
     user?.team_id ? { team_id: user.team_id } : "skip"
   );
 
+  const isAdmin = user?.role === "admin";
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg">
       <header className="border-b border-sol-border bg-sol-bg-alt/50 backdrop-blur sticky top-0 z-20">
@@ -45,15 +47,17 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
           <div className="hidden sm:block flex-1 min-w-0">
             <GlobalSearch />
           </div>
-          <div className="hidden md:block flex-shrink-0">
-            <InviteModal
-              trigger={
-                <Button variant="outline" size="sm">
-                  Invite
-                </Button>
-              }
-            />
-          </div>
+          {isAdmin && (
+            <div className="hidden md:block flex-shrink-0">
+              <InviteModal
+                trigger={
+                  <Button variant="outline" size="sm">
+                    Invite
+                  </Button>
+                }
+              />
+            </div>
+          )}
           <div className="flex-shrink-0">
             <ThemeToggle />
           </div>
