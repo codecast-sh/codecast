@@ -25,6 +25,7 @@ export default function SharedConversationPage() {
   return (
     <ConversationView
       conversation={conversation as ConversationData | null | undefined}
+      commits={[]}
       backHref="/"
       backLabel="Home"
       headerExtra={

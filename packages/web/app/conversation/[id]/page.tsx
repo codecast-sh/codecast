@@ -1,5 +1,5 @@
 "use client";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -16,6 +16,9 @@ export default function ConversationPage() {
   const [showShareCopied, setShowShareCopied] = useState(false);
 
   const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useConversationMessages(id);
+  const commits = useQuery(api.commits.getCommitsForConversation, {
+    conversation_id: id as Id<"conversations">,
+  });
 
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const setPrivacy = useMutation(api.conversations.setPrivacy);
@@ -111,6 +114,7 @@ export default function ConversationPage() {
     <AuthGuard>
       <ConversationView
         conversation={conversation as ConversationData | null | undefined}
+        commits={commits || []}
         backHref="/dashboard"
         backLabel="Back"
         headerExtra={shareControls}

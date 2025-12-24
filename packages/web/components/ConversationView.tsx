@@ -11,6 +11,7 @@ import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
+import { CommitCard } from "./CommitCard";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,8 +73,21 @@ export type ConversationData = {
   status?: "active" | "completed";
 };
 
+type Commit = {
+  _id: string;
+  sha: string;
+  message: string;
+  timestamp: number;
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+  author_name: string;
+  author_email: string;
+};
+
 type ConversationViewProps = {
   conversation: ConversationData | null | undefined;
+  commits?: Commit[];
   backHref: string;
   backLabel?: string;
   headerExtra?: React.ReactNode;
@@ -1098,7 +1112,7 @@ function MessageInput({ conversationId }: { conversationId: string }) {
   );
 }
 
-export function ConversationView({ conversation, backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder }: ConversationViewProps) {
+export function ConversationView({ conversation, commits = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder }: ConversationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -1107,6 +1121,19 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
   const shouldRestoreScrollRef = useRef(false);
 
   const messages = conversation?.messages || [];
+
+  // Merge messages and commits into a single timeline
+  type TimelineItem =
+    | { type: 'message'; data: Message; timestamp: number }
+    | { type: 'commit'; data: Commit; timestamp: number };
+
+  const timeline: TimelineItem[] = useMemo(() => {
+    const items: TimelineItem[] = [
+      ...messages.map(msg => ({ type: 'message' as const, data: msg, timestamp: msg.timestamp })),
+      ...commits.map(commit => ({ type: 'commit' as const, data: commit, timestamp: commit.timestamp })),
+    ];
+    return items.sort((a, b) => a.timestamp - b.timestamp);
+  }, [messages, commits]);
 
   const handleCopyAll = async () => {
     if (!conversation || messages.length === 0) {
@@ -1152,12 +1179,17 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
   }, [messages]);
 
   const virtualizer = useVirtualizer({
-    count: messages.length,
+    count: timeline.length,
     getScrollElement: () => containerRef.current,
     estimateSize: (index) => {
-      const msg = messages[index];
-      if (!msg) return 100;
+      const item = timeline[index];
+      if (!item) return 100;
 
+      if (item.type === 'commit') {
+        return 80;
+      }
+
+      const msg = item.data as Message;
       if (collapsed) {
         if (msg.role === "system") return 0;
         if (msg.role === "user" && msg.tool_results) return 0;
@@ -1220,31 +1252,38 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
   }, [messages.length]);
 
   useEffect(() => {
-    if (!userScrolled && messages.length > 0) {
-      virtualizer.scrollToIndex(messages.length - 1, { align: "end", behavior: "smooth" });
+    if (!userScrolled && timeline.length > 0) {
+      virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
     }
-  }, [messages.length, userScrolled, virtualizer]);
+  }, [timeline.length, userScrolled, virtualizer]);
 
   const hasInitialScrolled = useRef(false);
   useEffect(() => {
-    if (messages.length > 0 && !hasInitialScrolled.current && !window.location.hash) {
+    if (timeline.length > 0 && !hasInitialScrolled.current && !window.location.hash) {
       hasInitialScrolled.current = true;
       setTimeout(() => {
-        virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
+        virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
       }, 100);
     }
-  }, [messages.length, virtualizer]);
+  }, [timeline.length, virtualizer]);
 
   useEffect(() => {
-    if (messages.length && window.location.hash) {
+    if (timeline.length && window.location.hash) {
       const targetId = window.location.hash.slice(1);
-      const msgIndex = messages.findIndex(m => `msg-${m._id}` === targetId);
-      if (msgIndex >= 0) {
+      const itemIndex = timeline.findIndex(item => {
+        if (item.type === 'message') {
+          return `msg-${item.data._id}` === targetId;
+        } else if (item.type === 'commit') {
+          return `commit-${item.data.sha}` === targetId;
+        }
+        return false;
+      });
+      if (itemIndex >= 0) {
         setUserScrolled(true);
-        setTimeout(() => virtualizer.scrollToIndex(msgIndex, { align: "center", behavior: "smooth" }), 100);
+        setTimeout(() => virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" }), 100);
       }
     }
-  }, [messages.length, virtualizer]);
+  }, [timeline.length, virtualizer]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1283,7 +1322,25 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
     return map;
   }, [conversation?.messages]);
 
-  const renderMessage = (msg: Message, index: number) => {
+  const renderItem = (item: TimelineItem, index: number) => {
+    if (item.type === 'commit') {
+      const commit = item.data;
+      return (
+        <CommitCard
+          key={commit._id}
+          sha={commit.sha}
+          message={commit.message}
+          timestamp={commit.timestamp}
+          filesChanged={commit.files_changed}
+          insertions={commit.insertions}
+          deletions={commit.deletions}
+          authorName={commit.author_name}
+          authorEmail={commit.author_email}
+        />
+      );
+    }
+
+    const msg = item.data as Message;
     if (msg.role === "system") {
       if (collapsed) return null;
       return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} />;
@@ -1312,7 +1369,12 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
       // Find previous non-tool-result message to determine if this is first in Claude sequence
       let prevNonToolResultIdx = index - 1;
       while (prevNonToolResultIdx >= 0) {
-        const prev = messages[prevNonToolResultIdx];
+        const prevItem = timeline[prevNonToolResultIdx];
+        if (prevItem.type === 'commit') {
+          prevNonToolResultIdx--;
+          continue;
+        }
+        const prev = prevItem.data as Message;
         // Skip user messages that are just tool results
         if (prev.role === "user" && prev.tool_results && prev.tool_results.length > 0) {
           prevNonToolResultIdx--;
@@ -1320,7 +1382,8 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
         }
         break;
       }
-      const prevMsg = prevNonToolResultIdx >= 0 ? messages[prevNonToolResultIdx] : null;
+      const prevItem = prevNonToolResultIdx >= 0 ? timeline[prevNonToolResultIdx] : null;
+      const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
       const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
       return (
         <AssistantBlock
@@ -1449,7 +1512,7 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
       <div ref={containerRef} className="flex-1 overflow-y-auto">
         {!conversation ? (
           <div className="text-sol-text-dim text-center py-8 text-sm">Loading...</div>
-        ) : messages.length === 0 ? (
+        ) : timeline.length === 0 ? (
           <div className="text-sol-text-dim text-center py-8 text-sm">
             No messages in this conversation
           </div>
@@ -1487,7 +1550,7 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
               </div>
             )}
             {virtualizer.getVirtualItems().map((virtualItem) => {
-              const msg = messages[virtualItem.index];
+              const item = timeline[virtualItem.index];
               return (
                 <div
                   key={virtualItem.key}
@@ -1502,7 +1565,7 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
                   }}
                 >
                   <div className={`max-w-4xl mx-auto px-4 ${collapsed ? "py-0.5" : "py-1"}`}>
-                    {renderMessage(msg, virtualItem.index)}
+                    {renderItem(item, virtualItem.index)}
                   </div>
                 </div>
               );
