@@ -17,6 +17,7 @@
     "expo-auth-session": "^7.0.10",
     "expo-constants": "~18.0.12",
     "expo-font": "~14.0.10",
+    "expo-haptics": "~14.0.0",
     "expo-linking": "~8.0.10",
     "expo-local-authentication": "^17.0.8",
     "expo-router": "~6.0.20",

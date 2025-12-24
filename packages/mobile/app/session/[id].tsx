@@ -1,12 +1,13 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Text, View } from '@/components/Themed';
-import { useQuery } from 'convex/react';
+import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState } from 'react';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
 import { atomOneDark } from 'react-syntax-highlighter/styles/hljs';
+import * as Haptics from 'expo-haptics';
 
 type ToolCall = {
   id: string;
@@ -33,6 +34,7 @@ type Message = {
 type ConversationData = {
   _id: string;
   title: string;
+  status: string;
   messages: Message[];
 };
 
@@ -179,6 +181,146 @@ function MessageBubble({ message }: MessageBubbleProps) {
   );
 }
 
+type PendingMessage = {
+  _id: string;
+  conversation_id: string;
+  content: string;
+  status: 'pending' | 'delivered' | 'failed';
+  created_at: number;
+  retry_count: number;
+};
+
+type MessageInputProps = {
+  conversationId: Id<"conversations">;
+  isActive: boolean;
+};
+
+function MessageInput({ conversationId, isActive }: MessageInputProps) {
+  const [message, setMessage] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const retryMessage = useMutation(api.pendingMessages.retryMessage);
+
+  const pendingMessages = useQuery(
+    api.pendingMessages.getPendingMessages,
+    isActive ? {} : "skip"
+  ) as PendingMessage[] | undefined;
+
+  const conversationPendingMessages = pendingMessages?.filter(
+    (msg) => msg.conversation_id === conversationId
+  ) || [];
+
+  if (!isActive) {
+    return null;
+  }
+
+  const handleRetry = async (messageId: Id<"pending_messages">) => {
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await retryMessage({ message_id: messageId });
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (err) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  };
+
+  const handleSend = async () => {
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || isSending) return;
+
+    setIsSending(true);
+    setError(null);
+
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await sendMessage({
+        conversation_id: conversationId,
+        content: trimmedMessage,
+      });
+      setMessage('');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send message');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  return (
+    <View style={styles.messageInputContainer}>
+      {conversationPendingMessages.length > 0 && (
+        <View style={styles.pendingMessagesContainer}>
+          {conversationPendingMessages.map((msg) => (
+            <View key={msg._id} style={styles.pendingMessageItem}>
+              <View style={styles.pendingMessageContent}>
+                <Text style={styles.pendingMessageText} numberOfLines={1}>
+                  {msg.content}
+                </Text>
+                <View style={styles.pendingMessageStatus}>
+                  {msg.status === 'pending' && (
+                    <Text style={styles.statusPending}>⏱ Pending</Text>
+                  )}
+                  {msg.status === 'delivered' && (
+                    <Text style={styles.statusDelivered}>✓ Delivered</Text>
+                  )}
+                  {msg.status === 'failed' && (
+                    <>
+                      <Text style={styles.statusFailed}>✕ Failed</Text>
+                      <TouchableOpacity
+                        style={styles.retryButton}
+                        onPress={() => handleRetry(msg._id as Id<"pending_messages">)}
+                      >
+                        <Text style={styles.retryButtonText}>Retry</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+      {error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{error}</Text>
+          <TouchableOpacity onPress={() => setError(null)}>
+            <Text style={styles.errorBannerDismiss}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      <View style={styles.inputRow}>
+        <TextInput
+          style={styles.textInput}
+          value={message}
+          onChangeText={setMessage}
+          placeholder="Type a message..."
+          placeholderTextColor="#666"
+          multiline
+          maxLength={10000}
+          editable={!isSending}
+          onSubmitEditing={handleSend}
+          blurOnSubmit={false}
+        />
+        <TouchableOpacity
+          style={[
+            styles.sendButton,
+            (!message.trim() || isSending) && styles.sendButtonDisabled
+          ]}
+          onPress={handleSend}
+          disabled={!message.trim() || isSending}
+        >
+          <Text style={styles.sendButtonText}>
+            {isSending ? '...' : '→'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 export default function SessionDetailScreen() {
   const { id } = useLocalSearchParams();
 
@@ -208,15 +350,29 @@ export default function SessionDetailScreen() {
     <MessageBubble message={item} />
   );
 
+  const isActive = conversation.status === 'active';
+
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+    >
       <View style={styles.header}>
         <Text style={styles.title} numberOfLines={1}>
           {conversation.title}
         </Text>
-        <Text style={styles.messageCount}>
-          {conversation.messages.length} messages
-        </Text>
+        <View style={styles.headerRight}>
+          <Text style={styles.messageCount}>
+            {conversation.messages.length} messages
+          </Text>
+          {isActive && (
+            <View style={styles.activeIndicator}>
+              <View style={styles.activeDot} />
+              <Text style={styles.activeText}>Active</Text>
+            </View>
+          )}
+        </View>
       </View>
 
       <FlatList
@@ -225,7 +381,9 @@ export default function SessionDetailScreen() {
         keyExtractor={(item) => item._id}
         contentContainerStyle={styles.messageList}
       />
-    </View>
+
+      <MessageInput conversationId={id as Id<"conversations">} isActive={isActive} />
+    </KeyboardAvoidingView>
   );
 }
 
@@ -264,9 +422,30 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 4,
   },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
   messageCount: {
     fontSize: 13,
     color: '#888',
+  },
+  activeIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  activeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4ade80',
+  },
+  activeText: {
+    fontSize: 12,
+    color: '#4ade80',
+    fontWeight: '600',
   },
   messageList: {
     padding: 16,
@@ -367,5 +546,112 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#8b949e',
     fontFamily: 'monospace',
+  },
+  messageInputContainer: {
+    borderTopWidth: 1,
+    borderTopColor: '#333',
+    backgroundColor: '#0d1117',
+  },
+  pendingMessagesContainer: {
+    padding: 12,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+  },
+  pendingMessageItem: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: 8,
+    padding: 10,
+  },
+  pendingMessageContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  pendingMessageText: {
+    flex: 1,
+    color: '#e0e0e0',
+    fontSize: 14,
+  },
+  pendingMessageStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  statusPending: {
+    fontSize: 12,
+    color: '#fbbf24',
+  },
+  statusDelivered: {
+    fontSize: 12,
+    color: '#4ade80',
+  },
+  statusFailed: {
+    fontSize: 12,
+    color: '#ff6b6b',
+  },
+  retryButton: {
+    backgroundColor: '#1e40af',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  errorBanner: {
+    backgroundColor: '#ff6b6b',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+  },
+  errorBannerText: {
+    color: '#fff',
+    fontSize: 13,
+    flex: 1,
+  },
+  errorBannerDismiss: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    paddingLeft: 12,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    padding: 12,
+    gap: 8,
+  },
+  textInput: {
+    flex: 1,
+    backgroundColor: '#1a1a2e',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    color: '#e0e0e0',
+    fontSize: 15,
+    maxHeight: 100,
+    minHeight: 40,
+  },
+  sendButton: {
+    backgroundColor: '#4ade80',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sendButtonDisabled: {
+    backgroundColor: '#333',
+    opacity: 0.5,
+  },
+  sendButtonText: {
+    fontSize: 20,
+    color: '#0d1117',
+    fontWeight: 'bold',
   },
 });
