@@ -21,6 +21,8 @@ type ConversationData = {
   title?: string;
   session_id?: string;
   agent_type?: string;
+  model?: string;
+  started_at?: number;
   share_token?: string;
   is_private?: boolean;
   message_count?: number;

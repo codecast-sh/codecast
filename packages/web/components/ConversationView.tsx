@@ -58,6 +58,8 @@ export type ConversationData = {
   title?: string;
   session_id?: string;
   agent_type?: string;
+  model?: string;
+  started_at?: number;
   share_token?: string;
   message_count?: number;
   messages: Message[];
@@ -143,6 +145,95 @@ function ClaudeIcon() {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" fill="white"/>
       </svg>
+    </div>
+  );
+}
+
+function AgentTypeIcon({ agentType }: { agentType: string }) {
+  if (agentType === "claude_code") {
+    return (
+      <svg className="w-3 h-3 text-amber-400" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
+      </svg>
+    );
+  } else if (agentType === "codex") {
+    return (
+      <svg className="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" />
+      </svg>
+    );
+  } else if (agentType === "cursor") {
+    return (
+      <svg className="w-3 h-3 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M4 4l16 6-8 2-2 8z"/>
+      </svg>
+    );
+  }
+  return null;
+}
+
+function formatAgentType(agentType?: string): string {
+  if (!agentType) return "Unknown";
+  if (agentType === "claude_code") return "Claude Code";
+  if (agentType === "codex") return "Codex";
+  if (agentType === "cursor") return "Cursor";
+  return agentType;
+}
+
+function formatModel(model?: string): string {
+  if (!model) return "";
+  // Shorten long model names
+  if (model.includes("claude-sonnet")) {
+    return model.replace("claude-sonnet-", "sonnet-").replace("-20", "-'");
+  }
+  if (model.includes("claude-opus")) {
+    return model.replace("claude-opus-", "opus-").replace("-20", "-'");
+  }
+  if (model.includes("claude-haiku")) {
+    return model.replace("claude-haiku-", "haiku-").replace("-20", "-'");
+  }
+  return model;
+}
+
+function ConversationMetadata({
+  agentType,
+  model,
+  startedAt,
+  messageCount
+}: {
+  agentType?: string;
+  model?: string;
+  startedAt?: number;
+  messageCount?: number;
+}) {
+  if (!agentType && !model && !startedAt && !messageCount) return null;
+
+  return (
+    <div className="flex items-center gap-3 text-xs text-sol-text-dim">
+      {agentType && (
+        <div className="flex items-center gap-1.5">
+          <AgentTypeIcon agentType={agentType} />
+          <span>{formatAgentType(agentType)}</span>
+        </div>
+      )}
+      {model && (
+        <div className="flex items-center gap-1">
+          <span className="text-sol-text-dim">•</span>
+          <span className="font-mono" title={model}>{formatModel(model)}</span>
+        </div>
+      )}
+      {startedAt && (
+        <div className="flex items-center gap-1">
+          <span className="text-sol-text-dim">•</span>
+          <span title={formatFullTimestamp(startedAt)}>{formatRelativeTime(startedAt)}</span>
+        </div>
+      )}
+      {messageCount !== undefined && messageCount > 0 && (
+        <div className="flex items-center gap-1">
+          <span className="text-sol-text-dim">•</span>
+          <span>{messageCount} {messageCount === 1 ? "message" : "messages"}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1420,7 +1511,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
     <main className="h-screen flex flex-col bg-sol-bg">
       <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
         <div className="max-w-4xl mx-auto px-4 py-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 mb-2">
             <Link
               href={backHref}
               className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm flex-shrink-0"
@@ -1428,9 +1519,20 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
               &larr; {backLabel}
             </Link>
             <h1 className="text-sm font-medium text-sol-text-secondary truncate flex-1">{truncatedTitle}</h1>
+          </div>
 
-            {conversation && (
-              <>
+          {conversation && (
+            <>
+              <div className="flex items-center gap-3 mb-2">
+                <ConversationMetadata
+                  agentType={conversation.agent_type}
+                  model={conversation.model}
+                  startedAt={conversation.started_at}
+                  messageCount={conversation.message_count}
+                />
+              </div>
+
+              <div className="flex items-center gap-3">
                 {conversation.git_branch && (
                   <GitBranchBadge
                     gitBranch={conversation.git_branch}
@@ -1506,9 +1608,9 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
-              </>
-            )}
-          </div>
+              </div>
+            </>
+          )}
         </div>
       </header>
 
