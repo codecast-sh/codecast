@@ -108,13 +108,16 @@ function getRelativeTime(timestamp: number): string {
   const diffDays = Math.floor(diffMs / 86400000);
 
   if (diffMinutes < 1) return "just now";
-  if (diffMinutes === 1) return "1 minute ago";
-  if (diffMinutes < 60) return `${diffMinutes} minutes ago`;
-  if (diffHours === 1) return "1 hour ago";
-  if (diffHours < 24) return `${diffHours} hours ago`;
-  if (diffDays === 1) return "yesterday";
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays === 1) return "Yesterday";
 
   const date = new Date(timestamp);
+
+  if (diffDays < 7) {
+    return date.toLocaleDateString("en-US", { weekday: "long" });
+  }
+
   const thisYear = new Date().getFullYear();
   if (date.getFullYear() === thisYear) {
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -429,7 +432,7 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                           )}
                         </div>
                         <span className="text-[11px] text-sol-text-dim/50 shrink-0">
-                          {getRelativeTime(conv.updated_at).replace(' minutes', ' min').replace(' minute', ' min').replace(' hours', ' hr').replace(' hour', ' hr')}
+                          {getRelativeTime(conv.updated_at)}
                         </span>
                       </div>
 
