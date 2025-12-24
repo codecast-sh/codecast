@@ -116,6 +116,19 @@ function saveTitleCache(cache: TitleCache): void {
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
 }
 
+function generateTitleFromMessage(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.length <= 50) {
+    return trimmed;
+  }
+
+  return trimmed.slice(0, 50) + "...";
+}
+
 function readDaemonState(): DaemonState {
   if (!fs.existsSync(STATE_FILE)) {
     return {};
@@ -249,12 +262,16 @@ async function processSessionFile(
       const firstMessageTimestamp = messages[0]?.timestamp;
       const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
 
+      const firstUserMessage = messages.find(msg => msg.role === "user");
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
       conversationId = await syncService.createConversation({
         userId,
         sessionId,
         agentType: "claude_code",
         projectPath,
         slug,
+        title,
         startedAt: firstMessageTimestamp,
         parentMessageUuid,
         gitInfo,
@@ -375,12 +392,16 @@ async function processSessionFile(
         const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
 
         try {
+          const firstUserMessage = messages.find(msg => msg.role === "user");
+          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
           conversationId = await syncService.createConversation({
             userId,
             sessionId,
             agentType: "claude_code",
             projectPath,
             slug,
+            title,
             startedAt: firstMessageTimestamp,
             gitInfo,
           });
@@ -464,12 +485,15 @@ async function processCursorSession(
   if (!conversationId) {
     try {
       const firstMessageTimestamp = messages[0]?.timestamp;
+      const firstUserMessage = messages.find(msg => msg.role === "user");
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
       conversationId = await syncService.createConversation({
         userId,
         sessionId,
         agentType: "cursor",
         projectPath: workspacePath,
+        title,
         startedAt: firstMessageTimestamp,
       });
       conversationCache[sessionId] = conversationId;
@@ -570,6 +594,8 @@ async function processCursorSession(
         saveConversationCache(conversationCache);
 
         const firstMessageTimestamp = messages[0]?.timestamp;
+        const firstUserMessage = messages.find(msg => msg.role === "user");
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
         try {
           conversationId = await syncService.createConversation({
@@ -577,6 +603,7 @@ async function processCursorSession(
             sessionId,
             agentType: "cursor",
             projectPath: workspacePath,
+            title,
             startedAt: firstMessageTimestamp,
           });
           conversationCache[sessionId] = conversationId;

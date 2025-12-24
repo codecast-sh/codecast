@@ -36,6 +36,7 @@ export interface CreateConversationParams {
   agentType: AgentType;
   projectPath?: string;
   slug?: string;
+  title?: string;
   startedAt?: number;
   parentMessageUuid?: string;
   gitCommitHash?: string;
@@ -86,6 +87,7 @@ export class SyncService {
         project_hash: projectHash,
         project_path: params.projectPath,
         slug: params.slug,
+        title: params.title,
         started_at: params.startedAt,
         parent_message_uuid: params.parentMessageUuid,
         git_commit_hash: gitInfo?.commitHash || params.gitCommitHash,
