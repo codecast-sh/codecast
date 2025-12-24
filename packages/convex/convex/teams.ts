@@ -234,3 +234,43 @@ export const setMemberRole = mutation({
     await ctx.db.patch(args.member_user_id, { role: args.role });
   },
 });
+
+export const removeFromTeam = mutation({
+  args: {
+    team_id: v.id("teams"),
+    user_id: v.id("users"),
+    requesting_user_id: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const requestingUser = await ctx.db.get(args.requesting_user_id);
+    if (!requestingUser) {
+      throw new Error("Requesting user not found");
+    }
+    if (requestingUser.role !== "admin") {
+      throw new Error("Only admins can remove members");
+    }
+    if (requestingUser.team_id?.toString() !== args.team_id.toString()) {
+      throw new Error("Not a member of this team");
+    }
+    const userToRemove = await ctx.db.get(args.user_id);
+    if (!userToRemove) {
+      throw new Error("User not found");
+    }
+    if (userToRemove.team_id?.toString() !== args.team_id.toString()) {
+      throw new Error("User not in this team");
+    }
+    if (args.requesting_user_id === args.user_id) {
+      const teamMembers = await ctx.db.query("users").collect();
+      const adminCount = teamMembers.filter(
+        (u) => u.team_id?.toString() === args.team_id.toString() && u.role === "admin"
+      ).length;
+      if (adminCount <= 1) {
+        throw new Error("Cannot remove yourself as the last admin");
+      }
+    }
+    await ctx.db.patch(args.user_id, {
+      team_id: undefined,
+      role: undefined,
+    });
+  },
+});
