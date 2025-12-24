@@ -695,8 +695,49 @@ program
   .argument("[session-id]", "Session ID to mark as private")
   .option("--list", "List all private conversations")
   .option("--remove", "Remove private flag from conversation")
-  .action((sessionId, options) => {
-    console.log("Private command - not yet implemented");
+  .action(async (sessionId, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.user_id) {
+      console.error("Not authenticated. Run 'codecast auth' first.");
+      process.exit(1);
+    }
+
+    const convexUrl = config.convex_url || CONVEX_URL;
+
+    if (options.list) {
+      console.log("List private conversations - not yet implemented");
+      return;
+    }
+
+    if (!sessionId) {
+      console.error("Session ID is required");
+      console.log("Usage: codecast private <session-id>");
+      process.exit(1);
+    }
+
+    try {
+      const { ConvexHttpClient } = await import("convex/browser");
+      const client = new ConvexHttpClient(convexUrl);
+
+      await client.mutation("conversations:setPrivacyBySessionId" as any, {
+        session_id: sessionId,
+        is_private: options.remove ? false : true,
+        api_token: config.auth_token,
+      });
+
+      if (options.remove) {
+        console.log(`Removed private flag from conversation: ${sessionId}`);
+        console.log("This conversation will now appear in team view");
+      } else {
+        console.log(`Marked conversation as private: ${sessionId}`);
+        console.log("This conversation will no longer appear in team view");
+      }
+
+      client.close();
+    } catch (err) {
+      console.error("Failed to update conversation:", (err as Error).message);
+      process.exit(1);
+    }
   });
 
 program

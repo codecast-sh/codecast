@@ -1001,6 +1001,40 @@ export const setPrivacy = mutation({
   },
 });
 
+export const setPrivacyBySessionId = mutation({
+  args: {
+    session_id: v.string(),
+    is_private: v.boolean(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Unauthorized: valid session or API token required");
+    }
+
+    const conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
+      .filter((q) => q.eq(q.field("user_id"), authUserId))
+      .first();
+
+    if (!conversation) {
+      throw new Error(`Conversation not found with session_id: ${args.session_id}`);
+    }
+
+    await ctx.db.patch(conversation._id, {
+      is_private: args.is_private,
+    });
+
+    if (args.api_token) {
+      await ctx.db.patch(authUserId, {
+        daemon_last_seen: Date.now(),
+      });
+    }
+  },
+});
+
 export const updateTitle = mutation({
   args: {
     conversation_id: v.id("conversations"),
