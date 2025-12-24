@@ -18,6 +18,7 @@ export default defineSchema({
     github_id: v.optional(v.string()),
     github_username: v.optional(v.string()),
     github_avatar_url: v.optional(v.string()),
+    github_access_token: v.optional(v.string()),
     push_token: v.optional(v.string()),
     notifications_enabled: v.optional(v.boolean()),
     notification_preferences: v.optional(v.object({
@@ -32,7 +33,8 @@ export default defineSchema({
     hide_activity: v.optional(v.boolean()),
   })
     .index("email", ["email"])
-    .index("by_github_username", ["github_username"]),
+    .index("by_github_username", ["github_username"])
+    .index("by_github_id", ["github_id"]),
 
   teams: defineTable({
     name: v.string(),

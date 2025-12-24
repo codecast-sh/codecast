@@ -43,7 +43,12 @@ const ResendOTPPasswordReset = Email({
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
     GitHub({
-      profile(profile) {
+      authorization: {
+        params: {
+          scope: "read:user user:email read:org",
+        },
+      },
+      profile(profile, tokens) {
         return {
           email: profile.email,
           name: profile.name ?? profile.login,
@@ -51,6 +56,7 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           github_id: String(profile.id),
           github_username: profile.login,
           github_avatar_url: profile.avatar_url,
+          github_access_token: tokens.access_token,
         };
       },
     }),

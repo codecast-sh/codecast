@@ -1,5 +1,6 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, action } from "./_generated/server";
 import { v } from "convex/values";
+import { api } from "./_generated/api";
 
 function generateInviteCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -277,6 +278,158 @@ export const removeFromTeam = mutation({
     await ctx.db.patch(args.user_id, {
       team_id: undefined,
       role: undefined,
+    });
+  },
+});
+
+export const syncGithubOrg = action({
+  args: {
+    requesting_user_id: v.id("users"),
+    org_name: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const requestingUser = await ctx.runQuery(api.users.getCurrentUser);
+    if (!requestingUser || requestingUser._id !== args.requesting_user_id) {
+      throw new Error("Not authenticated");
+    }
+    if (requestingUser.role !== "admin") {
+      throw new Error("Only admins can sync GitHub organizations");
+    }
+    if (!requestingUser.team_id) {
+      throw new Error("You must be part of a team to sync");
+    }
+    if (!requestingUser.github_access_token) {
+      throw new Error("GitHub account not connected");
+    }
+
+    const membersResponse = await fetch(
+      `https://api.github.com/orgs/${args.org_name}/members`,
+      {
+        headers: {
+          Authorization: `Bearer ${requestingUser.github_access_token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      }
+    );
+
+    if (!membersResponse.ok) {
+      const errorText = await membersResponse.text();
+      throw new Error(`Failed to fetch GitHub org members: ${errorText}`);
+    }
+
+    const members = await membersResponse.json();
+    const imported = [];
+    const skipped = [];
+
+    for (const member of members) {
+      const membershipResponse = await fetch(
+        `https://api.github.com/orgs/${args.org_name}/memberships/${member.login}`,
+        {
+          headers: {
+            Authorization: `Bearer ${requestingUser.github_access_token}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+        }
+      );
+
+      let role: "admin" | "member" = "member";
+      if (membershipResponse.ok) {
+        const membership = await membershipResponse.json();
+        role = membership.role === "admin" ? "admin" : "member";
+      }
+
+      const existingUser = await ctx.runQuery(api.teams.getUserByGithubId, {
+        github_id: String(member.id),
+      });
+
+      if (existingUser) {
+        if (existingUser.team_id?.toString() === requestingUser.team_id.toString()) {
+          skipped.push({
+            github_username: member.login,
+            reason: "Already a team member",
+          });
+          continue;
+        }
+        await ctx.runMutation(api.teams.updateUserTeamAndRole, {
+          user_id: existingUser._id,
+          team_id: requestingUser.team_id,
+          role,
+        });
+        imported.push({
+          github_username: member.login,
+          name: existingUser.name,
+          role,
+        });
+      } else {
+        const newUserId = await ctx.runMutation(api.teams.createUserFromGithub, {
+          github_id: String(member.id),
+          github_username: member.login,
+          github_avatar_url: member.avatar_url,
+          team_id: requestingUser.team_id,
+          role,
+        });
+        imported.push({
+          github_username: member.login,
+          name: member.login,
+          role,
+        });
+      }
+    }
+
+    return {
+      imported,
+      skipped,
+      total: members.length,
+    };
+  },
+});
+
+export const getUserByGithubId = query({
+  args: {
+    github_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("users")
+      .withIndex("by_github_id", (q) => q.eq("github_id", args.github_id))
+      .unique();
+  },
+});
+
+export const updateUserTeamAndRole = mutation({
+  args: {
+    user_id: v.id("users"),
+    team_id: v.id("teams"),
+    role: v.union(v.literal("member"), v.literal("admin")),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.user_id, {
+      team_id: args.team_id,
+      role: args.role,
+    });
+  },
+});
+
+export const createUserFromGithub = mutation({
+  args: {
+    github_id: v.string(),
+    github_username: v.string(),
+    github_avatar_url: v.string(),
+    team_id: v.id("teams"),
+    role: v.union(v.literal("member"), v.literal("admin")),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("users", {
+      github_id: args.github_id,
+      github_username: args.github_username,
+      github_avatar_url: args.github_avatar_url,
+      image: args.github_avatar_url,
+      name: args.github_username,
+      team_id: args.team_id,
+      role: args.role,
+      created_at: Date.now(),
     });
   },
 });
