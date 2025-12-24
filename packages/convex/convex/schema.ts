@@ -35,6 +35,7 @@ export default defineSchema({
     session_id: v.string(),
     slug: v.optional(v.string()),
     title: v.optional(v.string()),
+    subtitle: v.optional(v.string()),
     project_hash: v.optional(v.string()),
     project_path: v.optional(v.string()),
     model: v.optional(v.string()),
@@ -129,4 +130,20 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_token_hash", ["token_hash"]),
+
+  pending_messages: defineTable({
+    conversation_id: v.id("conversations"),
+    from_user_id: v.id("users"),
+    content: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("delivered"),
+      v.literal("failed")
+    ),
+    created_at: v.number(),
+    delivered_at: v.optional(v.number()),
+    retry_count: v.number(),
+  })
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_user_status", ["from_user_id", "status"]),
 });
