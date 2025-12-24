@@ -577,19 +577,28 @@ async function runSync(): Promise<void> {
 
 program
   .name("codecast")
-  .description("Sync coding agent conversations to a shared Convex database")
+  .description(
+    "Sync coding agent conversations to a shared Convex database\n\n" +
+    "Quick Start:\n" +
+    "  1. codecast auth          # Authenticate with your account\n" +
+    "  2. codecast start         # Start background sync daemon\n" +
+    "  3. codecast status        # Check sync status"
+  )
   .version(getVersion());
 
 program
   .command("auth")
-  .description("Authenticate with codecast (opens browser)")
+  .description("Authenticate with codecast using browser OAuth flow")
   .action(async () => {
     await runAuth();
   });
 
 program
   .command("login")
-  .description("Link this device using a setup token from codecast.sh/cli")
+  .description(
+    "Link this device using a setup token (alternative to browser OAuth)\n\n" +
+    "Get your token from: codecast.sh/cli"
+  )
   .argument("<token>", "Setup token from the web dashboard")
   .action(async (token: string) => {
     await runLogin(token);
@@ -597,7 +606,7 @@ program
 
 program
   .command("start")
-  .description("Start the background daemon to watch and sync conversations")
+  .description("Start the background daemon to automatically watch and sync conversations")
   .action(() => {
     startDaemon();
   });
@@ -611,23 +620,29 @@ program
 
 program
   .command("status")
-  .description("Show daemon status and sync information")
+  .description("Show daemon status, connection state, and sync information")
   .action(() => {
     showStatus();
   });
 
 program
   .command("sync")
-  .description("Manually sync all unsynced conversations")
+  .description("Manually sync all unsynced conversations (daemon does this automatically)")
   .action(async () => {
     await runSync();
   });
 
 program
   .command("config")
-  .description("View or modify configuration")
-  .argument("[key]", "Configuration key to get or set")
-  .argument("[value]", "Value to set")
+  .description(
+    "View or modify configuration settings\n\n" +
+    "Examples:\n" +
+    "  codecast config                    # View all configuration\n" +
+    "  codecast config excluded_paths     # View specific setting\n" +
+    "  codecast config excluded_paths \"**/node_modules/**\"  # Set value"
+  )
+  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths)")
+  .argument("[value]", "Value to set for the key")
   .action((key, value) => {
     const config = readConfig();
 
@@ -680,9 +695,15 @@ program
 
 program
   .command("logs")
-  .description("View daemon logs")
+  .description(
+    "View daemon logs for troubleshooting\n\n" +
+    "Examples:\n" +
+    "  codecast logs              # View all logs\n" +
+    "  codecast logs -n 50        # View last 50 lines\n" +
+    "  codecast logs -f           # Follow logs in real-time"
+  )
   .option("-n, --lines <number>", "Number of lines to show (default: all)")
-  .option("-f, --follow", "Follow log output (like tail -f)")
+  .option("-f, --follow", "Follow log output in real-time (Ctrl+C to stop)")
   .action((options) => {
     const logFile = path.join(CONFIG_DIR, "daemon.log");
 
@@ -719,10 +740,16 @@ program
 
 program
   .command("private")
-  .description("Manage private conversations")
-  .argument("[session-id]", "Session ID to mark as private")
+  .description(
+    "Manage private conversations (hidden from team view)\n\n" +
+    "Examples:\n" +
+    "  codecast private --list                  # List private conversations\n" +
+    "  codecast private <session-id>            # Mark as private\n" +
+    "  codecast private <session-id> --remove   # Make visible to team"
+  )
+  .argument("[session-id]", "Session ID to mark as private/public")
   .option("--list", "List all private conversations")
-  .option("--remove", "Remove private flag from conversation")
+  .option("--remove", "Remove private flag (make visible to team)")
   .action(async (sessionId, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.user_id) {
@@ -796,7 +823,12 @@ program
 
 program
   .command("setup")
-  .description("Set up daemon to start automatically on login (macOS only)")
+  .description(
+    "Configure daemon to start automatically on login (macOS only)\n\n" +
+    "Examples:\n" +
+    "  codecast setup             # Enable auto-start\n" +
+    "  codecast setup --disable   # Disable auto-start"
+  )
   .option("--disable", "Disable auto-start on login")
   .action((options) => {
     if (process.platform !== "darwin") {
