@@ -750,10 +750,19 @@ async function injectMessageToStdin(ttyPath: string, content: string): Promise<v
   });
 }
 
+function isSyncPaused(): boolean {
+  return process.env.CODE_CHAT_SYNC_PAUSED === "1" || process.env.CODECAST_PAUSED === "1";
+}
+
 async function main(): Promise<void> {
   ensureConfigDir();
   log("Daemon started");
   log(`PID: ${process.pid}`);
+
+  if (isSyncPaused()) {
+    log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
+  }
+
   saveDaemonState({ connected: false });
 
   const config = readConfig();
@@ -888,6 +897,11 @@ async function main(): Promise<void> {
   watcher.on("session", (event: SessionEvent) => {
     const filePath = event.filePath;
 
+    if (isSyncPaused()) {
+      log(`Sync paused, skipping session: ${event.sessionId}`);
+      return;
+    }
+
     if (isPathExcluded(event.projectPath, config.excluded_paths)) {
       log(`Skipping sync for excluded path: ${event.projectPath}`);
       return;
@@ -930,6 +944,11 @@ async function main(): Promise<void> {
 
   cursorWatcher.on("session", (event: CursorSessionEvent) => {
     const dbPath = event.dbPath;
+
+    if (isSyncPaused()) {
+      log(`Sync paused, skipping Cursor session: ${event.sessionId}`);
+      return;
+    }
 
     if (isPathExcluded(event.workspacePath, config.excluded_paths)) {
       log(`Skipping sync for excluded path: ${event.workspacePath}`);
