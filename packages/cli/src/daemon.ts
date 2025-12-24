@@ -196,8 +196,14 @@ async function processSessionFile(
   titleCache: TitleCache,
   updateStateCallback: () => void
 ): Promise<void> {
-  const lastPosition = getPosition(filePath);
+  let lastPosition = getPosition(filePath);
   const stats = fs.statSync(filePath);
+
+  if (stats.size < lastPosition) {
+    log(`File rotation detected for ${filePath}: size=${stats.size} < position=${lastPosition}. Resetting to start.`);
+    setPosition(filePath, 0);
+    lastPosition = 0;
+  }
 
   if (stats.size <= lastPosition) {
     return;
