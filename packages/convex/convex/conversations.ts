@@ -104,6 +104,13 @@ export const createConversation = mutation({
       git_diff_staged: args.git_diff_staged,
       git_root: args.git_root,
     });
+
+    if (args.api_token) {
+      await ctx.db.patch(args.user_id, {
+        daemon_last_seen: now,
+      });
+    }
+
     return conversationId;
   },
 });
@@ -867,5 +874,11 @@ export const updateTitle = mutation({
     await ctx.db.patch(args.conversation_id, {
       title: args.title,
     });
+
+    if (args.api_token) {
+      await ctx.db.patch(conversation.user_id, {
+        daemon_last_seen: Date.now(),
+      });
+    }
   },
 });
