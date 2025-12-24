@@ -33,6 +33,7 @@ interface Config {
   convex_url?: string;
   web_url?: string;
   team_id?: string;
+  excluded_paths?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -613,6 +614,7 @@ program
         if (config.team_id) console.log(`  team_id: ${config.team_id}`);
         if (config.auth_token) console.log(`  auth_token: ${maskToken(config.auth_token)}`);
         console.log(`  web_url: ${config.web_url || WEB_URL}`);
+        if (config.excluded_paths) console.log(`  excluded_paths: ${config.excluded_paths}`);
         if (config.created_at) console.log(`  created_at: ${config.created_at}`);
         if (config.updated_at) console.log(`  updated_at: ${config.updated_at}`);
       } else {
@@ -621,7 +623,7 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id"] as const;
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths"] as const;
     const sensitiveKeys = ["auth_token"];
     type SettableKey = (typeof settableKeys)[number];
 

@@ -25,6 +25,7 @@ interface Config {
   user_id?: string;
   convex_url?: string;
   auth_token?: string;
+  excluded_paths?: string;
 }
 
 interface ConversationCache {
@@ -158,6 +159,25 @@ interface GitInfo {
   diff?: string;
   diffStaged?: string;
   root?: string;
+}
+
+function isPathExcluded(projectPath: string, excludedPaths?: string): boolean {
+  if (!excludedPaths || !projectPath) {
+    return false;
+  }
+
+  const paths = excludedPaths.split(',').map(p => p.trim()).filter(p => p.length > 0);
+
+  for (const excludedPath of paths) {
+    const normalizedExcluded = path.resolve(excludedPath);
+    const normalizedProject = path.resolve(projectPath);
+
+    if (normalizedProject.startsWith(normalizedExcluded)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function getGitInfo(projectPath: string): GitInfo | undefined {
@@ -755,6 +775,9 @@ async function main(): Promise<void> {
   if (config.auth_token) {
     log(`Auth token: ${maskToken(config.auth_token)}`);
   }
+  if (config.excluded_paths) {
+    log(`Excluded paths: ${config.excluded_paths}`);
+  }
 
   const syncService = new SyncService({
     convexUrl,
@@ -865,6 +888,11 @@ async function main(): Promise<void> {
   watcher.on("session", (event: SessionEvent) => {
     const filePath = event.filePath;
 
+    if (isPathExcluded(event.projectPath, config.excluded_paths)) {
+      log(`Skipping sync for excluded path: ${event.projectPath}`);
+      return;
+    }
+
     let sync = fileSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
@@ -902,6 +930,11 @@ async function main(): Promise<void> {
 
   cursorWatcher.on("session", (event: CursorSessionEvent) => {
     const dbPath = event.dbPath;
+
+    if (isPathExcluded(event.workspacePath, config.excluded_paths)) {
+      log(`Skipping sync for excluded path: ${event.workspacePath}`);
+      return;
+    }
 
     let sync = cursorSyncs.get(dbPath);
     if (!sync) {
