@@ -1234,3 +1234,66 @@ export const publishToDirectory = mutation({
     return publicConversationId;
   },
 });
+
+export const listPublicConversations = query({
+  args: {
+    search: v.optional(v.string()),
+    sort: v.optional(v.union(v.literal("recent"), v.literal("popular"))),
+    agent_type: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 20;
+    const sort = args.sort ?? "recent";
+
+    let publicConversations = await ctx.db
+      .query("public_conversations")
+      .collect();
+
+    if (args.agent_type) {
+      publicConversations = publicConversations.filter(
+        (pc) => pc.agent_type === args.agent_type
+      );
+    }
+
+    if (args.search && args.search.trim().length > 0) {
+      const searchLower = args.search.toLowerCase();
+      publicConversations = publicConversations.filter((pc) => {
+        const titleMatch = pc.title.toLowerCase().includes(searchLower);
+        const descMatch = pc.description?.toLowerCase().includes(searchLower);
+        const previewMatch = pc.preview_text.toLowerCase().includes(searchLower);
+        return titleMatch || descMatch || previewMatch;
+      });
+    }
+
+    if (sort === "popular") {
+      publicConversations.sort((a, b) => b.view_count - a.view_count);
+    } else {
+      publicConversations.sort((a, b) => b.created_at - a.created_at);
+    }
+
+    const results = await Promise.all(
+      publicConversations.slice(0, limit).map(async (pc) => {
+        const user = await ctx.db.get(pc.user_id);
+        const conversation = await ctx.db.get(pc.conversation_id);
+
+        return {
+          _id: pc._id,
+          title: pc.title,
+          description: pc.description,
+          tags: pc.tags,
+          preview_text: pc.preview_text,
+          agent_type: pc.agent_type,
+          message_count: pc.message_count,
+          created_at: pc.created_at,
+          view_count: pc.view_count,
+          author_name: user?.name || user?.email?.split("@")[0] || "Unknown",
+          author_avatar: user?.image || user?.github_avatar_url,
+          share_token: conversation?.share_token || null,
+        };
+      })
+    );
+
+    return results;
+  },
+});

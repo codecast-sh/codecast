@@ -22,6 +22,7 @@ import type * as pull_requests from "../pull_requests.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as reviews from "../reviews.js";
 import type * as syncCursors from "../syncCursors.js";
+import type * as teamActivity from "../teamActivity.js";
 import type * as teams from "../teams.js";
 import type * as titleGeneration from "../titleGeneration.js";
 import type * as users from "../users.js";
@@ -47,6 +48,7 @@ declare const fullApi: ApiFromModules<{
   rateLimit: typeof rateLimit;
   reviews: typeof reviews;
   syncCursors: typeof syncCursors;
+  teamActivity: typeof teamActivity;
   teams: typeof teams;
   titleGeneration: typeof titleGeneration;
   users: typeof users;
