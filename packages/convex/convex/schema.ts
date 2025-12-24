@@ -99,6 +99,7 @@ export default defineSchema({
     })),
   })
     .index("by_conversation_id", ["conversation_id"])
+    .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
     .index("by_conversation_uuid", ["conversation_id", "message_uuid"])
     .index("by_message_uuid", ["message_uuid"])
     .searchIndex("search_content", {

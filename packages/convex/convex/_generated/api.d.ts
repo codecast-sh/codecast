@@ -19,6 +19,7 @@ import type * as pendingMessages from "../pendingMessages.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as syncCursors from "../syncCursors.js";
 import type * as teams from "../teams.js";
+import type * as titleGeneration from "../titleGeneration.js";
 import type * as users from "../users.js";
 
 import type {
@@ -39,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   rateLimit: typeof rateLimit;
   syncCursors: typeof syncCursors;
   teams: typeof teams;
+  titleGeneration: typeof titleGeneration;
   users: typeof users;
 }>;
 

@@ -55,6 +55,7 @@ export type ConversationData = {
   session_id?: string;
   agent_type?: string;
   share_token?: string;
+  message_count?: number;
   messages: Message[];
   user?: { name?: string; email?: string } | null;
   parent_conversation_id?: string | null;
@@ -121,15 +122,8 @@ function stripLineNumbers(content: string): string {
 function ClaudeIcon() {
   return (
     <div className="w-6 h-6 rounded bg-sol-yellow flex items-center justify-center shrink-0">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-        <path
-          d="M7 8.5C7 7.67 7.67 7 8.5 7H11C11.83 7 12.5 7.67 12.5 8.5V11C12.5 11.83 11.83 12.5 11 12.5H8.5C7.67 12.5 7 11.83 7 11V8.5Z"
-          fill="white"
-        />
-        <path
-          d="M11.5 13C11.5 12.17 12.17 11.5 13 11.5H15.5C16.33 11.5 17 12.17 17 13V15.5C17 16.33 16.33 17 15.5 17H13C12.17 17 11.5 16.33 11.5 15.5V13Z"
-          fill="white"
-        />
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" fill="white"/>
       </svg>
     </div>
   );
@@ -185,7 +179,8 @@ function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'add
   return temp.reverse();
 }
 
-function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1 }: { oldStr: string; newStr: string; contextLines?: number; startLine?: number }) {
+function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxLines = 10, language }: { oldStr: string; newStr: string; contextLines?: number; startLine?: number; maxLines?: number; language?: string }) {
+  const [fullyExpanded, setFullyExpanded] = useState(false);
   const oldLines = oldStr.split('\n');
   const newLines = newStr.split('\n');
   const changes = computeDiff(oldLines, newLines);
@@ -229,38 +224,87 @@ function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1 }: { oldStr:
     }
   }
 
+  // Count actual lines (not separators)
+  const totalLines = output.filter(item => item !== 'separator').length;
+  const needsTruncation = totalLines > maxLines && !fullyExpanded;
+
+  // Truncate output if needed
+  let displayOutput = output;
+  if (needsTruncation) {
+    let lineCount = 0;
+    const truncated: typeof output = [];
+    for (const item of output) {
+      if (item === 'separator') {
+        truncated.push(item);
+      } else {
+        if (lineCount < maxLines) {
+          truncated.push(item);
+          lineCount++;
+        }
+      }
+    }
+    displayOutput = truncated;
+  }
+
   const maxLineNum = Math.max(oldLineNum, newLineNum);
   const lineNumWidth = String(maxLineNum).length;
 
   return (
-    <div className="font-mono text-xs p-2 overflow-x-auto">
-      {output.map((item, i) => {
-        if (item === 'separator') {
+    <div className="font-mono text-xs overflow-x-auto">
+      {language && (
+        <div className="text-[10px] px-2 py-1 border-b border-sol-border/20 text-sol-text-dim">
+          {language}
+        </div>
+      )}
+      <div className="p-2">
+        {displayOutput.map((item, i) => {
+          if (item === 'separator') {
+            return (
+              <div key={`sep-${i}`} className="text-center py-0.5 text-sol-text-dim">
+                ···
+              </div>
+            );
+          }
+          const { type, content, oldNum, newNum } = item;
+          const lineNum = type === 'removed' ? oldNum : newNum;
+          const lineNumStr = lineNum !== undefined ? String(lineNum).padStart(lineNumWidth) : ' '.repeat(lineNumWidth);
+          const prefix = type === 'added' ? '+' : type === 'removed' ? '-' : ' ';
+          const bgClass = type === 'added'
+            ? 'bg-sol-green/10'
+            : type === 'removed'
+            ? 'bg-sol-red/10'
+            : '';
+          const textClass = type === 'added'
+            ? 'text-sol-green'
+            : type === 'removed'
+            ? 'text-sol-red'
+            : 'text-sol-text-muted';
+
           return (
-            <div key={`sep-${i}`} className="text-center py-0.5" style={{ color: '#586e75' }}>
-              ···
+            <div key={i} className={`whitespace-pre ${bgClass}`}>
+              <span className="select-none text-sol-text-dim">{lineNumStr}</span>
+              <span className={`select-none ${textClass}`}> {prefix} </span>
+              <span className={textClass}>{content}</span>
             </div>
           );
-        }
-        const { type, content, oldNum, newNum } = item;
-        // Show line number in single column: old for removed, new for added/context
-        const lineNum = type === 'removed' ? oldNum : newNum;
-        const lineNumStr = lineNum !== undefined ? String(lineNum).padStart(lineNumWidth) : ' '.repeat(lineNumWidth);
-        const prefix = type === 'added' ? '+' : type === 'removed' ? '-' : ' ';
-        const style = type === 'added'
-          ? { backgroundColor: 'rgba(133, 153, 0, 0.15)', color: '#859900' }
-          : type === 'removed'
-          ? { backgroundColor: 'rgba(220, 50, 47, 0.15)', color: '#dc322f' }
-          : { color: '#586e75' };
-
-        return (
-          <div key={i} style={style} className="whitespace-pre">
-            <span className="select-none" style={{ color: '#586e75' }}>{lineNumStr}</span>
-            <span className="select-none"> {prefix} </span>
-            {content}
-          </div>
-        );
-      })}
+        })}
+        {needsTruncation && (
+          <button
+            onClick={() => setFullyExpanded(true)}
+            className="mt-1 text-[10px] text-sol-blue hover:text-sol-cyan"
+          >
+            show {totalLines - maxLines} more lines
+          </button>
+        )}
+        {fullyExpanded && totalLines > maxLines && (
+          <button
+            onClick={() => setFullyExpanded(false)}
+            className="mt-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted"
+          >
+            collapse
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -296,7 +340,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
   return (
     <div className={`my-3 rounded-lg ${colors.bg} border ${colors.border} overflow-hidden`}>
       <div
-        className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-white/5 transition-colors"
+        className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <span className={`font-mono text-xs font-semibold ${colors.text}`}>
@@ -393,8 +437,8 @@ function getRelativePath(fullPath: string): string {
 }
 
 function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
-  const [expanded, setExpanded] = useState(false);
   const isEdit = tool.name === "Edit" || tool.name === "Write";
+  const [expanded, setExpanded] = useState(isEdit);
   const isRead = tool.name === "Read";
   const isBash = tool.name === "Bash";
   const isGlob = tool.name === "Glob";
@@ -484,26 +528,27 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
       </div>
 
       {expanded && (
-        <div className="mt-1 rounded overflow-hidden border border-sol-border/30" style={{ backgroundColor: '#002b36' }}>
+        <div className="mt-1 rounded overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
           {isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
             <DiffView
               oldStr={String(parsedInput.old_string)}
               newStr={String(parsedInput.new_string)}
               startLine={startLine}
+              language={language}
             />
-          ) : processedContent ? (
+          ) : processedContent && processedContent.trim() ? (
             <div className="max-h-80 overflow-auto">
               {language && (
-                <div className="text-[10px] px-2 py-1 border-b border-sol-border/20" style={{ color: '#586e75' }}>
+                <div className="text-[10px] px-2 py-1 border-b border-sol-border/20 text-sol-text-dim">
                   {language}
                 </div>
               )}
-              <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : ""}`} style={result?.is_error ? {} : { color: '#93a1a1' }}>
+              <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
                 {processedContent}
               </pre>
             </div>
           ) : (
-            <div className="p-2 text-xs text-sol-text-dim">No content</div>
+            <div className="p-2 text-xs text-sol-text-dim italic">No output</div>
           )}
         </div>
       )}
@@ -567,28 +612,38 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
 
 function ThinkingBlock({ content }: { content: string }) {
   const [expanded, setExpanded] = useState(false);
-  const truncated = truncateLines(content, expanded ? 50 : 3);
+  const truncated = truncateLines(content, expanded ? 50 : 2);
+  const firstLine = content.split('\n')[0].slice(0, 100);
+  const isTruncated = !expanded && firstLine.length < content.length;
+  const showCaret = isTruncated || expanded;
 
   return (
-    <div className="my-3 border-l-2 border-sol-yellow/50 pl-3">
+    <div className="my-0.5 opacity-50">
       <div
-        className="flex items-center gap-2 cursor-pointer"
-        onClick={() => setExpanded(!expanded)}
+        className={`flex items-start gap-1 ${showCaret ? 'cursor-pointer' : ''}`}
+        onClick={() => showCaret && setExpanded(!expanded)}
       >
-        <span className="text-sol-yellow text-xs font-medium">thinking</span>
+        {showCaret && (
+          <svg
+            className={`w-3 h-3 mt-0.5 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        )}
+        {expanded ? (
+          <div className="flex-1 text-sol-text-muted italic font-mono whitespace-pre-wrap text-xs">
+            {truncated.text}
+            {truncated.truncated && "..."}
+          </div>
+        ) : (
+          <span className="flex-1 text-sol-text-muted italic font-mono truncate text-xs">
+            {firstLine}{isTruncated ? "..." : ""}
+          </span>
+        )}
       </div>
-      <div className="mt-1 text-sol-text-dim text-xs italic font-mono whitespace-pre-wrap">
-        {truncated.text}
-        {truncated.truncated && !expanded && "..."}
-      </div>
-      {truncated.truncated && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="text-[10px] text-sol-text-dim hover:text-sol-text-dim mt-1"
-        >
-          {expanded ? "collapse" : "expand"}
-        </button>
-      )}
     </div>
   );
 }
@@ -645,7 +700,7 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName }: { co
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4 scroll-mt-20 ${collapsed ? "mb-2" : "mb-6"} relative`}>
+    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 ${collapsed ? "p-2 mb-1" : "p-4 mb-6"} relative`}>
       <button
         onClick={handleCopy}
         className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
@@ -685,6 +740,7 @@ function AssistantBlock({
   messageUuid,
   collapsed,
   childConversationMap,
+  showHeader = true,
 }: {
   content?: string;
   timestamp: number;
@@ -696,6 +752,7 @@ function AssistantBlock({
   messageUuid?: string;
   collapsed?: boolean;
   childConversationMap?: Record<string, string>;
+  showHeader?: boolean;
 }) {
   const hasContent = content && content.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
@@ -716,8 +773,15 @@ function AssistantBlock({
     return null;
   }
 
-  const truncatedContent = collapsed && content ? content.split("\n").slice(0, 2).join("\n") : content;
-  const wasTruncated = collapsed && content && content.split("\n").length > 2;
+  const getCollapsedContent = () => {
+    if (!collapsed || !content) return { text: content || "", wasTruncated: false };
+    const lines = content.split("\n");
+    if (lines.length <= 4) return { text: content, wasTruncated: false };
+    const first2 = lines.slice(0, 2).join("\n");
+    const last2 = lines.slice(-2).join("\n");
+    return { text: `${first2}\n...\n${last2}`, wasTruncated: true };
+  };
+  const { text: truncatedContent, wasTruncated } = getCollapsedContent();
 
   const handleCopy = async () => {
     try {
@@ -728,12 +792,12 @@ function AssistantBlock({
     }
   };
 
-  // Only show Claude header for messages with actual content (not just tool calls)
-  const showHeader = hasContent || hasThinking;
+  // Only show Claude header for first message in sequence and messages with actual content
+  const shouldShowHeader = showHeader && (hasContent || hasThinking);
   const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
 
   return (
-    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-2" : onlyToolCalls ? "mb-1" : "mb-6"} relative`}>
+    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative`}>
       {hasContent && (
         <button
           onClick={handleCopy}
@@ -747,7 +811,7 @@ function AssistantBlock({
         </button>
       )}
 
-      {showHeader && (
+      {shouldShowHeader && (
         <div className="flex items-center gap-2 mb-2">
           <ClaudeIcon />
           <span className="text-sol-text-secondary text-xs font-medium">Claude</span>
@@ -764,7 +828,7 @@ function AssistantBlock({
         </div>
       )}
 
-      <div className={showHeader ? "pl-8" : "pl-0"}>
+      <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
         {!collapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
 
         {!collapsed && hasThinking && <ThinkingBlock content={thinking!} />}
@@ -785,9 +849,9 @@ function AssistantBlock({
         ))}
 
         {hasContent && (
-          <div className={`text-sol-text ${collapsed ? "text-sm line-clamp-2" : "prose prose-invert prose-sm max-w-none"}`}>
+          <div className={`text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}>
             {collapsed ? (
-              <span>{truncatedContent}{wasTruncated && "..."}</span>
+              <span>{truncatedContent}</span>
             ) : (
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
@@ -910,7 +974,7 @@ function GitDiffPanel({
         {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
           <div className="mb-2">
             <div className="text-sol-green text-[10px] font-semibold mb-1">Staged</div>
-            <div className="rounded overflow-hidden" style={{ backgroundColor: '#002b36' }}>
+            <div className="rounded overflow-hidden bg-sol-bg-alt border border-sol-border/30">
               <GitDiffView diff={gitDiffStaged} />
             </div>
           </div>
@@ -920,7 +984,7 @@ function GitDiffPanel({
             {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
               <div className="text-sol-orange text-[10px] font-semibold mb-1">Unstaged</div>
             )}
-            <div className="rounded overflow-hidden" style={{ backgroundColor: '#002b36' }}>
+            <div className="rounded overflow-hidden bg-sol-bg-alt border border-sol-border/30">
               <GitDiffView diff={gitDiff} />
             </div>
           </div>
@@ -936,25 +1000,20 @@ function GitDiffView({ diff }: { diff: string }) {
   return (
     <div className="font-mono text-xs p-2 overflow-x-auto">
       {lines.map((line, i) => {
-        let style: React.CSSProperties = { color: '#586e75' };
-        let prefix = ' ';
+        let className = 'whitespace-pre text-sol-text-muted';
 
         if (line.startsWith('+') && !line.startsWith('+++')) {
-          style = { backgroundColor: 'rgba(133, 153, 0, 0.15)', color: '#859900' };
-          prefix = '+';
+          className = 'whitespace-pre bg-sol-green/10 text-sol-green';
         } else if (line.startsWith('-') && !line.startsWith('---')) {
-          style = { backgroundColor: 'rgba(220, 50, 47, 0.15)', color: '#dc322f' };
-          prefix = '-';
+          className = 'whitespace-pre bg-sol-red/10 text-sol-red';
         } else if (line.startsWith('@@')) {
-          style = { color: '#268bd2' };
-          prefix = '@';
+          className = 'whitespace-pre text-sol-blue';
         } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
-          style = { color: '#93a1a1', fontWeight: 500 };
-          prefix = ' ';
+          className = 'whitespace-pre text-sol-text-secondary font-medium';
         }
 
         return (
-          <div key={i} style={style} className="whitespace-pre">
+          <div key={i} className={className}>
             {line}
           </div>
         );
@@ -1046,6 +1105,7 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
       return 100;
     },
     overscan: 5,
+    paddingEnd: 100,
   });
 
   useEffect(() => {
@@ -1147,7 +1207,7 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
     return map;
   }, [conversation?.messages]);
 
-  const renderMessage = (msg: Message) => {
+  const renderMessage = (msg: Message, index: number) => {
     if (msg.role === "system") {
       if (collapsed) return null;
       return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} />;
@@ -1173,6 +1233,19 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
     }
 
     if (msg.role === "assistant") {
+      // Find previous non-tool-result message to determine if this is first in Claude sequence
+      let prevNonToolResultIdx = index - 1;
+      while (prevNonToolResultIdx >= 0) {
+        const prev = messages[prevNonToolResultIdx];
+        // Skip user messages that are just tool results
+        if (prev.role === "user" && prev.tool_results && prev.tool_results.length > 0) {
+          prevNonToolResultIdx--;
+          continue;
+        }
+        break;
+      }
+      const prevMsg = prevNonToolResultIdx >= 0 ? messages[prevNonToolResultIdx] : null;
+      const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
       return (
         <AssistantBlock
           key={msg._id}
@@ -1186,6 +1259,7 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
           messageUuid={msg.message_uuid}
           collapsed={collapsed}
           childConversationMap={conversation?.child_conversation_map}
+          showHeader={isFirstInSequence}
         />
       );
     }
@@ -1311,6 +1385,19 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
               position: "relative",
             }}
           >
+            {/* Earlier messages indicator at top */}
+            {hasMoreAbove && !isLoadingOlder && (
+              <div className="sticky top-0 z-10 flex justify-center py-2">
+                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-xs shadow-sm">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                  </svg>
+                  {conversation?.message_count && messages.length < conversation.message_count
+                    ? `${conversation.message_count - messages.length} earlier messages`
+                    : "Scroll up to load more"}
+                </div>
+              </div>
+            )}
             {/* Loading indicator at top */}
             {isLoadingOlder && (
               <div className="sticky top-0 z-10 flex justify-center py-2">
@@ -1338,8 +1425,8 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
                     transform: `translateY(${virtualItem.start}px)`,
                   }}
                 >
-                  <div className="max-w-4xl mx-auto px-4 py-1">
-                    {renderMessage(msg)}
+                  <div className={`max-w-4xl mx-auto px-4 ${collapsed ? "py-0.5" : "py-1"}`}>
+                    {renderMessage(msg, virtualItem.index)}
                   </div>
                 </div>
               );

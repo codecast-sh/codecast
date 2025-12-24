@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -23,6 +23,7 @@ type ConversationData = {
   agent_type?: string;
   share_token?: string;
   is_private?: boolean;
+  message_count?: number;
   messages: Message[];
   user?: { name?: string; email?: string } | null;
   parent_conversation_id?: string | null;
@@ -33,94 +34,64 @@ type ConversationData = {
   git_diff?: string | null;
   git_diff_staged?: string | null;
   git_remote_url?: string | null;
-  has_more_above?: boolean;
-  oldest_timestamp?: number | null;
 };
 
 export function useConversationMessages(conversationId: string) {
-  const [olderMessages, setOlderMessages] = useState<Message[]>([]);
-  const [oldestTimestamp, setOldestTimestamp] = useState<number | null>(null);
-  const [hasMoreAbove, setHasMoreAbove] = useState(false);
-  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
-  const loadingRef = useRef(false);
+  const [lastTimestamp, setLastTimestamp] = useState<number | null>(null);
+  const [cachedMessages, setCachedMessages] = useState<Message[]>([]);
+  const [cachedConversation, setCachedConversation] = useState<any>(null);
 
-  const conversation = useQuery(api.conversations.getConversation, {
-    conversation_id: conversationId as Id<"conversations">,
-  }) as ConversationData | null | undefined;
+  const initialData = useQuery(
+    api.conversations.getAllMessages,
+    { conversation_id: conversationId as Id<"conversations"> }
+  );
 
-  const olderMessagesResult = useQuery(
-    api.conversations.getOlderMessages,
-    oldestTimestamp !== null && hasMoreAbove && isLoadingOlder
+  const newMessagesResult = useQuery(
+    api.conversations.getNewMessages,
+    lastTimestamp !== null
       ? {
           conversation_id: conversationId as Id<"conversations">,
-          before_timestamp: oldestTimestamp,
-          limit: 100,
+          after_timestamp: lastTimestamp,
         }
       : "skip"
   );
 
-  // Initialize from conversation
   useEffect(() => {
-    if (conversation) {
-      setHasMoreAbove(conversation.has_more_above ?? false);
-      if (conversation.oldest_timestamp !== undefined) {
-        setOldestTimestamp(conversation.oldest_timestamp);
-      }
+    if (initialData && !cachedConversation) {
+      setCachedConversation(initialData);
+      setCachedMessages(initialData.messages || []);
+      setLastTimestamp(initialData.last_timestamp);
     }
-  }, [conversation]);
+  }, [initialData, cachedConversation]);
 
-  // Handle older messages result
   useEffect(() => {
-    if (olderMessagesResult && isLoadingOlder) {
-      setOlderMessages((prev) => {
+    if (newMessagesResult && newMessagesResult.messages?.length > 0) {
+      setCachedMessages((prev) => {
         const existingIds = new Set(prev.map((m) => m._id));
-        const newMsgs = olderMessagesResult.messages.filter(
+        const uniqueNew = newMessagesResult.messages.filter(
           (m: Message) => !existingIds.has(m._id)
         );
-        return [...newMsgs, ...prev];
+        if (uniqueNew.length === 0) return prev;
+        return [...prev, ...uniqueNew].sort((a, b) => a.timestamp - b.timestamp);
       });
-      setHasMoreAbove(olderMessagesResult.has_more);
-      if (olderMessagesResult.oldest_timestamp !== null) {
-        setOldestTimestamp(olderMessagesResult.oldest_timestamp);
+
+      if (newMessagesResult.last_timestamp !== null) {
+        setLastTimestamp(newMessagesResult.last_timestamp);
       }
-      setIsLoadingOlder(false);
-      loadingRef.current = false;
     }
-  }, [olderMessagesResult, isLoadingOlder]);
+  }, [newMessagesResult]);
 
-  // Reset when conversation changes
-  useEffect(() => {
-    setOlderMessages([]);
-    setOldestTimestamp(null);
-    setHasMoreAbove(false);
-    setIsLoadingOlder(false);
-    loadingRef.current = false;
-  }, [conversationId]);
-
-  const loadOlder = useCallback(() => {
-    if (loadingRef.current || !hasMoreAbove || oldestTimestamp === null) return;
-    loadingRef.current = true;
-    setIsLoadingOlder(true);
-  }, [hasMoreAbove, oldestTimestamp]);
-
-  // Combine messages: older loaded messages + current conversation messages
-  const allMessages = conversation
-    ? (() => {
-        const currentMsgs = conversation.messages || [];
-        const currentIds = new Set(currentMsgs.map((m) => m._id));
-        const uniqueOlder = olderMessages.filter((m) => !currentIds.has(m._id));
-        return [...uniqueOlder, ...currentMsgs].sort(
-          (a, b) => a.timestamp - b.timestamp
-        );
-      })()
-    : [];
+  const conversation = cachedConversation
+    ? {
+        ...cachedConversation,
+        messages: cachedMessages,
+      }
+    : null;
 
   return {
-    conversation: conversation
-      ? { ...conversation, messages: allMessages }
-      : conversation,
-    hasMoreAbove,
-    isLoadingOlder,
-    loadOlder,
+    conversation: initialData === undefined ? undefined : conversation,
+    hasMoreAbove: false,
+    isLoadingOlder: false,
+    loadOlder: useCallback(() => {}, []),
   };
 }

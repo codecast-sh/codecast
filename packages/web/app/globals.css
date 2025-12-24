@@ -89,17 +89,22 @@
 .prose {
   --tw-prose-body: var(--sol-text-secondary);
   --tw-prose-headings: var(--sol-text);
+  --tw-prose-bold: var(--sol-text);
   --tw-prose-links: #d97706;
   --tw-prose-code: var(--sol-text);
   --tw-prose-pre-bg: var(--sol-bg-alt);
+  --tw-prose-bullets: var(--sol-text-muted);
+  --tw-prose-counters: var(--sol-text-muted);
+  --tw-prose-quotes: var(--sol-text-muted);
+  --tw-prose-quote-borders: var(--sol-border);
 }
 
 .prose pre {
   @apply rounded-md text-sm;
-  background-color: #002b36 !important;
-  border: none !important;
+  background-color: var(--sol-bg-alt) !important;
+  border: 1px solid var(--sol-border) !important;
+  border-opacity: 0.3;
   outline: none !important;
-  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
 }
 
 .prose code {
@@ -112,12 +117,14 @@
 
 .prose table {
   @apply w-full border-collapse text-sm;
+  background-color: var(--sol-bg);
 }
 
 .prose th,
 .prose td {
   @apply border px-3 py-2 text-left;
   border-color: var(--sol-border);
+  background-color: var(--sol-bg);
 }
 
 .prose th {
@@ -125,8 +132,8 @@
   @apply font-medium;
 }
 
-.prose tr:nth-child(even) {
-  background-color: color-mix(in srgb, var(--sol-bg-alt) 50%, transparent);
+.prose tr:nth-child(even) td {
+  background-color: var(--sol-bg-alt);
 }
 
 

@@ -3,13 +3,13 @@ import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { useEffect, useState, useMemo } from "react";
-import { getConversationPreview, cleanTitle } from "../lib/conversationProcessor";
-import { UsageBadge } from "./UsageDisplay";
+import { cleanTitle } from "../lib/conversationProcessor";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 
 type Conversation = {
   _id: string;
   title: string;
+  subtitle?: string | null;
   first_user_message?: string;
   first_assistant_message?: string;
   message_alternates?: Array<{ role: "user" | "assistant"; content: string }>;
@@ -70,10 +70,10 @@ function getMessageCountColor(count: number): string {
   return "text-indigo-400 border-indigo-500/50";
 }
 
-function ClaudeLogo({ className = "w-4 h-4" }: { className?: string }) {
+function ClaudeIcon({ className = "w-4 h-4" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M4.709 15.955l4.72-2.647.08-.08 2.726-4.721c.398-.65 1.063-1.063 1.808-1.063h.08c.744 0 1.409.413 1.807 1.063l2.727 4.72.079.08 4.72 2.728c.65.398 1.063 1.063 1.063 1.808v.08c0 .744-.413 1.409-1.063 1.807l-4.72 2.727-.08.08-2.727 4.72c-.398.65-1.063 1.063-1.808 1.063h-.08c-.744 0-1.409-.413-1.807-1.063l-2.727-4.72-.079-.08-4.72-2.727c-.65-.398-1.063-1.063-1.063-1.808v-.08c0-.744.413-1.409 1.063-1.807zm7.248-1.41l-1.33 2.302 2.302 1.33c.16.08.319.08.479 0l2.302-1.33-1.33-2.302c-.08-.16-.08-.319 0-.479l1.33-2.302-2.302-1.33c-.16-.08-.319-.08-.479 0l-2.302 1.33 1.33 2.302c.08.16.08.319 0 .479z" />
+      <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
     </svg>
   );
 }
@@ -383,62 +383,83 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                 <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-xl p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm">
                   <div className="flex items-start justify-between gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-start gap-2 mb-1.5">
-                        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-sol-bg-alt flex items-center justify-center text-[10px] font-medium text-sol-text-secondary mt-0.5">
-                          {(conv.author_name?.charAt(0) || "U").toUpperCase()}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sol-text font-medium text-base group-hover:text-sol-yellow transition-colors">
+                      {/* Header row: title + timestamp */}
+                      <div className="flex items-start justify-between gap-3 mb-1">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className="text-sol-text font-medium text-base group-hover:text-sol-yellow transition-colors truncate">
                             {cleanTitle(conv.title)}
                           </span>
                           {conv.is_active && (
-                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 ml-2 rounded-md bg-sol-green/20 border border-sol-green/60 align-middle">
-                              <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
-                              <span className="text-xs text-sol-green font-semibold tracking-wide">LIVE</span>
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50 shrink-0">
+                              <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+                              <span className="text-[10px] text-sol-green font-semibold">LIVE</span>
                             </span>
                           )}
                         </div>
+                        <span className="text-[11px] text-sol-text-dim/50 shrink-0">
+                          {getRelativeTime(conv.updated_at).replace(' minutes', ' min').replace(' minute', ' min').replace(' hours', ' hr').replace(' hour', ' hr')}
+                        </span>
                       </div>
 
-                      {(() => {
-                        const messages = getConversationPreview(conv.message_alternates, conv.title, 4);
-                        if (messages.length === 0 && conv.first_assistant_message && !conv.first_assistant_message.startsWith("[Using:")) {
-                          messages.push({ role: "assistant", content: conv.first_assistant_message, cleanContent: conv.first_assistant_message, isCommand: false });
-                        }
+                      {/* Subtitle */}
+                      {conv.subtitle && (
+                        <p className="text-sm text-sol-text-muted mb-2 line-clamp-2">{conv.subtitle}</p>
+                      )}
 
-                        if (messages.length === 0) return null;
+                      {(() => {
+                        const alternates = conv.message_alternates || [];
+                        if (alternates.length === 0) return null;
+
+                        const clean = (c: string) => c?.replace(/<[^>]+>/g, "").replace(/^\s*Caveat:.*$/gm, "").trim() || "";
+                        const isToolMsg = (c: string) => c?.startsWith("[Using:") || c?.startsWith("[Request");
+
+                        const processed = alternates
+                          .map(m => ({ ...m, cleanContent: clean(m.content) }))
+                          .filter(m => m.cleanContent.length > 0 && !isToolMsg(m.cleanContent));
+
+                        if (processed.length === 0) return null;
+
+                        const firstMsgs = processed.slice(0, 2);
+                        const lastMsgs = processed.length > 4 ? processed.slice(-2) : [];
+                        const showEllipsis = processed.length > 4;
+
+                        const renderMessage = (m: typeof processed[0], key: string) => (
+                          <div key={key} className="flex items-start gap-2 min-w-0">
+                            {m.role === "assistant" ? (
+                              <span className="flex-shrink-0 w-4 h-4 rounded bg-sol-yellow flex items-center justify-center mt-0.5">
+                                <ClaudeIcon className="w-2.5 h-2.5 text-sol-bg" />
+                              </span>
+                            ) : (
+                              <span className="flex-shrink-0 w-4 h-4 rounded-full bg-sol-violet/60 flex items-center justify-center mt-0.5 text-[8px] font-medium text-white">
+                                {(conv.author_name?.charAt(0) || "U").toUpperCase()}
+                              </span>
+                            )}
+                            <span className="truncate min-w-0 text-sol-text-muted leading-relaxed">{m.cleanContent}</span>
+                          </div>
+                        );
+
                         return (
-                          <div className="mb-2 space-y-0.5 text-xs overflow-hidden opacity-60">
-                            {messages.map((m, idx) => (
-                              <div key={idx} className="flex items-start gap-1.5 min-w-0">
-                                {m.role === "assistant" ? (
-                                  <span className="flex-shrink-0 w-3.5 h-3.5 rounded-full bg-sol-yellow/70 flex items-center justify-center mt-0.5">
-                                    <ClaudeLogo className="w-2 h-2 text-sol-text/80" />
-                                  </span>
-                                ) : (
-                                  <span className="flex-shrink-0 w-3.5 h-3.5 rounded-full bg-sol-bg-alt flex items-center justify-center mt-0.5 text-[7px] font-medium text-sol-text-muted">
-                                    {(conv.author_name?.charAt(0) || "U").toUpperCase()}
-                                  </span>
-                                )}
-                                <span className="truncate min-w-0 text-sol-text-muted">{m.cleanContent}</span>
+                          <div className="mb-3 space-y-1.5 text-xs overflow-hidden opacity-70">
+                            {firstMsgs.map((m, idx) => renderMessage(m, `first-${idx}`))}
+                            {showEllipsis && (
+                              <div className="flex items-center gap-2 pl-6">
+                                <span className="text-sol-text-muted0">...</span>
                               </div>
-                            ))}
+                            )}
+                            {lastMsgs.map((m, idx) => renderMessage(m, `last-${idx}`))}
                           </div>
                         );
                       })()}
 
 
-                      <div className="flex items-center gap-2 text-xs flex-wrap opacity-70">
+                      <div className="flex items-center gap-2 text-xs flex-wrap text-sol-text-muted0">
                         {!conv.is_own && (
-                          <span className="text-sol-text-muted font-medium">
+                          <span className="font-medium">
                             {conv.author_name}
                           </span>
                         )}
-                        <span className="text-sol-text-muted0">
-                          {getRelativeTime(conv.updated_at)}
-                        </span>
                         {conv.duration_ms > 60000 && (
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt/60 bg-sol-bg-alt border ${getDurationColor(conv.duration_ms)}`}>
+                          <span className={`inline-flex items-center gap-1 ${getDurationColor(conv.duration_ms).split(' ')[0]}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
@@ -446,31 +467,20 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                           </span>
                         )}
                         {conv.message_count > 0 && (
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt/60 bg-sol-bg-alt border ${getMessageCountColor(conv.message_count)}`}>
+                          <span className="inline-flex items-center gap-1">
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                             </svg>
                             {conv.message_count}
                           </span>
                         )}
-                        {conv.tool_call_count > 0 && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt/60 bg-sol-bg-alt text-sol-text-muted0 border border-sol-border/40 border-sol-border">
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
-                            </svg>
-                            {conv.tool_call_count}
-                          </span>
-                        )}
                         {conv.latest_todos && conv.latest_todos.todos.length > 0 && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/50 font-medium">
+                          <span className="inline-flex items-center gap-1 text-sol-green">
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                             </svg>
                             {conv.latest_todos.todos.filter(t => t.status === 'completed').length}/{conv.latest_todos.todos.length}
                           </span>
-                        )}
-                        {conv.latest_usage && (
-                          <UsageBadge usage={conv.latest_usage} />
                         )}
                         {conv.subagent_types && conv.subagent_types.length > 0 && conv.subagent_types.map((type) => (
                           <span

@@ -4,6 +4,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { checkRateLimit, MESSAGE_LIMIT } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
+import { shouldGenerateTitle } from "./titleGeneration";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -97,14 +99,21 @@ export const addMessage = mutation({
       subtype: args.subtype,
       timestamp: msgTimestamp,
     });
+    const newMessageCount = conversation.message_count + 1;
     await ctx.db.patch(args.conversation_id, {
-      message_count: conversation.message_count + 1,
+      message_count: newMessageCount,
       updated_at: msgTimestamp,
     });
 
     if (args.api_token) {
       await ctx.db.patch(conversation.user_id, {
         daemon_last_seen: Date.now(),
+      });
+    }
+
+    if (shouldGenerateTitle(newMessageCount)) {
+      await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
+        conversation_id: args.conversation_id,
       });
     }
 

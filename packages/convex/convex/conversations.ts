@@ -216,6 +216,159 @@ export const getConversation = query({
   },
 });
 
+export const getAllMessages = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return null;
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      if (conversation.is_private !== false) {
+        return null;
+      }
+      const authUser = await ctx.db.get(authUserId);
+      if (
+        !authUser ||
+        !authUser.team_id ||
+        authUser.team_id.toString() !== conversation.team_id?.toString()
+      ) {
+        return null;
+      }
+    }
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("asc")
+      .collect();
+
+    const user = await ctx.db.get(conversation.user_id);
+
+    let firstUserMessage = "";
+    for (const msg of messages) {
+      const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+      if (msg.role === "user" && !hasToolResults) {
+        const text = msg.content?.trim();
+        if (text) {
+          firstUserMessage = text.slice(0, 120);
+          if (text.length > 120) firstUserMessage += "...";
+          break;
+        }
+      }
+    }
+
+    const title = conversation.slug
+      ? formatSlugAsTitle(conversation.slug)
+      : conversation.title || firstUserMessage || `Session ${conversation.session_id.slice(0, 8)}`;
+
+    const childConversations: Array<{ _id: string; title: string }> = [];
+    const childConversationMap: Record<string, string> = {};
+
+    const childConvs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
+      .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
+      .take(100);
+
+    const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
+    for (const conv of childConvs) {
+      if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
+        const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+        childConversations.push({ _id: conv._id, title: childTitle });
+        childConversationMap[conv.parent_message_uuid] = conv._id;
+      }
+    }
+
+    return {
+      ...conversation,
+      title,
+      messages,
+      user: user ? { name: user.name, email: user.email } : null,
+      child_conversations: childConversations,
+      child_conversation_map: childConversationMap,
+      last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
+    };
+  },
+});
+
+export const getNewMessages = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    after_timestamp: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return null;
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      if (conversation.is_private !== false) {
+        return null;
+      }
+      const authUser = await ctx.db.get(authUserId);
+      if (
+        !authUser ||
+        !authUser.team_id ||
+        authUser.team_id.toString() !== conversation.team_id?.toString()
+      ) {
+        return null;
+      }
+    }
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id).gt("timestamp", args.after_timestamp)
+      )
+      .order("asc")
+      .collect();
+
+    const childConversations: Array<{ _id: string; title: string }> = [];
+    const childConversationMap: Record<string, string> = {};
+
+    if (messages.length > 0) {
+      const childConvs = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
+        .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
+        .take(100);
+
+      const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
+      for (const conv of childConvs) {
+        if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
+          const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+          childConversations.push({ _id: conv._id, title: childTitle });
+          childConversationMap[conv.parent_message_uuid] = conv._id;
+        }
+      }
+    }
+
+    return {
+      messages,
+      child_conversations: childConversations,
+      child_conversation_map: childConversationMap,
+      last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
+      updated_at: conversation.updated_at,
+      title: conversation.title,
+    };
+  },
+});
+
 export const getConversationMessages = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -245,20 +398,24 @@ export const getConversationMessages = query({
       }
     }
 
-    let messagesQuery = ctx.db
-      .query("messages")
-      .withIndex("by_conversation_id", (q) =>
-        q.eq("conversation_id", args.conversation_id)
-      );
-
+    let messages;
     if (args.after_timestamp) {
-      messagesQuery = messagesQuery.filter((q) =>
-        q.gt(q.field("timestamp"), args.after_timestamp!)
-      );
+      messages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) =>
+          q.eq("conversation_id", args.conversation_id).gt("timestamp", args.after_timestamp!)
+        )
+        .order("asc")
+        .collect();
+    } else {
+      messages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) =>
+          q.eq("conversation_id", args.conversation_id)
+        )
+        .order("asc")
+        .collect();
     }
-
-    const messages = await messagesQuery.collect();
-    const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
 
     const childConversations: Array<{ _id: string; title: string }> = [];
     const childConversationMap: Record<string, string> = {};
@@ -269,7 +426,7 @@ export const getConversationMessages = query({
       .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
       .take(100);
 
-    const messageUuids = new Set(sortedMessages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
+    const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
     for (const conv of childConvs) {
       if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
         const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
@@ -279,10 +436,10 @@ export const getConversationMessages = query({
     }
 
     return {
-      messages: sortedMessages,
+      messages,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
-      last_timestamp: sortedMessages.length > 0 ? sortedMessages[sortedMessages.length - 1].timestamp : null,
+      last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
     };
   },
 });
@@ -410,7 +567,7 @@ export const listConversations = query({
       return { conversations: [], nextCursor: null };
     }
 
-    const limit = args.limit ?? 50;
+    const limit = args.limit ?? 500;
     const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
     let conversations;
@@ -575,6 +732,7 @@ export const listConversations = query({
         return {
           _id: c._id,
           title,
+          subtitle: c.subtitle || null,
           first_user_message: firstUserMessage,
           first_assistant_message: firstAssistantMessage,
           message_alternates: messageAlternates,
