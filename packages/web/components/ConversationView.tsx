@@ -18,6 +18,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 type ToolCall = {
   id: string;
@@ -66,6 +69,7 @@ export type ConversationData = {
   git_diff?: string | null;
   git_diff_staged?: string | null;
   git_remote_url?: string | null;
+  status?: "active" | "completed";
 };
 
 type ConversationViewProps = {
@@ -1022,6 +1026,78 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
+function MessageInput({ conversationId }: { conversationId: string }) {
+  const [message, setMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
+  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!message.trim() || isSubmitting) return;
+
+    setIsSubmitting(true);
+    setLastStatus(null);
+
+    try {
+      await sendMessage({
+        conversation_id: conversationId as Id<"conversations">,
+        content: message.trim(),
+      });
+      setLastStatus("delivered");
+      setMessage("");
+      toast.success("Message sent");
+      setTimeout(() => setLastStatus(null), 2000);
+    } catch (error) {
+      setLastStatus("failed");
+      toast.error(error instanceof Error ? error.message : "Failed to send message");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
+      <form onSubmit={handleSubmit} className="max-w-4xl mx-auto px-4 py-3">
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            disabled={isSubmitting}
+            placeholder="Send a message to this session..."
+            className="flex-1 px-3 py-2 bg-sol-bg border border-sol-border rounded text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-blue disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={!message.trim() || isSubmitting}
+            className="px-4 py-2 bg-sol-blue hover:bg-sol-cyan text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {isSubmitting ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                Sending...
+              </>
+            ) : lastStatus === "delivered" ? (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                Sent
+              </>
+            ) : (
+              "Send"
+            )}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export function ConversationView({ conversation, backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder }: ConversationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -1434,6 +1510,10 @@ export function ConversationView({ conversation, backHref, backLabel = "Back", h
           </div>
         )}
       </div>
+
+      {conversation && conversation.status === "active" && (
+        <MessageInput conversationId={conversation._id} />
+      )}
     </main>
   );
 }
