@@ -167,4 +167,53 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_timestamp", ["timestamp"])
     .index("by_sha", ["sha"]),
+
+  pull_requests: defineTable({
+    team_id: v.id("teams"),
+    github_pr_id: v.number(),
+    repository: v.string(),
+    number: v.number(),
+    title: v.string(),
+    body: v.string(),
+    state: v.union(
+      v.literal("open"),
+      v.literal("closed"),
+      v.literal("merged")
+    ),
+    author_github_username: v.string(),
+    linked_session_ids: v.array(v.id("conversations")),
+    created_at: v.number(),
+    updated_at: v.number(),
+    merged_at: v.optional(v.number()),
+  })
+    .index("by_team_id", ["team_id"])
+    .index("by_github_pr_id", ["github_pr_id"])
+    .index("by_repository", ["repository"]),
+
+  reviews: defineTable({
+    pull_request_id: v.id("pull_requests"),
+    reviewer_user_id: v.id("users"),
+    state: v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("changes_requested"),
+      v.literal("commented")
+    ),
+    body: v.optional(v.string()),
+    submitted_at: v.number(),
+  })
+    .index("by_pull_request", ["pull_request_id"])
+    .index("by_reviewer", ["reviewer_user_id"])
+    .index("by_pull_request_state", ["pull_request_id", "state"]),
+
+  review_comments: defineTable({
+    review_id: v.id("reviews"),
+    file_path: v.string(),
+    line_number: v.number(),
+    content: v.string(),
+    resolved: v.boolean(),
+    created_at: v.number(),
+  })
+    .index("by_review", ["review_id"])
+    .index("by_review_resolved", ["review_id", "resolved"]),
 });
