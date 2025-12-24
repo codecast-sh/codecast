@@ -161,6 +161,20 @@ function groupByTime(conversations: Conversation[]): TimeGroup[] {
   return groups.filter((g) => g.conversations.length > 0);
 }
 
+function getAgentTypeLabel(agentType: string): string {
+  if (agentType === "claude_code") return "Claude Code";
+  if (agentType === "codex_cli") return "Codex CLI";
+  return agentType;
+}
+
+function createConversationAriaLabel(conv: Conversation): string {
+  const title = cleanTitle(conv.title);
+  const agentType = getAgentTypeLabel(conv.agent_type);
+  const time = getRelativeTime(conv.updated_at);
+  const status = conv.is_active ? ", active" : "";
+  return `${title}, ${agentType}, ${time}${status}`;
+}
+
 type TimeFilter = "all" | "long" | "active";
 type SubagentFilter = "all" | "main" | "subagent";
 
@@ -417,6 +431,8 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
       ref={listRef}
       className="space-y-6"
       tabIndex={0}
+      role="list"
+      aria-label="Conversation list"
       onKeyDown={handleKeyDown}
       onFocus={() => {
         if (focusedIndex === -1 && flatConversations.length > 0) {
@@ -510,6 +526,13 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
         </button>
       </div>
 
+      {/* Screen reader announcement for focused item */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {focusedIndex >= 0 && focusedIndex < flatConversations.length && (
+          `Selected: ${createConversationAriaLabel(flatConversations[focusedIndex])}`
+        )}
+      </div>
+
       {groups.length === 0 && (
         <div className="text-center py-8 text-sol-text-muted0">
           No conversations match these filters
@@ -532,6 +555,9 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
                   key={conv._id}
                   href={`/conversation/${conv._id}`}
                   className="group block relative"
+                  role="listitem"
+                  aria-label={createConversationAriaLabel(conv)}
+                  aria-current={isFocused ? "true" : undefined}
                 >
                   <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
                   <div className={`relative bg-sol-bg-alt/40 border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm ${
@@ -673,6 +699,9 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
                         key={child._id}
                         href={`/conversation/${child._id}`}
                         className="group block relative"
+                        role="listitem"
+                        aria-label={`Subagent: ${createConversationAriaLabel(child)}`}
+                        aria-current={isChildFocused ? "true" : undefined}
                       >
                         <div className={`relative bg-sol-bg-alt/40 border rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200 ${
                           isChildFocused
