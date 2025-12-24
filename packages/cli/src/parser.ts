@@ -55,7 +55,10 @@ export function parseSessionLine(line: string): ClaudeSessionEntry | null {
   if (!line.trim()) return null;
   try {
     return JSON.parse(line) as ClaudeSessionEntry;
-  } catch {
+  } catch (err) {
+    const preview = line.length > 100 ? line.slice(0, 100) + '...' : line;
+    console.warn(`[parser] Failed to parse session line: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[parser] Line content: ${preview}`);
     return null;
   }
 }
@@ -195,7 +198,10 @@ export function parseLine(line: string): ClaudeMessage | null {
   if (!line.trim()) return null;
   try {
     return JSON.parse(line) as ClaudeMessage;
-  } catch {
+  } catch (err) {
+    const preview = line.length > 100 ? line.slice(0, 100) + '...' : line;
+    console.warn(`[parser] Failed to parse line: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[parser] Line content: ${preview}`);
     return null;
   }
 }
@@ -216,7 +222,10 @@ export function parseCodexLine(line: string): CodexMessage | null {
   if (!line.trim()) return null;
   try {
     return JSON.parse(line) as CodexMessage;
-  } catch {
+  } catch (err) {
+    const preview = line.length > 100 ? line.slice(0, 100) + '...' : line;
+    console.warn(`[parser] Failed to parse codex line: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[parser] Line content: ${preview}`);
     return null;
   }
 }
