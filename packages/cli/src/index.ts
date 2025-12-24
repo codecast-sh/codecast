@@ -559,6 +559,109 @@ program
   });
 
 program
+  .command("setup")
+  .description("Set up daemon to start automatically on login (macOS only)")
+  .option("--disable", "Disable auto-start on login")
+  .action((options) => {
+    if (process.platform !== "darwin") {
+      console.error("Auto-start setup is only supported on macOS");
+      process.exit(1);
+    }
+
+    const home = process.env.HOME;
+    if (!home) {
+      console.error("HOME environment variable not set");
+      process.exit(1);
+    }
+
+    const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
+    const plistPath = path.join(launchAgentsDir, "sh.codecast.daemon.plist");
+
+    if (options.disable) {
+      if (!fs.existsSync(plistPath)) {
+        console.log("Auto-start is not enabled");
+        return;
+      }
+
+      try {
+        spawn("launchctl", ["unload", plistPath], { stdio: "inherit" });
+      } catch {
+        // Ignore errors - plist might not be loaded
+      }
+
+      fs.unlinkSync(plistPath);
+      console.log("Auto-start disabled");
+      console.log(`Removed: ${plistPath}`);
+      return;
+    }
+
+    if (!fs.existsSync(launchAgentsDir)) {
+      fs.mkdirSync(launchAgentsDir, { recursive: true });
+    }
+
+    let executablePath: string;
+    let args: string[];
+
+    const isBundle = __filename.includes("/dist/") || __filename.includes("/build/");
+    const isBinary = !__filename.endsWith(".ts") && !__filename.endsWith(".js");
+
+    if (isBinary) {
+      executablePath = process.argv[0];
+      args = ["start"];
+    } else if (isBundle) {
+      const scriptPath = path.resolve(__dirname, "index.js");
+      executablePath = process.execPath;
+      args = [scriptPath, "start"];
+    } else {
+      const scriptPath = path.resolve(__dirname, "index.ts");
+      executablePath = process.execPath;
+      args = [scriptPath, "start"];
+    }
+
+    const programArgs = [executablePath, ...args]
+      .map((arg) => `    <string>${arg}</string>`)
+      .join("\n");
+
+    const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.codecast.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+${programArgs}
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${CONFIG_DIR}/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>${CONFIG_DIR}/launchd.err.log</string>
+</dict>
+</plist>
+`;
+
+    fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
+    console.log("Auto-start enabled");
+    console.log(`LaunchAgent created: ${plistPath}`);
+    console.log(`Command: ${executablePath} ${args.join(" ")}`);
+
+    try {
+      spawn("launchctl", ["load", plistPath], { stdio: "inherit" });
+      console.log("\nLaunchAgent loaded successfully");
+    } catch (err) {
+      console.log("\nNote: LaunchAgent will start on next login");
+      console.log("To load it now, run: launchctl load " + plistPath);
+    }
+  });
+
+program
   .command("update")
   .description("Update codecast to the latest version")
   .action(async () => {
