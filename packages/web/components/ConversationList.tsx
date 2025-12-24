@@ -63,11 +63,11 @@ function getDurationColor(ms: number): string {
 }
 
 function getMessageCountColor(count: number): string {
-  if (count < 10) return "text-sol-text-muted0 border-sol-border/40";
-  if (count < 30) return "text-sol-text-muted border-sol-border/50";
-  if (count < 100) return "text-blue-400/80 border-blue-600/40";
-  if (count < 200) return "text-blue-400 border-blue-500/50";
-  return "text-indigo-400 border-indigo-500/50";
+  if (count < 10) return "bg-sol-bg-alt/60 text-sol-text-muted0 border-sol-border/40";
+  if (count < 30) return "bg-sol-bg-alt/80 text-sol-text-muted border-sol-border/50";
+  if (count < 100) return "bg-blue-500/20 text-blue-400 border-blue-600/40";
+  if (count < 200) return "bg-blue-500/30 text-blue-400 border-blue-500/50";
+  return "bg-indigo-500/30 text-indigo-400 border-indigo-500/50";
 }
 
 function ClaudeIcon({ className = "w-4 h-4" }: { className?: string }) {
@@ -502,11 +502,11 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                           </span>
                         )}
                         {conv.message_count > 0 && (
-                          <span className="inline-flex items-center gap-1">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${getMessageCountColor(conv.message_count)}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                             </svg>
-                            {conv.message_count}
+                            <span className="text-[10px] font-semibold">{conv.message_count}</span>
                           </span>
                         )}
                         {conv.latest_todos && conv.latest_todos.todos.length > 0 && (
@@ -564,7 +564,14 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                           {child.duration_ms > 60000 && (
                             <span>{formatDuration(child.duration_ms)}</span>
                           )}
-                          <span>{child.message_count} msgs</span>
+                          {child.message_count > 0 && (
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${getMessageCountColor(child.message_count)}`}>
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                              </svg>
+                              <span className="text-[10px] font-semibold">{child.message_count}</span>
+                            </span>
+                          )}
                         </div>
                       </div>
                     </Link>
