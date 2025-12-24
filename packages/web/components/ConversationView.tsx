@@ -19,9 +19,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { CommentPanel } from "./CommentPanel";
 
 type ToolCall = {
   id: string;
@@ -861,9 +862,13 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, collapsed, userName }: { content: string; timestamp: number; messageId: string; collapsed?: boolean; userName?: string }) {
+function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpenComments }: { content: string; timestamp: number; messageId: string; collapsed?: boolean; userName?: string; onOpenComments?: () => void }) {
   const truncated = collapsed ? content.split("\n").slice(0, 2).join("\n") : content;
   const wasTruncated = collapsed && content.split("\n").length > 2;
+
+  const commentCount = useQuery(api.comments.getCommentCount, {
+    message_id: messageId as Id<"messages">,
+  });
 
   const handleCopy = async () => {
     try {
@@ -876,16 +881,31 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName }: { co
 
   return (
     <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 ${collapsed ? "p-2 mb-1" : "p-4 mb-6"} relative`}>
-      <button
-        onClick={handleCopy}
-        className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
-        title="Copy message"
-        aria-label="Copy message"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-        </svg>
-      </button>
+      <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+        <button
+          onClick={onOpenComments}
+          className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue flex items-center gap-1"
+          title="Comments"
+          aria-label="Comments"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+          </svg>
+          {commentCount !== undefined && commentCount > 0 && (
+            <span className="text-xs">{commentCount}</span>
+          )}
+        </button>
+        <button
+          onClick={handleCopy}
+          className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
+          title="Copy message"
+          aria-label="Copy message"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        </button>
+      </div>
       <div className="flex items-center gap-2 mb-2">
         <UserIcon />
         <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
@@ -916,6 +936,7 @@ function AssistantBlock({
   collapsed,
   childConversationMap,
   showHeader = true,
+  onOpenComments,
 }: {
   content?: string;
   timestamp: number;
@@ -928,11 +949,16 @@ function AssistantBlock({
   collapsed?: boolean;
   childConversationMap?: Record<string, string>;
   showHeader?: boolean;
+  onOpenComments?: () => void;
 }) {
   const hasContent = content && content.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images && images.length > 0;
+
+  const commentCount = useQuery(api.comments.getCommentCount, {
+    message_id: messageId as Id<"messages">,
+  });
 
   const toolResultMap = useMemo(() => {
     const map: Record<string, ToolResult> = {};
@@ -974,16 +1000,31 @@ function AssistantBlock({
   return (
     <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative`}>
       {hasContent && (
-        <button
-          onClick={handleCopy}
-          className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary z-10"
-          title="Copy message"
-          aria-label="Copy message"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-        </button>
+        <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
+          <button
+            onClick={onOpenComments}
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary flex items-center gap-1"
+            title="Comments"
+            aria-label="Comments"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+            </svg>
+            {commentCount !== undefined && commentCount > 0 && (
+              <span className="text-xs">{commentCount}</span>
+            )}
+          </button>
+          <button
+            onClick={handleCopy}
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            title="Copy message"
+            aria-label="Copy message"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </button>
+        </div>
       )}
 
       {shouldShowHeader && (
@@ -1274,6 +1315,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [diffExpanded, setDiffExpanded] = useState(false);
+  const [commentMessageId, setCommentMessageId] = useState<Id<"messages"> | null>(null);
   const prevScrollHeightRef = useRef<number>(0);
   const shouldRestoreScrollRef = useRef(false);
 
@@ -1517,7 +1559,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
           return <CommandStatusLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} collapsed={collapsed} userName={userName} />;
+        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} />;
       }
       return null;
     }
@@ -1556,6 +1598,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
           collapsed={collapsed}
           childConversationMap={conversation?.child_conversation_map}
           showHeader={isFirstInSequence}
+          onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
         />
       );
     }
@@ -1744,6 +1787,14 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
 
       {conversation && conversation.status === "active" && (
         <MessageInput conversationId={conversation._id} />
+      )}
+
+      {commentMessageId && conversation && (
+        <CommentPanel
+          conversationId={conversation._id as Id<"conversations">}
+          messageId={commentMessageId}
+          onClose={() => setCommentMessageId(null)}
+        />
       )}
     </main>
   );

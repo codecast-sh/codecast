@@ -11,6 +11,7 @@
 import type * as apiTokens from "../apiTokens.js";
 import type * as auth from "../auth.js";
 import type * as cleanup from "../cleanup.js";
+import type * as comments from "../comments.js";
 import type * as commits from "../commits.js";
 import type * as conversations from "../conversations.js";
 import type * as health from "../health.js";
@@ -37,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   apiTokens: typeof apiTokens;
   auth: typeof auth;
   cleanup: typeof cleanup;
+  comments: typeof comments;
   commits: typeof commits;
   conversations: typeof conversations;
   health: typeof health;
