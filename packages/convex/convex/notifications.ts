@@ -1,4 +1,4 @@
-import { mutation, internalAction } from "./_generated/server";
+import { mutation, internalAction, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 
@@ -37,7 +37,7 @@ export const sendPushNotification = internalAction({
   },
 });
 
-export const notifyTeamSessionStart = mutation({
+export const notifyTeamSessionStart = internalMutation({
   args: {
     conversation_id: v.id("conversations"),
     user_id: v.id("users"),

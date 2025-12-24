@@ -2,9 +2,10 @@
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
+import { useRouter } from "next/navigation";
 
 type Conversation = {
   _id: string;
@@ -167,10 +168,13 @@ interface ConversationListProps {
 }
 
 export function ConversationList({ filter, directoryFilter, onDirectoriesChange }: ConversationListProps) {
+  const router = useRouter();
   const { conversations, hasMore, loadMore, isLoadingMore, isLoading } = useConversationsWithError(filter);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
+  const [focusedIndex, setFocusedIndex] = useState(-1);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -313,6 +317,48 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
     }
   }, [directories, onDirectoriesChange]);
 
+  const flatConversations = useMemo(() => {
+    const flat: Conversation[] = [];
+    filteredConversations.forEach((conv) => {
+      flat.push(conv);
+      if (conv.children && conv.children.length > 0) {
+        flat.push(...conv.children);
+      }
+    });
+    return flat;
+  }, [filteredConversations]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (flatConversations.length === 0) return;
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setFocusedIndex((prev) => {
+          if (prev < flatConversations.length - 1) {
+            return prev + 1;
+          }
+          return prev;
+        });
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setFocusedIndex((prev) => {
+          if (prev > 0) {
+            return prev - 1;
+          }
+          return prev;
+        });
+      } else if (e.key === "Enter" && focusedIndex >= 0) {
+        e.preventDefault();
+        const conversation = flatConversations[focusedIndex];
+        if (conversation) {
+          router.push(`/conversation/${conversation._id}`);
+        }
+      }
+    },
+    [flatConversations, focusedIndex, router]
+  );
+
   if (isLoading && conversations.length === 0) {
     return <LoadingSkeleton />;
   }
@@ -345,8 +391,24 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
 
   const groups = groupByTime(filteredConversations);
 
+  useEffect(() => {
+    if (focusedIndex === -1 && flatConversations.length > 0 && document.activeElement === listRef.current) {
+      setFocusedIndex(0);
+    }
+  }, [focusedIndex, flatConversations.length]);
+
   return (
-    <div className="space-y-6">
+    <div
+      ref={listRef}
+      className="space-y-6"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      onFocus={() => {
+        if (focusedIndex === -1 && flatConversations.length > 0) {
+          setFocusedIndex(0);
+        }
+      }}
+      onBlur={() => setFocusedIndex(-1)}>
       {/* Filter bar */}
       <div className="flex flex-wrap gap-1.5 sm:gap-2 items-center">
         {/* Time filters */}
@@ -424,14 +486,21 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
           </div>
 
           <div className="space-y-3">
-            {group.conversations.map((conv) => (
-              <Link
-                key={conv._id}
-                href={`/conversation/${conv._id}`}
-                className="group block relative"
-              >
-                <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm">
+            {group.conversations.map((conv) => {
+              const convIndex = flatConversations.findIndex(c => c._id === conv._id);
+              const isFocused = convIndex === focusedIndex;
+              return (
+                <Link
+                  key={conv._id}
+                  href={`/conversation/${conv._id}`}
+                  className="group block relative"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                  <div className={`relative bg-sol-bg-alt/40 border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm ${
+                    isFocused
+                      ? "ring-2 ring-sol-yellow border-sol-yellow/60"
+                      : "border-sol-border/30"
+                  }`}>
                   <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
                       {/* Header row: title + timestamp */}
@@ -552,18 +621,26 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                   </div>
                 </div>
               </Link>
-            ))}
+              );
+            })}
             {/* Render children (subagents) indented */}
             {group.conversations.map((conv) =>
               conv.children && conv.children.length > 0 && (
                 <div key={`children-${conv._id}`} className="ml-6 border-l-2 border-violet-600/30 pl-3 space-y-2">
-                  {conv.children.map((child) => (
-                    <Link
-                      key={child._id}
-                      href={`/conversation/${child._id}`}
-                      className="group block relative"
-                    >
-                      <div className="relative bg-sol-bg-alt/40 border border-sol-border/60 rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200">
+                  {conv.children.map((child) => {
+                    const childIndex = flatConversations.findIndex(c => c._id === child._id);
+                    const isChildFocused = childIndex === focusedIndex;
+                    return (
+                      <Link
+                        key={child._id}
+                        href={`/conversation/${child._id}`}
+                        className="group block relative"
+                      >
+                        <div className={`relative bg-sol-bg-alt/40 border rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200 ${
+                          isChildFocused
+                            ? "ring-2 ring-sol-yellow border-sol-yellow/60"
+                            : "border-sol-border/60"
+                        }`}>
                         <div className="flex items-center gap-2 mb-1">
                           <AgentIcon agentType={child.agent_type} className="w-3.5 h-3.5 shrink-0" />
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
@@ -592,7 +669,8 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                         </div>
                       </div>
                     </Link>
-                  ))}
+                    );
+                  })}
                 </div>
               )
             )}
