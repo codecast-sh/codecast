@@ -1,6 +1,7 @@
 import { convexAuth } from "@convex-dev/auth/server";
 import { Password } from "@convex-dev/auth/providers/Password";
 import { Email } from "@convex-dev/auth/providers/Email";
+import GitHub from "@auth/core/providers/github";
 import { Resend as ResendAPI } from "resend";
 import { alphabet, generateRandomString } from "oslo/crypto";
 
@@ -40,5 +41,19 @@ const ResendOTPPasswordReset = Email({
 });
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
-  providers: [Password({ reset: ResendOTPPasswordReset })],
+  providers: [
+    GitHub({
+      profile(profile) {
+        return {
+          email: profile.email,
+          name: profile.name ?? profile.login,
+          image: profile.avatar_url,
+          github_id: String(profile.id),
+          github_username: profile.login,
+          github_avatar_url: profile.avatar_url,
+        };
+      },
+    }),
+    Password({ reset: ResendOTPPasswordReset }),
+  ],
 });

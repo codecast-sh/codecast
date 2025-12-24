@@ -15,6 +15,9 @@ export default defineSchema({
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
     daemon_last_seen: v.optional(v.number()),
     theme: v.optional(v.union(v.literal("dark"), v.literal("light"))),
+    github_id: v.optional(v.string()),
+    github_username: v.optional(v.string()),
+    github_avatar_url: v.optional(v.string()),
   }).index("email", ["email"]),
 
   teams: defineTable({
@@ -35,6 +38,7 @@ export default defineSchema({
     session_id: v.string(),
     slug: v.optional(v.string()),
     title: v.optional(v.string()),
+    subtitle: v.optional(v.string()),
     project_hash: v.optional(v.string()),
     project_path: v.optional(v.string()),
     model: v.optional(v.string()),
