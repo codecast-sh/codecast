@@ -17,12 +17,13 @@ export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const reason = searchParams.get("reason");
+  const returnTo = searchParams.get("return_to");
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.push("/dashboard");
+      router.push(returnTo || "/dashboard");
     }
-  }, [isAuthenticated, isLoading, router]);
+  }, [isAuthenticated, isLoading, router, returnTo]);
 
   if (isLoading || isAuthenticated) {
     return (
@@ -50,7 +51,7 @@ export default function LoginPage() {
 
     try {
       await signIn("password", { email, password, flow: "signIn" });
-      router.push("/dashboard");
+      router.push(returnTo || "/dashboard");
     } catch (err) {
       if (err instanceof Error) {
         if (err.message.includes("Invalid") || err.message.includes("credentials")) {

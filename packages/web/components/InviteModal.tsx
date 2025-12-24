@@ -32,9 +32,11 @@ export function InviteModal({ trigger }: InviteModalProps) {
   const [copied, setCopied] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
 
+  const inviteUrl = team?.invite_code ? `https://codecast.sh/join/${team.invite_code}` : "";
+
   const handleCopyInviteCode = async () => {
-    if (team?.invite_code) {
-      await navigator.clipboard.writeText(team.invite_code);
+    if (inviteUrl) {
+      await navigator.clipboard.writeText(inviteUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -92,22 +94,22 @@ export function InviteModal({ trigger }: InviteModalProps) {
         <DialogHeader>
           <DialogTitle className="text-sol-text">Invite Team Member</DialogTitle>
           <DialogDescription className="text-sol-base1">
-            Share this invite code with your team members
+            Share this link with your team members
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label className="text-sol-base1">Invite Code</Label>
+              <Label className="text-sol-base1">Invite Link</Label>
               <span className={`text-xs ${isExpired ? "text-sol-red" : "text-sol-base1"}`}>
                 {formatExpiry(team.invite_code_expires_at)}
               </span>
             </div>
             <div className="flex gap-2">
               <Input
-                value={team.invite_code || ""}
+                value={inviteUrl}
                 readOnly
-                className={`font-mono text-lg tracking-wider bg-sol-bg-alt border-sol-border text-sol-text ${isExpired ? "opacity-50" : ""}`}
+                className={`font-mono text-sm bg-sol-bg-alt border-sol-border text-sol-text ${isExpired ? "opacity-50" : ""}`}
               />
               <Button
                 onClick={handleCopyInviteCode}
@@ -120,7 +122,7 @@ export function InviteModal({ trigger }: InviteModalProps) {
             </div>
             {isExpired && (
               <p className="text-sm text-sol-red">
-                This invite code has expired. {isAdmin ? "Generate a new one below." : "Ask an admin to regenerate it."}
+                This invite link has expired. {isAdmin ? "Generate a new one below." : "Ask an admin to regenerate it."}
               </p>
             )}
           </div>
@@ -129,8 +131,8 @@ export function InviteModal({ trigger }: InviteModalProps) {
             <div className="pt-2 border-t border-sol-border">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-sm text-sol-text">Regenerate Code</div>
-                  <div className="text-xs text-sol-base1">Creates a new code valid for 7 days</div>
+                  <div className="text-sm text-sol-text">Regenerate Link</div>
+                  <div className="text-xs text-sol-base1">Creates a new link valid for 7 days</div>
                 </div>
                 <Button
                   onClick={handleRegenerate}

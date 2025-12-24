@@ -66,6 +66,36 @@ export const getTeam = query({
   },
 });
 
+export const getTeamByInviteCode = query({
+  args: {
+    invite_code: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const team = await ctx.db
+      .query("teams")
+      .withIndex("by_invite_code", (q) => q.eq("invite_code", args.invite_code))
+      .unique();
+
+    if (!team) {
+      return null;
+    }
+
+    const members = await ctx.db.query("users").collect();
+    const memberCount = members.filter(
+      (u) => u.team_id?.toString() === team._id.toString()
+    ).length;
+
+    const isExpired = !!(team.invite_code_expires_at && Date.now() > team.invite_code_expires_at);
+
+    return {
+      _id: team._id,
+      name: team.name,
+      memberCount,
+      isExpired,
+    };
+  },
+});
+
 export const getTeamMembers = query({
   args: {
     team_id: v.id("teams"),
