@@ -26,9 +26,17 @@
     </watcher_daemon>
     <backend>
       <database>Convex (serverless, real-time)</database>
-      <auth>Convex Auth with email/password</auth>
+      <auth>GitHub OAuth (primary) + email/password (fallback)</auth>
       <functions>Convex functions for mutations and queries</functions>
+      <realtime>WebSocket connections for daemon ↔ web bidirectional messaging</realtime>
     </backend>
+    <mobile>
+      <framework>React Native via Expo SDK 54+</framework>
+      <navigation>Expo Router</navigation>
+      <state>Zustand (shared patterns with web)</state>
+      <push>Expo Push Notifications</push>
+      <database_client>Convex React Native client</database_client>
+    </mobile>
     <web_dashboard>
       <framework>Next.js 14 with App Router</framework>
       <styling>Tailwind CSS</styling>
@@ -113,10 +121,12 @@
 
     <web_dashboard>
       <authentication>
-        - Sign up with email/password via Convex Auth
+        - Primary: Sign in with GitHub OAuth
+        - Fallback: Email/password for users without GitHub
         - Login redirects to conversations list
         - Session persists across browser restarts
         - Logout clears local session
+        - Link GitHub account to access repository data
       </authentication>
 
       <conversation_list>
@@ -137,7 +147,29 @@
         - Display thinking/reasoning blocks if present
         - Show metadata: agent type, model, project path (hashed), timestamp
         - Copy message or entire conversation to clipboard
+        - Inline git commits: show commits made during session in timeline
+        - Send message to active session: input field to inject messages into running Claude Code
       </conversation_view>
+
+      <timeline_view>
+        - Unified timeline showing sessions + commits + PRs
+        - Filter by: user, date range, repository
+        - Group by: day, project, PR
+        - Link commits to sessions that created them
+        - Show PR status (open, merged, closed)
+        - Click to expand session context for any commit
+      </timeline_view>
+
+      <code_review>
+        - Fast, keyboard-driven review interface for teams
+        - Vim-style navigation: j/k for file navigation, n/p for comments
+        - Split diff view with syntax highlighting
+        - Inline commenting on any line
+        - Quick approve/request-changes workflow
+        - Link reviews to originating Claude Code sessions
+        - Batch review mode: flip through multiple PRs efficiently
+        - Keyboard shortcuts: a (approve), r (request changes), c (comment), Space (next file)
+      </code_review>
 
       <user_settings>
         - Profile: name, email
@@ -148,11 +180,75 @@
 
       <team_management>
         - View team members
-        - Invite by email (admin only)
+        - Invite by shareable link: codecast.sh/join/CODE (admin only)
+        - Generate new invite link (invalidates previous)
         - Remove member (admin only)
         - Team name and settings (admin only)
       </team_management>
     </web_dashboard>
+
+    <mobile_app>
+      <authentication>
+        - GitHub OAuth (primary)
+        - Email/password (fallback)
+        - Biometric unlock for returning users
+      </authentication>
+
+      <sessions_list>
+        - List all synced sessions (personal + team)
+        - Pull to refresh
+        - Filter by: agent type, user
+        - Show: title, timestamp, message count, status (active/completed)
+        - Real-time updates for active sessions
+      </sessions_list>
+
+      <conversation_view>
+        - Display full conversation with native scroll
+        - Syntax highlighted code blocks
+        - Tool calls with expandable outputs
+        - Send message to active session: input field + send button
+        - Native share sheet for conversation export
+      </conversation_view>
+
+      <push_notifications>
+        - Notify when team member starts new session
+        - Notify on @mentions in team comments
+        - Notify when session requests permission (if enabled)
+        - Configurable notification preferences
+        - Badge count for unread activity
+      </push_notifications>
+
+      <team_activity>
+        - Feed of team member activity (new sessions, commits, PRs)
+        - Filter by member or repository
+        - Quick actions: view session, send message
+      </team_activity>
+    </mobile_app>
+
+    <bidirectional_messaging>
+      <architecture>
+        - Daemon maintains persistent WebSocket connection to Convex
+        - Web/mobile clients send messages via Convex mutation
+        - Convex broadcasts to daemon via WebSocket
+        - Daemon injects message into active Claude Code session stdin
+      </architecture>
+
+      <flow>
+        1. User types message in web/mobile input
+        2. Message stored in Convex with session_id and pending status
+        3. WebSocket pushes message to daemon
+        4. Daemon locates active Claude Code session (by session_id)
+        5. Daemon writes message to session's input pipe
+        6. Daemon confirms delivery, updates message status to delivered
+        7. Normal sync captures Claude Code's response
+      </flow>
+
+      <error_handling>
+        - Session not found: show error, allow retry when session active
+        - Daemon offline: queue message, deliver on reconnect
+        - Delivery timeout: show failed status, allow retry
+      </error_handling>
+    </bidirectional_messaging>
 
     <data_model>
       <users>
@@ -160,12 +256,26 @@
         - team_id (belongs to one team)
         - role (member, admin)
         - daemon_last_seen (timestamp)
+        - github_id (optional, for OAuth)
+        - github_username (optional)
+        - github_avatar_url (optional)
+        - push_token (for mobile notifications)
+        - notification_preferences (JSON)
       </users>
 
       <teams>
         - id, name, created_at
         - invite_code (for joining)
+        - invite_link_slug (URL-friendly slug for shareable link)
       </teams>
+
+      <github_connections>
+        - id, user_id
+        - github_access_token (encrypted)
+        - github_refresh_token (encrypted)
+        - scopes (array of granted permissions)
+        - connected_at, expires_at
+      </github_connections>
 
       <conversations>
         - id, user_id, team_id
@@ -198,6 +308,54 @@
         - last_position (byte offset or line number)
         - last_synced_at
       </sync_cursors>
+
+      <commits>
+        - id, conversation_id (linked session)
+        - sha (git commit hash)
+        - message
+        - author_name, author_email
+        - timestamp
+        - files_changed (count)
+        - insertions, deletions
+        - repository (optional, if GitHub connected)
+        - pr_number (optional, if part of PR)
+      </commits>
+
+      <pull_requests>
+        - id, team_id
+        - github_pr_id
+        - repository (owner/repo)
+        - number, title, body
+        - state (open, closed, merged)
+        - author_github_username
+        - linked_session_ids (array)
+        - created_at, updated_at, merged_at
+      </pull_requests>
+
+      <pending_messages>
+        - id, conversation_id
+        - from_user_id
+        - content
+        - status (pending, delivered, failed)
+        - created_at, delivered_at
+        - retry_count
+      </pending_messages>
+
+      <reviews>
+        - id, pull_request_id
+        - reviewer_user_id
+        - state (pending, approved, changes_requested, commented)
+        - body
+        - submitted_at
+      </reviews>
+
+      <review_comments>
+        - id, review_id
+        - file_path, line_number
+        - content
+        - resolved (boolean)
+        - created_at
+      </review_comments>
     </data_model>
   </core_features>
 
@@ -312,16 +470,16 @@
   </accessibility>
 
   <out_of_scope>
-    - Real-time collaboration on conversations
+    - Real-time collaboration on conversations (multiple users editing)
     - Editing or deleting synced conversations
     - Analytics beyond basic counts (token usage dashboards, etc.)
-    - Mobile app
     - Cursor support (Phase 2)
     - Webhook integrations (Slack, etc.)
     - Self-hosted option (Convex only)
     - Message threading or replies
     - Conversation branching visualization
     - Export to other formats
+    - Voice control in mobile app
   </out_of_scope>
 
   <phase_2_future>
@@ -429,3 +587,35 @@
     - Reference architecture: Happy Coder's sessionRPC pattern
   </phase_2_interactive>
 </project_specification>
+
+---
+## Changelog
+
+### 2025-12-24 - Pivot: Team, Mobile, GitHub OAuth, Bidirectional Messaging, Code Review
+
+**Trigger:** User request to improve team support, add mobile app, messaging to Claude Code, GitHub OAuth, and timeline+review features.
+
+**Added:**
+- GitHub OAuth as primary authentication method (email/password kept as fallback)
+- React Native mobile app (Expo): sessions, conversations, push notifications, team activity
+- Bidirectional messaging: send messages from web/mobile to active Claude Code sessions via WebSocket
+- Team invite links: shareable URLs (`codecast.sh/join/CODE`) instead of just codes
+- Timeline view: unified view of sessions + commits + PRs
+- Code Review UI: fast, keyboard-driven review interface for teams (Vim-style navigation)
+- Data model additions: commits, pull_requests, pending_messages, reviews, review_comments, github_connections
+
+**Modified:**
+- Authentication: GitHub OAuth becomes primary, email/password is fallback
+- Team invites: from 6-char codes to shareable invite links
+- Conversation view: now includes inline commits and message sending to active sessions
+- Mobile app: moved from out_of_scope to core feature
+
+**Bug Fixes:**
+- Daemon status display: settings page shows "Not connected"/"Never" incorrectly
+
+**Rationale:**
+- Team collaboration is core value prop - needs frictionless invite flow
+- Mobile access enables async review and remote interaction with sessions
+- Bidirectional messaging unlocks remote control/guidance of Claude Code sessions
+- GitHub OAuth: developers already have GitHub, reduces friction
+- Timeline + Code Review: connects code changes to AI sessions, enables team review workflow
