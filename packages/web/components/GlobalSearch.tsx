@@ -199,8 +199,9 @@ export function GlobalSearch() {
                 <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
               </div>
             ) : flatResults.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sol-base00 text-sm">
-                No results for "{query}"
+              <div className="px-4 py-8 text-center">
+                <p className="text-sm text-sol-base0 mb-2">No conversations match</p>
+                <p className="text-xs text-sol-base00">Try different keywords</p>
               </div>
             ) : (
               <div className="max-h-[600px] overflow-y-auto">
