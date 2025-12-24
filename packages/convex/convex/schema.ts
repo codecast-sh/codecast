@@ -18,6 +18,13 @@ export default defineSchema({
     github_id: v.optional(v.string()),
     github_username: v.optional(v.string()),
     github_avatar_url: v.optional(v.string()),
+    push_token: v.optional(v.string()),
+    notifications_enabled: v.optional(v.boolean()),
+    notification_preferences: v.optional(v.object({
+      team_session_start: v.boolean(),
+      mention: v.boolean(),
+      permission_request: v.boolean(),
+    })),
   }).index("email", ["email"]),
 
   teams: defineTable({

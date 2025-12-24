@@ -1,6 +1,8 @@
 import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView } from 'react-native';
 import { Text, View } from '@/components/Themed';
 import { useAuth } from '@/lib/auth';
+import { useQuery, useMutation } from 'convex/react';
+import { api } from '@codecast/convex/convex/_generated/api';
 
 export default function SettingsScreen() {
   const {
@@ -11,6 +13,9 @@ export default function SettingsScreen() {
     disableBiometric,
   } = useAuth();
 
+  const currentUser = useQuery(api.users.getCurrentUser);
+  const updateNotificationPreferences = useMutation(api.users.updateNotificationPreferences);
+
   const handleToggleBiometric = async () => {
     if (isBiometricEnabled) {
       await disableBiometric();
@@ -20,6 +25,36 @@ export default function SettingsScreen() {
         'Biometric Unlock Enabled',
         'You can now use Face ID or Touch ID to unlock the app'
       );
+    }
+  };
+
+  const handleToggleNotifications = async () => {
+    const newValue = !currentUser?.notifications_enabled;
+    try {
+      await updateNotificationPreferences({
+        notifications_enabled: newValue,
+      });
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update notification settings');
+    }
+  };
+
+  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request') => {
+    const currentPrefs = currentUser?.notification_preferences || {
+      team_session_start: true,
+      mention: true,
+      permission_request: true,
+    };
+
+    try {
+      await updateNotificationPreferences({
+        notification_preferences: {
+          ...currentPrefs,
+          [type]: !currentPrefs[type],
+        },
+      });
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update notification preferences');
     }
   };
 
@@ -42,6 +77,74 @@ export default function SettingsScreen() {
     <ScrollView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Settings</Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Notifications</Text>
+
+        <View style={styles.setting}>
+          <View style={styles.settingText}>
+            <Text style={styles.settingLabel}>Enable Notifications</Text>
+            <Text style={styles.settingDescription}>
+              Receive push notifications for team activity
+            </Text>
+          </View>
+          <Switch
+            value={currentUser?.notifications_enabled ?? false}
+            onValueChange={handleToggleNotifications}
+            trackColor={{ false: '#ccc', true: '#d97706' }}
+            thumbColor="#fff"
+          />
+        </View>
+
+        {currentUser?.notifications_enabled && (
+          <>
+            <View style={styles.setting}>
+              <View style={styles.settingText}>
+                <Text style={styles.settingLabel}>Team Session Starts</Text>
+                <Text style={styles.settingDescription}>
+                  Notify when a team member starts a new session
+                </Text>
+              </View>
+              <Switch
+                value={currentUser?.notification_preferences?.team_session_start ?? true}
+                onValueChange={() => handleToggleNotificationType('team_session_start')}
+                trackColor={{ false: '#ccc', true: '#d97706' }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            <View style={styles.setting}>
+              <View style={styles.settingText}>
+                <Text style={styles.settingLabel}>Mentions</Text>
+                <Text style={styles.settingDescription}>
+                  Notify when someone mentions you in a comment
+                </Text>
+              </View>
+              <Switch
+                value={currentUser?.notification_preferences?.mention ?? true}
+                onValueChange={() => handleToggleNotificationType('mention')}
+                trackColor={{ false: '#ccc', true: '#d97706' }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            <View style={styles.setting}>
+              <View style={styles.settingText}>
+                <Text style={styles.settingLabel}>Permission Requests</Text>
+                <Text style={styles.settingDescription}>
+                  Notify when a session requests permission
+                </Text>
+              </View>
+              <Switch
+                value={currentUser?.notification_preferences?.permission_request ?? true}
+                onValueChange={() => handleToggleNotificationType('permission_request')}
+                trackColor={{ false: '#ccc', true: '#d97706' }}
+                thumbColor="#fff"
+              />
+            </View>
+          </>
+        )}
       </View>
 
       <View style={styles.section}>

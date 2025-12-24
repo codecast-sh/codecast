@@ -11,6 +11,7 @@ import { ConvexAuthProvider } from '@convex-dev/auth/react';
 import { useColorScheme } from '@/components/useColorScheme';
 import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
 
 export {
   ErrorBoundary,
@@ -73,6 +74,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+
+  usePushNotifications();
 
   useEffect(() => {
     if (isLoading) return;

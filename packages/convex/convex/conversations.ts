@@ -4,6 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
+import { internal } from "./_generated/api";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -110,6 +111,13 @@ export const createConversation = mutation({
     if (args.api_token) {
       await ctx.db.patch(args.user_id, {
         daemon_last_seen: now,
+      });
+    }
+
+    if (args.team_id && !existing) {
+      await ctx.scheduler.runAfter(0, internal.notifications.notifyTeamSessionStart, {
+        conversation_id: conversationId,
+        user_id: args.user_id,
       });
     }
 

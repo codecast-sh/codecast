@@ -77,3 +77,49 @@ export const updateDaemonLastSeen = mutation({
     });
   },
 });
+
+export const storePushToken = mutation({
+  args: {
+    push_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    await ctx.db.patch(userId, {
+      push_token: args.push_token,
+      notifications_enabled: true,
+      notification_preferences: {
+        team_session_start: true,
+        mention: true,
+        permission_request: true,
+      },
+    });
+  },
+});
+
+export const updateNotificationPreferences = mutation({
+  args: {
+    notifications_enabled: v.optional(v.boolean()),
+    notification_preferences: v.optional(v.object({
+      team_session_start: v.boolean(),
+      mention: v.boolean(),
+      permission_request: v.boolean(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const updateData: any = {};
+    if (args.notifications_enabled !== undefined) {
+      updateData.notifications_enabled = args.notifications_enabled;
+    }
+    if (args.notification_preferences !== undefined) {
+      updateData.notification_preferences = args.notification_preferences;
+    }
+    await ctx.db.patch(userId, updateData);
+  },
+});
