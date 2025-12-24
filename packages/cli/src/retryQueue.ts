@@ -12,23 +12,20 @@ export interface RetryQueueConfig {
   initialDelayMs?: number;
   maxDelayMs?: number;
   maxAttempts?: number;
-  checkIntervalMs?: number;
   onLog?: (message: string) => void;
 }
 
 const DEFAULT_INITIAL_DELAY = 1000;
 const DEFAULT_MAX_DELAY = 30000;
 const DEFAULT_MAX_ATTEMPTS = 10;
-const DEFAULT_CHECK_INTERVAL = 500;
 
 export class RetryQueue {
   private queue: Map<string, RetryOperation> = new Map();
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private executor: ((op: RetryOperation) => Promise<boolean>) | null = null;
   private initialDelayMs: number;
   private maxDelayMs: number;
   private maxAttempts: number;
-  private checkIntervalMs: number;
   private log: (message: string) => void;
   private processing = false;
 
@@ -36,7 +33,6 @@ export class RetryQueue {
     this.initialDelayMs = config.initialDelayMs ?? DEFAULT_INITIAL_DELAY;
     this.maxDelayMs = config.maxDelayMs ?? DEFAULT_MAX_DELAY;
     this.maxAttempts = config.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-    this.checkIntervalMs = config.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL;
     this.log = config.onLog ?? (() => {});
   }
 
@@ -61,7 +57,7 @@ export class RetryQueue {
     };
     this.queue.set(id, op);
     this.log(`Queued ${type} for retry (id: ${id})`);
-    this.ensureTimerRunning();
+    this.scheduleNextCheck();
     return id;
   }
 
@@ -70,14 +66,29 @@ export class RetryQueue {
     return Math.min(delay, this.maxDelayMs);
   }
 
-  private ensureTimerRunning(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => this.processQueue(), this.checkIntervalMs);
+  private scheduleNextCheck(): void {
+    this.stopTimer();
+
+    if (this.queue.size === 0) {
+      return;
+    }
+
+    // Find the earliest retry time
+    let earliestRetryAt = Infinity;
+    for (const op of this.queue.values()) {
+      if (op.nextRetryAt < earliestRetryAt) {
+        earliestRetryAt = op.nextRetryAt;
+      }
+    }
+
+    // Schedule timer for that time (with a minimum of 10ms to avoid tight loops)
+    const delay = Math.max(10, earliestRetryAt - Date.now());
+    this.timer = setTimeout(() => this.processQueue(), delay);
   }
 
   private stopTimer(): void {
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
   }
@@ -110,11 +121,10 @@ export class RetryQueue {
       }
     }
 
-    if (this.queue.size === 0) {
-      this.stopTimer();
-    }
-
     this.processing = false;
+
+    // Schedule next check based on remaining items
+    this.scheduleNextCheck();
   }
 
   private handleFailure(op: RetryOperation, error: string): void {
