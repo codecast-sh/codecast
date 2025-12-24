@@ -127,6 +127,16 @@ export function InviteModal({ trigger }: InviteModalProps) {
             )}
           </div>
 
+          <div className="pt-3 border-t border-sol-border">
+            <div className="text-sm font-medium text-sol-text mb-2">Setup Instructions</div>
+            <ol className="text-sm text-sol-base1 space-y-1.5 list-decimal list-inside">
+              <li>Share the invite link above with your team member</li>
+              <li>They&apos;ll be prompted to sign in or create an account</li>
+              <li>After signing in, they&apos;ll automatically join the team</li>
+              <li>They can then install the daemon to start syncing conversations</li>
+            </ol>
+          </div>
+
           {isAdmin && (
             <div className="pt-2 border-t border-sol-border">
               <div className="flex items-center justify-between">
