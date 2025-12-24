@@ -101,6 +101,13 @@ export const addMessage = mutation({
       message_count: conversation.message_count + 1,
       updated_at: msgTimestamp,
     });
+
+    if (args.api_token) {
+      await ctx.db.patch(conversation.user_id, {
+        daemon_last_seen: Date.now(),
+      });
+    }
+
     return messageId;
   },
 });

@@ -35,6 +35,7 @@ export default defineSchema({
     session_id: v.string(),
     slug: v.optional(v.string()),
     title: v.optional(v.string()),
+    subtitle: v.optional(v.string()),
     project_hash: v.optional(v.string()),
     project_path: v.optional(v.string()),
     model: v.optional(v.string()),
