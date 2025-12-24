@@ -39,6 +39,12 @@ interface DetectedAgent {
   historyPath: string;
 }
 
+interface DaemonState {
+  connected?: boolean;
+  lastSyncTime?: number;
+  pendingQueueSize?: number;
+}
+
 function detectAgents(): DetectedAgent[] {
   const agents: DetectedAgent[] = [];
   const home = process.env.HOME || "";
@@ -121,22 +127,40 @@ function isDaemonRunning(): boolean {
   return getDaemonPid() !== null;
 }
 
-function getDaemonState(): { connected: boolean } | null {
+function readDaemonState(): DaemonState | null {
   if (!fs.existsSync(STATE_FILE)) {
     return null;
   }
   try {
-    const content = fs.readFileSync(STATE_FILE, "utf-8");
-    return JSON.parse(content);
+    return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8")) as DaemonState;
   } catch {
     return null;
+  }
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const now = Date.now();
+  const diffMs = now - timestamp;
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffSec < 60) {
+    return diffSec === 1 ? "1 second ago" : `${diffSec} seconds ago`;
+  } else if (diffMin < 60) {
+    return diffMin === 1 ? "1 minute ago" : `${diffMin} minutes ago`;
+  } else if (diffHour < 24) {
+    return diffHour === 1 ? "1 hour ago" : `${diffHour} hours ago`;
+  } else {
+    return diffDay === 1 ? "1 day ago" : `${diffDay} days ago`;
   }
 }
 
 function showStatus(): void {
   const pid = getDaemonPid();
   const config = readConfig();
-  const state = getDaemonState();
+  const state = readDaemonState();
 
   console.log("");
 
@@ -154,6 +178,15 @@ function showStatus(): void {
 
   if (pid) {
     console.log(`  Daemon: running (PID: ${pid})`);
+
+    if (state?.lastSyncTime) {
+      console.log(`  Last sync: ${formatRelativeTime(state.lastSyncTime)}`);
+    } else {
+      console.log("  Last sync: never");
+    }
+
+    const queueSize = state?.pendingQueueSize ?? 0;
+    console.log(`  Pending queue: ${queueSize} items`);
   } else {
     console.log("  Daemon: stopped");
     if (config?.auth_token) {

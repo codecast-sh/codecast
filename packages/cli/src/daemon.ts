@@ -50,6 +50,13 @@ interface PendingMessages {
   }>;
 }
 
+interface DaemonState {
+  connected?: boolean;
+  lastSyncTime?: number;
+  pendingQueueSize?: number;
+  timestamp?: number;
+}
+
 
 function log(message: string): void {
   const timestamp = new Date().toISOString();
@@ -108,9 +115,22 @@ function saveTitleCache(cache: TitleCache): void {
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
 }
 
-function writeDaemonState(connected: boolean): void {
+function readDaemonState(): DaemonState {
+  if (!fs.existsSync(STATE_FILE)) {
+    return {};
+  }
   try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify({ connected, timestamp: Date.now() }), { mode: 0o600 });
+    return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8")) as DaemonState;
+  } catch {
+    return {};
+  }
+}
+
+function saveDaemonState(updates: Partial<DaemonState>): void {
+  try {
+    const current = readDaemonState();
+    const newState = { ...current, ...updates, timestamp: Date.now() };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(newState, null, 2), { mode: 0o600 });
   } catch (err) {
     log(`Failed to write daemon state: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -172,7 +192,8 @@ async function processSessionFile(
   conversationCache: ConversationCache,
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
-  titleCache: TitleCache
+  titleCache: TitleCache,
+  updateStateCallback: () => void
 ): Promise<void> {
   const lastPosition = getPosition(filePath);
   const stats = fs.statSync(filePath);
@@ -396,6 +417,8 @@ async function processSessionFile(
 
   setPosition(filePath, stats.size);
   log(`Synced ${messages.length} messages for session ${sessionId}`);
+
+  updateStateCallback();
 }
 
 async function processCursorSession(
@@ -406,7 +429,8 @@ async function processCursorSession(
   userId: string,
   conversationCache: ConversationCache,
   retryQueue: RetryQueue,
-  pendingMessages: PendingMessages
+  pendingMessages: PendingMessages,
+  updateStateCallback: () => void
 ): Promise<void> {
   const lastRowId = getPosition(dbPath);
 
@@ -588,6 +612,8 @@ async function processCursorSession(
 
   setPosition(dbPath, maxRowId);
   log(`Synced ${messages.length} Cursor messages for session ${sessionId}`);
+
+  updateStateCallback();
 }
 
 interface ActiveSession {
@@ -674,7 +700,7 @@ async function main(): Promise<void> {
   ensureConfigDir();
   log("Daemon started");
   log(`PID: ${process.pid}`);
-  writeDaemonState(false);
+  saveDaemonState({ connected: false });
 
   const config = readConfig();
   if (!config?.user_id) {
@@ -712,6 +738,13 @@ async function main(): Promise<void> {
     maxAttempts: 10,
     onLog: log,
   });
+
+  const updateState = () => {
+    saveDaemonState({
+      lastSyncTime: Date.now(),
+      pendingQueueSize: retryQueue.getQueueSize(),
+    });
+  };
 
   retryQueue.setExecutor(async (op: RetryOperation): Promise<boolean> => {
     if (op.type === "createConversation") {
@@ -763,6 +796,7 @@ async function main(): Promise<void> {
         }
         delete pendingMessages[params.sessionId];
       }
+      updateState();
       return true;
     }
 
@@ -780,6 +814,7 @@ async function main(): Promise<void> {
         subtype?: string;
       };
       await syncService.addMessage(params);
+      updateState();
       return true;
     }
 
@@ -808,7 +843,8 @@ async function main(): Promise<void> {
           conversationCache,
           retryQueue,
           pendingMessages,
-          titleCache
+          titleCache,
+          updateState
         );
       });
       fileSyncs.set(filePath, sync);
@@ -844,7 +880,8 @@ async function main(): Promise<void> {
           config.user_id!,
           conversationCache,
           retryQueue,
-          pendingMessages
+          pendingMessages,
+          updateState
         );
       });
       cursorSyncs.set(dbPath, sync);
@@ -932,12 +969,12 @@ async function main(): Promise<void> {
         }
       );
       log("Subscription established successfully");
-      writeDaemonState(true);
+      saveDaemonState({ connected: true });
       resetReconnectDelay();
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Subscription error: ${errMsg}`);
-      writeDaemonState(false);
+      saveDaemonState({ connected: false });
       if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;
@@ -955,7 +992,7 @@ async function main(): Promise<void> {
 
   const shutdown = () => {
     log("Shutting down");
-    writeDaemonState(false);
+    saveDaemonState({ connected: false });
     if (unsubscribe) {
       unsubscribe();
     }
