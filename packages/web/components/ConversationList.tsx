@@ -335,11 +335,11 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
   return (
     <div className="space-y-6">
       {/* Filter bar */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5 sm:gap-2 items-center">
         {/* Time filters */}
         <button
           onClick={() => setTimeFilter("all")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
             timeFilter === "all"
               ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -349,17 +349,19 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
         </button>
         <button
           onClick={() => setTimeFilter("long")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
             timeFilter === "long"
               ? "bg-amber-500/20 text-amber-400 border border-amber-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
           }`}
         >
-          Long Running{counts.long > 0 && ` (${counts.long})`}
+          <span className="hidden sm:inline">Long Running</span>
+          <span className="sm:hidden">Long</span>
+          {counts.long > 0 && ` (${counts.long})`}
         </button>
         <button
           onClick={() => setTimeFilter("active")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
             timeFilter === "active"
               ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
               : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border bg-sol-bg-alt border-sol-border"
@@ -373,7 +375,7 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
         {/* Subagent filters */}
         <button
           onClick={() => setSubagentFilter(subagentFilter === "main" ? "all" : "main")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
             subagentFilter === "main"
               ? "bg-sol-blue/20 text-sol-blue border border-sol-blue/40"
               : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
@@ -383,13 +385,15 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
         </button>
         <button
           onClick={() => setSubagentFilter(subagentFilter === "subagent" ? "all" : "subagent")}
-          className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+          className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
             subagentFilter === "subagent"
               ? "bg-sol-violet/20 text-sol-violet border border-sol-violet/40"
               : "bg-sol-bg-alt/40 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
           }`}
         >
-          Subagent{counts.subagent > 0 && ` (${counts.subagent})`}
+          <span className="hidden sm:inline">Subagent</span>
+          <span className="sm:hidden">Sub</span>
+          {counts.subagent > 0 && ` (${counts.subagent})`}
         </button>
       </div>
 
@@ -414,8 +418,8 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
                 className="group block relative"
               >
                 <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-xl p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm">
-                  <div className="flex items-start justify-between gap-4 overflow-hidden">
+                <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm">
+                  <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
                       {/* Header row: title + timestamp */}
                       <div className="flex items-start justify-between gap-3 mb-1">

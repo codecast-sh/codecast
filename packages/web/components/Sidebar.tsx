@@ -8,6 +8,8 @@ interface SidebarProps {
   directories?: string[];
   directoryFilter?: string | null;
   onDirectoryFilterChange?: (directory: string | null) => void;
+  isMobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 const bottomNavItems = [
@@ -53,7 +55,7 @@ function getShortPath(projectPath: string): string {
   return parts[parts.length - 1];
 }
 
-export function Sidebar({ filter = "my", onFilterChange, directories = [], directoryFilter, onDirectoryFilterChange }: SidebarProps) {
+export function Sidebar({ filter = "my", onFilterChange, directories = [], directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
@@ -64,6 +66,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
       router.push("/dashboard");
     }
     onFilterChange?.(newFilter);
+    onMobileClose?.();
   };
 
   const handleDirectoryClick = (dir: string) => {
@@ -71,10 +74,11 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
       router.push("/dashboard");
     }
     onDirectoryFilterChange?.(directoryFilter === dir ? null : dir);
+    onMobileClose?.();
   };
 
-  return (
-    <nav className="w-64 border-r border-sol-border bg-sol-bg-alt/50 h-[calc(100vh-52px)] p-4 hidden md:flex flex-col sticky top-[52px]">
+  const sidebarContent = (
+    <>
       <div className="flex-1 flex flex-col min-h-0">
         <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
           Conversations
@@ -157,6 +161,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
           <Link
             key={item.href}
             href={item.href}
+            onClick={() => onMobileClose?.()}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
               pathname === item.href || pathname?.startsWith(item.href + "/")
                 ? "bg-sol-bg-alt text-sol-text"
@@ -168,6 +173,27 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
           </Link>
         ))}
       </div>
-    </nav>
+    </>
+  );
+
+  return (
+    <>
+      {isMobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
+      )}
+      <nav
+        className={`
+          w-64 sm:w-72 md:w-64 border-r border-sol-border bg-sol-bg-alt/50 h-[calc(100vh-52px)] p-3 sm:p-4 flex flex-col sticky top-[52px]
+          md:flex
+          ${isMobileOpen ? 'fixed top-[52px] left-0 z-40 w-[85vw] max-w-xs' : 'hidden'}
+        `}
+      >
+        {sidebarContent}
+      </nav>
+    </>
   );
 }

@@ -265,29 +265,29 @@ function ConversationMetadata({
   if (!agentType && !model && !startedAt && !messageCount) return null;
 
   return (
-    <div className="flex items-center gap-3 text-xs text-sol-text-dim">
+    <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 text-[10px] sm:text-xs text-sol-text-dim flex-wrap">
       {agentType && (
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
           <AgentTypeIcon agentType={agentType} />
-          <span>{formatAgentType(agentType)}</span>
+          <span className="hidden sm:inline">{formatAgentType(agentType)}</span>
         </div>
       )}
       {model && (
-        <div className="flex items-center gap-1">
-          <span className="text-sol-text-dim">•</span>
-          <span className="font-mono" title={model}>{formatModel(model)}</span>
+        <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+          <span className="text-sol-text-dim hidden sm:inline">•</span>
+          <span className="font-mono truncate max-w-[120px] sm:max-w-none" title={model}>{formatModel(model)}</span>
         </div>
       )}
       {startedAt && (
-        <div className="flex items-center gap-1">
-          <span className="text-sol-text-dim">•</span>
+        <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+          <span className="text-sol-text-dim hidden sm:inline">•</span>
           <span title={formatFullTimestamp(startedAt)}>{formatRelativeTime(startedAt)}</span>
         </div>
       )}
       {messageCount !== undefined && messageCount > 0 && (
-        <div className="flex items-center gap-1">
-          <span className="text-sol-text-dim">•</span>
-          <span>{messageCount} {messageCount === 1 ? "message" : "messages"}</span>
+        <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+          <span className="text-sol-text-dim hidden sm:inline">•</span>
+          <span>{messageCount} {messageCount === 1 ? "msg" : "msgs"}</span>
         </div>
       )}
     </div>
@@ -1566,20 +1566,20 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
   return (
     <main className="h-screen flex flex-col bg-sol-bg">
       <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
-        <div className="max-w-4xl mx-auto px-4 py-3">
-          <div className="flex items-center gap-3 mb-2">
+        <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-2 sm:py-3">
+          <div className="flex items-center gap-2 sm:gap-3 mb-1.5 sm:mb-2">
             <Link
               href={backHref}
-              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm flex-shrink-0"
+              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-xs sm:text-sm flex-shrink-0"
             >
               &larr; {backLabel}
             </Link>
-            <h1 className="text-sm font-medium text-sol-text-secondary truncate flex-1">{truncatedTitle}</h1>
+            <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate flex-1 min-w-0">{truncatedTitle}</h1>
           </div>
 
           {conversation && (
             <>
-              <div className="flex items-center gap-3 mb-2">
+              <div className="flex items-center gap-2 sm:gap-3 mb-1.5 sm:mb-2 overflow-x-auto">
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
@@ -1588,7 +1588,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
                 />
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 flex-wrap">
                 {conversation.git_branch && (
                   <GitBranchBadge
                     gitBranch={conversation.git_branch}
@@ -1732,7 +1732,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
                     transform: `translateY(${virtualItem.start}px)`,
                   }}
                 >
-                  <div className={`max-w-4xl mx-auto px-4 ${collapsed ? "py-0.5" : "py-1"}`}>
+                  <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"}`}>
                     {renderItem(item, virtualItem.index)}
                   </div>
                 </div>
