@@ -62,13 +62,21 @@ function getSnippet(content: string, query: string, maxLen = 120): string {
 export function GlobalSearch() {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   const searchResults = useQuery(
     api.conversations.searchConversations,
-    query.length >= 2 ? { query, limit: 15 } : "skip"
+    debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 15 } : "skip"
   );
 
   const flatResults = searchResults?.flatMap((r) =>
