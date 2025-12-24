@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { ConversationList } from "../../components/ConversationList";
+import { reportWebVitals } from "../../lib/reportWebVitals";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -37,6 +38,23 @@ export default function DashboardPage() {
       setMemberFilter(memberParam);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    reportWebVitals((metric) => {
+      console.log(`[Dashboard Vitals] ${metric.name}:`, metric.value);
+    });
+
+    const startMark = 'dashboard-mount';
+    performance.mark(startMark);
+
+    return () => {
+      performance.measure('dashboard-lifecycle', startMark);
+      const measures = performance.getEntriesByName('dashboard-lifecycle');
+      if (measures.length > 0) {
+        console.log(`[Dashboard] Mount to unmount: ${measures[0].duration.toFixed(2)}ms`);
+      }
+    };
+  }, []);
 
   return (
     <AuthGuard>

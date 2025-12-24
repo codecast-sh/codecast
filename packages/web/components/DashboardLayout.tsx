@@ -1,13 +1,14 @@
 "use client";
-import { ReactNode, useState } from "react";
+import { ReactNode, useState, lazy, Suspense } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
 import { ThemeToggle } from "./ThemeToggle";
-import { InviteModal } from "./InviteModal";
 import { Button } from "./ui/button";
+
+const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -49,13 +50,15 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
           </div>
           {isAdmin && (
             <div className="hidden md:block flex-shrink-0">
-              <InviteModal
-                trigger={
-                  <Button variant="outline" size="sm">
-                    Invite
-                  </Button>
-                }
-              />
+              <Suspense fallback={<Button variant="outline" size="sm" disabled>Invite</Button>}>
+                <InviteModal
+                  trigger={
+                    <Button variant="outline" size="sm">
+                      Invite
+                    </Button>
+                  }
+                />
+              </Suspense>
             </div>
           )}
           <div className="flex-shrink-0">
