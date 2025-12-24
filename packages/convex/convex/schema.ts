@@ -150,4 +150,21 @@ export default defineSchema({
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_status", ["from_user_id", "status"]),
+
+  commits: defineTable({
+    conversation_id: v.optional(v.id("conversations")),
+    sha: v.string(),
+    message: v.string(),
+    author_name: v.string(),
+    author_email: v.string(),
+    timestamp: v.number(),
+    files_changed: v.number(),
+    insertions: v.number(),
+    deletions: v.number(),
+    repository: v.optional(v.string()),
+    pr_number: v.optional(v.number()),
+  })
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_timestamp", ["timestamp"])
+    .index("by_sha", ["sha"]),
 });
