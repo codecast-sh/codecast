@@ -240,6 +240,59 @@ function getDeviceName(): string {
   return `${platformName} - ${hostname}`;
 }
 
+async function runLogin(setupToken: string): Promise<void> {
+  console.log("\n=== codecast Login ===\n");
+  console.log("Exchanging setup token...\n");
+
+  try {
+    const response = await fetch(`${CONVEX_URL.replace(".cloud", ".site")}/cli/exchange-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: setupToken }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        console.error("Invalid or expired token.");
+        console.error("Generate a new token at: codecast.sh/cli");
+      } else {
+        console.error(`Error: ${error.error || response.statusText}`);
+      }
+      process.exit(1);
+    }
+
+    const result = await response.json();
+
+    const existingConfig = readConfig();
+    const config: Config = {
+      ...existingConfig,
+      user_id: result.user_id,
+      auth_token: result.auth_token,
+      convex_url: result.convex_url || CONVEX_URL,
+      web_url: WEB_URL,
+    };
+
+    writeConfig(config);
+
+    console.log("Linked successfully!\n");
+    console.log(`User ID: ${config.user_id}`);
+    console.log(`API Token: ${maskToken(config.auth_token || "")}`);
+    console.log(`Config: ${CONFIG_FILE}\n`);
+
+    if (!isDaemonRunning()) {
+      console.log("Starting daemon...");
+      startDaemon();
+    }
+
+    console.log("\nStatus:");
+    showStatus();
+  } catch (err) {
+    console.error("Failed to connect to server:", (err as Error).message);
+    process.exit(1);
+  }
+}
+
 async function runAuth(): Promise<void> {
   console.log("\n=== codecast Authentication ===\n");
 
@@ -314,6 +367,14 @@ program
   .description("Authenticate with codecast (opens browser)")
   .action(async () => {
     await runAuth();
+  });
+
+program
+  .command("login")
+  .description("Link this device using a setup token from codecast.sh/cli")
+  .argument("<token>", "Setup token from the web dashboard")
+  .action(async (token: string) => {
+    await runLogin(token);
   });
 
 program

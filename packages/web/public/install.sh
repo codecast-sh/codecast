@@ -2,6 +2,7 @@
 set -e
 
 DOWNLOAD_HOST="https://dl.codecast.sh"
+TOKEN="${1:-}"
 
 echo "Installing codecast..."
 
@@ -79,4 +80,10 @@ fi
 
 echo "codecast installed successfully!"
 echo ""
-echo "Run 'codecast auth' to authenticate and start syncing."
+
+if [ -n "${TOKEN}" ]; then
+  echo "Linking device..."
+  "${INSTALL_DIR}/codecast" login "${TOKEN}"
+else
+  echo "Run 'codecast auth' to authenticate and start syncing."
+fi

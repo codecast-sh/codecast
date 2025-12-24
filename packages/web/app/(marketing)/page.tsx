@@ -2,21 +2,33 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { InstallTabs } from "@/components/install-tabs";
 
+const CYCLING_WORDS = ["Search", "Share", "Sync", "Stream"];
+
 export default function LandingPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const router = useRouter();
+  const [wordIndex, setWordIndex] = useState(0);
+  const [animationKey, setAnimationKey] = useState(0);
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
       router.replace("/dashboard");
     }
   }, [isAuthenticated, isLoading, router]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setWordIndex((prev) => (prev + 1) % CYCLING_WORDS.length);
+      setAnimationKey((prev) => prev + 1);
+    }, 1800);
+    return () => clearInterval(interval);
+  }, []);
 
   if (isLoading || isAuthenticated) {
     return null;
@@ -25,7 +37,7 @@ export default function LandingPage() {
     <main className="min-h-screen bg-[#f5f5f0] w-full">
       <nav className="border-b border-black/5 bg-[#f5f5f0]/80 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="font-serif text-xl font-semibold text-black">
+          <div className="font-sans text-xl font-semibold text-black">
             codecast
           </div>
           <div className="flex items-center gap-4">
@@ -46,7 +58,10 @@ export default function LandingPage() {
       <section className="max-w-6xl mx-auto px-6 pt-20 pb-16">
         <div className="max-w-3xl">
           <h1 className="font-serif text-6xl font-bold text-black leading-[1.1] mb-6">
-            Share your AI coding sessions
+            <span key={animationKey} className="animate-word-cycle">
+              {CYCLING_WORDS[wordIndex]}
+            </span>{" "}
+            your AI coding sessions
           </h1>
           <p className="text-xl text-black/70 leading-relaxed mb-8 font-sans">
             Codecast syncs <b>Claude Code</b> conversations automatically. Monitor your sessions in real-time, on any device.
@@ -93,9 +108,79 @@ export default function LandingPage() {
                 codecast - Conversation #1234
               </div>
             </div>
-            <div className="p-8 bg-white min-h-[400px] flex items-center justify-center text-black/30 font-mono text-sm">
-              [Screenshot placeholder - conversation view with turn-by-turn
-              messages and tool calls]
+            <div className="p-6 bg-[#fdf6e3] min-h-[400px] space-y-4 font-mono text-sm overflow-hidden">
+              {/* User message */}
+              <div className="flex justify-end">
+                <div className="max-w-[75%]">
+                  <div className="bg-[#268bd2] text-white rounded-2xl rounded-br-md px-4 py-2.5">
+                    <p>Add a loading spinner to the submit button</p>
+                  </div>
+                  <p className="text-xs text-[#93a1a1] mt-1 text-right">2:34 PM</p>
+                </div>
+              </div>
+
+              {/* Tool call - Read */}
+              <div className="border border-[#93a1a1]/30 rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-[#eee8d5]/60 flex items-center gap-2">
+                  <div className="p-1 rounded border border-[#2aa198]/40 bg-[#2aa198]/10">
+                    <svg className="w-3.5 h-3.5 text-[#2aa198]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <span className="text-[#002b36] text-xs font-medium">Read src/components/SubmitButton.tsx</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tool call - Edit */}
+              <div className="border border-[#93a1a1]/30 rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-[#eee8d5]/60 flex items-center gap-2">
+                  <div className="p-1 rounded border border-[#b58900]/40 bg-[#b58900]/10">
+                    <svg className="w-3.5 h-3.5 text-[#b58900]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <span className="text-[#002b36] text-xs font-medium">Edit src/components/SubmitButton.tsx</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Assistant message */}
+              <div className="flex justify-start">
+                <div className="max-w-[75%]">
+                  <div className="bg-[#073642] text-[#eee8d5] rounded-2xl rounded-bl-md px-4 py-2.5">
+                    <p>Done. Added a loading state with a spinner icon that appears while the form is submitting.</p>
+                  </div>
+                  <p className="text-xs text-[#93a1a1] mt-1">2:34 PM</p>
+                </div>
+              </div>
+
+              {/* Another user message */}
+              <div className="flex justify-end">
+                <div className="max-w-[75%]">
+                  <div className="bg-[#268bd2] text-white rounded-2xl rounded-br-md px-4 py-2.5">
+                    <p>Perfect, now run the tests</p>
+                  </div>
+                  <p className="text-xs text-[#93a1a1] mt-1 text-right">2:35 PM</p>
+                </div>
+              </div>
+
+              {/* Tool call - Bash */}
+              <div className="border border-[#93a1a1]/30 rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-[#eee8d5]/60 flex items-center gap-2">
+                  <div className="p-1 rounded border border-[#6c71c4]/40 bg-[#6c71c4]/10">
+                    <svg className="w-3.5 h-3.5 text-[#6c71c4]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[#002b36] text-xs font-medium">npm test</span>
+                    <span className="text-[#859900] text-xs">✓ 24 passed</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useConvexAuth, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -13,18 +13,11 @@ export default function CliPage() {
     isAuthenticated ? {} : "skip"
   );
   const [copied, setCopied] = useState<string | null>(null);
+  const [setupToken, setSetupToken] = useState<string | null>(null);
+  const [tokenExpiry, setTokenExpiry] = useState<number | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
-  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL || "";
-  const userId = currentUser?._id || "";
-
-  const configJson = JSON.stringify(
-    {
-      user_id: userId,
-      convex_url: convexUrl,
-    },
-    null,
-    2
-  );
+  const createSetupToken = useMutation(api.apiTokens.createSetupToken);
 
   const copyToClipboard = async (text: string, label: string) => {
     await navigator.clipboard.writeText(text);
@@ -32,11 +25,24 @@ export default function CliPage() {
     setTimeout(() => setCopied(null), 2000);
   };
 
+  const generateSetupToken = async () => {
+    setIsGenerating(true);
+    try {
+      const result = await createSetupToken({});
+      setSetupToken(result.token);
+      setTokenExpiry(result.expiresAt);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const isTokenExpired = tokenExpiry ? Date.now() > tokenExpiry : false;
+
   return (
     <AuthGuard>
       <DashboardLayout>
         <div className="max-w-2xl">
-          <h1 className="text-2xl font-semibold text-white mb-2">
+          <h1 className="text-2xl font-semibold text-sol-text mb-2">
             CLI Setup
           </h1>
           <p className="text-sol-text-muted mb-8">
@@ -50,72 +56,49 @@ export default function CliPage() {
           ) : (
             <div className="space-y-6">
               <div className="bg-sol-bg-alt/50 rounded-lg p-6 border border-sol-border">
-                <h2 className="text-lg font-medium text-white mb-4">
-                  Quick Setup
+                <h2 className="text-lg font-medium text-sol-text mb-4">
+                  Install
                 </h2>
                 <p className="text-sol-text-muted text-sm mb-4">
-                  Copy this configuration to{" "}
-                  <code className="bg-sol-bg px-2 py-0.5 rounded text-amber-400">
-                    ~/.codecast/config.json
-                  </code>
+                  Run this command on any machine to install and link to your account:
                 </p>
-                <div className="relative">
-                  <pre className="bg-sol-bg rounded-lg p-4 text-sm text-sol-text-muted overflow-x-auto">
-                    {configJson}
-                  </pre>
+
+                {!setupToken || isTokenExpired ? (
                   <button
-                    onClick={() => copyToClipboard(configJson, "config")}
-                    className="absolute top-2 right-2 px-3 py-1.5 bg-sol-bg-highlight hover:bg-amber-600/20 text-sol-text-muted text-xs rounded transition-colors"
+                    onClick={generateSetupToken}
+                    disabled={isGenerating}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
                   >
-                    {copied === "config" ? "Copied!" : "Copy"}
+                    {isGenerating ? "Generating..." : "Generate Install Command"}
                   </button>
-                </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sol-text-dim text-xs">
+                      Token expires in 5 minutes:
+                    </p>
+                    <div className="relative">
+                      <code className="block bg-sol-bg rounded-lg p-4 text-sm text-green-400 overflow-x-auto pr-20 break-all">
+                        curl -fsSL codecast.sh/install | sh -s -- {setupToken}
+                      </code>
+                      <button
+                        onClick={() => copyToClipboard(`curl -fsSL codecast.sh/install | sh -s -- ${setupToken}`, "install")}
+                        className="absolute top-2 right-2 px-3 py-1.5 bg-sol-bg-highlight hover:bg-amber-600/20 text-sol-text-muted text-xs rounded transition-colors"
+                      >
+                        {copied === "install" ? "Copied!" : "Copy"}
+                      </button>
+                    </div>
+                    <button
+                      onClick={generateSetupToken}
+                      className="text-sol-text-dim text-xs hover:text-sol-text-muted transition-colors"
+                    >
+                      Generate new token
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="bg-sol-bg-alt/50 rounded-lg p-6 border border-sol-border">
-                <h2 className="text-lg font-medium text-white mb-4">
-                  Manual Setup
-                </h2>
-
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-sol-text-muted mb-2">
-                      User ID
-                    </label>
-                    <div className="flex gap-2">
-                      <code className="flex-1 bg-sol-bg px-4 py-2 rounded-lg text-amber-400 text-sm">
-                        {userId || "Loading..."}
-                      </code>
-                      <button
-                        onClick={() => copyToClipboard(userId, "userId")}
-                        className="px-4 py-2 bg-sol-bg-highlight hover:bg-amber-600/20 text-sol-text-muted text-sm rounded-lg transition-colors"
-                      >
-                        {copied === "userId" ? "Copied!" : "Copy"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-sol-text-muted mb-2">
-                      Convex URL
-                    </label>
-                    <div className="flex gap-2">
-                      <code className="flex-1 bg-sol-bg px-4 py-2 rounded-lg text-amber-400 text-sm truncate">
-                        {convexUrl || "Not configured"}
-                      </code>
-                      <button
-                        onClick={() => copyToClipboard(convexUrl, "convexUrl")}
-                        className="px-4 py-2 bg-sol-bg-highlight hover:bg-amber-600/20 text-sol-text-muted text-sm rounded-lg transition-colors"
-                      >
-                        {copied === "convexUrl" ? "Copied!" : "Copy"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-sol-bg-alt/50 rounded-lg p-6 border border-sol-border">
-                <h2 className="text-lg font-medium text-white mb-4">
+                <h2 className="text-lg font-medium text-sol-text mb-4">
                   CLI Commands
                 </h2>
                 <div className="space-y-3 text-sm">

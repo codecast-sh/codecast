@@ -3,6 +3,8 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 
+const CONVEX_URL = process.env.CONVEX_CLOUD_URL || process.env.VITE_CONVEX_URL || "";
+
 async function hashToken(token: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(token);
@@ -42,6 +44,32 @@ export const createToken = mutation({
     });
 
     return { token, userId };
+  },
+});
+
+export const createSetupToken = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized: must be logged in to create setup token");
+    }
+
+    const token = generateToken();
+    const tokenHash = await hashToken(token);
+    const now = Date.now();
+    const expiresAt = now + 5 * 60 * 1000;
+
+    await ctx.db.insert("api_tokens", {
+      user_id: userId,
+      token_hash: tokenHash,
+      name: `setup-${now}`,
+      created_at: now,
+      last_used_at: now,
+      expires_at: expiresAt,
+    });
+
+    return { token, expiresAt };
   },
 });
 
@@ -193,3 +221,49 @@ export async function verifyApiToken(
     tokenId: tokenDoc._id,
   };
 }
+
+export const exchangeSetupToken = internalMutation({
+  args: {
+    setupToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const tokenHash = await hashToken(args.setupToken);
+    const tokenDoc = await ctx.db
+      .query("api_tokens")
+      .withIndex("by_token_hash", (q) => q.eq("token_hash", tokenHash))
+      .first();
+
+    if (!tokenDoc) {
+      return null;
+    }
+
+    if (tokenDoc.expires_at && tokenDoc.expires_at < Date.now()) {
+      await ctx.db.delete(tokenDoc._id);
+      return null;
+    }
+
+    if (!tokenDoc.name.startsWith("setup-")) {
+      return null;
+    }
+
+    await ctx.db.delete(tokenDoc._id);
+
+    const newToken = generateToken();
+    const newTokenHash = await hashToken(newToken);
+    const now = Date.now();
+
+    await ctx.db.insert("api_tokens", {
+      user_id: tokenDoc.user_id,
+      token_hash: newTokenHash,
+      name: `CLI - ${new Date(now).toISOString().split("T")[0]}`,
+      created_at: now,
+      last_used_at: now,
+    });
+
+    return {
+      auth_token: newToken,
+      user_id: tokenDoc.user_id,
+      convex_url: CONVEX_URL,
+    };
+  },
+});

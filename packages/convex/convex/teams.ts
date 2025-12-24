@@ -112,3 +112,72 @@ export const removeMember = mutation({
     });
   },
 });
+
+export const renameTeam = mutation({
+  args: {
+    team_id: v.id("teams"),
+    requesting_user_id: v.id("users"),
+    name: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const requestingUser = await ctx.db.get(args.requesting_user_id);
+    if (!requestingUser || requestingUser.role !== "admin") {
+      throw new Error("Only admins can rename the team");
+    }
+    if (requestingUser.team_id?.toString() !== args.team_id.toString()) {
+      throw new Error("Not a member of this team");
+    }
+    await ctx.db.patch(args.team_id, { name: args.name.trim() });
+  },
+});
+
+export const regenerateInviteCode = mutation({
+  args: {
+    team_id: v.id("teams"),
+    requesting_user_id: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const requestingUser = await ctx.db.get(args.requesting_user_id);
+    if (!requestingUser || requestingUser.role !== "admin") {
+      throw new Error("Only admins can regenerate invite codes");
+    }
+    if (requestingUser.team_id?.toString() !== args.team_id.toString()) {
+      throw new Error("Not a member of this team");
+    }
+    const newCode = generateInviteCode();
+    const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
+    await ctx.db.patch(args.team_id, {
+      invite_code: newCode,
+      invite_code_expires_at: Date.now() + sevenDaysInMs,
+    });
+    return newCode;
+  },
+});
+
+export const setMemberRole = mutation({
+  args: {
+    requesting_user_id: v.id("users"),
+    member_user_id: v.id("users"),
+    role: v.union(v.literal("member"), v.literal("admin")),
+  },
+  handler: async (ctx, args) => {
+    const requestingUser = await ctx.db.get(args.requesting_user_id);
+    if (!requestingUser || requestingUser.role !== "admin") {
+      throw new Error("Only admins can change member roles");
+    }
+    const memberUser = await ctx.db.get(args.member_user_id);
+    if (!memberUser || memberUser.team_id?.toString() !== requestingUser.team_id?.toString()) {
+      throw new Error("User not in your team");
+    }
+    if (args.role === "member" && memberUser.role === "admin") {
+      const teamMembers = await ctx.db.query("users").collect();
+      const adminCount = teamMembers.filter(
+        (u) => u.team_id?.toString() === requestingUser.team_id?.toString() && u.role === "admin"
+      ).length;
+      if (adminCount <= 1) {
+        throw new Error("Cannot demote the last admin");
+      }
+    }
+    await ctx.db.patch(args.member_user_id, { role: args.role });
+  },
+});

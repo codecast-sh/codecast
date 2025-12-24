@@ -125,7 +125,7 @@ export const getConversations = query({
     const filtered = allConversations.filter((c) => {
       const isOwn = c.user_id.toString() === args.user_id.toString();
       if (isOwn) return true;
-      if (c.is_private) return false;
+      if (c.is_private !== false) return false;
       if (user.team_id && c.team_id?.toString() === user.team_id.toString()) {
         return true;
       }
@@ -151,7 +151,7 @@ export const getConversation = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private) {
+      if (conversation.is_private !== false) {
         return null;
       }
       const authUser = await ctx.db.get(authUserId);
@@ -225,7 +225,7 @@ export const getConversationMessages = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private) {
+      if (conversation.is_private !== false) {
         return null;
       }
       const authUser = await ctx.db.get(authUserId);
@@ -297,7 +297,7 @@ export const getMoreMessages = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private) {
+      if (conversation.is_private !== false) {
         return null;
       }
       const authUser = await ctx.db.get(authUserId);
@@ -349,7 +349,7 @@ export const getOlderMessages = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private) {
+      if (conversation.is_private !== false) {
         return null;
       }
       const authUser = await ctx.db.get(authUserId);
@@ -430,7 +430,7 @@ export const listConversations = query({
       let filtered = allConversations.filter((c) => {
         const isOwn = c.user_id.toString() === userId.toString();
         if (isOwn) return true;
-        if (c.is_private) return false;
+        if (c.is_private !== false) return false;
         if (user.team_id && c.team_id?.toString() === user.team_id.toString()) {
           return true;
         }
@@ -625,7 +625,6 @@ export const generateShareLink = mutation({
     const shareToken = generateShareToken();
     await ctx.db.patch(args.conversation_id, {
       share_token: shareToken,
-      is_private: false,
     });
     return shareToken;
   },
@@ -647,7 +646,7 @@ export const getSharedConversation = query({
 
     const conversation = conversations[0];
 
-    if (conversation.is_private) {
+    if (conversation.is_private !== false) {
       return null;
     }
 
@@ -748,7 +747,7 @@ export const searchConversations = query({
       // Check access
       const isOwn = conv.user_id.toString() === userId.toString();
       if (!isOwn) {
-        if (conv.is_private) continue;
+        if (conv.is_private !== false) continue;
         if (!user.team_id || conv.team_id?.toString() !== user.team_id.toString()) {
           continue;
         }
