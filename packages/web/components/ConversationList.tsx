@@ -318,6 +318,19 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
   }
 
   if (!isLoading && conversations.length === 0) {
+    if (filter === "team") {
+      return (
+        <EmptyState
+          title="No team conversations yet"
+          description="Your team hasn't synced any conversations. Invite team members to start sharing conversations."
+          action={{
+            label: "Invite team members",
+            href: "/settings/team",
+          }}
+        />
+      );
+    }
+
     return (
       <EmptyState
         title="No conversations yet"
