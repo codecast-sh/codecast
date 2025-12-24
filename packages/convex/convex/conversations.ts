@@ -1076,3 +1076,61 @@ export const updateTitle = mutation({
     }
   },
 });
+
+export const listPrivateConversations = query({
+  args: {
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Unauthorized: valid API token required");
+    }
+
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .filter((q) => q.eq(q.field("is_private"), true))
+      .collect();
+
+    const result = await Promise.all(
+      conversations.map(async (c) => {
+        const messages = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", c._id))
+          .order("asc")
+          .take(20);
+
+        let firstUserMessage = "";
+        for (const msg of messages) {
+          const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+          if (msg.role === "user" && !hasToolResults) {
+            const text = msg.content?.trim();
+            if (text) {
+              firstUserMessage = text.slice(0, 120);
+              if (text.length > 120) firstUserMessage += "...";
+              break;
+            }
+          }
+        }
+
+        const title = c.slug
+          ? formatSlugAsTitle(c.slug)
+          : c.title || firstUserMessage || `Session ${c.session_id.slice(0, 8)}`;
+
+        return {
+          conversation_id: c._id,
+          session_id: c.session_id,
+          title,
+          agent_type: c.agent_type,
+          started_at: c.started_at,
+          updated_at: c.updated_at,
+          message_count: c.message_count,
+          project_path: c.project_path,
+        };
+      })
+    );
+
+    return result.sort((a, b) => b.updated_at - a.updated_at);
+  },
+});

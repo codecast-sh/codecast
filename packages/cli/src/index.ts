@@ -705,7 +705,35 @@ program
     const convexUrl = config.convex_url || CONVEX_URL;
 
     if (options.list) {
-      console.log("List private conversations - not yet implemented");
+      try {
+        const { ConvexHttpClient } = await import("convex/browser");
+        const client = new ConvexHttpClient(convexUrl);
+
+        const conversations = await client.query("conversations:listPrivateConversations" as any, {
+          api_token: config.auth_token,
+        });
+
+        if (conversations.length === 0) {
+          console.log("\nNo private conversations found.");
+          console.log("Mark conversations as private using: codecast private <session-id>");
+        } else {
+          console.log(`\nPrivate conversations (${conversations.length}):\n`);
+          for (const conv of conversations) {
+            const date = new Date(conv.updated_at).toLocaleDateString();
+            console.log(`  ${conv.session_id}`);
+            console.log(`    Title: ${conv.title}`);
+            console.log(`    Updated: ${date}`);
+            console.log(`    Messages: ${conv.message_count}`);
+            if (conv.project_path) {
+              console.log(`    Project: ${conv.project_path}`);
+            }
+            console.log();
+          }
+        }
+      } catch (err) {
+        console.error("Failed to list private conversations:", (err as Error).message);
+        process.exit(1);
+      }
       return;
     }
 
@@ -732,8 +760,6 @@ program
         console.log(`Marked conversation as private: ${sessionId}`);
         console.log("This conversation will no longer appear in team view");
       }
-
-      client.close();
     } catch (err) {
       console.error("Failed to update conversation:", (err as Error).message);
       process.exit(1);
