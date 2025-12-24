@@ -57,6 +57,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
   const pathname = usePathname();
   const router = useRouter();
   const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
+  const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
 
   const handleFilterClick = (newFilter: "my" | "team") => {
     if (!isDashboard) {
@@ -105,6 +106,19 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
             </svg>
             <span>Team</span>
           </button>
+          <Link
+            href="/timeline"
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+              isTimeline
+                ? "bg-sol-bg-alt text-sol-text"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+            }`}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>Timeline</span>
+          </Link>
         </div>
 
         {directories.length > 0 && (
