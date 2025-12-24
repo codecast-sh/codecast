@@ -62,7 +62,7 @@ export function InviteModal({ trigger }: InviteModalProps) {
 
   if (!team) return null;
 
-  const isExpired = team.invite_code_expires_at && Date.now() > team.invite_code_expires_at;
+  const isExpired = !!(team.invite_code_expires_at && Date.now() > team.invite_code_expires_at);
   const isAdmin = user?.role === "admin";
 
   const formatExpiry = (timestamp: number | undefined) => {
