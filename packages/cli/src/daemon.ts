@@ -231,7 +231,17 @@ async function processSessionFile(
   updateStateCallback: () => void
 ): Promise<void> {
   let lastPosition = getPosition(filePath);
-  const stats = fs.statSync(filePath);
+  let stats;
+
+  try {
+    stats = fs.statSync(filePath);
+  } catch (err: any) {
+    if (err.code === 'EACCES' || err.code === 'EPERM') {
+      log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
+      return;
+    }
+    throw err;
+  }
 
   if (stats.size < lastPosition) {
     log(`File rotation detected for ${filePath}: size=${stats.size} < position=${lastPosition}. Resetting to start.`);
@@ -243,32 +253,44 @@ async function processSessionFile(
     return;
   }
 
-  const fd = fs.openSync(filePath, "r");
-  const buffer = Buffer.alloc(stats.size - lastPosition);
-  fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
-  fs.closeSync(fd);
+  let fd;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(stats.size - lastPosition);
+    fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
+    fs.closeSync(fd);
 
-  const newContent = buffer.toString("utf-8");
-  const messages = parseSessionFile(newContent);
+    const newContent = buffer.toString("utf-8");
+    const messages = parseSessionFile(newContent);
 
-  let conversationId = conversationCache[sessionId];
+    let conversationId = conversationCache[sessionId];
 
-  // Check for summary title even if no new messages
-  if (conversationId) {
-    const fullContent = fs.readFileSync(filePath, "utf-8");
-    const summaryTitle = extractSummaryTitle(fullContent);
-    if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
+    // Check for summary title even if no new messages
+    if (conversationId) {
+      let fullContent;
       try {
-        await syncService.updateTitle(conversationId, summaryTitle);
-        titleCache[sessionId] = summaryTitle;
-        saveTitleCache(titleCache);
-        log(`Updated title for session ${sessionId}: ${summaryTitle}`);
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        log(`Failed to update title: ${errMsg}`);
+        fullContent = fs.readFileSync(filePath, "utf-8");
+      } catch (err: any) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+          log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
+          setPosition(filePath, stats.size);
+          return;
+        }
+        throw err;
+      }
+      const summaryTitle = extractSummaryTitle(fullContent);
+      if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
+        try {
+          await syncService.updateTitle(conversationId, summaryTitle);
+          titleCache[sessionId] = summaryTitle;
+          saveTitleCache(titleCache);
+          log(`Updated title for session ${sessionId}: ${summaryTitle}`);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          log(`Failed to update title: ${errMsg}`);
+        }
       }
     }
-  }
 
   if (messages.length === 0) {
     setPosition(filePath, stats.size);
@@ -276,8 +298,18 @@ async function processSessionFile(
   }
 
   if (!conversationId) {
+    let fullContent;
     try {
-      const fullContent = fs.readFileSync(filePath, "utf-8");
+      fullContent = fs.readFileSync(filePath, "utf-8");
+    } catch (err: any) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        log(`Warning: Permission denied reading ${filePath} for conversation creation. Skipping.`);
+        return;
+      }
+      throw err;
+    }
+
+    try {
       const slug = extractSlug(fullContent);
       const parentMessageUuid = extractParentUuid(fullContent);
       const firstMessageTimestamp = messages[0]?.timestamp;
@@ -373,8 +405,19 @@ async function processSessionFile(
         });
       }
 
-      const fullContent = fs.readFileSync(filePath, "utf-8");
-      const slug = extractSlug(fullContent);
+      let retryFullContent;
+      try {
+        retryFullContent = fs.readFileSync(filePath, "utf-8");
+      } catch (readErr: any) {
+        if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
+          log(`Warning: Permission denied reading ${filePath} for retry queue. Skipping.`);
+          setPosition(filePath, stats.size);
+          return;
+        }
+        throw readErr;
+      }
+
+      const slug = extractSlug(retryFullContent);
       const firstMsgTimestamp = messages[0]?.timestamp;
       const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
 
@@ -420,8 +463,18 @@ async function processSessionFile(
         delete conversationCache[sessionId];
         saveConversationCache(conversationCache);
 
-        const fullContent = fs.readFileSync(filePath, "utf-8");
-        const slug = extractSlug(fullContent);
+        let recreateFullContent;
+        try {
+          recreateFullContent = fs.readFileSync(filePath, "utf-8");
+        } catch (readErr: any) {
+          if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
+            log(`Warning: Permission denied reading ${filePath} for conversation recreation. Skipping.`);
+            continue;
+          }
+          throw readErr;
+        }
+
+        const slug = extractSlug(recreateFullContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
         const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
 
@@ -477,10 +530,17 @@ async function processSessionFile(
     }
   }
 
-  setPosition(filePath, stats.size);
-  log(`Synced ${messages.length} messages for session ${sessionId}`);
+    setPosition(filePath, stats.size);
+    log(`Synced ${messages.length} messages for session ${sessionId}`);
 
-  updateStateCallback();
+    updateStateCallback();
+  } catch (err: any) {
+    if (err.code === 'EACCES' || err.code === 'EPERM') {
+      log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
+      return;
+    }
+    throw err;
+  }
 }
 
 async function processCursorSession(
@@ -499,7 +559,11 @@ async function processCursorSession(
   let result: { messages: ParsedMessage[]; maxRowId: number };
   try {
     result = extractMessagesFromCursorDb(dbPath, lastRowId);
-  } catch (err) {
+  } catch (err: any) {
+    if (err.code === 'EACCES' || err.code === 'EPERM') {
+      log(`Warning: Permission denied reading ${dbPath}. Will retry when permissions are restored.`);
+      return;
+    }
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Failed to extract messages from Cursor DB: ${errMsg}`);
     return;
