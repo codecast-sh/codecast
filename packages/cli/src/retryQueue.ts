@@ -151,4 +151,20 @@ export class RetryQueue {
   stop(): void {
     this.stopTimer();
   }
+
+  async waitForCompletion(timeoutMs: number = 10000): Promise<boolean> {
+    const startTime = Date.now();
+
+    while (this.queue.size > 0) {
+      if (Date.now() - startTime > timeoutMs) {
+        this.log(`Timeout waiting for retry queue to drain (${this.queue.size} operations remaining)`);
+        return false;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    this.log("All retry queue operations completed");
+    return true;
+  }
 }

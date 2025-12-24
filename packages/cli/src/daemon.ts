@@ -19,6 +19,7 @@ const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
+const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 
 interface Config {
   user_id?: string;
@@ -990,30 +991,63 @@ async function main(): Promise<void> {
 
   setupSubscription();
 
-  const shutdown = () => {
-    log("Shutting down");
+  const shutdown = async () => {
+    log("Shutting down gracefully");
+
     saveDaemonState({ connected: false });
+
     if (unsubscribe) {
       unsubscribe();
     }
-    const pendingOps = retryQueue.getQueueSize();
-    if (pendingOps > 0) {
-      log(`Warning: ${pendingOps} operations still pending in retry queue`);
-    }
-    retryQueue.stop();
+
     watcher.stop();
     cursorWatcher.stop();
+
+    const pendingOps = retryQueue.getQueueSize();
+    if (pendingOps > 0) {
+      log(`Waiting for ${pendingOps} pending operations to complete...`);
+
+      const completed = await retryQueue.waitForCompletion(10000);
+      if (!completed) {
+        log(`Shutdown timeout: ${retryQueue.getQueueSize()} operations did not complete`);
+      }
+    }
+
+    retryQueue.stop();
+
     for (const sync of fileSyncs.values()) {
       sync.stop();
     }
     for (const sync of cursorSyncs.values()) {
       sync.stop();
     }
+
+    if (fs.existsSync(PID_FILE)) {
+      try {
+        fs.unlinkSync(PID_FILE);
+        log("PID file removed");
+      } catch (err) {
+        log(`Failed to remove PID file: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    log("Shutdown complete");
     process.exit(0);
   };
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", () => {
+    shutdown().catch((err) => {
+      log(`Shutdown error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    });
+  });
+
+  process.on("SIGINT", () => {
+    shutdown().catch((err) => {
+      log(`Shutdown error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    });
+  });
 
   await new Promise(() => {});
 }
