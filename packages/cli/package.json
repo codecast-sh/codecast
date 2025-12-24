@@ -13,9 +13,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "chokidar": "^4.0.3",
     "commander": "^12.1.0",
     "convex": "^1.17.4",
-    "chokidar": "^4.0.3",
+    "glob": "^13.0.0",
     "open": "^11.0.0"
   },
   "devDependencies": {

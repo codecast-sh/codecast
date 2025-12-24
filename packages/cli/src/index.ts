@@ -8,6 +8,11 @@ import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion } from "./update.js";
+import { glob } from "glob";
+import { getPosition, setPosition } from "./positionTracker.js";
+import { parseSessionFile, extractSlug } from "./parser.js";
+import { SyncService } from "./syncService.js";
+import { hashPath } from "./hash.js";
 
 const program = new Command();
 
@@ -407,6 +412,142 @@ async function runAuth(): Promise<void> {
   showStatus();
 }
 
+async function runSync(): Promise<void> {
+  const config = readConfig();
+
+  if (!config?.auth_token || !config?.user_id) {
+    console.error("Not authenticated. Run 'codecast auth' first.");
+    process.exit(1);
+  }
+
+  const projectsPath = path.join(process.env.HOME || "", ".claude", "projects");
+
+  if (!fs.existsSync(projectsPath)) {
+    console.log("No Claude Code projects found at:", projectsPath);
+    return;
+  }
+
+  console.log("\nFinding unsynced conversations...\n");
+
+  const sessionFiles = await glob("**/*.jsonl", {
+    cwd: projectsPath,
+    absolute: true,
+  });
+
+  if (sessionFiles.length === 0) {
+    console.log("No session files found.");
+    return;
+  }
+
+  const unsyncedFiles: Array<{ path: string; size: number; position: number }> = [];
+
+  for (const filePath of sessionFiles) {
+    try {
+      const stats = fs.statSync(filePath);
+      const position = getPosition(filePath);
+
+      if (position < stats.size) {
+        unsyncedFiles.push({
+          path: filePath,
+          size: stats.size,
+          position,
+        });
+      }
+    } catch (err) {
+      continue;
+    }
+  }
+
+  if (unsyncedFiles.length === 0) {
+    console.log("All conversations are already synced.");
+    return;
+  }
+
+  console.log(`Syncing ${unsyncedFiles.length} conversations...\n`);
+
+  const syncService = new SyncService({
+    convexUrl: config.convex_url || CONVEX_URL,
+    authToken: config.auth_token,
+    userId: config.user_id,
+  });
+
+  let syncedCount = 0;
+  let errorCount = 0;
+
+  for (const file of unsyncedFiles) {
+    try {
+      const content = fs.readFileSync(file.path, "utf-8");
+      const lines = content.split("\n");
+      const newLines = lines.slice(Math.floor(file.position / (file.size / lines.length)));
+
+      if (newLines.length === 0) {
+        continue;
+      }
+
+      const messages = parseSessionFile(newLines.join("\n"));
+
+      if (messages.length === 0) {
+        continue;
+      }
+
+      const sessionId = path.basename(file.path, ".jsonl");
+      const projectDir = path.basename(path.dirname(file.path));
+      const projectPath = projectDir.replace(/-/g, "/");
+      const slug = extractSlug(content);
+
+      let conversationId: string | null = null;
+
+      try {
+        conversationId = await syncService.createConversation({
+          userId: config.user_id!,
+          sessionId,
+          agentType: "claude_code",
+          projectPath,
+          slug,
+          startedAt: messages[0]?.timestamp || Date.now(),
+        });
+      } catch (err) {
+        const errorMsg = (err as Error).message;
+        if (errorMsg.includes("already exists")) {
+          continue;
+        }
+        throw err;
+      }
+
+      if (conversationId) {
+        for (const msg of messages) {
+          await syncService.addMessage({
+            conversationId,
+            messageUuid: msg.uuid,
+            role: msg.role,
+            content: msg.content,
+            timestamp: msg.timestamp,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+          });
+        }
+      }
+
+      setPosition(file.path, file.size);
+      syncedCount++;
+
+      process.stdout.write(`\rSynced ${syncedCount}/${unsyncedFiles.length} conversations...`);
+    } catch (err) {
+      errorCount++;
+    }
+  }
+
+  console.log(`\n\nSync complete!`);
+  console.log(`  Synced: ${syncedCount} conversations`);
+
+  if (errorCount > 0) {
+    console.log(`  Errors: ${errorCount}`);
+  }
+}
+
 program
   .name("codecast")
   .description("Sync coding agent conversations to a shared Convex database")
@@ -451,8 +592,8 @@ program
 program
   .command("sync")
   .description("Manually sync all unsynced conversations")
-  .action(() => {
-    console.log("Sync command - not yet implemented");
+  .action(async () => {
+    await runSync();
   });
 
 program
