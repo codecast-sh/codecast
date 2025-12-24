@@ -49,6 +49,7 @@ interface DaemonState {
   connected?: boolean;
   lastSyncTime?: number;
   pendingQueueSize?: number;
+  authExpired?: boolean;
 }
 
 function detectAgents(): DetectedAgent[] {
@@ -170,7 +171,10 @@ function showStatus(): void {
 
   console.log("");
 
-  if (config?.auth_token) {
+  if (state?.authExpired) {
+    console.log("  Auth: expired");
+    console.log("  Run 'codecast auth' to re-authenticate");
+  } else if (config?.auth_token) {
     console.log("  Auth: authenticated");
     if (config.user_id) {
       console.log(`  User: ${config.user_id}`);
@@ -331,6 +335,17 @@ async function runLogin(setupToken: string): Promise<void> {
 
     writeConfig(config);
 
+    const stateFile = path.join(CONFIG_DIR, "daemon.state");
+    if (fs.existsSync(stateFile)) {
+      try {
+        const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+        const newState = { ...currentState, authExpired: false };
+        fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
+      } catch {
+        // Ignore errors
+      }
+    }
+
     console.log("Linked successfully!\n");
     console.log(`User ID: ${config.user_id}`);
     console.log(`API Token: ${maskToken(config.auth_token || "")}`);
@@ -398,6 +413,17 @@ async function runAuth(): Promise<void> {
   };
 
   writeConfig(config);
+
+  const stateFile = path.join(CONFIG_DIR, "daemon.state");
+  if (fs.existsSync(stateFile)) {
+    try {
+      const currentState = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+      const newState = { ...currentState, authExpired: false };
+      fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2), { mode: 0o600 });
+    } catch {
+      // Ignore errors
+    }
+  }
 
   console.log("Authenticated successfully!\n");
   console.log(`User ID: ${config.user_id}`);

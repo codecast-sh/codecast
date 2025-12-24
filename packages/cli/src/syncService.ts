@@ -6,9 +6,29 @@ const MAX_CONTENT_SIZE = 100_000;
 const MAX_TOOL_RESULT_SIZE = 50_000;
 const MAX_TOTAL_MESSAGE_SIZE = 900_000;
 
+export class AuthExpiredError extends Error {
+  constructor(message: string = "Authentication token expired") {
+    super(message);
+    this.name = "AuthExpiredError";
+  }
+}
+
 function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen) + `\n... [truncated ${str.length - maxLen} chars]`;
+}
+
+function isAuthError(error: any): boolean {
+  const message = (error?.message || String(error)).toLowerCase();
+  return (
+    message.includes("unauthenticated") ||
+    message.includes("invalid token") ||
+    message.includes("token expired") ||
+    message.includes("authentication failed") ||
+    (message.includes("auth") && message.includes("expired")) ||
+    message.includes("401") ||
+    message.includes("unauthorized")
+  );
 }
 
 export type AgentType = "claude_code" | "codex" | "cursor";
@@ -77,30 +97,37 @@ export class SyncService {
       ? hashPath(params.projectPath)
       : undefined;
     const gitInfo = params.gitInfo;
-    const result = await this.client.mutation(
-      "conversations:createConversation" as any,
-      {
-        user_id: params.userId,
-        team_id: params.teamId,
-        agent_type: params.agentType,
-        session_id: params.sessionId,
-        project_hash: projectHash,
-        project_path: params.projectPath,
-        slug: params.slug,
-        title: params.title,
-        started_at: params.startedAt,
-        parent_message_uuid: params.parentMessageUuid,
-        git_commit_hash: gitInfo?.commitHash || params.gitCommitHash,
-        git_branch: gitInfo?.branch,
-        git_remote_url: gitInfo?.remoteUrl,
-        git_status: gitInfo?.status,
-        git_diff: gitInfo?.diff,
-        git_diff_staged: gitInfo?.diffStaged,
-        git_root: gitInfo?.root,
-        api_token: this.apiToken,
+    try {
+      const result = await this.client.mutation(
+        "conversations:createConversation" as any,
+        {
+          user_id: params.userId,
+          team_id: params.teamId,
+          agent_type: params.agentType,
+          session_id: params.sessionId,
+          project_hash: projectHash,
+          project_path: params.projectPath,
+          slug: params.slug,
+          title: params.title,
+          started_at: params.startedAt,
+          parent_message_uuid: params.parentMessageUuid,
+          git_commit_hash: gitInfo?.commitHash || params.gitCommitHash,
+          git_branch: gitInfo?.branch,
+          git_remote_url: gitInfo?.remoteUrl,
+          git_status: gitInfo?.status,
+          git_diff: gitInfo?.diff,
+          git_diff_staged: gitInfo?.diffStaged,
+          git_root: gitInfo?.root,
+          api_token: this.apiToken,
+        }
+      );
+      return result as string;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
       }
-    );
-    return result as string;
+      throw error;
+    }
   }
 
   async addMessage(params: {
@@ -142,23 +169,30 @@ export class SyncService {
       return size < MAX_TOOL_RESULT_SIZE;
     }).slice(0, 5);
 
-    const messageId = await this.client.mutation(
-      "messages:addMessage" as any,
-      {
-        conversation_id: params.conversationId,
-        message_uuid: params.messageUuid,
-        role: roleMap[params.role],
-        content: redactedContent,
-        thinking: redactedThinking,
-        tool_calls: toolCalls,
-        tool_results: toolResults,
-        images,
-        subtype: params.subtype,
-        timestamp: params.timestamp,
-        api_token: this.apiToken,
+    try {
+      const messageId = await this.client.mutation(
+        "messages:addMessage" as any,
+        {
+          conversation_id: params.conversationId,
+          message_uuid: params.messageUuid,
+          role: roleMap[params.role],
+          content: redactedContent,
+          thinking: redactedThinking,
+          tool_calls: toolCalls,
+          tool_results: toolResults,
+          images,
+          subtype: params.subtype,
+          timestamp: params.timestamp,
+          api_token: this.apiToken,
+        }
+      );
+      return messageId as string;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
       }
-    );
-    return messageId as string;
+      throw error;
+    }
   }
 
   async updateSyncCursor(params: {
@@ -169,12 +203,19 @@ export class SyncService {
       throw new Error("userId required for sync cursor operations");
     }
     const filePathHash = hashPath(params.filePath);
-    await this.client.mutation("syncCursors:updateSyncCursor" as any, {
-      user_id: this.userId,
-      file_path_hash: filePathHash,
-      last_position: params.byteOffset,
-      api_token: this.apiToken,
-    });
+    try {
+      await this.client.mutation("syncCursors:updateSyncCursor" as any, {
+        user_id: this.userId,
+        file_path_hash: filePathHash,
+        last_position: params.byteOffset,
+        api_token: this.apiToken,
+      });
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
   }
 
   async getSyncCursor(filePath: string): Promise<number> {
@@ -182,23 +223,37 @@ export class SyncService {
       throw new Error("userId required for sync cursor operations");
     }
     const filePathHash = hashPath(filePath);
-    const position = await this.client.query(
-      "syncCursors:getSyncCursor" as any,
-      {
-        user_id: this.userId,
-        file_path_hash: filePathHash,
-        api_token: this.apiToken,
+    try {
+      const position = await this.client.query(
+        "syncCursors:getSyncCursor" as any,
+        {
+          user_id: this.userId,
+          file_path_hash: filePathHash,
+          api_token: this.apiToken,
+        }
+      );
+      return position ?? 0;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
       }
-    );
-    return position ?? 0;
+      throw error;
+    }
   }
 
   async updateTitle(conversationId: string, title: string): Promise<void> {
-    await this.client.mutation("conversations:updateTitle" as any, {
-      conversation_id: conversationId,
-      title,
-      api_token: this.apiToken,
-    });
+    try {
+      await this.client.mutation("conversations:updateTitle" as any, {
+        conversation_id: conversationId,
+        title,
+        api_token: this.apiToken,
+      });
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
   }
 
   async updateMessageStatus(params: {
@@ -206,11 +261,18 @@ export class SyncService {
     status: "pending" | "delivered" | "failed";
     deliveredAt?: number;
   }): Promise<void> {
-    await this.client.mutation("pendingMessages:updateMessageStatus" as any, {
-      message_id: params.messageId,
-      status: params.status,
-      delivered_at: params.deliveredAt,
-      api_token: this.apiToken,
-    });
+    try {
+      await this.client.mutation("pendingMessages:updateMessageStatus" as any, {
+        message_id: params.messageId,
+        status: params.status,
+        delivered_at: params.deliveredAt,
+        api_token: this.apiToken,
+      });
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
   }
 }

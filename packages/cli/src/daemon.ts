@@ -7,7 +7,7 @@ import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { parseSessionFile, extractSlug, extractParentUuid, extractSummaryTitle, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
-import { SyncService } from "./syncService.js";
+import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
 import { InvalidateSync } from "./invalidateSync.js";
@@ -57,6 +57,7 @@ interface DaemonState {
   lastSyncTime?: number;
   pendingQueueSize?: number;
   timestamp?: number;
+  authExpired?: boolean;
 }
 
 
@@ -343,6 +344,13 @@ async function processSessionFile(
         delete pendingMessages[sessionId];
       }
     } catch (err) {
+      if (err instanceof AuthExpiredError) {
+        log("⚠️  Authentication expired - sync paused");
+        saveDaemonState({ authExpired: true });
+        setPosition(filePath, stats.size);
+        return;
+      }
+
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Failed to create conversation, queueing for retry: ${errMsg}`);
 
@@ -400,6 +408,12 @@ async function processSessionFile(
         subtype: msg.subtype,
       });
     } catch (err) {
+      if (err instanceof AuthExpiredError) {
+        log("⚠️  Authentication expired - sync paused");
+        saveDaemonState({ authExpired: true });
+        return;
+      }
+
       const errMsg = err instanceof Error ? err.message : String(err);
       if (errMsg.includes("Conversation not found")) {
         log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
@@ -555,6 +569,13 @@ async function processCursorSession(
         delete pendingMessages[sessionId];
       }
     } catch (err) {
+      if (err instanceof AuthExpiredError) {
+        log("⚠️  Authentication expired - sync paused");
+        saveDaemonState({ authExpired: true });
+        setPosition(dbPath, maxRowId);
+        return;
+      }
+
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Failed to create Cursor conversation, queueing for retry: ${errMsg}`);
 
@@ -607,6 +628,12 @@ async function processCursorSession(
         subtype: msg.subtype,
       });
     } catch (err) {
+      if (err instanceof AuthExpiredError) {
+        log("⚠️  Authentication expired - sync paused");
+        saveDaemonState({ authExpired: true });
+        return;
+      }
+
       const errMsg = err instanceof Error ? err.message : String(err);
       if (errMsg.includes("Conversation not found")) {
         log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
@@ -897,6 +924,11 @@ async function main(): Promise<void> {
   watcher.on("session", (event: SessionEvent) => {
     const filePath = event.filePath;
 
+    const state = readDaemonState();
+    if (state?.authExpired) {
+      return;
+    }
+
     if (isSyncPaused()) {
       log(`Sync paused, skipping session: ${event.sessionId}`);
       return;
@@ -944,6 +976,11 @@ async function main(): Promise<void> {
 
   cursorWatcher.on("session", (event: CursorSessionEvent) => {
     const dbPath = event.dbPath;
+
+    const state = readDaemonState();
+    if (state?.authExpired) {
+      return;
+    }
 
     if (isSyncPaused()) {
       log(`Sync paused, skipping Cursor session: ${event.sessionId}`);
