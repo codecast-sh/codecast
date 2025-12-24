@@ -9,14 +9,18 @@
     "web": "npx expo start --web"
   },
   "dependencies": {
+    "@convex-dev/auth": "^0.0.90",
     "@expo/vector-icons": "^15.0.3",
     "@react-navigation/native": "^7.1.8",
     "convex": "^1.31.2",
     "expo": "~54.0.29",
+    "expo-auth-session": "^7.0.10",
     "expo-constants": "~18.0.12",
     "expo-font": "~14.0.10",
     "expo-linking": "~8.0.10",
+    "expo-local-authentication": "^17.0.8",
     "expo-router": "~6.0.20",
+    "expo-secure-store": "^15.0.8",
     "expo-splash-screen": "~31.0.12",
     "expo-status-bar": "~3.0.9",
     "expo-web-browser": "~15.0.10",
