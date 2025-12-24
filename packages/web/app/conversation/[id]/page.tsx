@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
+import { ShareDialog } from "../../../components/ShareDialog";
 import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 
@@ -14,13 +15,13 @@ export default function ConversationPage() {
   const id = params.id as string;
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [showShareCopied, setShowShareCopied] = useState(false);
+  const [showShareDialog, setShowShareDialog] = useState(false);
 
   const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useConversationMessages(id);
   const commits = useQuery(api.commits.getCommitsForConversation, {
     conversation_id: id as Id<"conversations">,
   });
 
-  const generateShareLink = useMutation(api.conversations.generateShareLink);
   const setPrivacy = useMutation(api.conversations.setPrivacy);
 
   useEffect(() => {
@@ -30,18 +31,8 @@ export default function ConversationPage() {
     }
   }, [conversation?.share_token]);
 
-  const handleShare = async () => {
-    try {
-      const token = await generateShareLink({ conversation_id: id as Id<"conversations"> });
-      const url = `${window.location.origin}/share/${token}`;
-      setShareUrl(url);
-      await navigator.clipboard.writeText(url);
-      setShowShareCopied(true);
-      toast.success("Share link copied to clipboard");
-      setTimeout(() => setShowShareCopied(false), 2000);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to generate share link");
-    }
+  const handleShare = () => {
+    setShowShareDialog(true);
   };
 
   const handleCopyShareUrl = async () => {
@@ -121,6 +112,17 @@ export default function ConversationPage() {
         hasMoreAbove={hasMoreAbove}
         isLoadingOlder={isLoadingOlder}
         onLoadOlder={loadOlder}
+      />
+      <ShareDialog
+        open={showShareDialog}
+        onOpenChange={setShowShareDialog}
+        conversationId={id as Id<"conversations">}
+        conversationTitle={conversation?.title}
+        shareToken={conversation?.share_token}
+        onShareGenerated={(token) => {
+          const url = `${window.location.origin}/share/${token}`;
+          setShareUrl(url);
+        }}
       />
     </AuthGuard>
   );

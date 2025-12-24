@@ -70,6 +70,21 @@ export default defineSchema({
     .index("by_share_token", ["share_token"])
     .index("by_session_id", ["session_id"]),
 
+  public_conversations: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    title: v.string(),
+    description: v.optional(v.string()),
+    tags: v.optional(v.array(v.string())),
+    preview_text: v.string(),
+    agent_type: v.string(),
+    message_count: v.number(),
+    created_at: v.number(),
+    view_count: v.number(),
+  })
+    .index("by_created_at", ["created_at"])
+    .index("by_view_count", ["view_count"]),
+
   messages: defineTable({
     conversation_id: v.id("conversations"),
     message_uuid: v.optional(v.string()),

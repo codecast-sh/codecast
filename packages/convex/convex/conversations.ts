@@ -1143,3 +1143,82 @@ export const listPrivateConversations = query({
     return result.sort((a, b) => b.updated_at - a.updated_at);
   },
 });
+
+export const publishToDirectory = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    title: v.string(),
+    description: v.optional(v.string()),
+    tags: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized: must be logged in");
+    }
+
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      throw new Error("Unauthorized: can only publish your own conversations");
+    }
+
+    if (!conversation.share_token) {
+      throw new Error("Conversation must be shared before publishing to directory");
+    }
+
+    const existingPublic = await ctx.db
+      .query("public_conversations")
+      .filter((q) => q.eq(q.field("conversation_id"), args.conversation_id))
+      .first();
+
+    if (existingPublic) {
+      await ctx.db.patch(existingPublic._id, {
+        title: args.title,
+        description: args.description,
+        tags: args.tags,
+      });
+      return existingPublic._id;
+    }
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .order("asc")
+      .take(10);
+
+    let previewText = "";
+    for (const msg of messages) {
+      if (msg.role === "user" && msg.content) {
+        const text = msg.content.trim();
+        if (text) {
+          previewText = text.slice(0, 200);
+          break;
+        }
+      }
+    }
+
+    if (!previewText) {
+      previewText = "No preview available";
+    }
+
+    const publicConversationId = await ctx.db.insert("public_conversations", {
+      conversation_id: args.conversation_id,
+      user_id: conversation.user_id,
+      title: args.title,
+      description: args.description,
+      tags: args.tags,
+      preview_text: previewText,
+      agent_type: conversation.agent_type,
+      message_count: conversation.message_count,
+      created_at: Date.now(),
+      view_count: 0,
+    });
+
+    return publicConversationId;
+  },
+});
