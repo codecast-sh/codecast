@@ -161,6 +161,29 @@ export const renameTeam = mutation({
   },
 });
 
+export const inviteToTeam = mutation({
+  args: {
+    team_id: v.id("teams"),
+    requesting_user_id: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const requestingUser = await ctx.db.get(args.requesting_user_id);
+    if (!requestingUser || requestingUser.role !== "admin") {
+      throw new Error("Only admins can generate invite codes");
+    }
+    if (requestingUser.team_id?.toString() !== args.team_id.toString()) {
+      throw new Error("Not a member of this team");
+    }
+    const newCode = generateInviteCode();
+    const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
+    await ctx.db.patch(args.team_id, {
+      invite_code: newCode,
+      invite_code_expires_at: Date.now() + sevenDaysInMs,
+    });
+    return newCode;
+  },
+});
+
 export const regenerateInviteCode = mutation({
   args: {
     team_id: v.id("teams"),
