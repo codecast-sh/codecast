@@ -110,6 +110,12 @@ export const getTeamMembers = query({
         email: u.email,
         role: u.role,
         daemon_last_seen: u.daemon_last_seen,
+        github_username: u.github_username,
+        github_avatar_url: u.github_avatar_url,
+        title: u.title,
+        bio: u.bio,
+        status: u.status,
+        timezone: u.timezone,
       }));
   },
 });

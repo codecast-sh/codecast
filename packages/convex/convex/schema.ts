@@ -25,7 +25,14 @@ export default defineSchema({
       mention: v.boolean(),
       permission_request: v.boolean(),
     })),
-  }).index("email", ["email"]),
+    bio: v.optional(v.string()),
+    title: v.optional(v.string()),
+    status: v.optional(v.union(v.literal("available"), v.literal("busy"), v.literal("away"))),
+    timezone: v.optional(v.string()),
+    hide_activity: v.optional(v.boolean()),
+  })
+    .index("email", ["email"])
+    .index("by_github_username", ["github_username"]),
 
   teams: defineTable({
     name: v.string(),

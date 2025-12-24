@@ -39,15 +39,23 @@ export const listUsers = query({
 export const updateProfile = mutation({
   args: {
     name: v.optional(v.string()),
+    bio: v.optional(v.string()),
+    title: v.optional(v.string()),
+    status: v.optional(v.union(v.literal("available"), v.literal("busy"), v.literal("away"))),
+    timezone: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) {
       throw new Error("Not authenticated");
     }
-    await ctx.db.patch(userId, {
-      name: args.name,
-    });
+    const updateData: any = {};
+    if (args.name !== undefined) updateData.name = args.name;
+    if (args.bio !== undefined) updateData.bio = args.bio;
+    if (args.title !== undefined) updateData.title = args.title;
+    if (args.status !== undefined) updateData.status = args.status;
+    if (args.timezone !== undefined) updateData.timezone = args.timezone;
+    await ctx.db.patch(userId, updateData);
     return userId;
   },
 });
@@ -121,5 +129,76 @@ export const updateNotificationPreferences = mutation({
       updateData.notification_preferences = args.notification_preferences;
     }
     await ctx.db.patch(userId, updateData);
+  },
+});
+
+export const updatePrivacySettings = mutation({
+  args: {
+    hide_activity: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    await ctx.db.patch(userId, {
+      hide_activity: args.hide_activity,
+    });
+  },
+});
+
+export const getUserByUsername = query({
+  args: {
+    username: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_github_username", (q) => q.eq("github_username", args.username))
+      .unique();
+    return user;
+  },
+});
+
+export const getUserActivity = query({
+  args: {
+    user_id: v.id("users"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.user_id);
+    if (!user || user.hide_activity) {
+      return [];
+    }
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+      .filter((q) => q.eq(q.field("is_private"), false))
+      .order("desc")
+      .take(args.limit ?? 10);
+    return conversations;
+  },
+});
+
+export const getUserStats = query({
+  args: {
+    user_id: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.user_id);
+    if (!user || user.hide_activity) {
+      return null;
+    }
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+      .filter((q) => q.eq(q.field("is_private"), false))
+      .collect();
+    const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);
+    return {
+      total_conversations: conversations.length,
+      total_messages: totalMessages,
+      active_conversations: conversations.filter((c) => c.status === "active").length,
+    };
   },
 });
