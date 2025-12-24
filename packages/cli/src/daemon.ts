@@ -223,6 +223,14 @@ async function processSessionFile(
       saveConversationCache(conversationCache);
       log(`Created conversation ${conversationId} for session ${sessionId}`);
 
+      if ((global as any).activeSessions) {
+        (global as any).activeSessions.set(conversationId, {
+          sessionId,
+          conversationId,
+          projectPath: projectPath || "",
+        });
+      }
+
       if (pendingMessages[sessionId]) {
         for (const msg of pendingMessages[sessionId]) {
           try {
@@ -570,6 +578,26 @@ async function processCursorSession(
   log(`Synced ${messages.length} Cursor messages for session ${sessionId}`);
 }
 
+interface ActiveSession {
+  sessionId: string;
+  conversationId: string;
+  projectPath: string;
+}
+
+let reconnectAttempt = 0;
+const BASE_DELAY_MS = 1000;
+const MAX_DELAY_MS = 30000;
+
+function getReconnectDelay(): number {
+  const delay = Math.min(BASE_DELAY_MS * Math.pow(2, reconnectAttempt), MAX_DELAY_MS);
+  reconnectAttempt++;
+  return delay;
+}
+
+function resetReconnectDelay(): void {
+  reconnectAttempt = 0;
+}
+
 async function main(): Promise<void> {
   ensureConfigDir();
   log("Daemon started");
@@ -603,6 +631,7 @@ async function main(): Promise<void> {
   const conversationCache = readConversationCache();
   const titleCache = readTitleCache();
   const pendingMessages: PendingMessages = {};
+  const activeSessions = new Map<string, ActiveSession>();
 
   const retryQueue = new RetryQueue({
     initialDelayMs: 1000,
@@ -757,8 +786,60 @@ async function main(): Promise<void> {
 
   cursorWatcher.start();
 
+  const subscriptionClient = syncService.getSubscriptionClient();
+  let unsubscribe: (() => void) | null = null;
+
+  const setupSubscription = () => {
+    try {
+      log("Setting up pending messages subscription");
+      unsubscribe = subscriptionClient.onUpdate(
+        "pendingMessages:getPendingMessages" as any,
+        { user_id: config.user_id, api_token: config.auth_token },
+        (messages: any) => {
+          log(`Subscription update received: ${JSON.stringify(messages)?.slice(0, 200)}`);
+
+          if (!messages) {
+            log("No messages in update");
+            return;
+          }
+
+          if (Array.isArray(messages)) {
+            log(`Received array with ${messages.length} pending message(s)`);
+            for (const msg of messages) {
+              log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}"`);
+            }
+          } else {
+            log(`Received non-array: ${typeof messages}`);
+          }
+
+          resetReconnectDelay();
+        }
+      );
+      log("Subscription established successfully");
+      resetReconnectDelay();
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log(`Subscription error: ${errMsg}`);
+      if (unsubscribe) {
+        unsubscribe();
+        unsubscribe = null;
+      }
+
+      const delay = getReconnectDelay();
+      log(`Reconnecting in ${delay}ms`);
+      setTimeout(() => {
+        setupSubscription();
+      }, delay);
+    }
+  };
+
+  setupSubscription();
+
   const shutdown = () => {
     log("Shutting down");
+    if (unsubscribe) {
+      unsubscribe();
+    }
     const pendingOps = retryQueue.getQueueSize();
     if (pendingOps > 0) {
       log(`Warning: ${pendingOps} operations still pending in retry queue`);

@@ -1,4 +1,4 @@
-import { ConvexHttpClient } from "convex/browser";
+import { ConvexHttpClient, ConvexClient } from "convex/browser";
 import { redactSecrets } from "./redact.js";
 import { hashPath } from "./hash.js";
 
@@ -44,13 +44,23 @@ export interface CreateConversationParams {
 
 export class SyncService {
   private client: ConvexHttpClient;
+  private subscriptionClient: ConvexClient;
   private userId?: string;
   private apiToken?: string;
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
+    this.subscriptionClient = new ConvexClient(config.convexUrl);
     this.userId = config.userId;
     this.apiToken = config.authToken;
+  }
+
+  getClient(): ConvexHttpClient {
+    return this.client;
+  }
+
+  getSubscriptionClient(): ConvexClient {
+    return this.subscriptionClient;
   }
 
   setUserId(userId: string): void {
