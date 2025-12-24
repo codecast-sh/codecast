@@ -198,4 +198,17 @@ export class SyncService {
       api_token: this.apiToken,
     });
   }
+
+  async updateMessageStatus(params: {
+    messageId: string;
+    status: "pending" | "delivered" | "failed";
+    deliveredAt?: number;
+  }): Promise<void> {
+    await this.client.mutation("pendingMessages:updateMessageStatus" as any, {
+      message_id: params.messageId,
+      status: params.status,
+      delivered_at: params.deliveredAt,
+      api_token: this.apiToken,
+    });
+  }
 }

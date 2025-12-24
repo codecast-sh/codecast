@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import * as fs from "fs";
 import * as path from "path";
-import { execSync } from "child_process";
+import { execSync, exec } from "child_process";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { parseSessionFile, extractSlug, extractParentUuid, extractSummaryTitle, type ParsedMessage } from "./parser.js";
@@ -11,6 +11,9 @@ import { SyncService } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
 import { InvalidateSync } from "./invalidateSync.js";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -598,6 +601,66 @@ function resetReconnectDelay(): void {
   reconnectAttempt = 0;
 }
 
+interface ClaudeCodeProcess {
+  pid: number;
+  tty: string;
+}
+
+async function findClaudeCodeProcesses(): Promise<ClaudeCodeProcess[]> {
+  try {
+    const { stdout } = await execAsync("ps aux | grep -i 'claude' | grep -v grep");
+    const lines = stdout.trim().split("\n");
+    const processes: ClaudeCodeProcess[] = [];
+
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 7) continue;
+
+      const pid = parseInt(parts[1], 10);
+      const tty = parts[6];
+
+      if (isNaN(pid) || tty === "?" || tty === "??") continue;
+
+      processes.push({ pid, tty });
+    }
+
+    return processes;
+  } catch (err) {
+    log(`Error finding Claude Code processes: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}
+
+async function getTtyPath(tty: string): Promise<string | null> {
+  if (tty.startsWith("/dev/")) {
+    return tty;
+  }
+
+  if (tty.startsWith("ttys")) {
+    return `/dev/${tty}`;
+  }
+
+  if (tty.match(/^s\d+$/)) {
+    return `/dev/tty${tty}`;
+  }
+
+  return null;
+}
+
+async function injectMessageToStdin(ttyPath: string, content: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const messageWithNewline = content + "\n";
+
+    fs.writeFile(ttyPath, messageWithNewline, (err) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
 async function main(): Promise<void> {
   ensureConfigDir();
   log("Daemon started");
@@ -795,7 +858,7 @@ async function main(): Promise<void> {
       unsubscribe = subscriptionClient.onUpdate(
         "pendingMessages:getPendingMessages" as any,
         { user_id: config.user_id, api_token: config.auth_token },
-        (messages: any) => {
+        async (messages: any) => {
           log(`Subscription update received: ${JSON.stringify(messages)?.slice(0, 200)}`);
 
           if (!messages) {
@@ -807,6 +870,49 @@ async function main(): Promise<void> {
             log(`Received array with ${messages.length} pending message(s)`);
             for (const msg of messages) {
               log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}"`);
+
+              try {
+                const processes = await findClaudeCodeProcesses();
+                log(`Found ${processes.length} Claude Code process(es)`);
+
+                if (processes.length === 0) {
+                  log(`No Claude Code processes found, message will remain pending`);
+                  continue;
+                }
+
+                let injected = false;
+                for (const proc of processes) {
+                  const ttyPath = await getTtyPath(proc.tty);
+                  if (!ttyPath) {
+                    log(`Could not resolve tty path for ${proc.tty}`);
+                    continue;
+                  }
+
+                  try {
+                    await injectMessageToStdin(ttyPath, msg.content);
+                    log(`Successfully injected message to ${ttyPath} (pid ${proc.pid})`);
+
+                    await syncService.updateMessageStatus({
+                      messageId: msg._id,
+                      status: "delivered",
+                      deliveredAt: Date.now(),
+                    });
+                    log(`Updated message status to delivered`);
+                    injected = true;
+                    break;
+                  } catch (writeErr) {
+                    const writeErrMsg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+                    log(`Failed to inject to ${ttyPath}: ${writeErrMsg}`);
+                  }
+                }
+
+                if (!injected) {
+                  log(`Failed to inject message to any process`);
+                }
+              } catch (err) {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                log(`Error handling pending message: ${errMsg}`);
+              }
             }
           } else {
             log(`Received non-array: ${typeof messages}`);
