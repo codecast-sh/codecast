@@ -66,3 +66,14 @@ export const setTheme = mutation({
     });
   },
 });
+
+export const updateDaemonLastSeen = mutation({
+  args: {
+    user_id: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.user_id, {
+      daemon_last_seen: Date.now(),
+    });
+  },
+});

@@ -4,5 +4,6 @@
   "ccs-ns8": "tests/e2e/ccs-ns8.test.ts",
   "ccs-gaq": "tests/e2e/ccs-gaq.test.ts",
   "ccs-l6r": "tests/e2e/ccs-l6r.test.ts",
-  "ccs-2ao": "tests/e2e/ccs-2ao.test.ts"
+  "ccs-2ao": "tests/e2e/ccs-2ao.test.ts",
+  "ccs-mik": "tests/e2e/ccs-mik.test.ts"
 }
