@@ -51,6 +51,10 @@ export class SessionWatcher extends EventEmitter {
       persistent: true,
       ignoreInitial: false,
       depth: 2,
+      awaitWriteFinish: {
+        stabilityThreshold: 100,
+        pollInterval: 50,
+      },
     });
 
     this.watcher.on("add", (filePath) => {
