@@ -6,9 +6,12 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useRouter } from "next/navigation";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 
 type Conversation = {
   _id: string;
+  user_id: string;
   title: string;
   subtitle?: string | null;
   first_user_message?: string;
@@ -164,10 +167,12 @@ type SubagentFilter = "all" | "main" | "subagent";
 interface ConversationListProps {
   filter: "my" | "team";
   directoryFilter?: string | null;
+  memberFilter?: string | null;
   onDirectoriesChange?: (directories: string[]) => void;
+  onMemberFilterChange?: (memberId: string | null) => void;
 }
 
-export function ConversationList({ filter, directoryFilter, onDirectoriesChange }: ConversationListProps) {
+export function ConversationList({ filter, directoryFilter, memberFilter, onDirectoriesChange, onMemberFilterChange }: ConversationListProps) {
   const router = useRouter();
   const { conversations, hasMore, loadMore, isLoadingMore, isLoading } = useConversationsWithError(filter);
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -175,6 +180,12 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const listRef = useRef<HTMLDivElement>(null);
+
+  const user = useQuery(api.users.getCurrentUser);
+  const teamMembers = useQuery(
+    api.teams.getTeamMembers,
+    filter === "team" && user?.team_id ? { team_id: user.team_id } : "skip"
+  );
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -260,6 +271,10 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
       filtered = filtered.filter(c => deriveGitRoot(c) === directoryFilter);
     }
 
+    if (memberFilter) {
+      filtered = filtered.filter(c => c.user_id === memberFilter);
+    }
+
     if (timeFilter === "long") {
       filtered = filtered.filter(c => c.duration_ms >= 20 * 60 * 1000);
     } else if (timeFilter === "active") {
@@ -309,7 +324,7 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
     filtered = withChildren as any;
 
     return { filteredConversations: filtered, counts, directories };
-  }, [conversations, timeFilter, subagentFilter, directoryFilter]);
+  }, [conversations, timeFilter, subagentFilter, directoryFilter, memberFilter]);
 
   useEffect(() => {
     if (onDirectoriesChange && directories.length > 0) {
@@ -444,6 +459,29 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
         >
           Active{counts.active > 0 && ` (${counts.active})`}
         </button>
+
+        {/* Member filter (team only) */}
+        {filter === "team" && teamMembers && teamMembers.length > 0 && (
+          <>
+            <div className="w-px bg-sol-border/30 mx-1" />
+            <select
+              value={memberFilter || ""}
+              onChange={(e) => onMemberFilterChange?.(e.target.value || null)}
+              className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
+                memberFilter
+                  ? "bg-purple-500/20 text-purple-400 border border-purple-500/40"
+                  : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border"
+              }`}
+            >
+              <option value="">All Members</option>
+              {teamMembers.map((member) => (
+                <option key={member._id} value={member._id}>
+                  {member.name || member.email}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
 
         <div className="w-px bg-sol-border/30 mx-1" />
 

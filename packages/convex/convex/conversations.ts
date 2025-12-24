@@ -741,6 +741,7 @@ export const listConversations = query({
 
         return {
           _id: c._id,
+          user_id: c.user_id,
           title,
           subtitle: c.subtitle || null,
           first_user_message: firstUserMessage,
