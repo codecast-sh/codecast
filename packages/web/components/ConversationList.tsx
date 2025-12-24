@@ -175,7 +175,21 @@ export function ConversationList({ filter, directoryFilter, onDirectoriesChange 
       return aiMsgCount <= 1 && userMsgCount === 0;
     };
 
-    const nonTrivialConvs = convs.filter(c => !isTrivialSubagent(c));
+    const isWarmupSession = (c: Conversation) => {
+      if (c.message_count > 3) return false;
+      const firstAssistantMsg = c.first_assistant_message?.toLowerCase() ||
+        c.message_alternates?.find(m => m.role === "assistant")?.content?.toLowerCase() || "";
+      const warmupPatterns = [
+        "i'm ready to help",
+        "i'll wait for your task",
+        "what would you like me to help",
+        "i understand. i'm ready",
+        "running in read-only exploration mode",
+      ];
+      return warmupPatterns.some(p => firstAssistantMsg.includes(p));
+    };
+
+    const nonTrivialConvs = convs.filter(c => !isTrivialSubagent(c) && !isWarmupSession(c));
 
     // Derive git root from project_path if git_root is not set
     // Common patterns: /Users/x/src/repo, /home/x/projects/repo, etc.
