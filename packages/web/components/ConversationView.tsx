@@ -98,6 +98,62 @@ type ConversationViewProps = {
   onLoadOlder?: () => void;
 };
 
+function ConversationSkeleton() {
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-4 space-y-6 animate-pulse motion-reduce:animate-none">
+      <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="w-6 h-6 rounded bg-sol-blue/30" />
+          <div className="h-3 w-12 bg-sol-blue/30 rounded" />
+          <div className="h-3 w-16 bg-sol-blue/20 rounded" />
+        </div>
+        <div className="pl-8 space-y-2">
+          <div className="h-3 bg-sol-blue/20 rounded w-3/4" />
+          <div className="h-3 bg-sol-blue/20 rounded w-1/2" />
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="w-6 h-6 rounded bg-sol-yellow/60" />
+          <div className="h-3 w-14 bg-sol-bg-alt rounded" />
+          <div className="h-3 w-16 bg-sol-bg-alt rounded" />
+        </div>
+        <div className="pl-8 space-y-2">
+          <div className="h-3 bg-sol-bg-alt rounded w-full" />
+          <div className="h-3 bg-sol-bg-alt rounded w-5/6" />
+          <div className="h-3 bg-sol-bg-alt rounded w-4/5" />
+        </div>
+      </div>
+
+      <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="w-6 h-6 rounded bg-sol-blue/30" />
+          <div className="h-3 w-12 bg-sol-blue/30 rounded" />
+          <div className="h-3 w-16 bg-sol-blue/20 rounded" />
+        </div>
+        <div className="pl-8">
+          <div className="h-3 bg-sol-blue/20 rounded w-2/3" />
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="w-6 h-6 rounded bg-sol-yellow/60" />
+          <div className="h-3 w-14 bg-sol-bg-alt rounded" />
+          <div className="h-3 w-16 bg-sol-bg-alt rounded" />
+        </div>
+        <div className="pl-8 space-y-2">
+          <div className="h-3 bg-sol-bg-alt rounded w-full" />
+          <div className="h-3 bg-sol-bg-alt rounded w-11/12" />
+          <div className="h-3 bg-sol-bg-alt rounded w-3/4" />
+          <div className="h-3 bg-sol-bg-alt rounded w-5/6" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function formatTimestamp(ts: number) {
   return new Date(ts).toLocaleTimeString([], {
     hour: "2-digit",
@@ -1623,7 +1679,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
 
       <div ref={containerRef} className="flex-1 overflow-y-auto">
         {!conversation ? (
-          <div className="text-sol-text-dim text-center py-8 text-sm">Loading...</div>
+          <ConversationSkeleton />
         ) : timeline.length === 0 ? (
           <div className="text-sol-text-dim text-center py-8 text-sm">
             No messages in this conversation
