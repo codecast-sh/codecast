@@ -30,19 +30,19 @@
 
 @layer components {
   .sol-card {
-    @apply bg-sol-bg-alt/60 border border-sol-border/40 rounded-xl;
+    @apply bg-sol-bg-alt border border-sol-border rounded-xl;
   }
 
   .sol-card-hover {
-    @apply hover:border-amber-500/40 transition-all duration-200 motion-reduce:transition-none;
+    @apply hover:border-amber-500 transition-all duration-200 motion-reduce:transition-none;
   }
 
   .sol-header {
-    @apply border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur;
+    @apply border-b border-sol-border bg-sol-bg-alt backdrop-blur;
   }
 
   .sol-sidebar {
-    @apply border-r border-sol-border bg-sol-bg-alt/50;
+    @apply border-r border-sol-border bg-sol-bg-alt;
   }
 
   .sol-btn {
@@ -54,7 +54,7 @@
   }
 
   .sol-btn-ghost {
-    @apply sol-btn text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50;
+    @apply sol-btn text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt;
   }
 
   .sol-badge {
@@ -62,19 +62,19 @@
   }
 
   .sol-badge-live {
-    @apply sol-badge bg-green-500/20 text-green-500 border-green-500/40;
+    @apply sol-badge bg-green-500 text-green-500 border-green-500;
   }
 
   .sol-badge-active {
-    @apply sol-badge bg-amber-500/20 text-amber-500 border-amber-500/40;
+    @apply sol-badge bg-amber-500 text-amber-500 border-amber-500;
   }
 
   .sol-badge-info {
-    @apply sol-badge bg-orange-500/20 text-orange-500 border-orange-500/40;
+    @apply sol-badge bg-orange-500 text-orange-500 border-orange-500;
   }
 
   .sol-badge-muted {
-    @apply sol-badge bg-sol-bg-alt text-sol-text-muted border-sol-border/40;
+    @apply sol-badge bg-sol-bg-alt text-sol-text-muted border-sol-border;
   }
 
   .sol-link {
