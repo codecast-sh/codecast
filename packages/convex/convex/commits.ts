@@ -1,6 +1,8 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 
 export const addCommit = mutation({
   args: {
@@ -39,6 +41,26 @@ export const addCommit = mutation({
       repository: args.repository,
       pr_number: args.pr_number,
     });
+
+    if (args.conversation_id) {
+      const conversation = await ctx.db.get(args.conversation_id);
+      if (conversation?.team_id && conversation.is_private === false) {
+        await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
+          team_id: conversation.team_id,
+          actor_user_id: conversation.user_id,
+          event_type: "commit_pushed" as const,
+          title: args.message.split('\n')[0],
+          description: args.repository,
+          related_conversation_id: args.conversation_id,
+          related_commit_sha: args.sha,
+          metadata: {
+            files_changed: args.files_changed,
+            insertions: args.insertions,
+            deletions: args.deletions,
+          },
+        });
+      }
+    }
 
     return commitId;
   },

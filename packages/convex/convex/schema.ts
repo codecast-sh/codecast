@@ -245,4 +245,35 @@ export default defineSchema({
   })
     .index("by_review", ["review_id"])
     .index("by_review_resolved", ["review_id", "resolved"]),
+
+  team_activity_events: defineTable({
+    team_id: v.id("teams"),
+    actor_user_id: v.id("users"),
+    event_type: v.union(
+      v.literal("session_started"),
+      v.literal("session_completed"),
+      v.literal("commit_pushed"),
+      v.literal("member_joined"),
+      v.literal("member_left"),
+      v.literal("pr_created"),
+      v.literal("pr_merged")
+    ),
+    title: v.string(),
+    description: v.optional(v.string()),
+    timestamp: v.number(),
+    related_conversation_id: v.optional(v.id("conversations")),
+    related_commit_sha: v.optional(v.string()),
+    related_pr_id: v.optional(v.id("pull_requests")),
+    metadata: v.optional(v.object({
+      duration_ms: v.optional(v.number()),
+      message_count: v.optional(v.number()),
+      git_branch: v.optional(v.string()),
+      files_changed: v.optional(v.number()),
+      insertions: v.optional(v.number()),
+      deletions: v.optional(v.number()),
+    })),
+  })
+    .index("by_team_id", ["team_id"])
+    .index("by_team_timestamp", ["team_id", "timestamp"])
+    .index("by_actor", ["actor_user_id"]),
 });

@@ -119,6 +119,18 @@ export const createConversation = mutation({
         conversation_id: conversationId,
         user_id: args.user_id,
       });
+
+      await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
+        team_id: args.team_id,
+        actor_user_id: args.user_id,
+        event_type: "session_started" as const,
+        title: args.title || (args.slug ? formatSlugAsTitle(args.slug) : "New session"),
+        description: args.project_path,
+        related_conversation_id: conversationId,
+        metadata: {
+          git_branch: args.git_branch,
+        },
+      });
     }
 
     return conversationId;
