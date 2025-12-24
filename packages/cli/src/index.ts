@@ -512,7 +512,7 @@ program
 program
   .command("logs")
   .description("View daemon logs")
-  .option("-n, --lines <number>", "Number of lines to show", "50")
+  .option("-n, --lines <number>", "Number of lines to show (default: all)")
   .option("-f, --follow", "Follow log output (like tail -f)")
   .action((options) => {
     const logFile = path.join(CONFIG_DIR, "daemon.log");
@@ -524,8 +524,9 @@ program
     }
 
     if (options.follow) {
+      const followLines = options.lines || "50";
       console.log(`Following ${logFile} (Ctrl+C to stop)\n`);
-      const tail = spawn("tail", ["-f", "-n", options.lines, logFile], {
+      const tail = spawn("tail", ["-f", "-n", followLines, logFile], {
         stdio: "inherit",
       });
 
@@ -534,11 +535,16 @@ program
         process.exit(0);
       });
     } else {
-      const lines = parseInt(options.lines, 10);
       const content = fs.readFileSync(logFile, "utf-8");
       const allLines = content.trim().split("\n");
-      const lastLines = allLines.slice(-lines);
-      console.log(lastLines.join("\n"));
+
+      if (options.lines) {
+        const lines = parseInt(options.lines, 10);
+        const lastLines = allLines.slice(-lines);
+        console.log(lastLines.join("\n"));
+      } else {
+        console.log(allLines.join("\n"));
+      }
     }
   });
 
