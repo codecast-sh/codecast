@@ -18,6 +18,7 @@ const execAsync = promisify(exec);
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
+const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 
 interface Config {
   user_id?: string;
@@ -105,6 +106,14 @@ function readTitleCache(): TitleCache {
 function saveTitleCache(cache: TitleCache): void {
   const cacheFile = path.join(CONFIG_DIR, "titles.json");
   fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
+}
+
+function writeDaemonState(connected: boolean): void {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ connected, timestamp: Date.now() }), { mode: 0o600 });
+  } catch (err) {
+    log(`Failed to write daemon state: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 interface GitInfo {
@@ -665,6 +674,7 @@ async function main(): Promise<void> {
   ensureConfigDir();
   log("Daemon started");
   log(`PID: ${process.pid}`);
+  writeDaemonState(false);
 
   const config = readConfig();
   if (!config?.user_id) {
@@ -922,10 +932,12 @@ async function main(): Promise<void> {
         }
       );
       log("Subscription established successfully");
+      writeDaemonState(true);
       resetReconnectDelay();
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Subscription error: ${errMsg}`);
+      writeDaemonState(false);
       if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;
@@ -943,6 +955,7 @@ async function main(): Promise<void> {
 
   const shutdown = () => {
     log("Shutting down");
+    writeDaemonState(false);
     if (unsubscribe) {
       unsubscribe();
     }

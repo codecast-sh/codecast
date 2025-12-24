@@ -14,6 +14,7 @@ const program = new Command();
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
+const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -120,9 +121,22 @@ function isDaemonRunning(): boolean {
   return getDaemonPid() !== null;
 }
 
+function getDaemonState(): { connected: boolean } | null {
+  if (!fs.existsSync(STATE_FILE)) {
+    return null;
+  }
+  try {
+    const content = fs.readFileSync(STATE_FILE, "utf-8");
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+
 function showStatus(): void {
   const pid = getDaemonPid();
   const config = readConfig();
+  const state = getDaemonState();
 
   console.log("");
 
@@ -146,6 +160,9 @@ function showStatus(): void {
       console.log("  Run 'codecast start' to start syncing");
     }
   }
+
+  const convexConnected = pid && (state?.connected ?? false);
+  console.log(`  Convex: ${convexConnected ? "connected" : "disconnected"}`);
 
   console.log("");
 }
