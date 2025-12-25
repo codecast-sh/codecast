@@ -171,14 +171,15 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
             ? 'text-sol-red font-bold'
             : 'text-sol-text-dim';
 
-          const highlightedContent = highlightCode(content, language);
+          const shouldHighlight = type === 'context' && language;
+          const highlightedContent = shouldHighlight ? highlightCode(content, language) : null;
 
           return (
             <div key={i} className={`whitespace-pre ${bgClass}`}>
               <span className="select-none text-sol-text-dim">{lineNumStr}</span>
               <span className={`select-none ${prefixClass}`}> {prefix} </span>
-              {language ? (
-                <span dangerouslySetInnerHTML={{ __html: highlightedContent }} />
+              {shouldHighlight ? (
+                <span dangerouslySetInnerHTML={{ __html: highlightedContent! }} />
               ) : (
                 <span className={textClass}>{content}</span>
               )}
