@@ -727,8 +727,23 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
 }
 
 function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpenComments, isHighlighted }: { content: string; timestamp: number; messageId: string; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean }) {
-  const truncated = collapsed ? content.split("\n").slice(0, 2).join("\n") : content;
-  const wasTruncated = collapsed && content.split("\n").length > 2;
+  const [isExpanded, setIsExpanded] = useState(false);
+  const MAX_LINES = 25;
+  const lines = content.split("\n");
+  const needsTruncation = !collapsed && lines.length > MAX_LINES;
+
+  let displayContent: string;
+  let wasTruncated = false;
+
+  if (collapsed) {
+    displayContent = lines.slice(0, 2).join("\n");
+    wasTruncated = lines.length > 2;
+  } else if (needsTruncation && !isExpanded) {
+    displayContent = lines.slice(0, MAX_LINES).join("\n");
+    wasTruncated = true;
+  } else {
+    displayContent = content;
+  }
 
   const commentCount = useQuery(api.comments.getCommentCount, {
     message_id: messageId as Id<"messages">,
@@ -782,8 +797,16 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpen
         </a>
       </div>
       <div className={`text-sol-text text-sm pl-8 ${collapsed ? "line-clamp-2" : "whitespace-pre-wrap"}`}>
-        {truncated}{wasTruncated && "..."}
+        {displayContent}{wasTruncated && !isExpanded && "..."}
       </div>
+      {needsTruncation && (
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="text-xs text-sol-text-dim hover:text-sol-blue mt-2 ml-8 transition-colors"
+        >
+          {isExpanded ? `Show less` : `Show ${lines.length - MAX_LINES} more lines`}
+        </button>
+      )}
     </div>
   );
 }
