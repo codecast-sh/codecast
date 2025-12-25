@@ -1154,6 +1154,289 @@ export const getSessionLinks = mutation({
   },
 });
 
+export const searchForCLI = mutation({
+  args: {
+    api_token: v.string(),
+    query: v.string(),
+    limit: v.optional(v.number()),
+    context_before: v.optional(v.number()),
+    context_after: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      return { error: "Unauthorized" };
+    }
+    const user = await ctx.db.get(authUserId);
+    if (!user) {
+      return { error: "User not found" };
+    }
+
+    const searchTerm = args.query.trim();
+    if (!searchTerm || searchTerm.length < 2) {
+      return { error: "Query must be at least 2 characters" };
+    }
+
+    const limit = args.limit ?? 10;
+    const contextBefore = args.context_before ?? 0;
+    const contextAfter = args.context_after ?? 0;
+
+    const searchResults = await ctx.db
+      .query("messages")
+      .withSearchIndex("search_content", (q) => q.search("content", searchTerm))
+      .take(100);
+
+    const conversationMatches = new Map<string, typeof searchResults>();
+    for (const msg of searchResults) {
+      const convId = msg.conversation_id.toString();
+      if (!conversationMatches.has(convId)) {
+        conversationMatches.set(convId, []);
+      }
+      conversationMatches.get(convId)!.push(msg);
+    }
+
+    const results: Array<{
+      id: string;
+      title: string;
+      project_path: string | null;
+      updated_at: string;
+      message_count: number;
+      matches: Array<{
+        line: number;
+        role: string;
+        content: string;
+        timestamp: string;
+      }>;
+      context: Array<{
+        line: number;
+        role: string;
+        content: string;
+      }>;
+    }> = [];
+
+    let totalMatches = 0;
+
+    for (const [convId, messages] of conversationMatches) {
+      if (results.length >= limit) break;
+
+      const conv = await ctx.db.get(messages[0].conversation_id);
+      if (!conv) continue;
+
+      const isOwn = conv.user_id.toString() === authUserId.toString();
+      if (!isOwn) {
+        if (conv.is_private !== false) continue;
+        if (!user.team_id || conv.team_id?.toString() !== user.team_id.toString()) {
+          continue;
+        }
+      }
+
+      const allMessages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .order("asc")
+        .collect();
+
+      const messageLineMap = new Map<string, number>();
+      allMessages.forEach((m, idx) => {
+        messageLineMap.set(m._id.toString(), idx + 1);
+      });
+
+      let firstUserMessage = "";
+      for (const msg of allMessages.slice(0, 10)) {
+        const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+        if (msg.role === "user" && !hasToolResults) {
+          const text = msg.content?.trim();
+          if (text) {
+            firstUserMessage = text.slice(0, 120);
+            if (text.length > 120) firstUserMessage += "...";
+            break;
+          }
+        }
+      }
+
+      const title = conv.title
+        || firstUserMessage
+        || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
+        || `Session ${conv.session_id.slice(0, 8)}`;
+
+      const searchTermLower = searchTerm.toLowerCase();
+      const matchedMessages = messages.slice(0, 5);
+      totalMatches += matchedMessages.length;
+
+      const contextLines = new Set<number>();
+      const matchedLines = new Set<number>();
+
+      const formattedMatches = matchedMessages.map((m) => {
+        const line = messageLineMap.get(m._id.toString()) || 0;
+        matchedLines.add(line);
+
+        for (let i = Math.max(1, line - contextBefore); i < line; i++) {
+          contextLines.add(i);
+        }
+        for (let i = line + 1; i <= Math.min(allMessages.length, line + contextAfter); i++) {
+          contextLines.add(i);
+        }
+
+        const content = m.content || "";
+        const idx = content.toLowerCase().indexOf(searchTermLower);
+        const start = Math.max(0, idx > -1 ? idx - 80 : 0);
+        const end = Math.min(content.length, idx > -1 ? idx + searchTerm.length + 120 : 200);
+        let snippet = content.slice(start, end);
+        if (start > 0) snippet = "..." + snippet;
+        if (end < content.length) snippet = snippet + "...";
+
+        return {
+          line,
+          role: m.role,
+          content: snippet,
+          timestamp: new Date(m.timestamp).toISOString(),
+        };
+      });
+
+      const contextMessages: Array<{ line: number; role: string; content: string }> = [];
+      for (const lineNum of contextLines) {
+        if (matchedLines.has(lineNum)) continue;
+        const msg = allMessages[lineNum - 1];
+        if (msg) {
+          const content = msg.content || "";
+          const snippet = content.length > 200 ? content.slice(0, 200) + "..." : content;
+          contextMessages.push({
+            line: lineNum,
+            role: msg.role,
+            content: snippet,
+          });
+        }
+      }
+
+      results.push({
+        id: conv._id,
+        title,
+        project_path: conv.project_path || null,
+        updated_at: new Date(conv.updated_at).toISOString(),
+        message_count: conv.message_count || allMessages.length,
+        matches: formattedMatches.sort((a, b) => a.line - b.line),
+        context: contextMessages.sort((a, b) => a.line - b.line),
+      });
+    }
+
+    results.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+    return {
+      total_matches: totalMatches,
+      conversations: results,
+    };
+  },
+});
+
+export const readConversationMessages = mutation({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.string(),
+    start_line: v.optional(v.number()),
+    end_line: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      return { error: "Unauthorized" };
+    }
+    const user = await ctx.db.get(authUserId);
+    if (!user) {
+      return { error: "User not found" };
+    }
+
+    let conv = null;
+
+    try {
+      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
+    } catch {
+      // ID format invalid, try prefix search
+    }
+
+    if (!conv) {
+      const userConvs = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+        .collect();
+
+      conv = userConvs.find((c) => c._id.toString().startsWith(args.conversation_id));
+
+      if (!conv && user.team_id) {
+        const teamConvs = await ctx.db
+          .query("conversations")
+          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id))
+          .filter((q) => q.eq(q.field("is_private"), false))
+          .collect();
+        conv = teamConvs.find((c) => c._id.toString().startsWith(args.conversation_id));
+      }
+    }
+
+    if (!conv) {
+      return { error: "Conversation not found" };
+    }
+
+    const isOwn = conv.user_id.toString() === authUserId.toString();
+    if (!isOwn) {
+      if (conv.is_private !== false) {
+        return { error: "Access denied" };
+      }
+      if (!user.team_id || conv.team_id?.toString() !== user.team_id.toString()) {
+        return { error: "Access denied" };
+      }
+    }
+
+    const allMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+      .order("asc")
+      .collect();
+
+    let firstUserMessage = "";
+    for (const msg of allMessages.slice(0, 10)) {
+      const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+      if (msg.role === "user" && !hasToolResults) {
+        const text = msg.content?.trim();
+        if (text) {
+          firstUserMessage = text.slice(0, 120);
+          if (text.length > 120) firstUserMessage += "...";
+          break;
+        }
+      }
+    }
+
+    const title = conv.title
+      || firstUserMessage
+      || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
+      || `Session ${conv.session_id.slice(0, 8)}`;
+
+    const startLine = args.start_line ?? 1;
+    const endLine = args.end_line ?? allMessages.length;
+
+    const startIdx = Math.max(0, startLine - 1);
+    const endIdx = Math.min(allMessages.length, endLine);
+
+    const messages = allMessages.slice(startIdx, endIdx).map((m, idx) => ({
+      line: startIdx + idx + 1,
+      role: m.role,
+      content: m.content || "",
+      timestamp: new Date(m.timestamp).toISOString(),
+      tool_calls: m.tool_calls,
+      tool_results: m.tool_results,
+    }));
+
+    return {
+      conversation: {
+        id: conv._id,
+        title,
+        project_path: conv.project_path || null,
+        message_count: allMessages.length,
+        updated_at: new Date(conv.updated_at).toISOString(),
+      },
+      messages,
+    };
+  },
+});
+
 export const updateTitle = mutation({
   args: {
     conversation_id: v.id("conversations"),

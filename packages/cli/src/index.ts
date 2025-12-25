@@ -789,6 +789,125 @@ program
   });
 
 program
+  .command("search")
+  .description(
+    "Search across all conversations\n\n" +
+    "Examples:\n" +
+    "  codecast search \"auth implementation\"     # Basic search\n" +
+    "  codecast search \"oauth\" -A 2 -B 1         # With context lines\n" +
+    "  codecast search \"middleware\" -C 3         # Context before and after\n" +
+    "  codecast search \"auth\" --limit 5          # Limit results"
+  )
+  .argument("<query>", "Search query (min 2 characters)")
+  .option("-A, --after <n>", "Show N messages after each match", "0")
+  .option("-B, --before <n>", "Show N messages before each match", "0")
+  .option("-C, --context <n>", "Show N messages before and after each match")
+  .option("-l, --limit <n>", "Maximum number of conversations to return", "10")
+  .action(async (query, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const contextBefore = options.context ? parseInt(options.context) : parseInt(options.before);
+    const contextAfter = options.context ? parseInt(options.context) : parseInt(options.after);
+    const limit = parseInt(options.limit);
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          query,
+          limit,
+          context_before: contextBefore,
+          context_after: contextAfter,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatSearchResults } = await import("./formatter.js");
+      console.log(formatSearchResults(result));
+    } catch (error) {
+      console.error("Search failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("read")
+  .description(
+    "Read messages from a conversation\n\n" +
+    "Examples:\n" +
+    "  codecast read jx70ntf                   # Read all messages\n" +
+    "  codecast read jx70ntf 12:20             # Read messages 12-20\n" +
+    "  codecast read jx70ntf 12:               # Read from message 12 to end\n" +
+    "  codecast read jx70ntf :20               # Read first 20 messages\n" +
+    "  codecast read jx70ntf 15                # Read single message 15"
+  )
+  .argument("<conversation-id>", "Conversation ID (can be truncated)")
+  .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
+  .action(async (conversationId, range) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    let startLine: number | undefined;
+    let endLine: number | undefined;
+
+    if (range) {
+      if (range.includes(":")) {
+        const [start, end] = range.split(":");
+        if (start) startLine = parseInt(start);
+        if (end) endLine = parseInt(end);
+      } else {
+        startLine = parseInt(range);
+        endLine = parseInt(range);
+      }
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/read`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          conversation_id: conversationId,
+          start_line: startLine,
+          end_line: endLine,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatReadResult } = await import("./formatter.js");
+      console.log(formatReadResult(result));
+    } catch (error) {
+      console.error("Read failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
   .command("private")
   .description(
     "Manage private conversations (hidden from team view)\n\n" +
