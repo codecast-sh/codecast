@@ -8,6 +8,7 @@ import { useState } from 'react';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
 import { atomOneDark } from 'react-syntax-highlighter/styles/hljs';
 import * as Haptics from 'expo-haptics';
+import { PermissionCard } from '@/components/PermissionCard';
 
 type ToolCall = {
   id: string;
@@ -329,6 +330,11 @@ export default function SessionDetailScreen() {
     id ? { conversation_id: id as Id<"conversations"> } : "skip"
   ) as ConversationData | null | undefined;
 
+  const pendingPermissions = useQuery(
+    api.permissions.getPendingPermissions,
+    id ? { conversation_id: id as Id<"conversations"> } : "skip"
+  );
+
   if (conversation === undefined) {
     return (
       <View style={styles.loadingContainer}>
@@ -380,6 +386,15 @@ export default function SessionDetailScreen() {
         renderItem={renderMessage}
         keyExtractor={(item) => item._id}
         contentContainerStyle={styles.messageList}
+        ListHeaderComponent={
+          pendingPermissions && pendingPermissions.length > 0 ? (
+            <View style={styles.permissionsContainer}>
+              {pendingPermissions.map((permission) => (
+                <PermissionCard key={permission._id} permission={permission} />
+              ))}
+            </View>
+          ) : null
+        }
       />
 
       <MessageInput conversationId={id as Id<"conversations">} isActive={isActive} />
@@ -449,6 +464,9 @@ const styles = StyleSheet.create({
   },
   messageList: {
     padding: 16,
+  },
+  permissionsContainer: {
+    marginBottom: 16,
   },
   messageContainer: {
     marginBottom: 16,
