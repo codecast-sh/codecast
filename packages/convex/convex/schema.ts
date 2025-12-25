@@ -152,11 +152,17 @@ export default defineSchema({
     content: v.string(),
     parent_comment_id: v.optional(v.id("comments")),
     created_at: v.number(),
+    github_comment_id: v.optional(v.number()),
+    pr_id: v.optional(v.id("pull_requests")),
+    file_path: v.optional(v.string()),
+    line_number: v.optional(v.number()),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_message_id", ["message_id"])
     .index("by_user_id", ["user_id"])
-    .index("by_parent_comment_id", ["parent_comment_id"]),
+    .index("by_parent_comment_id", ["parent_comment_id"])
+    .index("by_pr_id", ["pr_id"])
+    .index("by_github_comment_id", ["github_comment_id"]),
 
   public_comments: defineTable({
     conversation_id: v.id("conversations"),

@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 
 export const addComment = mutation({
   args: {
@@ -9,6 +10,9 @@ export const addComment = mutation({
     message_id: v.optional(v.id("messages")),
     content: v.string(),
     parent_comment_id: v.optional(v.id("comments")),
+    pr_id: v.optional(v.id("pull_requests")),
+    file_path: v.optional(v.string()),
+    line_number: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -35,6 +39,9 @@ export const addComment = mutation({
       content: args.content,
       parent_comment_id: args.parent_comment_id,
       created_at: Date.now(),
+      pr_id: args.pr_id,
+      file_path: args.file_path,
+      line_number: args.line_number,
     });
 
     const actor = await ctx.db.get(userId);
@@ -94,6 +101,38 @@ export const addComment = mutation({
         read: false,
         created_at: Date.now(),
       });
+    }
+
+    let prIdToSync = args.pr_id;
+    if (!prIdToSync) {
+      const prs = await ctx.db
+        .query("pull_requests")
+        .collect();
+
+      const linkedPR = prs.find(pr =>
+        pr.linked_session_ids.some(id => id.toString() === args.conversation_id.toString())
+      );
+
+      if (linkedPR) {
+        prIdToSync = linkedPR._id;
+      }
+    }
+
+    if (prIdToSync) {
+      const pr = await ctx.db.get(prIdToSync);
+      const user = await ctx.db.get(userId);
+
+      if (pr && user?.github_access_token) {
+        await ctx.scheduler.runAfter(0, internal.githubApi.postCommentToGitHub, {
+          repository: pr.repository,
+          pr_number: pr.number,
+          content: args.content,
+          file_path: args.file_path,
+          line_number: args.line_number,
+          github_access_token: user.github_access_token,
+          comment_id: commentId,
+        });
+      }
     }
 
     return commentId;
@@ -224,6 +263,20 @@ export const deleteComment = mutation({
     }
 
     await ctx.db.delete(args.comment_id);
+
+    return true;
+  },
+});
+
+export const updateGitHubCommentId = mutation({
+  args: {
+    comment_id: v.id("comments"),
+    github_comment_id: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.comment_id, {
+      github_comment_id: args.github_comment_id,
+    });
 
     return true;
   },
