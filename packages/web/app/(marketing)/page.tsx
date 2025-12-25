@@ -6,6 +6,7 @@ import { useEffect, useState, useRef } from "react";
 import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
+import { Logo, LogoIcon } from "@/components/Logo";
 
 const TYPING_PHRASES = [
   "watching your agent debug a 500 error",
@@ -96,7 +97,8 @@ function ConversationDemo() {
               <div className="w-3 h-3 rounded-full bg-[#b58900]"></div>
               <div className="w-3 h-3 rounded-full bg-[#859900]"></div>
             </div>
-            <span className="text-xs font-mono text-[#586e75] ml-2">codecast</span>
+            <LogoIcon size={14} className="text-[#586e75] ml-2" />
+            <span className="text-xs font-mono text-[#586e75] ml-1">codecast</span>
           </div>
           <LiveIndicator />
         </div>
@@ -182,9 +184,7 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="border-b border-stone-200 bg-stone-50/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="font-mono text-xl font-bold text-stone-900 tracking-tight">
-            codecast
-          </div>
+          <Logo size="md" className="text-stone-900" />
           <div className="flex items-center gap-3">
             <Link href="/login">
               <Button variant="ghost" className="text-stone-600 hover:text-stone-900 hover:bg-stone-100 font-medium">
@@ -232,7 +232,7 @@ export default function LandingPage() {
               </Button>
             </Link>
             <Link href="#how-it-works">
-              <Button size="lg" variant="outline" className="border-stone-300 text-stone-700 hover:bg-stone-100 text-base px-8 h-12 font-medium">
+              <Button size="lg" variant="outline" className="border-stone-300 bg-transparent text-stone-700 hover:bg-stone-100 hover:text-stone-900 text-base px-8 h-12 font-medium">
                 See how it works
               </Button>
             </Link>
@@ -441,8 +441,8 @@ export default function LandingPage() {
                 Start syncing free
               </Button>
             </Link>
-            <Link href="https://github.com/ashot/codecast" target="_blank">
-              <Button size="lg" variant="outline" className="border-stone-700 text-white hover:bg-stone-800 text-base px-8 h-12 font-medium">
+            <Link href="https://github.com/codecast-sh" target="_blank">
+              <Button size="lg" variant="outline" className="border-stone-600 bg-transparent text-white hover:bg-stone-800 hover:text-white text-base px-8 h-12 font-medium">
                 View on GitHub
               </Button>
             </Link>
@@ -455,7 +455,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-6 py-12">
           <div className="grid md:grid-cols-4 gap-8">
             <div>
-              <div className="font-mono text-xl font-bold text-stone-900 mb-4">codecast</div>
+              <Logo size="md" className="text-stone-900 mb-4" />
               <p className="text-sm text-stone-500">
                 Real-time sync for AI coding sessions.
               </p>
@@ -479,8 +479,8 @@ export default function LandingPage() {
             <div>
               <h4 className="font-semibold text-stone-900 mb-3 text-sm">Connect</h4>
               <ul className="space-y-2 text-sm text-stone-500">
-                <li><a href="https://github.com/ashot/codecast" className="hover:text-stone-900" target="_blank" rel="noopener noreferrer">GitHub</a></li>
-                <li><a href="https://twitter.com/codecast" className="hover:text-stone-900" target="_blank" rel="noopener noreferrer">Twitter</a></li>
+                <li><a href="https://github.com/codecast-sh" className="hover:text-stone-900" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+                <li><a href="https://x.com/codecastsh" className="hover:text-stone-900" target="_blank" rel="noopener noreferrer">Twitter</a></li>
                 <li><a href="https://discord.gg/codecast" className="hover:text-stone-900" target="_blank" rel="noopener noreferrer">Discord</a></li>
               </ul>
             </div>

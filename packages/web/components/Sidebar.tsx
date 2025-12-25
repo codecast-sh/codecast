@@ -32,12 +32,15 @@ function formatRelativeDate(timestamp: number): string {
 }
 
 function getDateGroup(timestamp: number): string {
-  const now = new Date();
-  const date = new Date(timestamp);
-  const diffDays = Math.floor((now.getTime() - date.getTime()) / 86400000);
+  const now = Date.now();
+  const diffMs = now - timestamp;
+  const diffHours = diffMs / 3600000;
+  const diffDays = diffMs / 86400000;
 
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
+  if (diffHours < 1) return "Last Hour";
+  if (diffHours < 12) return "Last 12 Hours";
+  if (diffDays < 1) return "Last Day";
+  if (diffDays < 2) return "Yesterday";
   if (diffDays < 7) return "This Week";
   if (diffDays < 30) return "This Month";
   return "Older";

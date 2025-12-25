@@ -1,7 +1,8 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, action, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
+import { internal, api } from "./_generated/api";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
 export const addCommit = mutation({
   args: {
@@ -137,5 +138,71 @@ export const getCommitsForTimeline = query({
     }
 
     return filtered;
+  },
+});
+
+export const getUserGitHubToken = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const user = await ctx.db.get(userId);
+    return user?.github_access_token || null;
+  },
+});
+
+export const syncMyRepositoryCommits = action({
+  args: {
+    repository: v.string(),
+    per_page: v.optional(v.number()),
+  },
+  returns: v.object({ synced: v.number(), total: v.number() }),
+  handler: async (ctx, args): Promise<{ synced: number; total: number }> => {
+    const token = await ctx.runQuery(internal.commits.getUserGitHubToken, {});
+    if (!token) {
+      throw new Error("GitHub account not connected");
+    }
+
+    const result = await ctx.runAction(api.githubApi.syncRepositoryCommits, {
+      repository: args.repository,
+      github_access_token: token,
+      per_page: args.per_page ?? 50,
+    });
+
+    return result;
+  },
+});
+
+type RepoInfo = {
+  full_name: string;
+  name: string;
+  owner: string;
+  private: boolean;
+  pushed_at: string;
+  default_branch: string;
+};
+
+export const getMyRepositories = action({
+  args: {},
+  returns: v.array(v.object({
+    full_name: v.string(),
+    name: v.string(),
+    owner: v.string(),
+    private: v.boolean(),
+    pushed_at: v.string(),
+    default_branch: v.string(),
+  })),
+  handler: async (ctx): Promise<RepoInfo[]> => {
+    const token = await ctx.runQuery(internal.commits.getUserGitHubToken, {});
+    if (!token) {
+      throw new Error("GitHub account not connected");
+    }
+
+    const repos = await ctx.runAction(api.githubApi.getUserRepositories, {
+      github_access_token: token,
+      per_page: 20,
+    });
+
+    return repos;
   },
 });

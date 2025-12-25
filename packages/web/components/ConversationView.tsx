@@ -1847,7 +1847,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   return (
-    <main className={`flex flex-col bg-sol-bg ${embedded ? "h-[calc(100vh-56px)]" : "h-screen"}`}>
+    <main className={`flex flex-col bg-sol-bg ${embedded ? "" : "h-screen"}`}>
       <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1.5 sm:py-2">
           <div className="flex items-center gap-2 min-w-0">
@@ -1953,7 +1953,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         />
       )}
 
-      <div ref={containerRef} className="flex-1 overflow-y-auto">
+      <div ref={containerRef} className={`flex-1 ${embedded ? "" : "overflow-y-auto"}`}>
         {!conversation ? (
           <ConversationSkeleton />
         ) : timeline.length === 0 ? (

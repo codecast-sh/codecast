@@ -2,7 +2,7 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
@@ -13,6 +13,7 @@ type TimelineItem =
       type: "session";
       id: string;
       title: string;
+      subtitle: string | null;
       author_name: string;
       timestamp: number;
       duration_ms: number;
@@ -31,6 +32,7 @@ type TimelineItem =
       insertions: number;
       deletions: number;
       conversation_id?: string;
+      repository?: string;
     };
 
 function getRelativeTime(timestamp: number): string {
@@ -79,27 +81,45 @@ function ClaudeIcon({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
+function GitIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.6.11.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z" />
+    </svg>
+  );
+}
+
 function SessionCard({ item }: { item: Extract<TimelineItem, { type: "session" }> }) {
+  const cleanedTitle = cleanTitle(item.title);
   return (
     <Link href={`/conversation/${item.id}`} className="group block relative">
-      <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-      <div className="relative bg-sol-bg-alt/40 border border-sol-border/30 rounded-xl p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm">
+      <div className="relative bg-white/60 border border-sol-border/40 rounded-xl p-4 hover:border-sol-yellow/50 transition-all duration-200 shadow-sm hover:shadow-md">
         <div className="flex items-start gap-3">
-          <div className="flex-shrink-0 w-8 h-8 rounded bg-sol-yellow flex items-center justify-center mt-1">
-            <ClaudeIcon className="w-4 h-4 text-sol-bg" />
+          <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-gradient-to-br from-sol-yellow to-sol-yellow/80 flex items-center justify-center shadow-sm">
+            <ClaudeIcon className="w-5 h-5 text-sol-bg" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-3 mb-1">
-              <span className="text-sol-text font-medium text-base group-hover:text-sol-yellow transition-colors truncate">
-                {cleanTitle(item.title)}
-              </span>
-              <span className="text-[11px] text-sol-text-dim/50 shrink-0">
-                {getRelativeTime(item.timestamp)}
-              </span>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sol-text font-medium text-[15px] leading-snug group-hover:text-sol-yellow transition-colors line-clamp-2">
+                  {cleanedTitle}
+                </h3>
+                {item.subtitle && item.subtitle !== cleanedTitle && (
+                  <p className="text-sol-text-muted text-xs mt-0.5 line-clamp-1">{item.subtitle}</p>
+                )}
+              </div>
+              <div className="flex flex-col items-end shrink-0 gap-0.5">
+                <span className="text-[11px] text-sol-text-dim/60">
+                  {getRelativeTime(item.timestamp)}
+                </span>
+                {item.is_active && (
+                  <span className="text-[10px] text-sol-green font-medium">LIVE</span>
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-2 text-xs text-sol-text-muted0 flex-wrap">
               {!item.is_own && <span className="font-medium">{item.author_name}</span>}
-              {item.is_active && (
+              {item.is_active && !item.is_own && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50">
                   <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
                   <span className="text-[10px] text-sol-green font-semibold">LIVE</span>
@@ -137,48 +157,128 @@ function SessionCard({ item }: { item: Extract<TimelineItem, { type: "session" }
   );
 }
 
-function CommitCard({ item }: { item: Extract<TimelineItem, { type: "commit" }> }) {
+function CommitCard({
+  item,
+  sessionTitle,
+}: {
+  item: Extract<TimelineItem, { type: "commit" }>;
+  sessionTitle?: string;
+}) {
   const shortSha = item.sha.substring(0, 7);
-  return (
-    <div className="relative bg-sol-bg-alt/30 border border-sol-border/20 rounded-xl p-4">
+  const commitLines = item.message.split("\n");
+  const commitTitle = commitLines[0];
+  const repoName = item.repository?.split("/").pop() || null;
+
+  const content = (
+    <div className="relative bg-white/60 border border-sol-border/40 rounded-xl p-4 hover:border-sol-violet/50 transition-all duration-200 shadow-sm hover:shadow-md">
       <div className="flex items-start gap-3">
-        <div className="flex-shrink-0 w-8 h-8 rounded bg-sol-violet/60 flex items-center justify-center mt-1">
-          <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"
-            />
-          </svg>
+        <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-gradient-to-br from-sol-violet to-sol-violet/80 flex items-center justify-center shadow-sm">
+          <GitIcon className="w-5 h-5 text-white" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-3 mb-1">
-            <div className="flex items-center gap-2 min-w-0">
-              <code className="text-xs font-mono text-sol-text-muted bg-sol-bg/50 px-1.5 py-0.5 rounded">
-                {shortSha}
-              </code>
-              <span className="text-sol-text text-sm truncate">{item.message}</span>
+          <div className="flex items-start justify-between gap-3 mb-1.5">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <code className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20">
+                  {shortSha}
+                </code>
+                {repoName && (
+                  <span className="text-[11px] font-mono text-sol-text-dim/60">{repoName}</span>
+                )}
+              </div>
+              <h3 className="text-sol-text font-medium text-[14px] leading-snug line-clamp-2">
+                {commitTitle}
+              </h3>
             </div>
-            <span className="text-[11px] text-sol-text-dim/50 shrink-0">
+            <span className="text-[11px] text-sol-text-dim/60 shrink-0">
               {getRelativeTime(item.timestamp)}
             </span>
           </div>
-          <div className="flex items-center gap-3 text-xs text-sol-text-muted0">
-            <span>{item.author_name}</span>
-            <span className="text-sol-green">+{item.insertions}</span>
-            <span className="text-sol-red">-{item.deletions}</span>
-            <span>{item.files_changed} files</span>
+
+          <div className="flex items-center gap-3 text-xs text-sol-text-dim/70 flex-wrap">
+            <span className="inline-flex items-center gap-1">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                />
+              </svg>
+              {item.author_name}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="text-sol-green font-medium">+{item.insertions}</span>
+              <span className="text-sol-red font-medium">-{item.deletions}</span>
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
+              </svg>
+              {item.files_changed} {item.files_changed === 1 ? "file" : "files"}
+            </span>
+            {sessionTitle && (
+              <span className="inline-flex items-center gap-1 text-sol-yellow/70">
+                <ClaudeIcon className="w-3 h-3" />
+                <span className="truncate max-w-[150px]">{sessionTitle}</span>
+              </span>
+            )}
           </div>
         </div>
       </div>
     </div>
   );
+
+  if (item.conversation_id) {
+    return (
+      <Link href={`/conversation/${item.conversation_id}`} className="group block">
+        {content}
+      </Link>
+    );
+  }
+
+  return content;
 }
 
 interface TimelineFeedProps {
   filter: "my" | "team";
   dateRange?: { start?: number; end?: number };
+}
+
+type Conversation = {
+  _id: string;
+  title: string;
+  subtitle?: string | null;
+  first_assistant_message?: string;
+  message_alternates?: Array<{ role: string; content: string }>;
+  author_name: string;
+  updated_at: number;
+  duration_ms: number;
+  message_count: number;
+  is_active: boolean;
+  is_own: boolean;
+};
+
+function isWarmupSession(c: Conversation): boolean {
+  if (c.title?.toLowerCase() === "warmup") return true;
+  if (c.message_count > 3) return false;
+  const firstAssistantMsg =
+    c.first_assistant_message?.toLowerCase() ||
+    c.message_alternates?.find((m) => m.role === "assistant")?.content?.toLowerCase() ||
+    "";
+  const warmupPatterns = [
+    "i'm ready to help",
+    "i'll wait for your task",
+    "what would you like me to help",
+    "i understand. i'm ready",
+    "running in read-only exploration mode",
+  ];
+  return warmupPatterns.some((p) => firstAssistantMsg.includes(p));
 }
 
 export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
@@ -188,16 +288,22 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
     end_time: dateRange?.end,
   });
 
-  const timelineItems = useMemo(() => {
-    if (!conversations?.conversations || !commits) return [];
+  const { timelineItems, sessionTitleMap } = useMemo(() => {
+    if (!conversations?.conversations || !commits)
+      return { timelineItems: [], sessionTitleMap: new Map<string, string>() };
 
     const items: TimelineItem[] = [];
+    const titleMap = new Map<string, string>();
 
     for (const conv of conversations.conversations) {
+      if (isWarmupSession(conv as Conversation)) continue;
+
+      titleMap.set(conv._id, conv.title || "Untitled Session");
       items.push({
         type: "session",
         id: conv._id,
         title: conv.title || "Untitled Session",
+        subtitle: conv.subtitle || null,
         author_name: conv.author_name,
         timestamp: conv.updated_at,
         duration_ms: conv.duration_ms,
@@ -219,12 +325,13 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
         insertions: commit.insertions,
         deletions: commit.deletions,
         conversation_id: commit.conversation_id,
+        repository: commit.repository,
       });
     }
 
     items.sort((a, b) => b.timestamp - a.timestamp);
 
-    return items;
+    return { timelineItems: items, sessionTitleMap: titleMap };
   }, [conversations, commits]);
 
   if (conversations === undefined || commits === undefined) {
@@ -293,7 +400,13 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
               item.type === "session" ? (
                 <SessionCard key={item.id} item={item} />
               ) : (
-                <CommitCard key={item.id} item={item} />
+                <CommitCard
+                  key={item.id}
+                  item={item}
+                  sessionTitle={
+                    item.conversation_id ? sessionTitleMap.get(item.conversation_id) : undefined
+                  }
+                />
               )
             )}
           </div>

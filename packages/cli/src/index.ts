@@ -114,38 +114,17 @@ function writeConfig(config: Config): void {
 }
 
 const CODECAST_SLASH_COMMAND = `---
-description: Get codecast dashboard and share links for current session
+description: Get codecast dashboard and share links for current session (user)
 allowed-tools: ["Bash"]
 ---
 
-Run this bash command to get codecast links for the current session:
+Run this command to get codecast links for the current session:
 
 \`\`\`bash
-PROJECT_DIR=$(echo "$PWD" | tr '/' '-')
-SESSIONS_DIR="$HOME/.claude/projects/$PROJECT_DIR"
-SESSION_FILE=$(ls -t "$SESSIONS_DIR"/*.jsonl 2>/dev/null | grep -E '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.jsonl$' | head -1)
-
-if [ -z "$SESSION_FILE" ]; then
-  echo '{"error":"No session found for current project"}'
-  exit 0
-fi
-
-SESSION_ID=$(basename "$SESSION_FILE" .jsonl)
-API_TOKEN=$(grep '"auth_token"' ~/.codecast/config.json | sed 's/.*: *"\\([^"]*\\)".*/\\1/')
-CONVEX_URL=$(grep '"convex_url"' ~/.codecast/config.json | sed 's/.*: *"\\([^"]*\\)".*/\\1/')
-
-if [ -z "$API_TOKEN" ] || [ -z "$CONVEX_URL" ]; then
-  echo '{"error":"Codecast not configured. Run: codecast auth"}'
-  exit 0
-fi
-
-SITE_URL=$(echo "$CONVEX_URL" | sed 's/\\.cloud/.site/')
-curl -s -X POST "$SITE_URL/cli/session-links" -H "Content-Type: application/json" -d "{\\"session_id\\":\\"$SESSION_ID\\",\\"api_token\\":\\"$API_TOKEN\\"}"
+codecast links
 \`\`\`
 
-Parse the JSON and display:
-- **Dashboard**: dashboard_url
-- **Share**: share_url (public link)
+Display the Dashboard and Share URLs from the output.
 `;
 
 function installSlashCommand(): void {
@@ -1204,6 +1183,77 @@ program
         console.error(`Unsupported platform: ${process.platform}`);
         console.log("Supported: macOS, Linux, Windows");
         process.exit(1);
+    }
+  });
+
+program
+  .command("links")
+  .description(
+    "Get dashboard and share URLs for the current session\n\n" +
+    "Examples:\n" +
+    "  codecast links              # Get links for current project\n" +
+    "  codecast links --json       # Output as JSON"
+  )
+  .option("--json", "Output as JSON")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const cwd = process.cwd();
+    const projectDir = cwd.replace(/\//g, "-");
+    const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
+
+    if (!fs.existsSync(sessionsDir)) {
+      console.error("No Claude Code sessions found for current project");
+      process.exit(1);
+    }
+
+    const files = fs.readdirSync(sessionsDir)
+      .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
+      .map(f => ({
+        name: f,
+        path: path.join(sessionsDir, f),
+        mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.mtime - a.mtime);
+
+    if (files.length === 0) {
+      console.error("No session files found for current project");
+      process.exit(1);
+    }
+
+    const sessionId = path.basename(files[0].name, ".jsonl");
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/session-links`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          api_token: config.auth_token,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(`\nDashboard: ${result.dashboard_url}`);
+        console.log(`Share: ${result.share_url}\n`);
+      }
+    } catch (error) {
+      console.error("Failed to get links:", error instanceof Error ? error.message : error);
+      process.exit(1);
     }
   });
 
