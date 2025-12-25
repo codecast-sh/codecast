@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 import { AuthGuard } from "../../../../components/AuthGuard";
+import { DashboardLayout } from "../../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationDiffLayout } from "../../../../components/ConversationDiffLayout";
 import { ConversationData } from "../../../../components/ConversationView";
@@ -31,16 +32,20 @@ export default function ConversationDiffPage() {
   if (!conversation) {
     return (
       <AuthGuard>
-        <div className="h-screen w-full flex items-center justify-center">
-          <div className="text-muted-foreground">Loading conversation...</div>
-        </div>
+        <DashboardLayout hideSidebar>
+          <div className="h-[calc(100vh-56px)] w-full flex items-center justify-center">
+            <div className="text-muted-foreground">Loading conversation...</div>
+          </div>
+        </DashboardLayout>
       </AuthGuard>
     );
   }
 
   return (
     <AuthGuard>
-      <ConversationDiffLayout conversation={conversation as ConversationData} />
+      <DashboardLayout hideSidebar>
+        <ConversationDiffLayout conversation={conversation as ConversationData} embedded />
+      </DashboardLayout>
     </AuthGuard>
   );
 }
