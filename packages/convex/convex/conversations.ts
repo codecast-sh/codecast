@@ -223,9 +223,10 @@ export const getConversation = query({
       }
     }
 
-    const title = conversation.slug
-      ? formatSlugAsTitle(conversation.slug)
-      : conversation.title || firstUserMessage || `Session ${conversation.session_id.slice(0, 8)}`;
+    const title = conversation.title
+      || firstUserMessage
+      || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
+      || `Session ${conversation.session_id.slice(0, 8)}`;
 
     return {
       ...conversation,
@@ -289,9 +290,10 @@ export const getAllMessages = query({
       }
     }
 
-    const title = conversation.slug
-      ? formatSlugAsTitle(conversation.slug)
-      : conversation.title || firstUserMessage || `Session ${conversation.session_id.slice(0, 8)}`;
+    const title = conversation.title
+      || firstUserMessage
+      || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
+      || `Session ${conversation.session_id.slice(0, 8)}`;
 
     const childConversations: Array<{ _id: string; title: string }> = [];
     const childConversationMap: Record<string, string> = {};
@@ -877,9 +879,10 @@ export const getSharedConversation = query({
       }
     }
 
-    const title = conversation.slug
-      ? formatSlugAsTitle(conversation.slug)
-      : conversation.title || firstUserMessage || `Session ${conversation.session_id.slice(0, 8)}`;
+    const title = conversation.title
+      || firstUserMessage
+      || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
+      || `Session ${conversation.session_id.slice(0, 8)}`;
 
     return {
       ...conversation,
@@ -960,9 +963,30 @@ export const searchConversations = query({
       }
 
       const conversationUser = await ctx.db.get(conv.user_id);
-      const title = conv.slug
-        ? formatSlugAsTitle(conv.slug)
-        : conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+
+      // Get first user message for title fallback
+      let firstUserMessage = "";
+      const firstMessages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .order("asc")
+        .take(10);
+      for (const msg of firstMessages) {
+        const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+        if (msg.role === "user" && !hasToolResults) {
+          const text = msg.content?.trim();
+          if (text) {
+            firstUserMessage = text.slice(0, 120);
+            if (text.length > 120) firstUserMessage += "...";
+            break;
+          }
+        }
+      }
+
+      const title = conv.title
+        || firstUserMessage
+        || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
+        || `Session ${conv.session_id.slice(0, 8)}`;
 
       const searchTermLower = searchTerm.toLowerCase();
       results.push({
@@ -1094,6 +1118,40 @@ export const getConversationBySessionId = query({
   },
 });
 
+export const getSessionLinks = mutation({
+  args: {
+    session_id: v.string(),
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      return { error: "Unauthorized" };
+    }
+
+    const conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
+      .filter((q) => q.eq(q.field("user_id"), authUserId))
+      .first();
+
+    if (!conversation) {
+      return { error: "Session not found" };
+    }
+
+    let shareToken = conversation.share_token;
+    if (!shareToken) {
+      shareToken = generateShareToken();
+      await ctx.db.patch(conversation._id, { share_token: shareToken });
+    }
+
+    return {
+      conversation_id: conversation._id,
+      share_token: shareToken,
+    };
+  },
+});
+
 export const updateTitle = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -1173,9 +1231,10 @@ export const listPrivateConversations = query({
           }
         }
 
-        const title = c.slug
-          ? formatSlugAsTitle(c.slug)
-          : c.title || firstUserMessage || `Session ${c.session_id.slice(0, 8)}`;
+        const title = c.title
+          || firstUserMessage
+          || (c.slug ? formatSlugAsTitle(c.slug) : null)
+          || `Session ${c.session_id.slice(0, 8)}`;
 
         return {
           conversation_id: c._id,

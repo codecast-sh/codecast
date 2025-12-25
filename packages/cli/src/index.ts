@@ -114,16 +114,27 @@ function writeConfig(config: Config): void {
 }
 
 const CODECAST_SLASH_COMMAND = `---
-description: Display codecast session link and share link for current session
+description: Get codecast dashboard and share links for current session
+allowed-tools: ["Bash"]
 ---
 
-Read ~/.codecast/conversations.json to find the conversation ID for the current session.
+Run this command to get the codecast links:
 
-Output the codecast links:
-1. Codecast dashboard link: https://codecast.sh/conversation/{conversation_id}
-2. If a share_token exists, also output: https://codecast.sh/share/{share_token}
+\`\`\`bash
+SESSION_ID=$(tail -1 ~/.codecast/conversations.json 2>/dev/null | grep -o '"[^"]*":' | head -1 | tr -d '":')
+API_TOKEN=$(grep -o '"auth_token":"[^"]*"' ~/.codecast/config.json 2>/dev/null | cut -d'"' -f4)
 
-If no session is found, tell the user to run \`codecast start\` to begin syncing.
+if [ -z "$SESSION_ID" ] || [ -z "$API_TOKEN" ]; then
+  echo "Codecast not configured. Run: codecast auth && codecast start"
+  exit 1
+fi
+
+curl -s -X POST https://little-bobcat-226.convex.site/cli/session-links \\
+  -H "Content-Type: application/json" \\
+  -d "{\\"session_id\\":\\"$SESSION_ID\\",\\"api_token\\":\\"$API_TOKEN\\"}"
+\`\`\`
+
+Parse the JSON response and output the dashboard_url and share_url in a user-friendly format.
 `;
 
 function installSlashCommand(): void {
