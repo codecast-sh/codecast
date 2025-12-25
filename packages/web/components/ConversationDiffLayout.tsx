@@ -4,9 +4,10 @@ import { useState, useEffect } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { ConversationView, ConversationData } from "./ConversationView";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Keyboard } from "lucide-react";
 import { Button } from "./ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 
 interface ConversationDiffLayoutProps {
   conversation: ConversationData;
@@ -21,8 +22,17 @@ export function ConversationDiffLayout({
   const [isMobile, setIsMobile] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
-  const { selectedChangeIndex, changes } = useDiffViewerStore();
+  const {
+    selectedChangeIndex,
+    changes,
+    nextChange,
+    prevChange,
+    toggleDiffMode,
+    toggleFileTree,
+    clearSelection
+  } = useDiffViewerStore();
 
   useEffect(() => {
     const checkMobile = () => {
@@ -33,6 +43,45 @@ export function ConversationDiffLayout({
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+
+      if (isInput) return;
+
+      switch (e.key) {
+        case "[":
+          e.preventDefault();
+          prevChange();
+          break;
+        case "]":
+          e.preventDefault();
+          nextChange();
+          break;
+        case "c":
+          e.preventDefault();
+          toggleDiffMode();
+          break;
+        case "f":
+          e.preventDefault();
+          toggleFileTree();
+          break;
+        case "Escape":
+          e.preventDefault();
+          clearSelection();
+          break;
+        case "?":
+          e.preventDefault();
+          setShowHelp((prev) => !prev);
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [nextChange, prevChange, toggleDiffMode, toggleFileTree, clearSelection]);
 
   const handleLayoutChange = (layout: Record<string, number>) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
@@ -129,6 +178,15 @@ export function ConversationDiffLayout({
                 >
                   <ChevronRight className="h-4 w-4" />
                 </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute top-2 right-2 z-10 h-6 w-6 opacity-50 hover:opacity-100"
+                  onClick={() => setShowHelp(true)}
+                  title="Keyboard shortcuts (?)"
+                >
+                  <Keyboard className="h-4 w-4" />
+                </Button>
               </div>
             </Panel>
           )}
@@ -166,6 +224,8 @@ export function ConversationDiffLayout({
           <ChevronLeft className="h-5 w-5" />
         </Button>
       )}
+
+      <KeyboardShortcutsHelp isOpen={showHelp} onClose={() => setShowHelp(false)} />
     </div>
   );
 }
