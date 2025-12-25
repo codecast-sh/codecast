@@ -15,6 +15,9 @@ export function computeCumulativeDiff(changes: FileChange[]): CumulativeDiff[] {
   const fileGroups = new Map<string, FileChange[]>();
 
   for (const change of changes) {
+    if (change.changeType === 'commit') {
+      continue;
+    }
     const existing = fileGroups.get(change.filePath) || [];
     existing.push(change);
     fileGroups.set(change.filePath, existing);
