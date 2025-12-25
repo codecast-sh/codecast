@@ -26,6 +26,7 @@ export default defineSchema({
       mention: v.boolean(),
       permission_request: v.boolean(),
     })),
+    pr_auto_comment_enabled: v.optional(v.boolean()),
     bio: v.optional(v.string()),
     title: v.optional(v.string()),
     status: v.optional(v.union(v.literal("available"), v.literal("busy"), v.literal("away"))),
@@ -240,14 +241,17 @@ export default defineSchema({
       v.literal("merged")
     ),
     author_github_username: v.string(),
+    head_ref: v.optional(v.string()),
     linked_session_ids: v.array(v.id("conversations")),
+    pr_comment_posted: v.optional(v.boolean()),
     created_at: v.number(),
     updated_at: v.number(),
     merged_at: v.optional(v.number()),
   })
     .index("by_team_id", ["team_id"])
     .index("by_github_pr_id", ["github_pr_id"])
-    .index("by_repository", ["repository"]),
+    .index("by_repository", ["repository"])
+    .index("by_head_ref", ["head_ref"]),
 
   reviews: defineTable({
     pull_request_id: v.id("pull_requests"),

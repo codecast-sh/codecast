@@ -49,6 +49,7 @@ export const syncPRFromGitHub = mutation({
       v.literal("merged")
     ),
     author_github_username: v.string(),
+    head_ref: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
     merged_at: v.optional(v.number()),
@@ -65,6 +66,7 @@ export const syncPRFromGitHub = mutation({
         body: args.body,
         state: args.state,
         author_github_username: args.author_github_username,
+        head_ref: args.head_ref,
         updated_at: args.updated_at,
         merged_at: args.merged_at,
       });
@@ -80,7 +82,9 @@ export const syncPRFromGitHub = mutation({
       body: args.body,
       state: args.state,
       author_github_username: args.author_github_username,
+      head_ref: args.head_ref,
       linked_session_ids: [],
+      pr_comment_posted: false,
       created_at: args.created_at,
       updated_at: args.updated_at,
       merged_at: args.merged_at,
