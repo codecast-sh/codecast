@@ -225,6 +225,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
     };
 
     const isWarmupSession = (c: Conversation) => {
+      if (c.title?.toLowerCase() === "warmup") return true;
       if (c.message_count > 3) return false;
       const firstAssistantMsg = c.first_assistant_message?.toLowerCase() ||
         c.message_alternates?.find(m => m.role === "assistant")?.content?.toLowerCase() || "";
