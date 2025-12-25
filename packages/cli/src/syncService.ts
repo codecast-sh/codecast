@@ -275,4 +275,25 @@ export class SyncService {
       throw error;
     }
   }
+
+  async createPermissionRequest(params: {
+    conversationId: string;
+    toolName: string;
+    argumentsPreview?: string;
+  }): Promise<string> {
+    try {
+      const permissionId = await this.client.mutation("permissions:createPermissionRequest" as any, {
+        conversation_id: params.conversationId,
+        tool_name: params.toolName,
+        arguments_preview: params.argumentsPreview,
+        api_token: this.apiToken,
+      });
+      return permissionId;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
 }

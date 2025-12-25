@@ -1421,6 +1421,8 @@ async function main(): Promise<void> {
 
   const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe: (() => void) | null = null;
+  let permissionUnsubscribe: (() => void) | null = null;
+  const processedPermissionIds = new Set<string>();
 
   const setupSubscription = () => {
     try {
@@ -1513,6 +1515,89 @@ async function main(): Promise<void> {
 
   setupSubscription();
 
+  const setupPermissionSubscription = () => {
+    try {
+      log("Setting up permission responses subscription");
+      permissionUnsubscribe = subscriptionClient.onUpdate(
+        "permissions:getAllRespondedPermissions" as any,
+        { user_id: config.user_id, api_token: config.auth_token },
+        async (permissions: any) => {
+          log(`Permission subscription update received: ${JSON.stringify(permissions)?.slice(0, 200)}`);
+
+          if (!permissions || !Array.isArray(permissions)) {
+            log("No permissions in update or invalid format");
+            return;
+          }
+
+          for (const permission of permissions) {
+            if (processedPermissionIds.has(permission._id)) {
+              continue;
+            }
+
+            log(`New permission response: ${permission._id} status=${permission.status} tool=${permission.tool_name}`);
+
+            try {
+              const processes = await findClaudeCodeProcesses();
+              log(`Found ${processes.length} Claude Code process(es) for permission injection`);
+
+              if (processes.length === 0) {
+                log(`No Claude Code processes found, will retry on next update`);
+                continue;
+              }
+
+              const response = permission.status === "approved" ? "y" : "n";
+              let injected = false;
+
+              for (const proc of processes) {
+                const ttyPath = await getTtyPath(proc.tty);
+                if (!ttyPath) {
+                  log(`Could not resolve tty path for ${proc.tty}`);
+                  continue;
+                }
+
+                try {
+                  await injectMessageToStdin(ttyPath, response);
+                  log(`Successfully injected permission response '${response}' to ${ttyPath} (pid ${proc.pid})`);
+                  processedPermissionIds.add(permission._id);
+                  injected = true;
+                  break;
+                } catch (writeErr) {
+                  const writeErrMsg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+                  log(`Failed to inject permission to ${ttyPath}: ${writeErrMsg}`);
+                }
+              }
+
+              if (!injected) {
+                log(`Failed to inject permission response to any process`);
+              }
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              log(`Error handling permission response: ${errMsg}`);
+            }
+          }
+
+          resetReconnectDelay();
+        }
+      );
+      log("Permission subscription established successfully");
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log(`Permission subscription error: ${errMsg}`);
+      if (permissionUnsubscribe) {
+        permissionUnsubscribe();
+        permissionUnsubscribe = null;
+      }
+
+      const delay = getReconnectDelay();
+      log(`Reconnecting permission subscription in ${delay}ms`);
+      setTimeout(() => {
+        setupPermissionSubscription();
+      }, delay);
+    }
+  };
+
+  setupPermissionSubscription();
+
   const shutdown = async () => {
     log("Shutting down gracefully");
 
@@ -1520,6 +1605,10 @@ async function main(): Promise<void> {
 
     if (unsubscribe) {
       unsubscribe();
+    }
+
+    if (permissionUnsubscribe) {
+      permissionUnsubscribe();
     }
 
     watcher.stop();

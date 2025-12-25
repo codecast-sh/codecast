@@ -23,6 +23,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { CommentPanel } from "./CommentPanel";
+import { PermissionCard } from "./PermissionCard";
 
 type ToolCall = {
   id: string;
@@ -1329,6 +1330,11 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
 
   const messages = conversation?.messages || [];
 
+  const pendingPermissions = useQuery(
+    api.permissions.getPendingPermissions,
+    conversation?._id ? { conversation_id: conversation._id } : "skip"
+  );
+
   // Merge messages and commits into a single timeline
   type TimelineItem =
     | { type: 'message'; data: Message; timestamp: number }
@@ -1805,6 +1811,16 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
           </div>
         )}
       </div>
+
+      {pendingPermissions && pendingPermissions.length > 0 && (
+        <div className="border-t border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
+          <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-3 space-y-2">
+            {pendingPermissions.map((permission) => (
+              <PermissionCard key={permission._id} permission={permission} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {conversation && conversation.status === "active" && (
         <MessageInput conversationId={conversation._id} />
