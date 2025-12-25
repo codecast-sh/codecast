@@ -56,6 +56,7 @@ type Message = {
 
 export type ConversationData = {
   _id: string;
+  user_id?: string;
   title?: string;
   session_id?: string;
   agent_type?: string;

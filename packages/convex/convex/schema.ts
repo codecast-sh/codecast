@@ -153,6 +153,15 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_parent_comment_id", ["parent_comment_id"]),
 
+  public_comments: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    content: v.string(),
+    parent_comment_id: v.optional(v.id("public_comments")),
+    created_at: v.number(),
+  })
+    .index("by_conversation_id", ["conversation_id"]),
+
   sync_cursors: defineTable({
     user_id: v.id("users"),
     file_path_hash: v.string(),
