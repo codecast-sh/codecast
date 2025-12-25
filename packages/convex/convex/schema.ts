@@ -276,15 +276,23 @@ export default defineSchema({
     .index("by_pull_request_state", ["pull_request_id", "state"]),
 
   review_comments: defineTable({
-    review_id: v.id("reviews"),
-    file_path: v.string(),
-    line_number: v.number(),
+    review_id: v.optional(v.id("reviews")),
+    pull_request_id: v.id("pull_requests"),
+    file_path: v.optional(v.string()),
+    line_number: v.optional(v.number()),
     content: v.string(),
     resolved: v.boolean(),
     created_at: v.number(),
+    updated_at: v.optional(v.number()),
+    github_comment_id: v.optional(v.number()),
+    codecast_origin: v.optional(v.boolean()),
+    author_github_username: v.optional(v.string()),
+    author_user_id: v.optional(v.id("users")),
   })
     .index("by_review", ["review_id"])
-    .index("by_review_resolved", ["review_id", "resolved"]),
+    .index("by_review_resolved", ["review_id", "resolved"])
+    .index("by_pull_request", ["pull_request_id"])
+    .index("by_github_comment_id", ["github_comment_id"]),
 
   team_activity_events: defineTable({
     team_id: v.id("teams"),

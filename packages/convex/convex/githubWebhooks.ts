@@ -3,7 +3,7 @@ import { mutation, internalMutation, internalAction, internalQuery, action } fro
 import { internal, api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
-export const storeWebhookEvent = mutation({
+export const storeWebhookEvent = internalMutation({
   args: {
     delivery_id: v.string(),
     event_type: v.string(),
@@ -197,3 +197,222 @@ export const postPRCommentIfNeeded = internalMutation({
     }
   },
 });
+
+export const processCommentWebhooks = internalMutation({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 10;
+    const events = await ctx.db
+      .query("github_webhook_events")
+      .withIndex("by_processed", (q) => q.eq("processed", false))
+      .take(limit);
+
+    const results = [];
+
+    for (const event of events) {
+      try {
+        const payload = JSON.parse(event.payload);
+        let processed = false;
+
+        if (event.event_type === "pull_request_review_comment" && event.action === "created") {
+          processed = await handleReviewCommentCreated(ctx, payload);
+        } else if (event.event_type === "pull_request_review_comment" && event.action === "edited") {
+          processed = await handleReviewCommentEdited(ctx, payload);
+        } else if (event.event_type === "pull_request_review_comment" && event.action === "deleted") {
+          processed = await handleReviewCommentDeleted(ctx, payload);
+        } else if (event.event_type === "issue_comment" && event.action === "created") {
+          processed = await handleIssueCommentCreated(ctx, payload);
+        } else if (event.event_type === "issue_comment" && event.action === "edited") {
+          processed = await handleIssueCommentEdited(ctx, payload);
+        } else if (event.event_type === "issue_comment" && event.action === "deleted") {
+          processed = await handleIssueCommentDeleted(ctx, payload);
+        }
+
+        if (processed) {
+          await ctx.db.patch(event._id, { processed: true });
+          results.push({ event_id: event._id, status: "processed" });
+        } else {
+          results.push({ event_id: event._id, status: "skipped" });
+        }
+      } catch (error) {
+        results.push({
+          event_id: event._id,
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return { processed: results.length, results };
+  },
+});
+
+async function handleReviewCommentCreated(ctx: any, payload: any): Promise<boolean> {
+  const comment = payload.comment;
+  const pullRequest = payload.pull_request;
+
+  if (comment.body?.includes("codecast_comment_id:")) {
+    return false;
+  }
+
+  const repository = pullRequest.base.repo.full_name;
+  const prNumber = pullRequest.number;
+
+  const pr = await ctx.db
+    .query("pull_requests")
+    .withIndex("by_repository", (q: any) => q.eq("repository", repository))
+    .filter((q: any) => q.eq(q.field("number"), prNumber))
+    .first();
+
+  if (!pr) {
+    return false;
+  }
+
+  const existing = await ctx.db
+    .query("review_comments")
+    .withIndex("by_github_comment_id", (q: any) => q.eq("github_comment_id", comment.id))
+    .first();
+
+  if (existing) {
+    return false;
+  }
+
+  await ctx.db.insert("review_comments", {
+    pull_request_id: pr._id,
+    github_comment_id: comment.id,
+    file_path: comment.path,
+    line_number: comment.line || comment.original_line,
+    content: comment.body,
+    resolved: false,
+    created_at: new Date(comment.created_at).getTime(),
+    updated_at: new Date(comment.updated_at).getTime(),
+    author_github_username: comment.user.login,
+    codecast_origin: false,
+  });
+
+  return true;
+}
+
+async function handleReviewCommentEdited(ctx: any, payload: any): Promise<boolean> {
+  const comment = payload.comment;
+
+  const existing = await ctx.db
+    .query("review_comments")
+    .withIndex("by_github_comment_id", (q: any) => q.eq("github_comment_id", comment.id))
+    .first();
+
+  if (!existing) {
+    return false;
+  }
+
+  await ctx.db.patch(existing._id, {
+    content: comment.body,
+    updated_at: new Date(comment.updated_at).getTime(),
+  });
+
+  return true;
+}
+
+async function handleReviewCommentDeleted(ctx: any, payload: any): Promise<boolean> {
+  const comment = payload.comment;
+
+  const existing = await ctx.db
+    .query("review_comments")
+    .withIndex("by_github_comment_id", (q: any) => q.eq("github_comment_id", comment.id))
+    .first();
+
+  if (!existing) {
+    return false;
+  }
+
+  await ctx.db.delete(existing._id);
+
+  return true;
+}
+
+async function handleIssueCommentCreated(ctx: any, payload: any): Promise<boolean> {
+  const comment = payload.comment;
+  const issue = payload.issue;
+
+  if (!issue.pull_request) {
+    return false;
+  }
+
+  if (comment.body?.includes("codecast_comment_id:")) {
+    return false;
+  }
+
+  const repository = payload.repository.full_name;
+  const prNumber = issue.number;
+
+  const pr = await ctx.db
+    .query("pull_requests")
+    .withIndex("by_repository", (q: any) => q.eq("repository", repository))
+    .filter((q: any) => q.eq(q.field("number"), prNumber))
+    .first();
+
+  if (!pr) {
+    return false;
+  }
+
+  const existing = await ctx.db
+    .query("review_comments")
+    .withIndex("by_github_comment_id", (q: any) => q.eq("github_comment_id", comment.id))
+    .first();
+
+  if (existing) {
+    return false;
+  }
+
+  await ctx.db.insert("review_comments", {
+    pull_request_id: pr._id,
+    github_comment_id: comment.id,
+    content: comment.body,
+    resolved: false,
+    created_at: new Date(comment.created_at).getTime(),
+    updated_at: new Date(comment.updated_at).getTime(),
+    author_github_username: comment.user.login,
+    codecast_origin: false,
+  });
+
+  return true;
+}
+
+async function handleIssueCommentEdited(ctx: any, payload: any): Promise<boolean> {
+  const comment = payload.comment;
+
+  const existing = await ctx.db
+    .query("review_comments")
+    .withIndex("by_github_comment_id", (q: any) => q.eq("github_comment_id", comment.id))
+    .first();
+
+  if (!existing) {
+    return false;
+  }
+
+  await ctx.db.patch(existing._id, {
+    content: comment.body,
+    updated_at: new Date(comment.updated_at).getTime(),
+  });
+
+  return true;
+}
+
+async function handleIssueCommentDeleted(ctx: any, payload: any): Promise<boolean> {
+  const comment = payload.comment;
+
+  const existing = await ctx.db
+    .query("review_comments")
+    .withIndex("by_github_comment_id", (q: any) => q.eq("github_comment_id", comment.id))
+    .first();
+
+  if (!existing) {
+    return false;
+  }
+
+  await ctx.db.delete(existing._id);
+
+  return true;
+}

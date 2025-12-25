@@ -33,13 +33,20 @@ export const addReviewComment = mutation({
     content: v.string(),
   },
   handler: async (ctx, args) => {
+    const review = await ctx.db.get(args.review_id);
+    if (!review) {
+      throw new Error(`Review with id ${args.review_id} not found`);
+    }
+
     const commentId = await ctx.db.insert("review_comments", {
       review_id: args.review_id,
+      pull_request_id: review.pull_request_id,
       file_path: args.file_path,
       line_number: args.line_number,
       content: args.content,
       resolved: false,
       created_at: Date.now(),
+      codecast_origin: true,
     });
     return commentId;
   },
@@ -117,5 +124,20 @@ export const getPendingReviews = query({
       .filter((q) => q.eq(q.field("state"), "pending"))
       .collect();
     return reviews;
+  },
+});
+
+export const getCommentsForPR = query({
+  args: {
+    pull_request_id: v.id("pull_requests"),
+  },
+  handler: async (ctx, args) => {
+    const comments = await ctx.db
+      .query("review_comments")
+      .withIndex("by_pull_request", (q) =>
+        q.eq("pull_request_id", args.pull_request_id)
+      )
+      .collect();
+    return comments;
   },
 });
