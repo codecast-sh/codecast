@@ -149,7 +149,7 @@ export default function ConversationPage() {
 
   return (
     <AuthGuard>
-      <DashboardLayout hideSidebar>
+      <DashboardLayout>
         <ConversationView
           conversation={conversation as ConversationData | null | undefined}
           commits={commits || []}

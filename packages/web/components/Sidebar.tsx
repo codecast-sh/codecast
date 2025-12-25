@@ -93,7 +93,8 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
   const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
 
   const favorites = useQuery(api.conversations.listFavorites);
-  const { conversations } = useQuery(api.conversations.listConversations, { filter: "my", limit: 50 }) ?? { conversations: [] };
+  const bookmarks = useQuery(api.bookmarks.listBookmarks);
+  const { conversations } = useQuery(api.conversations.listConversations, { filter: "my", limit: 100 }) ?? { conversations: [] };
 
   const handleFilterClick = (newFilter: "my" | "team") => {
     if (!isDashboard) {
@@ -112,12 +113,43 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
   };
 
   type ConversationItem = NonNullable<typeof conversations>[number];
-  const groupedSessions = conversations?.reduce<Record<string, ConversationItem[]>>((acc, conv) => {
+
+  const isSubagent = (c: ConversationItem) =>
+    c.title?.startsWith("Session agent-") ?? false;
+
+  const isTrivialSubagent = (c: ConversationItem) => {
+    if (!isSubagent(c)) return false;
+    const userMsgCount = c.message_alternates?.filter(m => m.role === "user").length ?? 0;
+    const aiMsgCount = c.message_alternates?.filter(m => m.role === "assistant").length ?? 0;
+    if (c.ai_message_count !== undefined) {
+      return c.ai_message_count <= 1 && userMsgCount === 0;
+    }
+    return aiMsgCount <= 1 && userMsgCount === 0;
+  };
+
+  const isWarmupSession = (c: ConversationItem) => {
+    if (c.title?.toLowerCase() === "warmup") return true;
+    if (c.message_count > 3) return false;
+    const firstAssistantMsg = c.first_assistant_message?.toLowerCase() ||
+      c.message_alternates?.find(m => m.role === "assistant")?.content?.toLowerCase() || "";
+    const warmupPatterns = [
+      "i'm ready to help",
+      "i'll wait for your task",
+      "what would you like me to help",
+      "i understand. i'm ready",
+      "running in read-only exploration mode",
+    ];
+    return warmupPatterns.some(p => firstAssistantMsg.includes(p));
+  };
+
+  const filteredConversations = conversations?.filter(c => !isTrivialSubagent(c) && !isWarmupSession(c)) ?? [];
+
+  const groupedSessions = filteredConversations.reduce<Record<string, ConversationItem[]>>((acc, conv) => {
     const group = getDateGroup(conv.updated_at);
     if (!acc[group]) acc[group] = [];
     acc[group].push(conv);
     return acc;
-  }, {}) ?? {};
+  }, {});
 
   const sidebarContent = (
     <>
@@ -194,6 +226,32 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
           </div>
         )}
 
+        {bookmarks && bookmarks.length > 0 && (
+          <div className="mt-4">
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2 flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5 text-sol-cyan" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+              </svg>
+              Bookmarks
+            </div>
+            <div className="space-y-0.5">
+              {bookmarks.slice(0, 8).map((bookmark) => (
+                <Link
+                  key={bookmark._id}
+                  href={`/conversation/${bookmark.conversation_id}#msg-${bookmark.message_id}`}
+                  onClick={onMobileClose}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors group"
+                >
+                  <svg className={`w-3 h-3 flex-shrink-0 ${bookmark.message_role === "user" ? "text-sol-blue" : "text-sol-violet"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                  </svg>
+                  <span className="truncate text-sm flex-1">{bookmark.message_preview || bookmark.conversation_title}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
         {directories.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
@@ -221,7 +279,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
           </div>
         )}
 
-        {conversations && conversations.length > 0 && (
+        {filteredConversations.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
               Recent Sessions
@@ -234,7 +292,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
                   <div key={group}>
                     <div className="text-[10px] font-medium text-sol-text-dim px-3 py-0.5">{group}</div>
                     <div className="space-y-0.5">
-                      {items.slice(0, group === "Today" ? 10 : 5).map((conv) => (
+                      {items.map((conv) => (
                         <Link
                           key={conv._id}
                           href={`/conversation/${conv._id}`}
