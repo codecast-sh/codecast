@@ -2,7 +2,7 @@
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
@@ -11,6 +11,8 @@ import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import Link from "next/link";
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default function ConversationPage() {
   const params = useParams();
   const router = useRouter();
@@ -18,6 +20,19 @@ export default function ConversationPage() {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [showShareCopied, setShowShareCopied] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
+
+  const isUUID = useMemo(() => UUID_REGEX.test(id), [id]);
+
+  const sessionLookup = useQuery(
+    api.conversations.getConversationBySessionId,
+    isUUID ? { session_id: id } : "skip"
+  );
+
+  useEffect(() => {
+    if (sessionLookup?._id) {
+      router.replace(`/conversation/${sessionLookup._id}`);
+    }
+  }, [sessionLookup, router]);
 
   const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useConversationMessages(id);
   const commits = useQuery(api.commits.getCommitsForConversation, {
