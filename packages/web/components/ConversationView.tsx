@@ -11,6 +11,8 @@ import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
+import { useDiffViewerStore } from "../store/diffViewerStore";
+import { extractFileChanges } from "../lib/fileChangeExtractor";
 import { CommitCard } from "./CommitCard";
 import {
   DropdownMenu,
@@ -611,13 +613,15 @@ function getRelativePath(fullPath: string): string {
   return parts.slice(-3).join("/");
 }
 
-function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: ToolResult; changeIndex?: number }) {
   const isEdit = tool.name === "Edit" || tool.name === "Write";
   const [expanded, setExpanded] = useState(isEdit);
   const isRead = tool.name === "Read";
   const isBash = tool.name === "Bash";
   const isGlob = tool.name === "Glob";
   const isGrep = tool.name === "Grep";
+
+  const { selectedChangeIndex, rangeStart, rangeEnd, selectChange, selectRange } = useDiffViewerStore();
 
   let parsedInput: Record<string, unknown> = {};
   try {
@@ -685,11 +689,42 @@ function ToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
 
   const toolColor = toolColors[tool.name] || "text-sol-text-dim";
 
+  const isClickable = isEdit && changeIndex !== undefined;
+  const isSelected = isClickable && (
+    selectedChangeIndex === changeIndex ||
+    (rangeStart !== null && rangeEnd !== null && changeIndex >= rangeStart && changeIndex <= rangeEnd)
+  );
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (isClickable) {
+      e.stopPropagation();
+      if (e.metaKey || e.ctrlKey) {
+        if (selectedChangeIndex !== null && selectedChangeIndex !== changeIndex) {
+          selectRange(selectedChangeIndex, changeIndex);
+        } else {
+          selectChange(changeIndex);
+        }
+      } else {
+        selectChange(changeIndex);
+      }
+    } else {
+      setExpanded(!expanded);
+    }
+  };
+
   return (
     <div className="my-0.5">
       <div
-        className="flex items-center gap-1.5 cursor-pointer group text-xs"
-        onClick={() => setExpanded(!expanded)}
+        className={`flex items-center gap-1.5 group text-xs ${
+          isClickable
+            ? 'cursor-pointer hover:bg-sol-bg-highlight/30 rounded px-1 -mx-1 transition-colors'
+            : 'cursor-pointer'
+        } ${
+          isSelected
+            ? 'bg-sol-blue/10 border border-sol-blue/30 rounded px-1 -mx-1'
+            : ''
+        }`}
+        onClick={handleClick}
       >
         <span className={`font-mono ${toolColor}`}>{tool.name}</span>
         {summary && (
@@ -928,6 +963,7 @@ function AssistantBlock({
   childConversationMap,
   showHeader = true,
   onOpenComments,
+  toolCallToChangeIndexMap,
 }: {
   content?: string;
   timestamp: number;
@@ -941,6 +977,7 @@ function AssistantBlock({
   childConversationMap?: Record<string, string>;
   showHeader?: boolean;
   onOpenComments?: () => void;
+  toolCallToChangeIndexMap?: Record<string, number>;
 }) {
   const hasContent = content && content.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
@@ -1051,7 +1088,12 @@ function AssistantBlock({
           ) : tc.name === "TodoWrite" ? (
             <TodoWriteBlock key={tc.id} tool={tc} />
           ) : (
-            <ToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+            <ToolBlock
+              key={tc.id}
+              tool={tc}
+              result={toolResultMap[tc.id]}
+              changeIndex={toolCallToChangeIndexMap?.[tc.id]}
+            />
           )
         ))}
 
@@ -1311,6 +1353,15 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
   const shouldRestoreScrollRef = useRef(false);
 
   const messages = conversation?.messages || [];
+
+  const toolCallToChangeIndexMap = useMemo(() => {
+    const fileChanges = extractFileChanges(messages as any);
+    const map: Record<string, number> = {};
+    for (const change of fileChanges) {
+      map[change.id] = change.sequenceIndex;
+    }
+    return map;
+  }, [messages]);
 
   const pendingPermissions = useQuery(
     api.permissions.getPendingPermissions,
@@ -1595,6 +1646,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
           childConversationMap={conversation?.child_conversation_map}
           showHeader={isFirstInSequence}
           onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
+          toolCallToChangeIndexMap={toolCallToChangeIndexMap}
         />
       );
     }
