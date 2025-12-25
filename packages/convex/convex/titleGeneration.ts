@@ -37,8 +37,8 @@ export const generateTitle = internalAction({
 
     const { messages } = conversation;
 
-    const firstSlice = messages.slice(0, 3);
-    const lastSlice = messages.length > 6 ? messages.slice(-3) : [];
+    const firstSlice = messages.slice(0, 6);
+    const lastSlice = messages.length > 15 ? messages.slice(-9) : [];
 
     const selectedMessages = [...firstSlice];
     for (const msg of lastSlice) {
@@ -47,18 +47,28 @@ export const generateTitle = internalAction({
       }
     }
 
+    const truncateMessage = (content: string | undefined, maxLen: number) => {
+      if (!content) return "[no text]";
+      if (content.length <= maxLen) return content;
+      return content.slice(0, maxLen) + "...";
+    };
+
     const messageText = selectedMessages
       .map(m => {
         const role = m.role === "assistant" ? "Assistant" : "User";
-        const content = m.content?.slice(0, 500) || "[no text]";
+        const content = truncateMessage(m.content, 400);
         return `${role}: ${content}`;
       })
       .join("\n\n");
 
-    const prompt = `Summarize this conversation with a title and subtitle.
+    const prompt = `Summarize this coding conversation with a title and subtitle.
 
 Title: 3-8 words, captures the main topic/goal
-Subtitle: 1-2 sentences describing what was accomplished or discussed
+
+Subtitle: A concise narrative (2-4 sentences) OR bullet points describing:
+- What was built, fixed, or changed
+- Key files or components affected
+- Current state (working, in progress, blocked)
 
 Respond in this exact JSON format only, no markdown:
 {"title": "...", "subtitle": "..."}
@@ -76,7 +86,7 @@ ${messageText}`;
         },
         body: JSON.stringify({
           model: "claude-3-5-haiku-latest",
-          max_tokens: 200,
+          max_tokens: 400,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -149,6 +159,6 @@ export const getConversationForTitle = internalQuery({
 
 export function shouldGenerateTitle(messageCount: number): boolean {
   if (messageCount === 2) return true;
-  if (messageCount > 2 && (messageCount - 2) % 10 === 0) return true;
+  if (messageCount > 2 && (messageCount - 2) % 30 === 0) return true;
   return false;
 }
