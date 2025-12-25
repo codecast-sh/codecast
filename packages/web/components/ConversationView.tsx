@@ -836,7 +836,7 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpen
       >
         {displayContent}{wasTruncated && !isExpanded && "..."}
       </div>
-      {(effectivelyCollapsed || needsTruncation) && (
+      {wasTruncated && (
         <button
           onClick={handleExpand}
           className="text-xs text-sol-text-dim hover:text-sol-blue mt-2 ml-8 transition-colors"
@@ -935,8 +935,25 @@ function AssistantBlock({
     }
   };
 
+  // When collapsed and only tool calls (no text content), show compact inline summary
+  if (effectivelyCollapsed && onlyToolCalls) {
+    return (
+      <div id={`msg-${messageId}`} className="mb-1">
+        <button
+          onClick={handleExpand}
+          className="text-xs text-sol-text-dim hover:text-sol-text-muted pl-8 py-0.5 transition-colors"
+        >
+          [{toolCalls!.length} tool{toolCalls!.length > 1 ? "s" : ""}]
+        </button>
+      </div>
+    );
+  }
+
+  // Determine if we need to show expand button (has hidden content)
+  const hasHiddenContent = effectivelyCollapsed && (wasTruncated || hasToolCalls || hasThinking || hasImages);
+
   return (
-    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${effectivelyCollapsed ? "mb-2" : onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
       {hasContent && (
         <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
           <button
@@ -1044,12 +1061,12 @@ function AssistantBlock({
           </div>
         )}
 
-        {effectivelyCollapsed && wasTruncated && (
+        {hasHiddenContent && (
           <button
             onClick={handleExpand}
             className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
           >
-            Show all ({lines.length} lines{hasToolCalls ? `, ${toolCalls!.length} tools` : ""})
+            Show all ({lines.length > 0 ? `${lines.length} lines` : ""}{lines.length > 0 && hasToolCalls ? ", " : ""}{hasToolCalls ? `${toolCalls!.length} tools` : ""})
           </button>
         )}
       </div>
