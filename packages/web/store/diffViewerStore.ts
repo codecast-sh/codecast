@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { computeCumulativeDiff } from '../lib/cumulativeDiff';
+import { computeCumulativeDiff, type CumulativeDiff } from '../lib/cumulativeDiff';
+import { LRUCache } from '../lib/lruCache';
 
 export interface FileChange {
   id: string;
@@ -10,6 +11,24 @@ export interface FileChange {
   oldContent?: string;
   newContent: string;
   timestamp: number;
+}
+
+interface DiffCacheKey {
+  rangeStart: number;
+  rangeEnd: number;
+  diffMode: 'cumulative' | 'single';
+  changesHash: string;
+}
+
+const diffCache = new LRUCache<DiffCacheKey, CumulativeDiff[]>(50);
+
+function hashChanges(changes: FileChange[]): string {
+  if (changes.length === 0) return 'empty';
+  return `${changes.length}-${changes[0]?.id}-${changes[changes.length - 1]?.id}`;
+}
+
+export function clearDiffCache() {
+  diffCache.clear();
 }
 
 interface DiffViewerState {
@@ -81,7 +100,10 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
 
   toggleFileTree: () => set((state) => ({ showFileTree: !state.showFileTree })),
 
-  setChanges: (changes) => set({ changes }),
+  setChanges: (changes) => {
+    diffCache.clear();
+    set({ changes });
+  },
 
   selectFile: (filePath) => set({ selectedFile: filePath }),
 
@@ -151,28 +173,6 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
     const change = changes[selectedChangeIndex];
     if (!change) return null;
 
-    if (rangeStart !== null && rangeEnd !== null) {
-      const relevantChanges = changes.slice(rangeStart, rangeEnd + 1);
-      const cumulativeDiffs = computeCumulativeDiff(relevantChanges);
-
-      const targetFile = selectedFile || change.filePath;
-      const cumulativeDiff = cumulativeDiffs.find(d => d.filePath === targetFile);
-
-      if (!cumulativeDiff) {
-        return {
-          filePath: change.filePath,
-          oldContent: change.oldContent,
-          newContent: change.newContent,
-        };
-      }
-
-      return {
-        filePath: cumulativeDiff.filePath,
-        oldContent: cumulativeDiff.oldContent,
-        newContent: cumulativeDiff.newContent,
-      };
-    }
-
     if (diffMode === 'single') {
       return {
         filePath: change.filePath,
@@ -181,8 +181,23 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
       };
     }
 
-    const relevantChanges = changes.slice(0, selectedChangeIndex + 1);
-    const cumulativeDiffs = computeCumulativeDiff(relevantChanges);
+    const actualRangeStart = rangeStart ?? 0;
+    const actualRangeEnd = rangeEnd ?? selectedChangeIndex;
+
+    const cacheKey: DiffCacheKey = {
+      rangeStart: actualRangeStart,
+      rangeEnd: actualRangeEnd,
+      diffMode,
+      changesHash: hashChanges(changes),
+    };
+
+    let cumulativeDiffs = diffCache.get(cacheKey);
+
+    if (!cumulativeDiffs) {
+      const relevantChanges = changes.slice(actualRangeStart, actualRangeEnd + 1);
+      cumulativeDiffs = computeCumulativeDiff(relevantChanges);
+      diffCache.set(cacheKey, cumulativeDiffs);
+    }
 
     const targetFile = selectedFile || change.filePath;
     const cumulativeDiff = cumulativeDiffs.find(d => d.filePath === targetFile);

@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { useDiffViewerStore } from '../diffViewerStore';
+import { useDiffViewerStore, clearDiffCache } from '../diffViewerStore';
 import type { FileChange } from '../diffViewerStore';
 
 describe('diffViewerStore', () => {
   beforeEach(() => {
+    clearDiffCache();
     useDiffViewerStore.setState({
       selectedChangeIndex: null,
       rangeStart: null,
