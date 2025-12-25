@@ -1635,6 +1635,34 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const prevItem = prevNonToolResultIdx >= 0 ? timeline[prevNonToolResultIdx] : null;
       const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
       const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
+
+      // In collapsed mode, only render the first assistant message with text content in the sequence
+      if (collapsed) {
+        const hasTextContent = msg.content && msg.content.trim().length > 0;
+
+        // Check if there's an earlier assistant message with text content in this sequence
+        let hasEarlierTextContent = false;
+        for (let i = index - 1; i >= 0; i--) {
+          const checkItem = timeline[i];
+          if (checkItem.type !== 'message') continue;
+          const checkMsg = checkItem.data as Message;
+          // Stop at user messages (except tool results)
+          if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
+            break;
+          }
+          // Found an earlier assistant message with text
+          if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
+            hasEarlierTextContent = true;
+            break;
+          }
+        }
+
+        // Skip this message if: no text content, or there's earlier text content in sequence
+        if (!hasTextContent || hasEarlierTextContent) {
+          return null;
+        }
+      }
+
       const relevantToolResults = msg.tool_calls
         ?.map(tc => globalToolResultMap[tc.id])
         .filter((tr): tr is ToolResult => tr !== undefined);
@@ -1651,7 +1679,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           messageUuid={msg.message_uuid}
           collapsed={collapsed}
           childConversationMap={conversation?.child_conversation_map}
-          showHeader={isFirstInSequence}
+          showHeader={collapsed ? true : isFirstInSequence}
           onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
           toolCallToChangeIndexMap={toolCallToChangeIndexMap}
           isHighlighted={highlightedMessageId === msg._id}
