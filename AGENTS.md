@@ -1,5 +1,11 @@
 # Agent Notes
 
+## Test Credentials
+For testing the web app locally, use:
+- Email: ashot@almostcandid.com
+- Password: TEST_USER_PASS
+These are also stored in packages/web/.env.local as TEST_USER_EMAIL and TEST_USER_PASSWORD.
+
 ## Debugging Lessons
 
 ### Convex Auth Issues
