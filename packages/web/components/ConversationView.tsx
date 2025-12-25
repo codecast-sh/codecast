@@ -786,49 +786,31 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
 }
 
 function ThinkingBlock({ content }: { content: string }) {
-  const [expanded, setExpanded] = useState(true);
-  const truncated = truncateLines(content, expanded ? 50 : 3);
-  const hasMoreContent = content.split('\n').length > 3 || content.length > 300;
+  const [expanded, setExpanded] = useState(false);
+  const truncated = truncateLines(content, expanded ? 50 : 2);
+  const isTruncated = truncated.truncated;
 
   return (
-    <div className="my-3 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 overflow-hidden">
+    <div className="my-0.5 opacity-50">
       <div
-        className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/30 transition-colors"
-        onClick={() => setExpanded(!expanded)}
+        className={`flex items-start gap-1 ${isTruncated || expanded ? 'cursor-pointer' : ''}`}
+        onClick={() => (isTruncated || expanded) && setExpanded(!expanded)}
       >
-        <svg
-          className={`w-3 h-3 shrink-0 transition-transform text-sol-text-dim ${expanded ? 'rotate-90' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-        <span className="font-mono text-xs font-semibold text-sol-violet">
-          Thinking
-        </span>
-        {!expanded && hasMoreContent && (
-          <span className="text-sol-text-dim text-[10px]">
-            ({content.split('\n').length} lines)
-          </span>
+        {(isTruncated || expanded) && (
+          <svg
+            className={`w-3 h-3 mt-0.5 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
         )}
-        <span className="text-sol-text-dim text-[10px] ml-auto">
-          {expanded ? "collapse" : "expand"}
-        </span>
-      </div>
-      {expanded && (
-        <div className="px-3 pb-3">
-          <div className="text-sol-text-muted italic font-mono whitespace-pre-wrap text-xs leading-relaxed">
-            {truncated.text}
-            {truncated.truncated && "..."}
-          </div>
-          {truncated.truncated && (
-            <div className="text-[10px] text-sol-text-dim mt-2">
-              ({truncated.totalLines - 50} more lines truncated)
-            </div>
-          )}
+        <div className="flex-1 text-sol-text-muted italic font-mono whitespace-pre-wrap text-xs">
+          {truncated.text}
+          {truncated.truncated && !expanded && "..."}
         </div>
-      )}
+      </div>
     </div>
   );
 }
