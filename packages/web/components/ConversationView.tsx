@@ -752,26 +752,21 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
 
 function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpenComments, isHighlighted }: { content: string; timestamp: number; messageId: string; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const MAX_LINES = 25;
-  const COLLAPSED_LINES = 2;
-  const lines = content.split("\n");
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
 
   // In collapsed mode, individual expansion is allowed
   const effectivelyCollapsed = collapsed && !isExpanded;
-  const needsTruncation = !effectivelyCollapsed && lines.length > MAX_LINES;
 
-  let displayContent: string;
-  let wasTruncated = false;
-
-  if (effectivelyCollapsed) {
-    displayContent = lines.slice(0, COLLAPSED_LINES).join("\n");
-    wasTruncated = lines.length > COLLAPSED_LINES;
-  } else if (needsTruncation && !isExpanded) {
-    displayContent = lines.slice(0, MAX_LINES).join("\n");
-    wasTruncated = true;
-  } else {
-    displayContent = content;
-  }
+  // Check if content is visually truncated (scrollHeight > clientHeight)
+  useEffect(() => {
+    if (effectivelyCollapsed && contentRef.current) {
+      const el = contentRef.current;
+      setIsTruncated(el.scrollHeight > el.clientHeight);
+    } else {
+      setIsTruncated(false);
+    }
+  }, [effectivelyCollapsed, content]);
 
   const commentCount = useQuery(api.comments.getCommentCount, {
     message_id: messageId as Id<"messages">,
@@ -786,14 +781,12 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpen
     }
   };
 
-  const handleExpand = () => {
-    if (effectivelyCollapsed || needsTruncation) {
-      setIsExpanded(!isExpanded);
-    }
+  const handleToggleExpand = () => {
+    setIsExpanded(!isExpanded);
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 p-4 mb-6 relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg" : ""}`}>
       <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
         <button
           onClick={onOpenComments}
@@ -831,17 +824,25 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpen
         </a>
       </div>
       <div
-        className={`text-sol-text text-sm pl-8 whitespace-pre-wrap ${(effectivelyCollapsed || (needsTruncation && !isExpanded)) ? "cursor-pointer hover:bg-sol-blue/5 -mx-2 px-2 py-1 rounded transition-colors" : ""}`}
-        onClick={handleExpand}
+        ref={contentRef}
+        className={`text-sol-text text-sm pl-8 whitespace-pre-wrap ${effectivelyCollapsed ? "line-clamp-2" : ""}`}
       >
-        {displayContent}{wasTruncated && !isExpanded && "..."}
+        {content}
       </div>
-      {wasTruncated && (
+      {isTruncated && (
         <button
-          onClick={handleExpand}
+          onClick={handleToggleExpand}
           className="text-xs text-sol-text-dim hover:text-sol-blue mt-2 ml-8 transition-colors"
         >
-          {isExpanded ? "Show less" : effectivelyCollapsed ? `Show all (${lines.length} lines)` : `Show ${lines.length - MAX_LINES} more lines`}
+          Expand
+        </button>
+      )}
+      {isExpanded && collapsed && (
+        <button
+          onClick={handleToggleExpand}
+          className="text-xs text-sol-text-dim hover:text-sol-blue mt-2 ml-8 transition-colors"
+        >
+          Collapse
         </button>
       )}
     </div>
@@ -929,10 +930,8 @@ function AssistantBlock({
   const shouldShowHeader = showHeader && (hasContent || hasThinking);
   const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
 
-  const handleExpand = () => {
-    if (effectivelyCollapsed) {
-      setIsExpanded(true);
-    }
+  const handleToggleExpand = () => {
+    setIsExpanded(!isExpanded);
   };
 
   // When collapsed and only tool calls (no text content), hide completely
@@ -1013,10 +1012,7 @@ function AssistantBlock({
         ))}
 
         {hasContent && (
-          <div
-            className={`text-sol-text ${effectivelyCollapsed ? "text-sm whitespace-pre-wrap cursor-pointer hover:bg-sol-bg-alt/30 -mx-2 px-2 py-1 rounded transition-colors" : "prose prose-invert prose-sm max-w-none"}`}
-            onClick={effectivelyCollapsed ? handleExpand : undefined}
-          >
+          <div className={`text-sol-text ${effectivelyCollapsed ? "text-sm whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}>
             {effectivelyCollapsed ? (
               <>
                 <span>{truncatedContent}</span>
@@ -1051,10 +1047,19 @@ function AssistantBlock({
 
         {hasHiddenContent && (
           <button
-            onClick={handleExpand}
+            onClick={handleToggleExpand}
             className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
           >
-            Show all
+            Expand
+          </button>
+        )}
+
+        {isExpanded && collapsed && (
+          <button
+            onClick={handleToggleExpand}
+            className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
+          >
+            Collapse
           </button>
         )}
       </div>
