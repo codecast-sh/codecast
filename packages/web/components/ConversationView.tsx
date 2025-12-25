@@ -865,6 +865,8 @@ function AssistantBlock({
   toolCallToChangeIndexMap,
   isHighlighted,
   onToggleCollapsed,
+  isSequenceExpanded,
+  showCollapseButton,
 }: {
   content?: string;
   timestamp: number;
@@ -881,6 +883,8 @@ function AssistantBlock({
   toolCallToChangeIndexMap?: Record<string, number>;
   isHighlighted?: boolean;
   onToggleCollapsed?: () => void;
+  isSequenceExpanded?: boolean;
+  showCollapseButton?: boolean;
 }) {
   const COLLAPSED_LINES = 2;
 
@@ -1042,6 +1046,14 @@ function AssistantBlock({
             className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
           >
             Expand
+          </button>
+        )}
+        {showCollapseButton && onToggleCollapsed && (
+          <button
+            onClick={onToggleCollapsed}
+            className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
+          >
+            Collapse
           </button>
         )}
       </div>
@@ -1265,6 +1277,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
   const [diffExpanded, setDiffExpanded] = useState(false);
   const [commentMessageId, setCommentMessageId] = useState<Id<"messages"> | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
@@ -1623,8 +1636,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
       const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
 
-      // In collapsed mode, only render the first assistant message with text content in the sequence
-      if (collapsed) {
+      // Find the sequence start ID (first assistant message with text in this sequence)
+      let sequenceStartId = msg._id;
+      for (let i = index - 1; i >= 0; i--) {
+        const checkItem = timeline[i];
+        if (checkItem.type !== 'message') continue;
+        const checkMsg = checkItem.data as Message;
+        // Stop at user messages (except tool results)
+        if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
+          break;
+        }
+        // Found an earlier assistant message with text - that's the sequence start
+        if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
+          sequenceStartId = checkMsg._id;
+        }
+      }
+
+      const isSequenceExpanded = expandedSequences.has(sequenceStartId);
+
+      // In collapsed mode, only render messages if sequence is expanded OR this is the first with text
+      if (collapsed && !isSequenceExpanded) {
         const hasTextContent = msg.content && msg.content.trim().length > 0;
 
         // Check if there's an earlier assistant message with text content in this sequence
@@ -1633,11 +1664,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           const checkItem = timeline[i];
           if (checkItem.type !== 'message') continue;
           const checkMsg = checkItem.data as Message;
-          // Stop at user messages (except tool results)
           if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
             break;
           }
-          // Found an earlier assistant message with text
           if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
             hasEarlierTextContent = true;
             break;
@@ -1653,6 +1682,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const relevantToolResults = msg.tool_calls
         ?.map(tc => globalToolResultMap[tc.id])
         .filter((tr): tr is ToolResult => tr !== undefined);
+
+      // Determine effective collapsed state for this message
+      const effectiveCollapsed = collapsed && !isSequenceExpanded;
+
       return (
         <AssistantBlock
           key={msg._id}
@@ -1664,13 +1697,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           images={msg.images}
           messageId={msg._id}
           messageUuid={msg.message_uuid}
-          collapsed={collapsed}
+          collapsed={effectiveCollapsed}
           childConversationMap={conversation?.child_conversation_map}
-          showHeader={collapsed ? true : isFirstInSequence}
+          showHeader={effectiveCollapsed ? true : isFirstInSequence}
           onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
           toolCallToChangeIndexMap={toolCallToChangeIndexMap}
           isHighlighted={highlightedMessageId === msg._id}
-          onToggleCollapsed={() => setCollapsed(c => !c)}
+          isSequenceExpanded={isSequenceExpanded}
+          onToggleCollapsed={collapsed ? () => {
+            setExpandedSequences(prev => {
+              const next = new Set(prev);
+              if (next.has(sequenceStartId)) {
+                next.delete(sequenceStartId);
+              } else {
+                next.add(sequenceStartId);
+              }
+              return next;
+            });
+          } : undefined}
+          showCollapseButton={collapsed && isSequenceExpanded && showHeader}
         />
       );
     }
