@@ -14,6 +14,7 @@ import { DiffView } from "./DiffView";
 
 interface ConversationDiffLayoutProps {
   conversation: ConversationData;
+  embedded?: boolean;
 }
 
 const STORAGE_KEY = "conversation-diff-layout";
@@ -21,7 +22,9 @@ const MOBILE_BREAKPOINT = 768;
 
 export function ConversationDiffLayout({
   conversation,
+  embedded,
 }: ConversationDiffLayoutProps) {
+  const heightClass = embedded ? "h-[calc(100vh-56px)]" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
@@ -115,7 +118,7 @@ export function ConversationDiffLayout({
 
   if (isMobile) {
     return (
-      <div className="h-screen w-full">
+      <div className={`${heightClass} w-full`}>
         <Tabs defaultValue="conversation" className="h-full flex flex-col">
           <TabsList className="grid w-full grid-cols-2 shrink-0">
             <TabsTrigger value="conversation">Conversation</TabsTrigger>
@@ -139,7 +142,7 @@ export function ConversationDiffLayout({
   }
 
   return (
-    <div className="h-screen w-full relative">
+    <div className={`${heightClass} w-full relative`}>
       <PanelGroup
         orientation="horizontal"
         onLayoutChange={handleLayoutChange}

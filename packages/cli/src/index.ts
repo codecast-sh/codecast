@@ -118,14 +118,25 @@ description: Get codecast dashboard and share links for current session
 allowed-tools: ["Bash"]
 ---
 
-Run this command to get the codecast links:
+Run this bash command to get the codecast links for the current session:
 
 \`\`\`bash
-SESSION_ID=$(tail -1 ~/.codecast/conversations.json 2>/dev/null | grep -o '"[^"]*":' | head -1 | tr -d '":')
+# Get the project dir from PWD
+PROJECT_DIR=$(echo "$PWD" | sed 's|/|\\\\-|g; s|^\\\\-||')
+SESSIONS_DIR="$HOME/.claude/projects/$PROJECT_DIR"
+
+# Find most recent UUID session file (not agent-xxx files)
+SESSION_FILE=$(ls -t "$SESSIONS_DIR"/*.jsonl 2>/dev/null | grep -E '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\\\.jsonl$' | head -1)
+if [ -z "$SESSION_FILE" ]; then
+  echo "No session found for current project"
+  exit 1
+fi
+
+SESSION_ID=$(basename "$SESSION_FILE" .jsonl)
 API_TOKEN=$(grep -o '"auth_token":"[^"]*"' ~/.codecast/config.json 2>/dev/null | cut -d'"' -f4)
 
-if [ -z "$SESSION_ID" ] || [ -z "$API_TOKEN" ]; then
-  echo "Codecast not configured. Run: codecast auth && codecast start"
+if [ -z "$API_TOKEN" ]; then
+  echo "Codecast not configured. Run: codecast auth"
   exit 1
 fi
 
@@ -134,7 +145,9 @@ curl -s -X POST https://little-bobcat-226.convex.site/cli/session-links \\
   -d "{\\"session_id\\":\\"$SESSION_ID\\",\\"api_token\\":\\"$API_TOKEN\\"}"
 \`\`\`
 
-Parse the JSON response and output the dashboard_url and share_url in a user-friendly format.
+Parse the JSON response and output:
+- **Dashboard**: the dashboard_url value
+- **Share**: the share_url value (this is the public shareable link)
 `;
 
 function installSlashCommand(): void {
