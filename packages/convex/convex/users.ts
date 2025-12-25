@@ -202,3 +202,22 @@ export const getUserStats = query({
     };
   },
 });
+
+export const getTeamMembers = query({
+  args: {
+    team_id: v.id("teams"),
+  },
+  handler: async (ctx, args) => {
+    const teamMembers = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("team_id"), args.team_id))
+      .collect();
+
+    return teamMembers.map((member) => ({
+      _id: member._id,
+      name: member.name,
+      github_username: member.github_username,
+      github_avatar_url: member.github_avatar_url,
+    }));
+  },
+});

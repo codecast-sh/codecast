@@ -291,4 +291,23 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_team_timestamp", ["team_id", "timestamp"])
     .index("by_actor", ["actor_user_id"]),
+
+  notifications: defineTable({
+    recipient_user_id: v.id("users"),
+    type: v.union(
+      v.literal("mention"),
+      v.literal("comment_reply"),
+      v.literal("conversation_comment"),
+      v.literal("team_invite")
+    ),
+    actor_user_id: v.id("users"),
+    comment_id: v.optional(v.id("comments")),
+    conversation_id: v.optional(v.id("conversations")),
+    message: v.string(),
+    read: v.boolean(),
+    created_at: v.number(),
+  })
+    .index("by_recipient", ["recipient_user_id"])
+    .index("by_recipient_read", ["recipient_user_id", "read"])
+    .index("by_recipient_created", ["recipient_user_id", "created_at"]),
 });

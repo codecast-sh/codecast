@@ -1,6 +1,7 @@
-import { mutation, internalAction, internalMutation } from "./_generated/server";
+import { mutation, query, internalAction, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -80,5 +81,143 @@ export const notifyTeamSessionStart = internalMutation({
         });
       }
     }
+  },
+});
+
+export const create = mutation({
+  args: {
+    recipient_user_id: v.id("users"),
+    type: v.union(
+      v.literal("mention"),
+      v.literal("comment_reply"),
+      v.literal("conversation_comment"),
+      v.literal("team_invite")
+    ),
+    actor_user_id: v.id("users"),
+    comment_id: v.optional(v.id("comments")),
+    conversation_id: v.optional(v.id("conversations")),
+    message: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const recipient = await ctx.db.get(args.recipient_user_id);
+    if (!recipient) {
+      throw new Error("Recipient not found");
+    }
+
+    const prefs = recipient.notification_preferences;
+    if (args.type === "mention" && prefs && !prefs.mention) {
+      return null;
+    }
+
+    const notificationId = await ctx.db.insert("notifications", {
+      recipient_user_id: args.recipient_user_id,
+      type: args.type,
+      actor_user_id: args.actor_user_id,
+      comment_id: args.comment_id,
+      conversation_id: args.conversation_id,
+      message: args.message,
+      read: false,
+      created_at: Date.now(),
+    });
+
+    return notificationId;
+  },
+});
+
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return [];
+    }
+
+    const notifications = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_created", (q) => q.eq("recipient_user_id", userId))
+      .order("desc")
+      .take(50);
+
+    const notificationsWithActors = await Promise.all(
+      notifications.map(async (notification) => {
+        const actor = await ctx.db.get(notification.actor_user_id);
+        return {
+          ...notification,
+          actor: actor ? {
+            _id: actor._id,
+            name: actor.name,
+            github_username: actor.github_username,
+            github_avatar_url: actor.github_avatar_url,
+          } : null,
+        };
+      })
+    );
+
+    return notificationsWithActors;
+  },
+});
+
+export const getUnreadCount = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return 0;
+    }
+
+    const unreadNotifications = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_read", (q) =>
+        q.eq("recipient_user_id", userId).eq("read", false)
+      )
+      .collect();
+
+    return unreadNotifications.length;
+  },
+});
+
+export const markAsRead = mutation({
+  args: {
+    notificationId: v.id("notifications"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    const notification = await ctx.db.get(args.notificationId);
+    if (!notification) {
+      throw new Error("Notification not found");
+    }
+
+    if (notification.recipient_user_id !== userId) {
+      throw new Error("Unauthorized");
+    }
+
+    await ctx.db.patch(args.notificationId, { read: true });
+  },
+});
+
+export const markAllAsRead = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    const unreadNotifications = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_read", (q) =>
+        q.eq("recipient_user_id", userId).eq("read", false)
+      )
+      .collect();
+
+    await Promise.all(
+      unreadNotifications.map((notification) =>
+        ctx.db.patch(notification._id, { read: true })
+      )
+    );
   },
 });

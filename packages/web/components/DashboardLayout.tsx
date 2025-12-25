@@ -6,6 +6,7 @@ import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
 import { ThemeToggle } from "./ThemeToggle";
+import { NotificationBell } from "./NotificationBell";
 import { Button } from "./ui/button";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
@@ -63,6 +64,9 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
           )}
           <div className="flex-shrink-0">
             <ThemeToggle />
+          </div>
+          <div className="flex-shrink-0">
+            <NotificationBell />
           </div>
           <div className="flex-shrink-0">
             <UserMenu />

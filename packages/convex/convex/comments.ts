@@ -37,6 +37,65 @@ export const addComment = mutation({
       created_at: Date.now(),
     });
 
+    const actor = await ctx.db.get(userId);
+    const actorName = actor?.name || actor?.github_username || actor?.email || "Someone";
+
+    const mentionRegex = /@(\w+)/g;
+    const mentions = Array.from(args.content.matchAll(mentionRegex)).map(match => match[1]);
+
+    if (conversation.team_id && mentions.length > 0) {
+      const teamMembers = await ctx.db
+        .query("users")
+        .filter((q) => q.eq(q.field("team_id"), conversation.team_id))
+        .collect();
+
+      for (const mention of mentions) {
+        const mentionedUser = teamMembers.find(
+          u => u.github_username === mention || u.name === mention
+        );
+
+        if (mentionedUser && mentionedUser._id.toString() !== userId.toString()) {
+          await ctx.db.insert("notifications", {
+            recipient_user_id: mentionedUser._id,
+            type: "mention",
+            actor_user_id: userId,
+            comment_id: commentId,
+            conversation_id: args.conversation_id,
+            message: `${actorName} mentioned you in a comment`,
+            read: false,
+            created_at: Date.now(),
+          });
+        }
+      }
+    }
+
+    if (args.parent_comment_id) {
+      const parentComment = await ctx.db.get(args.parent_comment_id);
+      if (parentComment && parentComment.user_id.toString() !== userId.toString()) {
+        await ctx.db.insert("notifications", {
+          recipient_user_id: parentComment.user_id,
+          type: "comment_reply",
+          actor_user_id: userId,
+          comment_id: commentId,
+          conversation_id: args.conversation_id,
+          message: `${actorName} replied to your comment`,
+          read: false,
+          created_at: Date.now(),
+        });
+      }
+    } else if (conversation.user_id.toString() !== userId.toString()) {
+      await ctx.db.insert("notifications", {
+        recipient_user_id: conversation.user_id,
+        type: "conversation_comment",
+        actor_user_id: userId,
+        comment_id: commentId,
+        conversation_id: args.conversation_id,
+        message: `${actorName} commented on your conversation`,
+        read: false,
+        created_at: Date.now(),
+      });
+    }
+
     return commentId;
   },
 });

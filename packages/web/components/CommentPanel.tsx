@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -17,14 +17,96 @@ export function CommentPanel({ conversationId, messageId, onClose }: CommentPane
   const [newComment, setNewComment] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [replyingTo, setReplyingTo] = useState<Id<"comments"> | null>(null);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [showMentions, setShowMentions] = useState(false);
+  const [mentionCursorPos, setMentionCursorPos] = useState(0);
+  const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const comments = useQuery(api.comments.getComments, {
     conversation_id: conversationId,
     message_id: messageId,
   });
 
+  const conversation = useQuery(api.conversations.getConversation, { id: conversationId });
+  const teamMembers = useQuery(
+    api.users.getTeamMembers,
+    conversation?.team_id ? { team_id: conversation.team_id } : "skip"
+  );
+
   const addComment = useMutation(api.comments.addComment);
   const deleteComment = useMutation(api.comments.deleteComment);
+
+  const filteredMembers = teamMembers?.filter(member => {
+    if (!mentionQuery) return true;
+    const username = member.github_username || member.name || "";
+    return username.toLowerCase().includes(mentionQuery.toLowerCase());
+  }) || [];
+
+  useEffect(() => {
+    if (showMentions && filteredMembers.length > 0) {
+      setSelectedMentionIndex(0);
+    }
+  }, [mentionQuery, showMentions, filteredMembers.length]);
+
+  const handleCommentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    const cursorPos = e.target.selectionStart;
+    setNewComment(value);
+
+    const textBeforeCursor = value.slice(0, cursorPos);
+    const match = textBeforeCursor.match(/@(\w*)$/);
+
+    if (match) {
+      setMentionQuery(match[1]);
+      setMentionCursorPos(cursorPos);
+      setShowMentions(true);
+    } else {
+      setShowMentions(false);
+      setMentionQuery("");
+    }
+  };
+
+  const handleMentionSelect = (username: string) => {
+    const textBefore = newComment.slice(0, mentionCursorPos);
+    const textAfter = newComment.slice(mentionCursorPos);
+    const mentionStart = textBefore.lastIndexOf('@');
+    const newText = textBefore.slice(0, mentionStart) + `@${username} ` + textAfter;
+
+    setNewComment(newText);
+    setShowMentions(false);
+    setMentionQuery("");
+
+    setTimeout(() => {
+      textareaRef.current?.focus();
+      const newCursorPos = mentionStart + username.length + 2;
+      textareaRef.current?.setSelectionRange(newCursorPos, newCursorPos);
+    }, 0);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!showMentions || filteredMembers.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedMentionIndex((prev) =>
+        prev < filteredMembers.length - 1 ? prev + 1 : 0
+      );
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedMentionIndex((prev) =>
+        prev > 0 ? prev - 1 : filteredMembers.length - 1
+      );
+    } else if (e.key === 'Enter' && showMentions) {
+      e.preventDefault();
+      const member = filteredMembers[selectedMentionIndex];
+      if (member) {
+        handleMentionSelect(member.github_username || member.name || '');
+      }
+    } else if (e.key === 'Escape') {
+      setShowMentions(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,6 +122,7 @@ export function CommentPanel({ conversationId, messageId, onClose }: CommentPane
       });
       setNewComment("");
       setReplyingTo(null);
+      setShowMentions(false);
       toast.success("Comment added");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to add comment");
@@ -200,15 +283,43 @@ export function CommentPanel({ conversationId, messageId, onClose }: CommentPane
               </button>
             </div>
           )}
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} className="relative">
             <textarea
+              ref={textareaRef}
               value={newComment}
-              onChange={(e) => setNewComment(e.target.value)}
+              onChange={handleCommentChange}
+              onKeyDown={handleKeyDown}
               placeholder="Write a comment... (supports markdown and @mentions)"
               className="w-full px-3 py-2 bg-sol-bg-alt border border-sol-border rounded text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-blue resize-none"
               rows={3}
               disabled={isSubmitting}
             />
+            {showMentions && filteredMembers.length > 0 && (
+              <div className="absolute bottom-full left-0 mb-1 w-full max-w-xs bg-sol-bg border border-sol-border rounded-lg shadow-lg max-h-48 overflow-y-auto z-10">
+                {filteredMembers.map((member, index) => {
+                  const username = member.github_username || member.name || '';
+                  return (
+                    <button
+                      key={member._id}
+                      type="button"
+                      onClick={() => handleMentionSelect(username)}
+                      className={`w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-sol-bg-alt transition-colors ${
+                        index === selectedMentionIndex ? 'bg-sol-bg-alt' : ''
+                      }`}
+                    >
+                      {member.github_avatar_url && (
+                        <img
+                          src={member.github_avatar_url}
+                          alt={username}
+                          className="w-6 h-6 rounded-full"
+                        />
+                      )}
+                      <span className="text-sol-text text-sm">{username}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <div className="flex justify-end mt-2">
               <button
                 type="submit"
