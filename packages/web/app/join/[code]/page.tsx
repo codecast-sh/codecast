@@ -6,6 +6,7 @@ import { useQuery, useMutation } from "convex/react";
 import { useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Button } from "../../../components/ui/button";
+import { Logo } from "../../../components/Logo";
 
 export default function JoinTeamPage() {
   const params = useParams();
@@ -148,13 +149,11 @@ export default function JoinTeamPage() {
     return (
       <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
         <div className="w-full max-w-md">
-          <div className="text-center mb-8">
-            <h1 className="text-3xl font-semibold text-sol-text tracking-tight">
-              codecast
-            </h1>
+          <div className="text-center mb-8 flex flex-col items-center">
+            <Logo size="xl" className="text-sol-text" />
           </div>
 
-          <div className="bg-sol-bg-alt/50 backdrop-blur border border-sol-border rounded-xl p-8 shadow-2xl">
+          <div className="bg-sol-bg-alt backdrop-blur-sm border border-sol-border rounded-xl p-8 shadow-xl">
             <div className="text-center mb-6">
               <h2 className="text-2xl font-semibold text-sol-text mb-2">
                 Join {teamInfo.name}

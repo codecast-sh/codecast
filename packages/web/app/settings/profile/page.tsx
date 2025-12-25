@@ -7,7 +7,6 @@ import { Card } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
 import { Button } from "../../../components/ui/button";
-import { SettingsModal } from "../../../components/SettingsModal";
 import { Textarea } from "../../../components/ui/textarea";
 
 export default function ProfilePage() {
@@ -72,16 +71,7 @@ export default function ProfilePage() {
   return (
     <div className="space-y-6">
       <Card className="p-6 bg-sol-bg border-sol-border">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-sol-text">Profile</h2>
-          <SettingsModal
-            trigger={
-              <Button variant="outline" size="sm">
-                Edit in Modal
-              </Button>
-            }
-          />
-        </div>
+        <h2 className="text-lg font-semibold text-sol-text mb-4">Profile</h2>
         <div className="space-y-4">
           <div>
             <Label htmlFor="name" className="text-sol-base1">Display Name</Label>

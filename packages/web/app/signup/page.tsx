@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Logo } from "../../components/Logo";
 
 export default function SignUpPage() {
   const [email, setEmail] = useState("");
@@ -64,16 +65,14 @@ export default function SignUpPage() {
   return (
     <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-semibold text-white tracking-tight">
-            codecast
-          </h1>
-          <p className="text-sol-text-muted mt-2 text-sm">
+        <div className="text-center mb-8 flex flex-col items-center">
+          <Logo size="xl" className="text-sol-text" />
+          <p className="text-sol-text-muted mt-3 text-sm">
             Create your account
           </p>
         </div>
 
-        <div className="bg-sol-bg-alt/50 backdrop-blur border border-sol-border rounded-xl p-8 shadow-2xl">
+        <div className="bg-sol-bg-alt backdrop-blur-sm border border-sol-border rounded-xl p-8 shadow-xl">
           <button
             onClick={handleGitHubSignIn}
             disabled={loading}
@@ -90,7 +89,7 @@ export default function SignUpPage() {
               <div className="w-full border-t border-sol-border"></div>
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-sol-bg-alt/50 text-sol-text-muted">or sign up with email</span>
+              <span className="px-2 bg-sol-bg-alt text-sol-text-muted">or sign up with email</span>
             </div>
           </div>
 
@@ -111,7 +110,7 @@ export default function SignUpPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-white placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
                 placeholder="you@example.com"
               />
             </div>
@@ -131,7 +130,7 @@ export default function SignUpPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-white placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
                 placeholder="Create a password"
               />
             </div>
@@ -151,7 +150,7 @@ export default function SignUpPage() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-white placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
                 placeholder="Confirm your password"
               />
             </div>

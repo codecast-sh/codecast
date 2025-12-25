@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Logo } from "../../components/Logo";
 
 function LoginForm() {
   const [email, setEmail] = useState("");
@@ -72,18 +73,16 @@ function LoginForm() {
   return (
     <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-semibold text-sol-text tracking-tight">
-            codecast
-          </h1>
-          <p className="text-sol-text-muted mt-2 text-sm">
+        <div className="text-center mb-8 flex flex-col items-center">
+          <Logo size="xl" className="text-sol-text" />
+          <p className="text-sol-text-muted mt-3 text-sm">
             {reason === "session_expired"
               ? "Your session expired. Please sign in again."
               : "Sign in to access your conversations"}
           </p>
         </div>
 
-        <div className="bg-sol-bg-alt/50 backdrop-blur border border-sol-border rounded-xl p-8 shadow-2xl">
+        <div className="bg-sol-bg-alt backdrop-blur-sm border border-sol-border rounded-xl p-8 shadow-xl">
           <button
             onClick={handleGitHubSignIn}
             disabled={loading}

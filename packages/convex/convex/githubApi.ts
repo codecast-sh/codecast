@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const GITHUB_API_BASE = "https://api.github.com";
 
@@ -194,5 +194,116 @@ export const postCommentToGitHub = internalAction({
     }
 
     throw new Error(`Failed to post GitHub comment after ${maxRetries} attempts: ${lastError?.message}`);
+  },
+});
+
+export const syncRepositoryCommits = action({
+  args: {
+    repository: v.string(),
+    github_access_token: v.string(),
+    per_page: v.optional(v.number()),
+    since: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const [owner, repo] = args.repository.split("/");
+
+    if (!owner || !repo) {
+      throw new Error(`Invalid repository format: ${args.repository}. Expected: owner/repo`);
+    }
+
+    const perPage = args.per_page ?? 100;
+    let url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/commits?per_page=${perPage}`;
+    if (args.since) {
+      url += `&since=${args.since}`;
+    }
+
+    const response = await fetch(url, {
+      headers: {
+        "Authorization": `Bearer ${args.github_access_token}`,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`GitHub API error: ${response.status} ${errorText}`);
+    }
+
+    const commits = await response.json();
+    let synced = 0;
+
+    for (const commit of commits) {
+      const commitUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/commits/${commit.sha}`;
+      const detailResponse = await fetch(commitUrl, {
+        headers: {
+          "Authorization": `Bearer ${args.github_access_token}`,
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      });
+
+      if (!detailResponse.ok) {
+        console.error(`Failed to fetch commit details for ${commit.sha}`);
+        continue;
+      }
+
+      const commitDetail = await detailResponse.json();
+
+      try {
+        await ctx.runMutation(api.commits.addCommit, {
+          sha: commit.sha,
+          message: commit.commit.message,
+          author_name: commit.commit.author?.name || commit.author?.login || "Unknown",
+          author_email: commit.commit.author?.email || "",
+          timestamp: new Date(commit.commit.author?.date || commit.commit.committer?.date).getTime(),
+          files_changed: commitDetail.files?.length || 0,
+          insertions: commitDetail.stats?.additions || 0,
+          deletions: commitDetail.stats?.deletions || 0,
+          repository: args.repository,
+        });
+        synced++;
+      } catch (e) {
+        console.error(`Failed to add commit ${commit.sha}:`, e);
+      }
+
+      await sleep(100);
+    }
+
+    return { synced, total: commits.length };
+  },
+});
+
+export const getUserRepositories = action({
+  args: {
+    github_access_token: v.string(),
+    per_page: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const perPage = args.per_page ?? 30;
+    const url = `${GITHUB_API_BASE}/user/repos?per_page=${perPage}&sort=pushed&affiliation=owner,collaborator`;
+
+    const response = await fetch(url, {
+      headers: {
+        "Authorization": `Bearer ${args.github_access_token}`,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`GitHub API error: ${response.status} ${errorText}`);
+    }
+
+    const repos = await response.json();
+    return repos.map((repo: any) => ({
+      full_name: repo.full_name,
+      name: repo.name,
+      owner: repo.owner.login,
+      private: repo.private,
+      pushed_at: repo.pushed_at,
+      default_branch: repo.default_branch,
+    }));
   },
 });
