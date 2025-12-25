@@ -72,6 +72,8 @@ export default defineSchema({
     git_diff: v.optional(v.string()),
     git_diff_staged: v.optional(v.string()),
     git_root: v.optional(v.string()),
+    fork_count: v.optional(v.number()),
+    forked_from: v.optional(v.id("conversations")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])

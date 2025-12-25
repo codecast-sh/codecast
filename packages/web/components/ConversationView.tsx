@@ -74,6 +74,13 @@ export type ConversationData = {
   git_diff_staged?: string | null;
   git_remote_url?: string | null;
   status?: "active" | "completed";
+  fork_count?: number;
+  forked_from?: string;
+  forked_from_details?: {
+    conversation_id: string;
+    share_token?: string;
+    username: string;
+  } | null;
 };
 
 type Commit = {
@@ -1652,6 +1659,19 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
                     </svg>
+                  </Link>
+                )}
+
+                {conversation.forked_from_details && (
+                  <Link
+                    href={conversation.forked_from_details.share_token ? `/share/${conversation.forked_from_details.share_token}` : `/conversation/${conversation.forked_from_details.conversation_id}`}
+                    className="text-sol-text-secondary text-xs flex items-center gap-1 px-2 py-0.5 rounded bg-sol-bg-alt border border-sol-border hover:bg-sol-bg-hover transition-colors flex-shrink-0"
+                    title="View original conversation"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    Forked from @{conversation.forked_from_details.username}
                   </Link>
                 )}
 

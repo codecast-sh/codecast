@@ -311,6 +311,19 @@ export const getAllMessages = query({
       }
     }
 
+    let forkedFromDetails = null;
+    if (conversation.forked_from) {
+      const originalConv = await ctx.db.get(conversation.forked_from);
+      if (originalConv) {
+        const originalUser = await ctx.db.get(originalConv.user_id);
+        forkedFromDetails = {
+          conversation_id: originalConv._id,
+          share_token: originalConv.share_token,
+          username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
+        };
+      }
+    }
+
     return {
       ...conversation,
       title,
@@ -319,6 +332,9 @@ export const getAllMessages = query({
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
+      fork_count: conversation.fork_count,
+      forked_from: conversation.forked_from,
+      forked_from_details: forkedFromDetails,
     };
   },
 });
@@ -870,6 +886,8 @@ export const getSharedConversation = query({
       title,
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
+      fork_count: conversation.fork_count,
+      forked_from: conversation.forked_from,
     };
   },
 });
@@ -1295,5 +1313,86 @@ export const listPublicConversations = query({
     );
 
     return results;
+  },
+});
+
+export const forkConversation = mutation({
+  args: {
+    share_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized: must be logged in to fork conversations");
+    }
+
+    const originalConversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_share_token", (q) => q.eq("share_token", args.share_token))
+      .collect();
+
+    if (originalConversations.length === 0) {
+      throw new Error("Conversation not found");
+    }
+
+    const original = originalConversations[0];
+
+    if (original.is_private !== false) {
+      throw new Error("Cannot fork a private conversation");
+    }
+
+    const authUser = await ctx.db.get(authUserId);
+    if (!authUser) {
+      throw new Error("User not found");
+    }
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", original._id))
+      .collect();
+
+    const now = Date.now();
+    const newConversationId = await ctx.db.insert("conversations", {
+      user_id: authUserId,
+      team_id: authUser.team_id,
+      agent_type: original.agent_type,
+      session_id: `forked-${original.session_id}-${crypto.randomUUID()}`,
+      slug: original.slug,
+      title: original.title,
+      subtitle: original.subtitle,
+      project_hash: original.project_hash,
+      project_path: original.project_path,
+      model: original.model,
+      started_at: now,
+      updated_at: now,
+      message_count: messages.length,
+      is_private: true,
+      status: "completed",
+      forked_from: original._id,
+    });
+
+    for (const msg of messages) {
+      await ctx.db.insert("messages", {
+        conversation_id: newConversationId,
+        message_uuid: msg.message_uuid,
+        role: msg.role,
+        content: msg.content,
+        thinking: msg.thinking,
+        tool_calls: msg.tool_calls,
+        tool_results: msg.tool_results,
+        images: msg.images,
+        subtype: msg.subtype,
+        timestamp: msg.timestamp,
+        tokens_used: msg.tokens_used,
+        usage: msg.usage,
+      });
+    }
+
+    const currentForkCount = original.fork_count ?? 0;
+    await ctx.db.patch(original._id, {
+      fork_count: currentForkCount + 1,
+    });
+
+    return newConversationId;
   },
 });
