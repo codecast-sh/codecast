@@ -29,6 +29,7 @@ interface DiffViewerState {
   toggleSyncScroll: () => void;
   toggleFileTree: () => void;
   setChanges: (changes: FileChange[]) => void;
+  selectFile: (filePath: string | null) => void;
   nextChange: () => void;
   prevChange: () => void;
 
@@ -81,6 +82,8 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   toggleFileTree: () => set((state) => ({ showFileTree: !state.showFileTree })),
 
   setChanges: (changes) => set({ changes }),
+
+  selectFile: (filePath) => set({ selectedFile: filePath }),
 
   nextChange: () => {
     const { selectedChangeIndex, changes } = get();

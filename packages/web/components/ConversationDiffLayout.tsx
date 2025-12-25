@@ -9,6 +9,7 @@ import { ChevronLeft, ChevronRight, Keyboard, Link as LinkIcon } from "lucide-re
 import { Button } from "./ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
+import { FileTreeSidebar } from "./FileTreeSidebar";
 
 interface ConversationDiffLayoutProps {
   conversation: ConversationData;
@@ -289,18 +290,21 @@ function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<C
 }
 
 function DiffPane() {
-  const { selectedChangeIndex, changes, getCurrentDiffContent } = useDiffViewerStore();
+  const { selectedChangeIndex, changes, getCurrentDiffContent, showFileTree } = useDiffViewerStore();
 
   const diffContent = getCurrentDiffContent();
 
   if (changes.length === 0) {
     return (
-      <div className="h-full w-full flex items-center justify-center text-muted-foreground">
-        <div className="text-center">
-          <p className="text-lg font-medium">No changes yet</p>
-          <p className="text-sm mt-1">
-            File changes will appear here as the conversation progresses
-          </p>
+      <div className="h-full w-full flex bg-background">
+        {showFileTree && <FileTreeSidebar getFileColor={getFileColor} />}
+        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          <div className="text-center">
+            <p className="text-lg font-medium">No changes yet</p>
+            <p className="text-sm mt-1">
+              File changes will appear here as the conversation progresses
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -308,48 +312,54 @@ function DiffPane() {
 
   if (!diffContent) {
     return (
-      <div className="h-full w-full flex items-center justify-center text-muted-foreground">
-        <p>Select a change from the timeline to view diff</p>
+      <div className="h-full w-full flex bg-background">
+        {showFileTree && <FileTreeSidebar getFileColor={getFileColor} />}
+        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          <p>Select a change from the timeline to view diff</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full w-full overflow-auto bg-background">
-      <div className="p-4">
-        <div className="mb-4 pb-2 border-b">
-          <h3 className="font-mono text-sm font-medium">{diffContent.filePath}</h3>
-          <p className="text-xs text-muted-foreground mt-1">
-            Change {selectedChangeIndex! + 1} of {changes.length}
-          </p>
-        </div>
+    <div className="h-full w-full flex bg-background">
+      {showFileTree && <FileTreeSidebar getFileColor={getFileColor} />}
+      <div className="flex-1 overflow-auto">
+        <div className="p-4">
+          <div className="mb-4 pb-2 border-b">
+            <h3 className="font-mono text-sm font-medium">{diffContent.filePath}</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Change {selectedChangeIndex! + 1} of {changes.length}
+            </p>
+          </div>
 
-        <div className="space-y-1">
-          {diffContent.oldContent && (
+          <div className="space-y-1">
+            {diffContent.oldContent && (
+              <div className="font-mono text-sm">
+                <div className="text-red-600 dark:text-red-400">
+                  {diffContent.oldContent.split("\n").map((line, i) => (
+                    <div key={i} className="hover:bg-red-50 dark:hover:bg-red-950/20">
+                      <span className="inline-block w-12 text-right pr-2 text-muted-foreground select-none">
+                        {i + 1}
+                      </span>
+                      <span className="bg-red-100 dark:bg-red-900/30">- {line}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="font-mono text-sm">
-              <div className="text-red-600 dark:text-red-400">
-                {diffContent.oldContent.split("\n").map((line, i) => (
-                  <div key={i} className="hover:bg-red-50 dark:hover:bg-red-950/20">
+              <div className="text-green-600 dark:text-green-400">
+                {diffContent.newContent.split("\n").map((line, i) => (
+                  <div key={i} className="hover:bg-green-50 dark:hover:bg-green-950/20">
                     <span className="inline-block w-12 text-right pr-2 text-muted-foreground select-none">
                       {i + 1}
                     </span>
-                    <span className="bg-red-100 dark:bg-red-900/30">- {line}</span>
+                    <span className="bg-green-100 dark:bg-green-900/30">+ {line}</span>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-
-          <div className="font-mono text-sm">
-            <div className="text-green-600 dark:text-green-400">
-              {diffContent.newContent.split("\n").map((line, i) => (
-                <div key={i} className="hover:bg-green-50 dark:hover:bg-green-950/20">
-                  <span className="inline-block w-12 text-right pr-2 text-muted-foreground select-none">
-                    {i + 1}
-                  </span>
-                  <span className="bg-green-100 dark:bg-green-900/30">+ {line}</span>
-                </div>
-              ))}
             </div>
           </div>
         </div>
