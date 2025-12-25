@@ -342,4 +342,16 @@ export default defineSchema({
   })
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_session", ["session_id"]),
+
+  github_webhook_events: defineTable({
+    delivery_id: v.string(),
+    event_type: v.string(),
+    action: v.optional(v.string()),
+    payload: v.string(),
+    processed: v.boolean(),
+    created_at: v.number(),
+  })
+    .index("by_delivery_id", ["delivery_id"])
+    .index("by_processed", ["processed"])
+    .index("by_event_type", ["event_type"]),
 });
