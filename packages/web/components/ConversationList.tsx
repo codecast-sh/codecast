@@ -6,8 +6,9 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useRouter } from "next/navigation";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 type Conversation = {
   _id: string;
@@ -44,6 +45,7 @@ type Conversation = {
   };
   project_path?: string | null;
   git_root?: string | null;
+  is_favorite?: boolean;
 };
 
 function formatDuration(ms: number): string {
@@ -196,6 +198,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
   const listRef = useRef<HTMLDivElement>(null);
 
   const user = useQuery(api.users.getCurrentUser);
+  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
   const teamMembers = useQuery(
     api.teams.getTeamMembers,
     filter === "team" && user?.team_id ? { team_id: user.team_id } : "skip"
@@ -582,6 +585,23 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
                             </span>
                           )}
                         </div>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            toggleFavorite({ conversation_id: conv._id as Id<"conversations"> });
+                          }}
+                          className={`p-1 rounded transition-colors flex-shrink-0 ${
+                            conv.is_favorite
+                              ? "text-amber-400 hover:text-amber-300"
+                              : "text-sol-text-dim/30 hover:text-amber-400 opacity-0 group-hover:opacity-100"
+                          }`}
+                          title={conv.is_favorite ? "Remove from favorites" : "Add to favorites"}
+                        >
+                          <svg className="w-4 h-4" fill={conv.is_favorite ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                          </svg>
+                        </button>
                         <span className="text-[11px] text-sol-text-dim/50 shrink-0">
                           {getRelativeTime(conv.updated_at)}
                         </span>

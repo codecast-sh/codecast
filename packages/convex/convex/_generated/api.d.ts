@@ -10,6 +10,7 @@
 
 import type * as apiTokens from "../apiTokens.js";
 import type * as auth from "../auth.js";
+import type * as bookmarks from "../bookmarks.js";
 import type * as cleanup from "../cleanup.js";
 import type * as comments from "../comments.js";
 import type * as commits from "../commits.js";
@@ -42,6 +43,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   apiTokens: typeof apiTokens;
   auth: typeof auth;
+  bookmarks: typeof bookmarks;
   cleanup: typeof cleanup;
   comments: typeof comments;
   commits: typeof commits;

@@ -77,8 +77,10 @@ export default defineSchema({
     git_root: v.optional(v.string()),
     fork_count: v.optional(v.number()),
     forked_from: v.optional(v.id("conversations")),
+    is_favorite: v.optional(v.boolean()),
   })
     .index("by_user_id", ["user_id"])
+    .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_team_id", ["team_id"])
     .index("by_agent_type", ["agent_type"])
     .index("by_share_token", ["share_token"])
@@ -144,6 +146,16 @@ export default defineSchema({
       searchField: "content",
       filterFields: ["conversation_id"],
     }),
+
+  bookmarks: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    message_id: v.id("messages"),
+    created_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_conversation", ["user_id", "conversation_id"])
+    .index("by_message_id", ["message_id"]),
 
   comments: defineTable({
     conversation_id: v.id("conversations"),
