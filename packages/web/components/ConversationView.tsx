@@ -474,7 +474,7 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
     if (isEdit || isRead) return relativePath;
     if (isBash && parsedInput.command) {
       const cmd = String(parsedInput.command);
-      return cmd.length > 50 ? cmd.slice(0, 50) + "..." : cmd;
+      return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd;
     }
     if (isGlob && parsedInput.pattern) return String(parsedInput.pattern);
     if (isGrep && parsedInput.pattern) return String(parsedInput.pattern);
@@ -584,6 +584,21 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
               startLine={startLine}
               language={language}
             />
+          ) : isBash && parsedInput.command ? (
+            <div className="max-h-80 overflow-auto">
+              <div className="px-2 py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
+                <pre className="text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+                  $ {String(parsedInput.command)}
+                </pre>
+              </div>
+              {processedContent && processedContent.trim() ? (
+                <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
+                  {processedContent}
+                </pre>
+              ) : (
+                <div className="p-2 text-xs text-sol-text-dim">No output</div>
+              )}
+            </div>
           ) : processedContent && processedContent.trim() ? (
             <div className="max-h-80 overflow-auto">
               {language && (
@@ -596,7 +611,7 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
               </pre>
             </div>
           ) : (
-            <div className="p-2 text-xs text-sol-text-dim italic">No output</div>
+            <div className="p-2 text-xs text-sol-text-dim">No output</div>
           )}
         </div>
       )}
