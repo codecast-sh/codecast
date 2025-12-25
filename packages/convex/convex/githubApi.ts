@@ -47,6 +47,56 @@ export const postPRComment = action({
   },
 });
 
+export const submitPRReview = action({
+  args: {
+    repository: v.string(),
+    pr_number: v.number(),
+    event: v.union(
+      v.literal("APPROVE"),
+      v.literal("REQUEST_CHANGES"),
+      v.literal("COMMENT")
+    ),
+    body: v.optional(v.string()),
+    github_access_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const [owner, repo] = args.repository.split("/");
+
+    if (!owner || !repo) {
+      throw new Error(`Invalid repository format: ${args.repository}. Expected: owner/repo`);
+    }
+
+    const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/reviews`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${args.github_access_token}`,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        event: args.event,
+        body: args.body,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`GitHub API error: ${response.status} ${errorText}`);
+    }
+
+    const data = await response.json();
+    return {
+      success: true,
+      review_id: data.id,
+      review_url: data.html_url,
+      state: data.state,
+    };
+  },
+});
+
 export const postCommentToGitHub = internalAction({
   args: {
     repository: v.string(),

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useAction } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 
 interface FileDiff {
   path: string;
@@ -26,6 +28,11 @@ export function ReviewView({ prId }: { prId: string }) {
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  const submitReview = useAction(api.reviews.submitReview);
 
   const mockPR = {
     title: "Add Header component improvements",
@@ -132,20 +139,94 @@ export function ReviewView({ prId }: { prId: string }) {
     setCommentDraft(null);
   };
 
+  const handleApprove = async () => {
+    setIsSubmitting(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await submitReview({
+        pull_request_id: prId as any,
+        reviewer_user_id: "mock-user-id" as any,
+        event: "APPROVE",
+        body: "Looks good!",
+        github_access_token: "mock-token",
+      });
+      setSuccess("PR approved successfully!");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to approve PR");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRequestChanges = async () => {
+    setIsSubmitting(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await submitReview({
+        pull_request_id: prId as any,
+        reviewer_user_id: "mock-user-id" as any,
+        event: "REQUEST_CHANGES",
+        body: "Please address the comments.",
+        github_access_token: "mock-token",
+      });
+      setSuccess("Changes requested successfully!");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to request changes");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div className="h-screen flex flex-col bg-sol-bg">
       <div className="sol-header px-4 py-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold text-sol-text">
-            {mockPR.title}
-          </h1>
-          <span className="text-sm text-sol-text-muted">
-            #{mockPR.number}
-          </span>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-lg font-semibold text-sol-text">
+                {mockPR.title}
+              </h1>
+              <span className="text-sm text-sol-text-muted">
+                #{mockPR.number}
+              </span>
+            </div>
+            <div className="text-sm text-sol-text-secondary mt-1">
+              {mockPR.repository}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleApprove}
+              disabled={isSubmitting}
+              className="sol-btn-primary bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSubmitting ? "Submitting..." : "Approve"}
+            </button>
+            <button
+              onClick={handleRequestChanges}
+              disabled={isSubmitting}
+              className="sol-btn-primary bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSubmitting ? "Submitting..." : "Request Changes"}
+            </button>
+          </div>
         </div>
-        <div className="text-sm text-sol-text-secondary mt-1">
-          {mockPR.repository}
-        </div>
+
+        {error && (
+          <div className="mt-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-600 dark:text-red-400">
+            {error}
+          </div>
+        )}
+        {success && (
+          <div className="mt-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded text-sm text-green-600 dark:text-green-400">
+            {success}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 flex overflow-hidden">

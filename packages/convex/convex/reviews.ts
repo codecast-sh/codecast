@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, action } from "./_generated/server";
+import { api } from "./_generated/api";
 
 export const createReview = mutation({
   args: {
@@ -139,5 +140,55 @@ export const getCommentsForPR = query({
       )
       .collect();
     return comments;
+  },
+});
+
+export const submitReview = action({
+  args: {
+    pull_request_id: v.id("pull_requests"),
+    reviewer_user_id: v.id("users"),
+    event: v.union(
+      v.literal("APPROVE"),
+      v.literal("REQUEST_CHANGES"),
+      v.literal("COMMENT")
+    ),
+    body: v.optional(v.string()),
+    github_access_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const pr = await ctx.runQuery(api.pull_requests.getPRById, {
+      pr_id: args.pull_request_id,
+    });
+
+    if (!pr) {
+      throw new Error(`Pull request with id ${args.pull_request_id} not found`);
+    }
+
+    const githubResult = await ctx.runAction(api.githubApi.submitPRReview, {
+      repository: pr.repository,
+      pr_number: pr.number,
+      event: args.event,
+      body: args.body,
+      github_access_token: args.github_access_token,
+    });
+
+    const state =
+      args.event === "APPROVE" ? "approved" :
+      args.event === "REQUEST_CHANGES" ? "changes_requested" :
+      "commented";
+
+    const reviewId = await ctx.runMutation(api.reviews.createReview, {
+      pull_request_id: args.pull_request_id,
+      reviewer_user_id: args.reviewer_user_id,
+      state: state as "approved" | "changes_requested" | "commented",
+      body: args.body,
+    });
+
+    return {
+      success: true,
+      review_id: reviewId,
+      github_review_id: githubResult.review_id,
+      github_review_url: githubResult.review_url,
+    };
   },
 });
