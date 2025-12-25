@@ -864,6 +864,7 @@ function AssistantBlock({
   onOpenComments,
   toolCallToChangeIndexMap,
   isHighlighted,
+  onToggleCollapsed,
 }: {
   content?: string;
   timestamp: number;
@@ -879,17 +880,14 @@ function AssistantBlock({
   onOpenComments?: () => void;
   toolCallToChangeIndexMap?: Record<string, number>;
   isHighlighted?: boolean;
+  onToggleCollapsed?: () => void;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
   const COLLAPSED_LINES = 2;
 
   const hasContent = content && content.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images && images.length > 0;
-
-  // Effective collapsed state allows individual expansion
-  const effectivelyCollapsed = collapsed && !isExpanded;
 
   const commentCount = useQuery(api.comments.getCommentCount, {
     message_id: messageId as Id<"messages">,
@@ -911,11 +909,11 @@ function AssistantBlock({
 
   const lines = content ? content.split("\n") : [];
   const getCollapsedContent = () => {
-    if (!effectivelyCollapsed || !content) return { text: content || "", wasTruncated: false };
+    if (!collapsed || !content) return { text: content || "", wasTruncated: false };
     if (lines.length <= COLLAPSED_LINES) return { text: content, wasTruncated: false };
     return { text: lines.slice(0, COLLAPSED_LINES).join("\n"), wasTruncated: true };
   };
-  const { text: truncatedContent, wasTruncated } = getCollapsedContent();
+  const { text: truncatedContent } = getCollapsedContent();
 
   const handleCopy = async () => {
     try {
@@ -930,20 +928,13 @@ function AssistantBlock({
   const shouldShowHeader = showHeader && (hasContent || hasThinking);
   const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
 
-  const handleToggleExpand = () => {
-    setIsExpanded(!isExpanded);
-  };
-
   // When collapsed and only tool calls (no text content), hide completely
-  if (effectivelyCollapsed && onlyToolCalls) {
+  if (collapsed && onlyToolCalls) {
     return null;
   }
 
-  // Determine if we need to show expand button (has hidden content)
-  const hasHiddenContent = effectivelyCollapsed && (wasTruncated || hasToolCalls || hasThinking || hasImages);
-
   return (
-    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${effectivelyCollapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
       {hasContent && (
         <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
           <button
@@ -987,11 +978,11 @@ function AssistantBlock({
       )}
 
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
-        {!effectivelyCollapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
+        {!collapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
 
-        {!effectivelyCollapsed && hasThinking && <ThinkingBlock content={thinking!} />}
+        {!collapsed && hasThinking && <ThinkingBlock content={thinking!} />}
 
-        {!effectivelyCollapsed && hasToolCalls && toolCalls?.map((tc) => (
+        {!collapsed && hasToolCalls && toolCalls?.map((tc) => (
           tc.name === "Task" ? (
             <TaskToolBlock
               key={tc.id}
@@ -1012,11 +1003,11 @@ function AssistantBlock({
         ))}
 
         {hasContent && (
-          <div className={`text-sol-text ${effectivelyCollapsed ? "text-sm whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}>
-            {effectivelyCollapsed ? (
+          <div className={`text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}>
+            {collapsed ? (
               <>
                 <span>{truncatedContent}</span>
-                {wasTruncated && <span className="text-sol-text-dim">...</span>}
+                {lines.length > COLLAPSED_LINES && <span className="text-sol-text-dim">...</span>}
               </>
             ) : (
               <ReactMarkdown
@@ -1045,21 +1036,12 @@ function AssistantBlock({
           </div>
         )}
 
-        {hasHiddenContent && (
+        {collapsed && onToggleCollapsed && (
           <button
-            onClick={handleToggleExpand}
+            onClick={onToggleCollapsed}
             className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
           >
             Expand
-          </button>
-        )}
-
-        {isExpanded && collapsed && (
-          <button
-            onClick={handleToggleExpand}
-            className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
-          >
-            Collapse
           </button>
         )}
       </div>
@@ -1688,6 +1670,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
           toolCallToChangeIndexMap={toolCallToChangeIndexMap}
           isHighlighted={highlightedMessageId === msg._id}
+          onToggleCollapsed={() => setCollapsed(c => !c)}
         />
       );
     }
