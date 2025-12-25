@@ -1,6 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import Prism from "prismjs";
+import "prismjs/components/prism-typescript";
+import "prismjs/components/prism-javascript";
+import "prismjs/components/prism-jsx";
+import "prismjs/components/prism-tsx";
+import "prismjs/components/prism-python";
+import "prismjs/components/prism-json";
+import "prismjs/components/prism-bash";
+import "prismjs/components/prism-css";
+import "prismjs/components/prism-markdown";
+import "prismjs/components/prism-yaml";
+import "prismjs/themes/prism-tomorrow.css";
 
 function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'added' | 'removed' | 'context'; content: string }> {
   // Simple LCS-based diff
@@ -38,6 +50,19 @@ function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'add
   }
 
   return temp.reverse();
+}
+
+function highlightCode(code: string, language?: string): string {
+  if (!language) return code;
+
+  try {
+    const grammar = Prism.languages[language];
+    if (!grammar) return code;
+
+    return Prism.highlight(code, grammar, language);
+  } catch (e) {
+    return code;
+  }
 }
 
 export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxLines = 10, language }: { oldStr: string; newStr: string; contextLines?: number; startLine?: number; maxLines?: number; language?: string }) {
@@ -141,11 +166,17 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
             ? 'text-sol-red'
             : 'text-sol-text-muted';
 
+          const highlightedContent = highlightCode(content, language);
+
           return (
             <div key={i} className={`whitespace-pre ${bgClass}`}>
               <span className="select-none text-sol-text-dim">{lineNumStr}</span>
               <span className={`select-none ${textClass}`}> {prefix} </span>
-              <span className={textClass}>{content}</span>
+              {language ? (
+                <span dangerouslySetInnerHTML={{ __html: highlightedContent }} />
+              ) : (
+                <span className={textClass}>{content}</span>
+              )}
             </div>
           );
         })}
