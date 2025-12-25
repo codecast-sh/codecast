@@ -18,13 +18,13 @@ type PermissionCardProps = {
 };
 
 export function PermissionCard({ permission }: PermissionCardProps) {
-  const respondToPermission = useMutation(api.permissions.respondToPermission);
+  const updatePermissionStatus = useMutation(api.permissions.updatePermissionStatus);
 
   const handleApprove = async () => {
     try {
-      await respondToPermission({
+      await updatePermissionStatus({
         permission_id: permission._id,
-        decision: "approved",
+        status: "approved",
       });
       toast.success("Permission approved");
     } catch (err) {
@@ -35,9 +35,9 @@ export function PermissionCard({ permission }: PermissionCardProps) {
 
   const handleDeny = async () => {
     try {
-      await respondToPermission({
+      await updatePermissionStatus({
         permission_id: permission._id,
-        decision: "denied",
+        status: "denied",
       });
       toast.success("Permission denied");
     } catch (err) {

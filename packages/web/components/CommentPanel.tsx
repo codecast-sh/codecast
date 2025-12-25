@@ -28,7 +28,7 @@ export function CommentPanel({ conversationId, messageId, onClose }: CommentPane
     message_id: messageId,
   });
 
-  const conversation = useQuery(api.conversations.getConversation, { id: conversationId });
+  const conversation = useQuery(api.conversations.getConversation, { conversation_id: conversationId });
   const teamMembers = useQuery(
     api.users.getTeamMembers,
     conversation?.team_id ? { team_id: conversation.team_id } : "skip"

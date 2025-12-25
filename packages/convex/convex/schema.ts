@@ -206,21 +206,6 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_status", ["from_user_id", "status"]),
 
-  pending_permissions: defineTable({
-    conversation_id: v.id("conversations"),
-    tool_name: v.string(),
-    arguments_preview: v.optional(v.string()),
-    status: v.union(
-      v.literal("pending"),
-      v.literal("approved"),
-      v.literal("denied")
-    ),
-    created_at: v.number(),
-    responded_at: v.optional(v.number()),
-  })
-    .index("by_conversation_id", ["conversation_id"])
-    .index("by_conversation_status", ["conversation_id", "status"]),
-
   commits: defineTable({
     conversation_id: v.optional(v.id("conversations")),
     sha: v.string(),
