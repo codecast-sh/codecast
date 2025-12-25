@@ -26,30 +26,31 @@ async function getAuthenticatedUserId(
 export const createPermissionRequest = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    session_id: v.string(),
     tool_name: v.string(),
-    arguments_preview: v.optional(v.string()),
+    arguments_preview: v.string(),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
-    }
-
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) {
       throw new Error("Conversation not found");
     }
 
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Unauthorized: valid session or API token required");
+    }
     if (conversation.user_id.toString() !== authUserId.toString()) {
       throw new Error("Unauthorized: can only create permissions for your own conversations");
     }
 
     const permissionId = await ctx.db.insert("pending_permissions", {
       conversation_id: args.conversation_id,
+      session_id: args.session_id,
       tool_name: args.tool_name,
       arguments_preview: args.arguments_preview,
-      status: "pending" as const,
+      status: "pending",
       created_at: Date.now(),
     });
 
@@ -57,16 +58,15 @@ export const createPermissionRequest = mutation({
   },
 });
 
-export const respondToPermission = mutation({
+export const updatePermissionStatus = mutation({
   args: {
     permission_id: v.id("pending_permissions"),
-    decision: v.union(v.literal("approved"), v.literal("denied")),
-    api_token: v.optional(v.string()),
+    status: v.union(v.literal("approved"), v.literal("denied")),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthorized");
     }
 
     const permission = await ctx.db.get(args.permission_id);
@@ -79,37 +79,41 @@ export const respondToPermission = mutation({
       throw new Error("Conversation not found");
     }
 
-    if (conversation.user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized: can only respond to permissions for your own conversations");
+    if (conversation.user_id.toString() !== userId.toString()) {
+      throw new Error("Unauthorized: can only manage permissions for your own conversations");
+    }
+
+    if (permission.status !== "pending") {
+      throw new Error("Permission already resolved");
     }
 
     await ctx.db.patch(args.permission_id, {
-      status: args.decision,
-      responded_at: Date.now(),
+      status: args.status,
+      resolved_at: Date.now(),
+      resolved_by: userId,
     });
 
-    return { success: true };
+    return args.permission_id;
   },
 });
 
 export const getPendingPermissions = query({
   args: {
     conversation_id: v.id("conversations"),
-    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return [];
     }
 
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) {
-      throw new Error("Conversation not found");
+      return [];
     }
 
-    if (conversation.user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized: can only get permissions for your own conversations");
+    if (conversation.user_id.toString() !== userId.toString()) {
+      return [];
     }
 
     const permissions = await ctx.db
@@ -119,43 +123,47 @@ export const getPendingPermissions = query({
       )
       .collect();
 
-    return permissions;
+    return permissions.sort((a, b) => a.created_at - b.created_at);
   },
 });
 
-export const getAllRespondedPermissions = query({
+export const getPermissionDecision = query({
   args: {
-    user_id: v.optional(v.id("users")),
+    session_id: v.string(),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      return null;
     }
 
-    const targetUserId = args.user_id || authUserId;
-
-    if (targetUserId.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized: can only get your own permissions");
-    }
-
-    const allPermissions = await ctx.db
+    const permissions = await ctx.db
       .query("pending_permissions")
+      .withIndex("by_session", (q) => q.eq("session_id", args.session_id))
+      .filter((q) => q.neq(q.field("status"), "pending"))
       .collect();
 
-    const respondedPermissions = [];
-    for (const permission of allPermissions) {
-      if (permission.status === "pending") continue;
-
-      const conversation = await ctx.db.get(permission.conversation_id);
-      if (!conversation) continue;
-
-      if (conversation.user_id.toString() === targetUserId.toString()) {
-        respondedPermissions.push(permission);
-      }
+    if (permissions.length === 0) {
+      return null;
     }
 
-    return respondedPermissions;
+    const latest = permissions.sort((a, b) => (b.resolved_at || 0) - (a.resolved_at || 0))[0];
+
+    const conversation = await ctx.db.get(latest.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      return null;
+    }
+
+    return {
+      _id: latest._id,
+      status: latest.status,
+      resolved_at: latest.resolved_at,
+      tool_name: latest.tool_name,
+    };
   },
 });

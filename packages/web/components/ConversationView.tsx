@@ -56,7 +56,7 @@ type Message = {
 };
 
 export type ConversationData = {
-  _id: string;
+  _id: Id<"conversations">;
   user_id?: string;
   title?: string;
   session_id?: string;

@@ -277,18 +277,46 @@ export class SyncService {
   }
 
   async createPermissionRequest(params: {
-    conversationId: string;
-    toolName: string;
-    argumentsPreview?: string;
+    conversation_id: string;
+    session_id: string;
+    tool_name: string;
+    arguments_preview: string;
   }): Promise<string> {
     try {
-      const permissionId = await this.client.mutation("permissions:createPermissionRequest" as any, {
-        conversation_id: params.conversationId,
-        tool_name: params.toolName,
-        arguments_preview: params.argumentsPreview,
-        api_token: this.apiToken,
-      });
-      return permissionId;
+      const permissionId = await this.client.mutation(
+        "permissions:createPermissionRequest" as any,
+        {
+          conversation_id: params.conversation_id,
+          session_id: params.session_id,
+          tool_name: params.tool_name,
+          arguments_preview: params.arguments_preview,
+          api_token: this.apiToken,
+        }
+      );
+      return permissionId as string;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
+  async getPermissionDecision(sessionId: string): Promise<{
+    _id: string;
+    status: "approved" | "denied";
+    resolved_at?: number;
+    tool_name: string;
+  } | null> {
+    try {
+      const decision = await this.client.query(
+        "permissions:getPermissionDecision" as any,
+        {
+          session_id: sessionId,
+          api_token: this.apiToken,
+        }
+      );
+      return decision as any;
     } catch (error) {
       if (isAuthError(error)) {
         throw new AuthExpiredError();

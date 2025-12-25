@@ -13,6 +13,8 @@ import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
 import { InvalidateSync } from "./invalidateSync.js";
 import { promisify } from "util";
+import { detectPermissionPrompt } from "./permissionDetector.js";
+import { handlePermissionRequest } from "./permissionHandler.js";
 
 const execAsync = promisify(exec);
 
@@ -533,6 +535,54 @@ async function processSessionFile(
 
     setPosition(filePath, stats.size);
     log(`Synced ${messages.length} messages for session ${sessionId}`);
+
+    const lastAssistantMessage = messages.filter(m => m.role === "assistant").pop();
+    if (lastAssistantMessage && conversationId) {
+      const permissionPrompt = detectPermissionPrompt(lastAssistantMessage.content);
+      if (permissionPrompt) {
+        log(`Permission prompt detected for tool: ${permissionPrompt.tool_name}`);
+
+        handlePermissionRequest(
+          syncService,
+          conversationId,
+          sessionId,
+          permissionPrompt,
+          log
+        ).then((decision) => {
+          if (decision) {
+            const response = decision.approved ? "y" : "n";
+            log(`Attempting to inject response '${response}' to Claude Code`);
+
+            findClaudeCodeProcesses().then((processes) => {
+              if (processes.length === 0) {
+                log("No Claude Code processes found");
+                return;
+              }
+
+              for (const proc of processes) {
+                getTtyPath(proc.tty).then((ttyPath) => {
+                  if (ttyPath) {
+                    injectMessageToStdin(ttyPath, response).then(() => {
+                      log(`Injected '${response}' to Claude Code process ${proc.pid} at ${ttyPath}`);
+                    }).catch((err) => {
+                      log(`Failed to inject to ${ttyPath}: ${err instanceof Error ? err.message : String(err)}`);
+                    });
+                  }
+                }).catch((err) => {
+                  log(`Failed to get TTY path for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+                });
+              }
+            }).catch((err) => {
+              log(`Failed to find Claude Code processes: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          } else {
+            log("Permission request timed out or failed");
+          }
+        }).catch((err) => {
+          log(`Permission handling error: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+    }
 
     updateStateCallback();
   } catch (err: any) {
