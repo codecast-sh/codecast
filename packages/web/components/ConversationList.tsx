@@ -388,6 +388,12 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
     [flatConversations, focusedIndex, router]
   );
 
+  useEffect(() => {
+    if (focusedIndex === -1 && flatConversations.length > 0 && document.activeElement === listRef.current) {
+      setFocusedIndex(0);
+    }
+  }, [focusedIndex, flatConversations.length]);
+
   if (isLoading && conversations.length === 0) {
     return <LoadingSkeleton />;
   }
@@ -419,12 +425,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
   }
 
   const groups = groupByTime(filteredConversations);
-
-  useEffect(() => {
-    if (focusedIndex === -1 && flatConversations.length > 0 && document.activeElement === listRef.current) {
-      setFocusedIndex(0);
-    }
-  }, [focusedIndex, flatConversations.length]);
 
   return (
     <div
