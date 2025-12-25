@@ -156,19 +156,19 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
           const lineNumStr = lineNum !== undefined ? String(lineNum).padStart(lineNumWidth) : ' '.repeat(lineNumWidth);
           const prefix = type === 'added' ? '+' : type === 'removed' ? '-' : ' ';
           const bgClass = type === 'added'
-            ? 'bg-sol-green/25 border-l-2 border-sol-green'
+            ? 'bg-emerald-900/40 border-l-2 border-emerald-500'
             : type === 'removed'
-            ? 'bg-sol-red/25 border-l-2 border-sol-red'
+            ? 'bg-rose-900/40 border-l-2 border-rose-500'
             : '';
           const textClass = type === 'added'
-            ? 'text-sol-green'
+            ? 'text-emerald-300'
             : type === 'removed'
-            ? 'text-sol-red'
+            ? 'text-rose-300'
             : 'text-sol-text-muted';
           const prefixClass = type === 'added'
-            ? 'text-sol-green font-bold'
+            ? 'text-emerald-400 font-bold'
             : type === 'removed'
-            ? 'text-sol-red font-bold'
+            ? 'text-rose-400 font-bold'
             : 'text-sol-text-dim';
 
           const highlightedContent = highlightCode(content, language);
