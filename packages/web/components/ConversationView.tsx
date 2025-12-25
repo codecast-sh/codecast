@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -109,6 +109,10 @@ type ConversationViewProps = {
   isLoadingOlder?: boolean;
   onLoadOlder?: () => void;
 };
+
+export interface ConversationViewHandle {
+  scrollToMessage: (messageId: string) => void;
+}
 
 function ConversationSkeleton() {
   return (
@@ -888,7 +892,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpenComments }: { content: string; timestamp: number; messageId: string; collapsed?: boolean; userName?: string; onOpenComments?: () => void }) {
+function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpenComments, isHighlighted }: { content: string; timestamp: number; messageId: string; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean }) {
   const truncated = collapsed ? content.split("\n").slice(0, 2).join("\n") : content;
   const wasTruncated = collapsed && content.split("\n").length > 2;
 
@@ -906,7 +910,7 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpen
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 ${collapsed ? "p-2 mb-1" : "p-4 mb-6"} relative`}>
+    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 ${collapsed ? "p-2 mb-1" : "p-4 mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg" : ""}`}>
       <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
         <button
           onClick={onOpenComments}
@@ -964,6 +968,7 @@ function AssistantBlock({
   showHeader = true,
   onOpenComments,
   toolCallToChangeIndexMap,
+  isHighlighted,
 }: {
   content?: string;
   timestamp: number;
@@ -978,6 +983,7 @@ function AssistantBlock({
   showHeader?: boolean;
   onOpenComments?: () => void;
   toolCallToChangeIndexMap?: Record<string, number>;
+  isHighlighted?: boolean;
 }) {
   const hasContent = content && content.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
@@ -1026,7 +1032,7 @@ function AssistantBlock({
   const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
 
   return (
-    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative`}>
+    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
       {hasContent && (
         <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
           <button
@@ -1343,12 +1349,14 @@ function MessageInput({ conversationId }: { conversationId: string }) {
   );
 }
 
-export function ConversationView({ conversation, commits = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder }: ConversationViewProps) {
+export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
+  function ConversationView({ conversation, commits = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [diffExpanded, setDiffExpanded] = useState(false);
   const [commentMessageId, setCommentMessageId] = useState<Id<"messages"> | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const prevScrollHeightRef = useRef<number>(0);
   const shouldRestoreScrollRef = useRef(false);
 
@@ -1461,6 +1469,24 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
     overscan: 5,
     paddingEnd: 100,
   });
+
+  useImperativeHandle(ref, () => ({
+    scrollToMessage: (messageId: string) => {
+      const itemIndex = timeline.findIndex(item => {
+        if (item.type === 'message') {
+          return item.data._id === messageId;
+        }
+        return false;
+      });
+
+      if (itemIndex >= 0) {
+        setUserScrolled(true);
+        virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
+        setHighlightedMessageId(messageId);
+        setTimeout(() => setHighlightedMessageId(null), 2000);
+      }
+    }
+  }), [timeline, virtualizer]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1606,7 +1632,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
           return <CommandStatusLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} />;
+        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} />;
       }
       return null;
     }
@@ -1647,6 +1673,7 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
           showHeader={isFirstInSequence}
           onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
           toolCallToChangeIndexMap={toolCallToChangeIndexMap}
+          isHighlighted={highlightedMessageId === msg._id}
         />
       );
     }
@@ -1864,4 +1891,4 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
       )}
     </main>
   );
-}
+});

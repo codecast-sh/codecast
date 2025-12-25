@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
-import { ConversationView, ConversationData } from "./ConversationView";
+import { ConversationView, ConversationData, ConversationViewHandle } from "./ConversationView";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { ChevronLeft, ChevronRight, Keyboard } from "lucide-react";
+import { extractFileChanges } from "../lib/fileChangeExtractor";
+import { ChevronLeft, ChevronRight, Keyboard, Link as LinkIcon } from "lucide-react";
 import { Button } from "./ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
@@ -23,6 +24,7 @@ export function ConversationDiffLayout({
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const conversationRef = useRef<ConversationViewHandle>(null);
 
   const {
     selectedChangeIndex,
@@ -31,8 +33,18 @@ export function ConversationDiffLayout({
     prevChange,
     toggleDiffMode,
     toggleFileTree,
-    clearSelection
+    clearSelection,
+    syncScroll,
+    toggleSyncScroll,
+    setChanges
   } = useDiffViewerStore();
+
+  useEffect(() => {
+    if (conversation?.messages) {
+      const extractedChanges = extractFileChanges(conversation.messages as any);
+      setChanges(extractedChanges);
+    }
+  }, [conversation?.messages, setChanges]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -111,6 +123,7 @@ export function ConversationDiffLayout({
           </TabsList>
           <TabsContent value="conversation" className="flex-1 overflow-auto m-0">
             <ConversationView
+              ref={conversationRef}
               conversation={conversation}
               backHref="/dashboard"
             />
@@ -142,6 +155,7 @@ export function ConversationDiffLayout({
               >
                 <div className="h-full relative">
                   <ConversationView
+                    ref={conversationRef}
                     conversation={conversation}
                     backHref="/dashboard"
                   />
@@ -196,9 +210,20 @@ export function ConversationDiffLayout({
       {/* Center - Fixed Timeline Strip (overlaid) */}
       <div className="absolute left-1/2 top-0 bottom-0 -translate-x-1/2 w-[40px] border-x border-border bg-muted/30 z-10 pointer-events-none">
         <div className="pointer-events-auto h-full">
-          <TimelineStrip />
+          <TimelineStrip conversationRef={conversationRef} />
         </div>
       </div>
+
+      {/* Sync Scroll Toggle Button */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-20 h-8 w-8 ${syncScroll ? "text-primary" : "text-muted-foreground"}`}
+        onClick={toggleSyncScroll}
+        title={syncScroll ? "Disable scroll sync" : "Enable scroll sync"}
+      >
+        <LinkIcon className={`h-4 w-4 ${syncScroll ? "" : "opacity-50"}`} />
+      </Button>
 
       {/* Collapse buttons for when panels are hidden */}
       {leftCollapsed && (
@@ -230,8 +255,15 @@ export function ConversationDiffLayout({
   );
 }
 
-function TimelineStrip() {
-  const { changes, selectedChangeIndex, selectChange } = useDiffViewerStore();
+function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<ConversationViewHandle | null> }) {
+  const { changes, selectedChangeIndex, selectChange, syncScroll } = useDiffViewerStore();
+
+  const handleDotClick = (index: number, messageId: string) => {
+    selectChange(index);
+    if (syncScroll && conversationRef.current) {
+      conversationRef.current.scrollToMessage(messageId);
+    }
+  };
 
   return (
     <div className="h-full w-full flex flex-col items-center py-4 gap-2 overflow-y-auto">
@@ -242,7 +274,7 @@ function TimelineStrip() {
         return (
           <button
             key={change.id}
-            onClick={() => selectChange(index)}
+            onClick={() => handleDotClick(index, change.messageId)}
             className={`
               w-3 h-3 rounded-full transition-all shrink-0
               ${isSelected ? "scale-150 ring-2 ring-primary/50" : "hover:scale-125"}
