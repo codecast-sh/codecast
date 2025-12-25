@@ -935,25 +935,16 @@ function AssistantBlock({
     }
   };
 
-  // When collapsed and only tool calls (no text content), show compact inline summary
+  // When collapsed and only tool calls (no text content), hide completely
   if (effectivelyCollapsed && onlyToolCalls) {
-    return (
-      <div id={`msg-${messageId}`} className="mb-1">
-        <button
-          onClick={handleExpand}
-          className="text-xs text-sol-text-dim hover:text-sol-text-muted pl-8 py-0.5 transition-colors"
-        >
-          [{toolCalls!.length} tool{toolCalls!.length > 1 ? "s" : ""}]
-        </button>
-      </div>
-    );
+    return null;
   }
 
   // Determine if we need to show expand button (has hidden content)
   const hasHiddenContent = effectivelyCollapsed && (wasTruncated || hasToolCalls || hasThinking || hasImages);
 
   return (
-    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${effectivelyCollapsed ? "mb-2" : onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${effectivelyCollapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
       {hasContent && (
         <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
           <button
@@ -993,9 +984,6 @@ function AssistantBlock({
           >
             {formatRelativeTime(timestamp)}
           </a>
-          {effectivelyCollapsed && hasToolCalls && (
-            <span className="text-sol-text-dim text-xs">[{toolCalls!.length} tool{toolCalls!.length > 1 ? "s" : ""}]</span>
-          )}
         </div>
       )}
 
@@ -1066,7 +1054,7 @@ function AssistantBlock({
             onClick={handleExpand}
             className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
           >
-            Show all ({lines.length > 0 ? `${lines.length} lines` : ""}{lines.length > 0 && hasToolCalls ? ", " : ""}{hasToolCalls ? `${toolCalls!.length} tools` : ""})
+            Show all
           </button>
         )}
       </div>
