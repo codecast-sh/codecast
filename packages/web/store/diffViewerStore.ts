@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { computeCumulativeDiff } from '../lib/cumulativeDiff';
 
 export interface FileChange {
   id: string;
@@ -138,7 +139,7 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   },
 
   getCurrentDiffContent: () => {
-    const { selectedChangeIndex, changes } = get();
+    const { selectedChangeIndex, changes, diffMode, selectedFile } = get();
 
     if (selectedChangeIndex === null || changes.length === 0) {
       return null;
@@ -147,10 +148,32 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
     const change = changes[selectedChangeIndex];
     if (!change) return null;
 
+    if (diffMode === 'single') {
+      return {
+        filePath: change.filePath,
+        oldContent: change.oldContent,
+        newContent: change.newContent,
+      };
+    }
+
+    const relevantChanges = changes.slice(0, selectedChangeIndex + 1);
+    const cumulativeDiffs = computeCumulativeDiff(relevantChanges);
+
+    const targetFile = selectedFile || change.filePath;
+    const cumulativeDiff = cumulativeDiffs.find(d => d.filePath === targetFile);
+
+    if (!cumulativeDiff) {
+      return {
+        filePath: change.filePath,
+        oldContent: change.oldContent,
+        newContent: change.newContent,
+      };
+    }
+
     return {
-      filePath: change.filePath,
-      oldContent: change.oldContent,
-      newContent: change.newContent,
+      filePath: cumulativeDiff.filePath,
+      oldContent: cumulativeDiff.oldContent,
+      newContent: cumulativeDiff.newContent,
     };
   },
 }));
