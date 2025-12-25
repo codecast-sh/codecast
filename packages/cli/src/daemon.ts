@@ -4,6 +4,7 @@ import * as path from "path";
 import { execSync, exec } from "child_process";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
+import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
 import { parseSessionFile, extractSlug, extractParentUuid, extractSummaryTitle, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -761,6 +762,294 @@ async function processCursorSession(
   updateStateCallback();
 }
 
+async function processCodexSession(
+  filePath: string,
+  sessionId: string,
+  syncService: SyncService,
+  userId: string,
+  conversationCache: ConversationCache,
+  retryQueue: RetryQueue,
+  pendingMessages: PendingMessages,
+  titleCache: TitleCache,
+  updateStateCallback: () => void
+): Promise<void> {
+  let lastPosition = getPosition(filePath);
+  let stats;
+
+  try {
+    stats = fs.statSync(filePath);
+  } catch (err: any) {
+    if (err.code === 'EACCES' || err.code === 'EPERM') {
+      log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
+      return;
+    }
+    throw err;
+  }
+
+  if (stats.size < lastPosition) {
+    log(`File rotation detected for ${filePath}: size=${stats.size} < position=${lastPosition}. Resetting to start.`);
+    setPosition(filePath, 0);
+    lastPosition = 0;
+  }
+
+  if (stats.size <= lastPosition) {
+    return;
+  }
+
+  let fd;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(stats.size - lastPosition);
+    fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
+    fs.closeSync(fd);
+
+    const newContent = buffer.toString("utf-8");
+    const messages = parseSessionFile(newContent);
+
+    let conversationId = conversationCache[sessionId];
+
+    if (conversationId) {
+      let fullContent;
+      try {
+        fullContent = fs.readFileSync(filePath, "utf-8");
+      } catch (err: any) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+          log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
+          setPosition(filePath, stats.size);
+          return;
+        }
+        throw err;
+      }
+      const summaryTitle = extractSummaryTitle(fullContent);
+      if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
+        try {
+          await syncService.updateTitle(conversationId, summaryTitle);
+          titleCache[sessionId] = summaryTitle;
+          saveTitleCache(titleCache);
+          log(`Updated title for Codex session ${sessionId}: ${summaryTitle}`);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          log(`Failed to update title: ${errMsg}`);
+        }
+      }
+    }
+
+    if (messages.length === 0) {
+      setPosition(filePath, stats.size);
+      return;
+    }
+
+    if (!conversationId) {
+      let fullContent;
+      try {
+        fullContent = fs.readFileSync(filePath, "utf-8");
+      } catch (err: any) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+          log(`Warning: Permission denied reading ${filePath} for conversation creation. Skipping.`);
+          return;
+        }
+        throw err;
+      }
+
+      try {
+        const slug = extractSlug(fullContent);
+        const parentMessageUuid = extractParentUuid(fullContent);
+        const firstMessageTimestamp = messages[0]?.timestamp;
+
+        const firstUserMessage = messages.find(msg => msg.role === "user");
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
+        conversationId = await syncService.createConversation({
+          userId,
+          sessionId,
+          agentType: "codex",
+          projectPath: undefined,
+          slug,
+          title,
+          startedAt: firstMessageTimestamp,
+          parentMessageUuid,
+          gitInfo: undefined,
+        });
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        log(`Created conversation ${conversationId} for Codex session ${sessionId}`);
+
+        if ((global as any).activeSessions) {
+          (global as any).activeSessions.set(conversationId, {
+            sessionId,
+            conversationId,
+            projectPath: "",
+          });
+        }
+
+        if (pendingMessages[sessionId]) {
+          for (const msg of pendingMessages[sessionId]) {
+            try {
+              await syncService.addMessage({
+                conversationId,
+                messageUuid: msg.uuid,
+                role: msg.role,
+                content: msg.content,
+                timestamp: msg.timestamp,
+                thinking: msg.thinking,
+                toolCalls: msg.toolCalls,
+                toolResults: msg.toolResults,
+                images: msg.images,
+                subtype: msg.subtype,
+              });
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              log(`Failed to add pending message, queueing for retry: ${errMsg}`);
+              retryQueue.add("addMessage", {
+                conversationId,
+                messageUuid: msg.uuid,
+                role: msg.role,
+                content: msg.content,
+                timestamp: msg.timestamp,
+                thinking: msg.thinking,
+                toolCalls: msg.toolCalls,
+                toolResults: msg.toolResults,
+                images: msg.images,
+                subtype: msg.subtype,
+              }, errMsg);
+            }
+          }
+          delete pendingMessages[sessionId];
+        }
+      } catch (err) {
+        if (err instanceof AuthExpiredError) {
+          log("⚠️  Authentication expired - sync paused");
+          saveDaemonState({ authExpired: true });
+          setPosition(filePath, stats.size);
+          return;
+        }
+
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log(`Failed to create Codex conversation, queueing for retry: ${errMsg}`);
+
+        if (!pendingMessages[sessionId]) {
+          pendingMessages[sessionId] = [];
+        }
+        for (const msg of messages) {
+          pendingMessages[sessionId].push({
+            uuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            filePath,
+            fileSize: stats.size,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+          });
+        }
+
+        const firstMsgTimestamp = messages[0]?.timestamp;
+        const firstUserMessage = messages.find(msg => msg.role === "user");
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
+        retryQueue.add("createConversation", {
+          userId,
+          sessionId,
+          agentType: "codex",
+          title,
+          startedAt: firstMsgTimestamp,
+        }, errMsg);
+
+        setPosition(filePath, stats.size);
+        return;
+      }
+    }
+
+    for (const msg of messages) {
+      try {
+        await syncService.addMessage({
+          conversationId,
+          messageUuid: msg.uuid,
+          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+          content: redactSecrets(msg.content),
+          timestamp: msg.timestamp,
+          thinking: msg.thinking,
+          toolCalls: msg.toolCalls,
+          toolResults: msg.toolResults,
+          images: msg.images,
+          subtype: msg.subtype,
+        });
+      } catch (err) {
+        if (err instanceof AuthExpiredError) {
+          log("⚠️  Authentication expired - sync paused");
+          saveDaemonState({ authExpired: true });
+          return;
+        }
+
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes("Conversation not found")) {
+          log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+          delete conversationCache[sessionId];
+          saveConversationCache(conversationCache);
+
+          const firstMsgTimestamp = messages[0]?.timestamp;
+          const firstUserMessage = messages.find(msg => msg.role === "user");
+          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
+          try {
+            conversationId = await syncService.createConversation({
+              userId,
+              sessionId,
+              agentType: "codex",
+              title,
+              startedAt: firstMsgTimestamp,
+            });
+            conversationCache[sessionId] = conversationId;
+            saveConversationCache(conversationCache);
+            log(`Recreated conversation ${conversationId} for Codex session ${sessionId}`);
+
+            await syncService.addMessage({
+              conversationId,
+              messageUuid: msg.uuid,
+              role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+              content: redactSecrets(msg.content),
+              timestamp: msg.timestamp,
+              thinking: msg.thinking,
+              toolCalls: msg.toolCalls,
+              toolResults: msg.toolResults,
+              images: msg.images,
+              subtype: msg.subtype,
+            });
+          } catch (retryErr) {
+            const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            log(`Failed to recreate Codex conversation and add message: ${retryErrMsg}`);
+          }
+        } else {
+          log(`Failed to add message, queueing for retry: ${errMsg}`);
+          retryQueue.add("addMessage", {
+            conversationId,
+            messageUuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+          }, errMsg);
+        }
+      }
+    }
+
+    setPosition(filePath, stats.size);
+    log(`Synced ${messages.length} Codex messages for session ${sessionId}`);
+
+    updateStateCallback();
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log(`Error processing Codex session file ${filePath}: ${errMsg}`);
+  }
+}
+
 interface ActiveSession {
   sessionId: string;
   conversationId: string;
@@ -1082,6 +1371,53 @@ async function main(): Promise<void> {
   });
 
   cursorWatcher.start();
+
+  const codexWatcher = new CodexWatcher();
+  const codexSyncs = new Map<string, InvalidateSync>();
+
+  codexWatcher.on("ready", () => {
+    log("Codex watcher ready");
+  });
+
+  codexWatcher.on("session", (event: CodexSessionEvent) => {
+    const filePath = event.filePath;
+
+    const state = readDaemonState();
+    if (state?.authExpired) {
+      return;
+    }
+
+    if (isSyncPaused()) {
+      log(`Sync paused, skipping Codex session: ${event.sessionId}`);
+      return;
+    }
+
+    let sync = codexSyncs.get(filePath);
+    if (!sync) {
+      sync = new InvalidateSync(async () => {
+        await processCodexSession(
+          filePath,
+          event.sessionId,
+          syncService,
+          config.user_id!,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState
+        );
+      });
+      codexSyncs.set(filePath, sync);
+    }
+
+    sync.invalidate();
+  });
+
+  codexWatcher.on("error", (error: Error) => {
+    log(`Codex watcher error: ${error.message}`);
+  });
+
+  codexWatcher.start();
 
   const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe: (() => void) | null = null;
