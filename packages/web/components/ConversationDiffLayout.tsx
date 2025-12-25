@@ -257,40 +257,67 @@ export function ConversationDiffLayout({
 }
 
 function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<ConversationViewHandle | null> }) {
-  const { changes, selectedChangeIndex, selectChange, syncScroll } = useDiffViewerStore();
+  const { changes, selectedChangeIndex, rangeStart, rangeEnd, selectChange, selectRange, syncScroll } = useDiffViewerStore();
 
-  const handleDotClick = (index: number, messageId: string) => {
-    selectChange(index);
+  const handleDotClick = (index: number, messageId: string, e: React.MouseEvent) => {
+    if (e.metaKey || e.ctrlKey) {
+      if (selectedChangeIndex !== null && selectedChangeIndex !== index) {
+        selectRange(selectedChangeIndex, index);
+      } else {
+        selectChange(index);
+      }
+    } else {
+      selectChange(index);
+    }
+
     if (syncScroll && conversationRef.current) {
       conversationRef.current.scrollToMessage(messageId);
     }
   };
 
+  const isInRange = (index: number) => {
+    if (rangeStart !== null && rangeEnd !== null) {
+      return index >= rangeStart && index <= rangeEnd;
+    }
+    return false;
+  };
+
   return (
-    <div className="h-full w-full flex flex-col items-center py-4 gap-2 overflow-y-auto">
+    <div className="h-full w-full flex flex-col items-center py-4 gap-2 overflow-y-auto relative">
       {changes.map((change, index) => {
         const isSelected = selectedChangeIndex === index;
+        const inRange = isInRange(index);
         const fileColor = getFileColor(change.filePath);
 
         return (
           <button
             key={change.id}
-            onClick={() => handleDotClick(index, change.messageId)}
+            onClick={(e) => handleDotClick(index, change.messageId, e)}
             className={`
-              w-3 h-3 rounded-full transition-all shrink-0
+              w-3 h-3 rounded-full transition-all shrink-0 relative z-10
               ${isSelected ? "scale-150 ring-2 ring-primary/50" : "hover:scale-125"}
+              ${inRange && !isSelected ? "ring-1 ring-primary/30" : ""}
             `}
             style={{ backgroundColor: fileColor }}
             title={`${change.filePath} - ${change.changeType}`}
           />
         );
       })}
+      {rangeStart !== null && rangeEnd !== null && (
+        <div
+          className="absolute w-1 bg-primary/20 left-1/2 -translate-x-1/2 rounded-full z-0"
+          style={{
+            top: `${(rangeStart / changes.length) * 100}%`,
+            height: `${((rangeEnd - rangeStart) / changes.length) * 100}%`,
+          }}
+        />
+      )}
     </div>
   );
 }
 
 function DiffPane() {
-  const { selectedChangeIndex, changes, getCurrentDiffContent, showFileTree } = useDiffViewerStore();
+  const { selectedChangeIndex, rangeStart, rangeEnd, changes, getCurrentDiffContent, showFileTree } = useDiffViewerStore();
 
   const diffContent = getCurrentDiffContent();
 
@@ -321,6 +348,13 @@ function DiffPane() {
     );
   }
 
+  const getRangeDisplay = () => {
+    if (rangeStart !== null && rangeEnd !== null) {
+      return `Changes ${rangeStart + 1}-${rangeEnd + 1} of ${changes.length}`;
+    }
+    return `Change ${selectedChangeIndex! + 1} of ${changes.length}`;
+  };
+
   return (
     <div className="h-full w-full flex bg-background">
       {showFileTree && <FileTreeSidebar getFileColor={getFileColor} />}
@@ -329,7 +363,7 @@ function DiffPane() {
           <div className="mb-4 pb-2 border-b">
             <h3 className="font-mono text-sm font-medium">{diffContent.filePath}</h3>
             <p className="text-xs text-muted-foreground mt-1">
-              Change {selectedChangeIndex! + 1} of {changes.length}
+              {getRangeDisplay()}
             </p>
           </div>
 

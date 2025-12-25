@@ -142,7 +142,7 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   },
 
   getCurrentDiffContent: () => {
-    const { selectedChangeIndex, changes, diffMode, selectedFile } = get();
+    const { selectedChangeIndex, rangeStart, rangeEnd, changes, diffMode, selectedFile } = get();
 
     if (selectedChangeIndex === null || changes.length === 0) {
       return null;
@@ -150,6 +150,28 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
 
     const change = changes[selectedChangeIndex];
     if (!change) return null;
+
+    if (rangeStart !== null && rangeEnd !== null) {
+      const relevantChanges = changes.slice(rangeStart, rangeEnd + 1);
+      const cumulativeDiffs = computeCumulativeDiff(relevantChanges);
+
+      const targetFile = selectedFile || change.filePath;
+      const cumulativeDiff = cumulativeDiffs.find(d => d.filePath === targetFile);
+
+      if (!cumulativeDiff) {
+        return {
+          filePath: change.filePath,
+          oldContent: change.oldContent,
+          newContent: change.newContent,
+        };
+      }
+
+      return {
+        filePath: cumulativeDiff.filePath,
+        oldContent: cumulativeDiff.oldContent,
+        newContent: cumulativeDiff.newContent,
+      };
+    }
 
     if (diffMode === 'single') {
       return {
