@@ -5,9 +5,11 @@ export interface FileChange {
   sequenceIndex: number;
   messageId: string;
   filePath: string;
-  changeType: "write" | "edit";
+  changeType: "write" | "edit" | "commit";
   oldContent?: string;
   newContent: string;
+  commitMessage?: string;
+  commitHash?: string;
   timestamp: number;
 }
 
@@ -25,7 +27,7 @@ export function extractFileChanges(messages: Message[]): FileChange[] {
     }
 
     for (const toolCall of message.tool_calls) {
-      if (toolCall.name !== "Edit" && toolCall.name !== "Write") {
+      if (toolCall.name !== "Edit" && toolCall.name !== "Write" && toolCall.name !== "Bash") {
         continue;
       }
 
@@ -61,6 +63,30 @@ export function extractFileChanges(messages: Message[]): FileChange[] {
             newContent: params.content,
             timestamp: message.timestamp,
           });
+        } else if (toolCall.name === "Bash") {
+          const command = params.command as string | undefined;
+          if (!command || !command.includes("git commit")) {
+            continue;
+          }
+
+          const commitMessage = extractCommitMessage(command);
+          if (!commitMessage) {
+            continue;
+          }
+
+          const commitHash = extractCommitHash(message.tool_results, toolCall.id);
+
+          changes.push({
+            id: toolCall.id,
+            sequenceIndex: sequenceIndex++,
+            messageId: message._id,
+            filePath: "git commit",
+            changeType: "commit",
+            newContent: commitMessage,
+            commitMessage,
+            commitHash,
+            timestamp: message.timestamp,
+          });
         }
       } catch (error) {
         continue;
@@ -69,4 +95,39 @@ export function extractFileChanges(messages: Message[]): FileChange[] {
   }
 
   return changes;
+}
+
+function extractCommitMessage(command: string): string | undefined {
+  const messageFlagMatch = command.match(/-m\s+["']([\s\S]+?)["']/);
+  if (messageFlagMatch) {
+    return messageFlagMatch[1];
+  }
+
+  const heredocMatch = command.match(/\$\(cat\s+<<'?EOF'?\s+([\s\S]+?)\s+EOF\s*\)/);
+  if (heredocMatch) {
+    return heredocMatch[1].trim();
+  }
+
+  return undefined;
+}
+
+function extractCommitHash(
+  toolResults: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | undefined,
+  toolCallId: string
+): string | undefined {
+  if (!toolResults) {
+    return undefined;
+  }
+
+  const result = toolResults.find((r) => r.tool_use_id === toolCallId);
+  if (!result || result.is_error) {
+    return undefined;
+  }
+
+  const hashMatch = result.content.match(/\[([a-f0-9]{7,40})\]/);
+  if (hashMatch) {
+    return hashMatch[1];
+  }
+
+  return undefined;
 }

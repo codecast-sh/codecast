@@ -7,9 +7,11 @@ export interface FileChange {
   sequenceIndex: number;
   messageId: string;
   filePath: string;
-  changeType: 'write' | 'edit';
+  changeType: 'write' | 'edit' | 'commit';
   oldContent?: string;
   newContent: string;
+  commitMessage?: string;
+  commitHash?: string;
   timestamp: number;
 }
 

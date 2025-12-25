@@ -294,18 +294,20 @@ function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<C
         const isSelected = selectedChangeIndex === index;
         const inRange = isInRange(index);
         const fileColor = getFileColor(change.filePath);
+        const isCommit = change.changeType === "commit";
 
         return (
           <button
             key={change.id}
             onClick={(e) => handleDotClick(index, change.messageId, e)}
             className={`
-              w-3 h-3 rounded-full transition-all shrink-0 relative z-10
+              w-3 h-3 transition-all shrink-0 relative z-10
+              ${isCommit ? "rounded-sm" : "rounded-full"}
               ${isSelected ? "scale-150 ring-2 ring-primary/50" : "hover:scale-125"}
               ${inRange && !isSelected ? "ring-1 ring-primary/30" : ""}
             `}
             style={{ backgroundColor: fileColor }}
-            title={`${change.filePath} - ${change.changeType}`}
+            title={isCommit ? `Git commit: ${change.commitMessage}` : `${change.filePath} - ${change.changeType}`}
           />
         );
       })}
@@ -373,6 +375,47 @@ function DiffPane() {
     }
     return `Change ${selectedChangeIndex! + 1} of ${changes.length}`;
   };
+
+  const selectedChange = selectedChangeIndex !== null ? changes[selectedChangeIndex] : null;
+  const isCommit = selectedChange?.changeType === "commit";
+
+  if (isCommit) {
+    return (
+      <div className="h-full w-full flex bg-background">
+        {showFileTree && <FileTreeSidebar getFileColor={getFileColor} />}
+        <div className="flex-1 overflow-auto">
+          <div className="p-4">
+            <div className="mb-4 pb-2 border-b">
+              <h3 className="font-mono text-sm font-medium flex items-center gap-2">
+                <span className="w-3 h-3 rounded-sm bg-primary/70"></span>
+                Git Commit
+              </h3>
+              <p className="text-xs text-muted-foreground mt-1">
+                {getRangeDisplay()}
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded border border-border bg-muted/30 p-4">
+                <div className="text-xs text-muted-foreground mb-2">Commit Message</div>
+                <div className="font-mono text-sm whitespace-pre-wrap">
+                  {selectedChange.commitMessage}
+                </div>
+                {selectedChange.commitHash && (
+                  <div className="mt-3 pt-3 border-t border-border/50">
+                    <div className="text-xs text-muted-foreground">Hash</div>
+                    <div className="font-mono text-xs text-primary mt-1">
+                      {selectedChange.commitHash}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const language = getFileExtension(diffContent.filePath);
 
