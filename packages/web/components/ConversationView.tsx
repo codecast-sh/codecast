@@ -744,15 +744,19 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
 function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpenComments, isHighlighted }: { content: string; timestamp: number; messageId: string; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const MAX_LINES = 25;
+  const COLLAPSED_LINES = 2;
   const lines = content.split("\n");
-  const needsTruncation = !collapsed && lines.length > MAX_LINES;
+
+  // In collapsed mode, individual expansion is allowed
+  const effectivelyCollapsed = collapsed && !isExpanded;
+  const needsTruncation = !effectivelyCollapsed && lines.length > MAX_LINES;
 
   let displayContent: string;
   let wasTruncated = false;
 
-  if (collapsed) {
-    displayContent = lines.slice(0, 2).join("\n");
-    wasTruncated = lines.length > 2;
+  if (effectivelyCollapsed) {
+    displayContent = lines.slice(0, COLLAPSED_LINES).join("\n");
+    wasTruncated = lines.length > COLLAPSED_LINES;
   } else if (needsTruncation && !isExpanded) {
     displayContent = lines.slice(0, MAX_LINES).join("\n");
     wasTruncated = true;
@@ -773,8 +777,14 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpen
     }
   };
 
+  const handleExpand = () => {
+    if (effectivelyCollapsed || needsTruncation) {
+      setIsExpanded(!isExpanded);
+    }
+  };
+
   return (
-    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 ${collapsed ? "p-2 mb-1" : "p-4 mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 p-4 mb-6 relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg" : ""}`}>
       <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
         <button
           onClick={onOpenComments}
@@ -811,15 +821,18 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpen
           {formatRelativeTime(timestamp)}
         </a>
       </div>
-      <div className={`text-sol-text text-sm pl-8 ${collapsed ? "line-clamp-2" : "whitespace-pre-wrap"}`}>
+      <div
+        className={`text-sol-text text-sm pl-8 whitespace-pre-wrap ${(effectivelyCollapsed || (needsTruncation && !isExpanded)) ? "cursor-pointer hover:bg-sol-blue/5 -mx-2 px-2 py-1 rounded transition-colors" : ""}`}
+        onClick={handleExpand}
+      >
         {displayContent}{wasTruncated && !isExpanded && "..."}
       </div>
-      {needsTruncation && (
+      {(effectivelyCollapsed || needsTruncation) && (
         <button
-          onClick={() => setIsExpanded(!isExpanded)}
+          onClick={handleExpand}
           className="text-xs text-sol-text-dim hover:text-sol-blue mt-2 ml-8 transition-colors"
         >
-          {isExpanded ? `Show less` : `Show ${lines.length - MAX_LINES} more lines`}
+          {isExpanded ? "Show less" : effectivelyCollapsed ? `Show all (${lines.length} lines)` : `Show ${lines.length - MAX_LINES} more lines`}
         </button>
       )}
     </div>
@@ -857,10 +870,16 @@ function AssistantBlock({
   toolCallToChangeIndexMap?: Record<string, number>;
   isHighlighted?: boolean;
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const COLLAPSED_LINES = 2;
+
   const hasContent = content && content.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images && images.length > 0;
+
+  // Effective collapsed state allows individual expansion
+  const effectivelyCollapsed = collapsed && !isExpanded;
 
   const commentCount = useQuery(api.comments.getCommentCount, {
     message_id: messageId as Id<"messages">,
@@ -880,13 +899,11 @@ function AssistantBlock({
     return null;
   }
 
+  const lines = content ? content.split("\n") : [];
   const getCollapsedContent = () => {
-    if (!collapsed || !content) return { text: content || "", wasTruncated: false };
-    const lines = content.split("\n");
-    if (lines.length <= 4) return { text: content, wasTruncated: false };
-    const first2 = lines.slice(0, 2).join("\n");
-    const last2 = lines.slice(-2).join("\n");
-    return { text: `${first2}\n...\n${last2}`, wasTruncated: true };
+    if (!effectivelyCollapsed || !content) return { text: content || "", wasTruncated: false };
+    if (lines.length <= COLLAPSED_LINES) return { text: content, wasTruncated: false };
+    return { text: lines.slice(0, COLLAPSED_LINES).join("\n"), wasTruncated: true };
   };
   const { text: truncatedContent, wasTruncated } = getCollapsedContent();
 
@@ -903,8 +920,14 @@ function AssistantBlock({
   const shouldShowHeader = showHeader && (hasContent || hasThinking);
   const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
 
+  const handleExpand = () => {
+    if (effectivelyCollapsed) {
+      setIsExpanded(true);
+    }
+  };
+
   return (
-    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
       {hasContent && (
         <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
           <button
@@ -944,18 +967,18 @@ function AssistantBlock({
           >
             {formatRelativeTime(timestamp)}
           </a>
-          {collapsed && hasToolCalls && (
+          {effectivelyCollapsed && hasToolCalls && (
             <span className="text-sol-text-dim text-xs">[{toolCalls!.length} tool{toolCalls!.length > 1 ? "s" : ""}]</span>
           )}
         </div>
       )}
 
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
-        {!collapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
+        {!effectivelyCollapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
 
-        {!collapsed && hasThinking && <ThinkingBlock content={thinking!} />}
+        {!effectivelyCollapsed && hasThinking && <ThinkingBlock content={thinking!} />}
 
-        {!collapsed && hasToolCalls && toolCalls?.map((tc) => (
+        {!effectivelyCollapsed && hasToolCalls && toolCalls?.map((tc) => (
           tc.name === "Task" ? (
             <TaskToolBlock
               key={tc.id}
@@ -976,9 +999,15 @@ function AssistantBlock({
         ))}
 
         {hasContent && (
-          <div className={`text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}>
-            {collapsed ? (
-              <span>{truncatedContent}</span>
+          <div
+            className={`text-sol-text ${effectivelyCollapsed ? "text-sm whitespace-pre-wrap cursor-pointer hover:bg-sol-bg-alt/30 -mx-2 px-2 py-1 rounded transition-colors" : "prose prose-invert prose-sm max-w-none"}`}
+            onClick={effectivelyCollapsed ? handleExpand : undefined}
+          >
+            {effectivelyCollapsed ? (
+              <>
+                <span>{truncatedContent}</span>
+                {wasTruncated && <span className="text-sol-text-dim">...</span>}
+              </>
             ) : (
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
@@ -1004,6 +1033,15 @@ function AssistantBlock({
               </ReactMarkdown>
             )}
           </div>
+        )}
+
+        {effectivelyCollapsed && wasTruncated && (
+          <button
+            onClick={handleExpand}
+            className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
+          >
+            Show all ({lines.length} lines{hasToolCalls ? `, ${toolCalls!.length} tools` : ""})
+          </button>
         )}
       </div>
     </div>
@@ -1669,6 +1707,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       {collapsed ? "Expand messages" : "Collapse messages"}
                       <span className="ml-auto text-[10px] text-sol-text-dim">Cmd+Shift+C</span>
                     </DropdownMenuItem>
+                    {conversation?.session_id && (
+                      <DropdownMenuItem onClick={() => {
+                        navigator.clipboard.writeText(`claude --resume ${conversation.session_id}`);
+                        toast.success("Resume command copied");
+                      }}>
+                        Copy resume command
+                      </DropdownMenuItem>
+                    )}
                     {latestUsage && (
                       <>
                         <DropdownMenuSeparator />

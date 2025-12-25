@@ -113,6 +113,32 @@ function writeConfig(config: Config): void {
   fs.chmodSync(CONFIG_FILE, 0o600);
 }
 
+const CODECAST_SLASH_COMMAND = `---
+description: Display codecast session link and share link for current session
+---
+
+Read ~/.codecast/conversations.json to find the conversation ID for the current session.
+
+Output the codecast links:
+1. Codecast dashboard link: https://codecast.sh/conversation/{conversation_id}
+2. If a share_token exists, also output: https://codecast.sh/share/{share_token}
+
+If no session is found, tell the user to run \`codecast start\` to begin syncing.
+`;
+
+function installSlashCommand(): void {
+  const home = process.env.HOME || "";
+  const commandsDir = path.join(home, ".claude", "commands");
+  const commandFile = path.join(commandsDir, "codecast.md");
+
+  try {
+    fs.mkdirSync(commandsDir, { recursive: true });
+    fs.writeFileSync(commandFile, CODECAST_SLASH_COMMAND);
+  } catch {
+    // Ignore errors - slash command is optional
+  }
+}
+
 function getDaemonPid(): number | null {
   if (!fs.existsSync(PID_FILE)) {
     return null;
@@ -424,6 +450,8 @@ async function runAuth(): Promise<void> {
       // Ignore errors
     }
   }
+
+  installSlashCommand();
 
   console.log("Authenticated successfully!\n");
   console.log(`User ID: ${config.user_id}`);

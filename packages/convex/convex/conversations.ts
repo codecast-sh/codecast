@@ -1074,6 +1074,26 @@ export const setPrivacyBySessionId = mutation({
   },
 });
 
+export const getConversationBySessionId = query({
+  args: {
+    session_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return null;
+    }
+
+    const conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
+      .filter((q) => q.eq(q.field("user_id"), authUserId))
+      .first();
+
+    return conversation ? { _id: conversation._id } : null;
+  },
+});
+
 export const updateTitle = mutation({
   args: {
     conversation_id: v.id("conversations"),
