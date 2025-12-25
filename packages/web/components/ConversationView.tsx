@@ -750,15 +750,13 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpenComments, isHighlighted }: { content: string; timestamp: number; messageId: string; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean }) {
+function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
 
-  // In collapsed mode, individual expansion is allowed
   const effectivelyCollapsed = collapsed && !isExpanded;
 
-  // Check if content is visually truncated (scrollHeight > clientHeight)
   useEffect(() => {
     if (effectivelyCollapsed && contentRef.current) {
       const el = contentRef.current;
@@ -772,12 +770,41 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpen
     message_id: messageId as Id<"messages">,
   });
 
+  const isBookmarked = useQuery(
+    api.bookmarks.isBookmarked,
+    messageId ? { message_id: messageId as Id<"messages"> } : "skip"
+  );
+  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(content);
       toast.success("Copied!");
     } catch (err) {
       toast.error("Failed to copy");
+    }
+  };
+
+  const handleCopyLink = async () => {
+    try {
+      const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied!");
+    } catch (err) {
+      toast.error("Failed to copy link");
+    }
+  };
+
+  const handleToggleBookmark = async () => {
+    if (!conversationId) return;
+    try {
+      const result = await toggleBookmark({
+        conversation_id: conversationId,
+        message_id: messageId as Id<"messages">,
+      });
+      toast.success(result ? "Bookmarked!" : "Bookmark removed");
+    } catch (err) {
+      toast.error("Failed to toggle bookmark");
     }
   };
 
@@ -788,6 +815,26 @@ function UserPrompt({ content, timestamp, messageId, collapsed, userName, onOpen
   return (
     <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg" : ""}`}>
       <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+        <button
+          onClick={handleCopyLink}
+          className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
+          title="Copy link to message"
+          aria-label="Copy link to message"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+          </svg>
+        </button>
+        <button
+          onClick={handleToggleBookmark}
+          className={`p-1.5 rounded hover:bg-sol-blue/20 ${isBookmarked ? "text-amber-400" : "text-sol-blue"}`}
+          title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
+          aria-label={isBookmarked ? "Remove bookmark" : "Bookmark message"}
+        >
+          <svg className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+          </svg>
+        </button>
         <button
           onClick={onOpenComments}
           className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue flex items-center gap-1"
@@ -858,6 +905,7 @@ function AssistantBlock({
   images,
   messageId,
   messageUuid,
+  conversationId,
   collapsed,
   childConversationMap,
   showHeader = true,
@@ -876,6 +924,7 @@ function AssistantBlock({
   images?: ImageData[];
   messageId: string;
   messageUuid?: string;
+  conversationId?: Id<"conversations">;
   collapsed?: boolean;
   childConversationMap?: Record<string, string>;
   showHeader?: boolean;
@@ -896,6 +945,12 @@ function AssistantBlock({
   const commentCount = useQuery(api.comments.getCommentCount, {
     message_id: messageId as Id<"messages">,
   });
+
+  const isBookmarked = useQuery(
+    api.bookmarks.isBookmarked,
+    messageId ? { message_id: messageId as Id<"messages"> } : "skip"
+  );
+  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
   const toolResultMap = useMemo(() => {
     const map: Record<string, ToolResult> = {};
@@ -928,6 +983,29 @@ function AssistantBlock({
     }
   };
 
+  const handleCopyLink = async () => {
+    try {
+      const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied!");
+    } catch (err) {
+      toast.error("Failed to copy link");
+    }
+  };
+
+  const handleToggleBookmark = async () => {
+    if (!conversationId) return;
+    try {
+      const result = await toggleBookmark({
+        conversation_id: conversationId,
+        message_id: messageId as Id<"messages">,
+      });
+      toast.success(result ? "Bookmarked!" : "Bookmark removed");
+    } catch (err) {
+      toast.error("Failed to toggle bookmark");
+    }
+  };
+
   // Only show Claude header for first message in sequence and messages with actual content
   const shouldShowHeader = showHeader && (hasContent || hasThinking);
   const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
@@ -941,6 +1019,26 @@ function AssistantBlock({
     <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
       {hasContent && (
         <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
+          <button
+            onClick={handleCopyLink}
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            title="Copy link to message"
+            aria-label="Copy link to message"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+          </button>
+          <button
+            onClick={handleToggleBookmark}
+            className={`p-1.5 rounded hover:bg-sol-bg-alt ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
+            title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
+            aria-label={isBookmarked ? "Remove bookmark" : "Bookmark message"}
+          >
+            <svg className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+            </svg>
+          </button>
           <button
             onClick={onOpenComments}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary flex items-center gap-1"
@@ -1435,6 +1533,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   useEffect(() => {
     virtualizer.measure();
+    // Force scroll recalculation after measuring
+    requestAnimationFrame(() => {
+      containerRef.current?.dispatchEvent(new Event('scroll'));
+    });
   }, [collapsed, expandedSequences, virtualizer]);
 
   useImperativeHandle(ref, () => ({
@@ -1630,7 +1732,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <CommandStatusLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} />;
+        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} />;
       }
       return null;
     }
@@ -1717,9 +1819,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           images={msg.images}
           messageId={msg._id}
           messageUuid={msg.message_uuid}
+          conversationId={conversation?._id}
           collapsed={effectiveCollapsed}
           childConversationMap={conversation?.child_conversation_map}
-          showHeader={effectiveCollapsed ? true : isFirstInSequence}
+          showHeader={effectiveCollapsed ? true : (isFirstInSequence || (collapsed && msg._id === sequenceStartId))}
           onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
           toolCallToChangeIndexMap={toolCallToChangeIndexMap}
           isHighlighted={highlightedMessageId === msg._id}
@@ -1746,93 +1849,41 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   return (
     <main className={`flex flex-col bg-sol-bg ${embedded ? "h-[calc(100vh-56px)]" : "h-screen"}`}>
       <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
-        <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-2 sm:py-3">
-          <div className="flex items-center gap-2 sm:gap-3">
+        <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1.5 sm:py-2">
+          <div className="flex items-center gap-2 min-w-0">
             <Link
               href={backHref}
-              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-xs sm:text-sm flex-shrink-0"
+              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-xs flex-shrink-0"
             >
-              &larr; {backLabel}
+              &larr;
             </Link>
-            <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0">{truncatedTitle}</h1>
+            <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1">{truncatedTitle}</h1>
 
             {conversation && (
-              <>
+              <div className="flex items-center gap-1 flex-shrink-0">
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
                   startedAt={conversation.started_at}
                   messageCount={conversation.message_count}
                 />
-                {conversation.git_branch && (
-                  <GitBranchBadge
-                    gitBranch={conversation.git_branch}
-                    gitStatus={conversation.git_status}
-                    gitRemoteUrl={conversation.git_remote_url}
-                    hasDiff={!!(conversation.git_diff?.trim() || conversation.git_diff_staged?.trim())}
-                    diffExpanded={diffExpanded}
-                    onToggleDiff={() => setDiffExpanded(!diffExpanded)}
-                  />
-                )}
 
-                {conversation.parent_conversation_id && (
-                  <Link
-                    href={`/conversation/${conversation.parent_conversation_id}`}
-                    className="text-sol-violet hover:text-sol-violet text-xs flex items-center gap-1 flex-shrink-0"
-                    title="Parent conversation"
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
-                    </svg>
-                  </Link>
-                )}
-
-                {conversation.forked_from_details && (
-                  <Link
-                    href={conversation.forked_from_details.share_token ? `/share/${conversation.forked_from_details.share_token}` : `/conversation/${conversation.forked_from_details.conversation_id}`}
-                    className="text-sol-text-secondary text-xs flex items-center gap-1 px-2 py-0.5 rounded bg-sol-bg-alt border border-sol-border hover:bg-sol-bg-hover transition-colors flex-shrink-0"
-                    title="View original conversation"
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    Forked from @{conversation.forked_from_details.username}
-                  </Link>
-                )}
-
-                {conversation.child_conversations && conversation.child_conversations.length > 0 && (
-                  <span className="text-sol-cyan text-xs flex-shrink-0" title={`${conversation.child_conversations.length} subagent${conversation.child_conversations.length > 1 ? "s" : ""}`}>
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                    </svg>
-                  </span>
-                )}
-
-                {latestTodos && latestTodos.todos.length > 0 && (
-                  <span className="text-sol-text-secondary text-xs flex items-center gap-1 px-2 py-0.5 rounded bg-sol-bg-alt border border-sol-border flex-shrink-0" title="Tasks completed">
-                    <svg className="w-3 h-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                    </svg>
-                    {latestTodos.todos.filter(t => t.status === 'completed').length}/{latestTodos.todos.length}
-                  </span>
-                )}
+                {headerExtra}
 
                 <button
                   onClick={handleCopyAll}
-                  className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors flex-shrink-0"
+                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
                   title="Copy all messages"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                   </svg>
                 </button>
 
-                {headerExtra}
-
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <button className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors flex-shrink-0">
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <button className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
                       </svg>
                     </button>
@@ -1850,6 +1901,35 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         Copy resume command
                       </DropdownMenuItem>
                     )}
+                    {conversation.git_branch && (
+                      <DropdownMenuItem onClick={() => setDiffExpanded(!diffExpanded)}>
+                        {diffExpanded ? "Hide git diff" : "Show git diff"}
+                      </DropdownMenuItem>
+                    )}
+                    {conversation.parent_conversation_id && (
+                      <DropdownMenuItem asChild>
+                        <Link href={`/conversation/${conversation.parent_conversation_id}`}>
+                          View parent conversation
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
+                    {conversation.forked_from_details && (
+                      <DropdownMenuItem asChild>
+                        <Link href={conversation.forked_from_details.share_token ? `/share/${conversation.forked_from_details.share_token}` : `/conversation/${conversation.forked_from_details.conversation_id}`}>
+                          Forked from @{conversation.forked_from_details.username}
+                        </Link>
+                      </DropdownMenuItem>
+                    )}
+                    {conversation.child_conversations && conversation.child_conversations.length > 0 && (
+                      <DropdownMenuItem disabled>
+                        {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? "s" : ""}
+                      </DropdownMenuItem>
+                    )}
+                    {latestTodos && latestTodos.todos.length > 0 && (
+                      <DropdownMenuItem disabled>
+                        Tasks: {latestTodos.todos.filter(t => t.status === 'completed').length}/{latestTodos.todos.length}
+                      </DropdownMenuItem>
+                    )}
                     {latestUsage && (
                       <>
                         <DropdownMenuSeparator />
@@ -1860,7 +1940,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
-              </>
+              </div>
             )}
           </div>
         </div>

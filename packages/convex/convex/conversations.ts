@@ -797,6 +797,7 @@ export const listConversations = query({
           git_root: c.git_root || null,
           git_branch: c.git_branch || null,
           git_remote_url: c.git_remote_url || null,
+          is_favorite: c.is_favorite || false,
         };
       })
     );
@@ -1758,5 +1759,62 @@ export const forkConversation = mutation({
     });
 
     return newConversationId;
+  },
+});
+
+export const toggleFavorite = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized");
+    }
+
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Can only favorite your own conversations");
+    }
+
+    const newValue = !conversation.is_favorite;
+    await ctx.db.patch(args.conversation_id, {
+      is_favorite: newValue,
+    });
+
+    return newValue;
+  },
+});
+
+export const listFavorites = query({
+  args: {},
+  handler: async (ctx) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return [];
+    }
+
+    const favorites = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_favorite", (q) =>
+        q.eq("user_id", authUserId).eq("is_favorite", true)
+      )
+      .collect();
+
+    return favorites
+      .sort((a, b) => b.updated_at - a.updated_at)
+      .map((conv) => ({
+        _id: conv._id,
+        title: conv.title,
+        session_id: conv.session_id,
+        updated_at: conv.updated_at,
+        message_count: conv.message_count,
+        agent_type: conv.agent_type,
+        is_favorite: conv.is_favorite,
+      }));
   },
 });
