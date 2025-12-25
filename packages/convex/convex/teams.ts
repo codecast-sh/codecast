@@ -287,7 +287,18 @@ export const syncGithubOrg = action({
     requesting_user_id: v.id("users"),
     org_name: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{
+    imported: Array<{
+      github_username: string;
+      name: string;
+      role: "admin" | "member";
+    }>;
+    skipped: Array<{
+      github_username: string;
+      reason: string;
+    }>;
+    total: number;
+  }> => {
     const requestingUser = await ctx.runQuery(api.users.getCurrentUser);
     if (!requestingUser || requestingUser._id !== args.requesting_user_id) {
       throw new Error("Not authenticated");
