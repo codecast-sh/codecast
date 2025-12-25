@@ -679,7 +679,7 @@ function ThinkingBlock({ content }: { content: string }) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
         )}
-        <div className="flex-1 text-sol-text-muted italic font-mono whitespace-pre-wrap text-xs">
+        <div className="flex-1 text-sol-text-muted font-mono whitespace-pre-wrap text-xs">
           {truncated.text}
           {truncated.truncated && !expanded && "..."}
         </div>
