@@ -1395,6 +1395,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (msg.role === "system") return 0;
         if (msg.role === "user" && msg.tool_results) return 0;
         if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return 0;
+        if (msg.role === "assistant") {
+          const hasTextContent = msg.content && msg.content.trim().length > 0;
+          if (!hasTextContent) return 0;
+          // Check if there's an earlier assistant with text in this sequence
+          for (let i = index - 1; i >= 0; i--) {
+            const checkItem = timeline[i];
+            if (checkItem.type !== 'message') continue;
+            const checkMsg = checkItem.data as Message;
+            if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
+              break;
+            }
+            if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
+              return 0; // Earlier message in sequence has text, this won't render
+            }
+          }
+        }
         return 80;
       }
 
@@ -1416,6 +1432,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     overscan: 5,
     paddingEnd: 100,
   });
+
+  useEffect(() => {
+    virtualizer.measure();
+  }, [collapsed, expandedSequences, virtualizer]);
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: (messageId: string) => {
@@ -1715,7 +1735,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               return next;
             });
           } : undefined}
-          showCollapseButton={collapsed && isSequenceExpanded && showHeader}
+          showCollapseButton={collapsed && isSequenceExpanded && isFirstInSequence}
         />
       );
     }
@@ -1895,6 +1915,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
             {virtualizer.getVirtualItems().map((virtualItem) => {
               const item = timeline[virtualItem.index];
+              const content = renderItem(item, virtualItem.index);
               return (
                 <div
                   key={virtualItem.key}
@@ -1908,9 +1929,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     transform: `translateY(${virtualItem.start}px)`,
                   }}
                 >
-                  <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"}`}>
-                    {renderItem(item, virtualItem.index)}
-                  </div>
+                  {content && (
+                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"}`}>
+                      {content}
+                    </div>
+                  )}
                 </div>
               );
             })}
