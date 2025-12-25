@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/button";
 
 const tabs = [
   { name: "Profile", path: "/settings/profile" },
+  { name: "Accounts", path: "/settings/accounts" },
   { name: "Team", path: "/settings/team" },
   { name: "Privacy", path: "/settings/privacy" },
 ];

@@ -1184,8 +1184,37 @@ function isSyncPaused(): boolean {
   return process.env.CODE_CHAT_SYNC_PAUSED === "1" || process.env.CODECAST_PAUSED === "1";
 }
 
+async function waitForConfig(): Promise<{ config: Config; convexUrl: string }> {
+  const checkInterval = 30000;
+
+  while (true) {
+    const config = readConfig();
+    if (config?.user_id) {
+      const convexUrl = config.convex_url || process.env.CONVEX_URL;
+      if (convexUrl) {
+        return { config, convexUrl };
+      }
+    }
+    log("Waiting for configuration... (run 'codecast auth' to set up)");
+    await new Promise(resolve => setTimeout(resolve, checkInterval));
+  }
+}
+
 async function main(): Promise<void> {
   ensureConfigDir();
+
+  fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
+
+  process.on("uncaughtException", (err) => {
+    log(`Uncaught exception: ${err.message}`);
+    log(err.stack || "");
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    log(`Unhandled rejection: ${msg}`);
+  });
+
   log("Daemon started");
   log(`PID: ${process.pid}`);
 
@@ -1195,19 +1224,7 @@ async function main(): Promise<void> {
 
   saveDaemonState({ connected: false });
 
-  const config = readConfig();
-  if (!config?.user_id) {
-    log("No user_id configured. Run 'codecast setup' first.");
-    console.error("No user_id configured. Run 'codecast setup' first.");
-    process.exit(1);
-  }
-
-  const convexUrl = config.convex_url || process.env.CONVEX_URL;
-  if (!convexUrl) {
-    log("No Convex URL configured.");
-    console.error("No Convex URL configured. Set convex_url in config or CONVEX_URL env var.");
-    process.exit(1);
-  }
+  const { config, convexUrl } = await waitForConfig();
 
   log(`User ID: ${config.user_id}`);
   log(`Convex URL: ${convexUrl}`);

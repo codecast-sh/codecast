@@ -1606,28 +1606,23 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
     <main className="h-screen flex flex-col bg-sol-bg">
       <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-2 sm:py-3">
-          <div className="flex items-center gap-2 sm:gap-3 mb-1.5 sm:mb-2">
+          <div className="flex items-center gap-2 sm:gap-3">
             <Link
               href={backHref}
               className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-xs sm:text-sm flex-shrink-0"
             >
               &larr; {backLabel}
             </Link>
-            <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate flex-1 min-w-0">{truncatedTitle}</h1>
-          </div>
+            <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0">{truncatedTitle}</h1>
 
-          {conversation && (
-            <>
-              <div className="flex items-center gap-2 sm:gap-3 mb-1.5 sm:mb-2 overflow-x-auto">
+            {conversation && (
+              <>
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
                   startedAt={conversation.started_at}
                   messageCount={conversation.message_count}
                 />
-              </div>
-
-              <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 flex-wrap">
                 {conversation.git_branch && (
                   <GitBranchBadge
                     gitBranch={conversation.git_branch}
@@ -1716,9 +1711,9 @@ export function ConversationView({ conversation, commits = [], backHref, backLab
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
-              </div>
-            </>
-          )}
+              </>
+            )}
+          </div>
         </div>
       </header>
 

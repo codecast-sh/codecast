@@ -17,7 +17,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   };
 
   return (
-    <div className="relative group my-3 rounded-md overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
+    <div className="relative group my-2 rounded-md overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
       <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
         <button
           onClick={handleCopy}
@@ -28,11 +28,11 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
         </button>
       </div>
       {language && (
-        <div className="text-xs px-3 py-1.5 text-sol-text-dim bg-sol-bg-highlight/50 border-b border-sol-border/20">
+        <div className="text-xs px-3 py-1 text-sol-text-dim bg-sol-bg-highlight/50 border-b border-sol-border/20">
           {language}
         </div>
       )}
-      <pre className="p-4 overflow-x-auto text-sm bg-sol-bg-alt">
+      <pre className="!m-0 !p-3 !border-0 overflow-x-auto text-sm bg-sol-bg-alt">
         <code className="font-mono text-sol-text-secondary">{code}</code>
       </pre>
     </div>

@@ -30,7 +30,15 @@ export default function LandingPage() {
     return () => clearInterval(interval);
   }, []);
 
-  if (isLoading || isAuthenticated) {
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#f5f5f0] flex items-center justify-center">
+        <div className="text-black/50">Loading...</div>
+      </div>
+    );
+  }
+
+  if (isAuthenticated) {
     return null;
   }
   return (

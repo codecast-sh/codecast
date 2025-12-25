@@ -231,3 +231,56 @@ export const getTeamMembers = query({
     }));
   },
 });
+
+export const linkGitHub = mutation({
+  args: {
+    github_id: v.string(),
+    github_username: v.string(),
+    github_avatar_url: v.optional(v.string()),
+    github_access_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const existingUser = await ctx.db
+      .query("users")
+      .withIndex("by_github_id", (q) => q.eq("github_id", args.github_id))
+      .first();
+    if (existingUser && existingUser._id !== userId) {
+      throw new Error("This GitHub account is already linked to another user");
+    }
+    await ctx.db.patch(userId, {
+      github_id: args.github_id,
+      github_username: args.github_username,
+      github_avatar_url: args.github_avatar_url,
+      github_access_token: args.github_access_token,
+    });
+    return userId;
+  },
+});
+
+export const unlinkGitHub = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+    if (!user.email) {
+      throw new Error("Cannot unlink GitHub without an email/password login configured");
+    }
+    await ctx.db.patch(userId, {
+      github_id: undefined,
+      github_username: undefined,
+      github_avatar_url: undefined,
+      github_access_token: undefined,
+    });
+    return userId;
+  },
+});

@@ -3,7 +3,7 @@ import { Command } from "commander";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
@@ -821,76 +821,51 @@ program
     }
   });
 
-program
-  .command("setup")
-  .description(
-    "Configure daemon to start automatically on login (macOS only)\n\n" +
-    "Examples:\n" +
-    "  codecast setup             # Enable auto-start\n" +
-    "  codecast setup --disable   # Disable auto-start"
-  )
-  .option("--disable", "Disable auto-start on login")
-  .action((options) => {
-    if (process.platform !== "darwin") {
-      console.error("Auto-start setup is only supported on macOS");
-      process.exit(1);
-    }
+function getExecutableInfo(): { executablePath: string; args: string[] } {
+  const isBundle = __filename.includes("/dist/") || __filename.includes("/build/");
+  const isBinary = !__filename.endsWith(".ts") && !__filename.endsWith(".js");
 
-    const home = process.env.HOME;
-    if (!home) {
-      console.error("HOME environment variable not set");
-      process.exit(1);
-    }
+  if (isBinary) {
+    return { executablePath: process.argv[0], args: ["_daemon"] };
+  } else if (isBundle) {
+    return { executablePath: process.execPath, args: [path.resolve(__dirname, "daemon.js")] };
+  } else {
+    return { executablePath: process.execPath, args: [path.resolve(__dirname, "daemon.ts")] };
+  }
+}
 
-    const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
-    const plistPath = path.join(launchAgentsDir, "sh.codecast.daemon.plist");
+function setupMacOS(disable: boolean): void {
+  const home = process.env.HOME;
+  if (!home) {
+    console.error("HOME environment variable not set");
+    process.exit(1);
+  }
 
-    if (options.disable) {
-      if (!fs.existsSync(plistPath)) {
-        console.log("Auto-start is not enabled");
-        return;
-      }
+  const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
+  const plistPath = path.join(launchAgentsDir, "sh.codecast.daemon.plist");
 
-      try {
-        spawn("launchctl", ["unload", plistPath], { stdio: "inherit" });
-      } catch {
-        // Ignore errors - plist might not be loaded
-      }
-
-      fs.unlinkSync(plistPath);
-      console.log("Auto-start disabled");
-      console.log(`Removed: ${plistPath}`);
+  if (disable) {
+    if (!fs.existsSync(plistPath)) {
+      console.log("Auto-start is not enabled");
       return;
     }
+    spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, plistPath], { stdio: "inherit" });
+    fs.unlinkSync(plistPath);
+    console.log("Auto-start disabled");
+    console.log(`Removed: ${plistPath}`);
+    return;
+  }
 
-    if (!fs.existsSync(launchAgentsDir)) {
-      fs.mkdirSync(launchAgentsDir, { recursive: true });
-    }
+  if (!fs.existsSync(launchAgentsDir)) {
+    fs.mkdirSync(launchAgentsDir, { recursive: true });
+  }
 
-    let executablePath: string;
-    let args: string[];
+  const { executablePath, args } = getExecutableInfo();
+  const programArgs = [executablePath, ...args]
+    .map((arg) => `    <string>${arg}</string>`)
+    .join("\n");
 
-    const isBundle = __filename.includes("/dist/") || __filename.includes("/build/");
-    const isBinary = !__filename.endsWith(".ts") && !__filename.endsWith(".js");
-
-    if (isBinary) {
-      executablePath = process.argv[0];
-      args = ["start"];
-    } else if (isBundle) {
-      const scriptPath = path.resolve(__dirname, "index.js");
-      executablePath = process.execPath;
-      args = [scriptPath, "start"];
-    } else {
-      const scriptPath = path.resolve(__dirname, "index.ts");
-      executablePath = process.execPath;
-      args = [scriptPath, "start"];
-    }
-
-    const programArgs = [executablePath, ...args]
-      .map((arg) => `    <string>${arg}</string>`)
-      .join("\n");
-
-    const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+  const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -903,10 +878,9 @@ ${programArgs}
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
   <key>StandardOutPath</key>
   <string>${CONFIG_DIR}/launchd.out.log</string>
   <key>StandardErrorPath</key>
@@ -915,17 +889,152 @@ ${programArgs}
 </plist>
 `;
 
-    fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
-    console.log("Auto-start enabled");
-    console.log(`LaunchAgent created: ${plistPath}`);
-    console.log(`Command: ${executablePath} ${args.join(" ")}`);
+  spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, plistPath], { stdio: "ignore" });
 
-    try {
-      spawn("launchctl", ["load", plistPath], { stdio: "inherit" });
-      console.log("\nLaunchAgent loaded successfully");
-    } catch (err) {
-      console.log("\nNote: LaunchAgent will start on next login");
-      console.log("To load it now, run: launchctl load " + plistPath);
+  fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
+  console.log("Auto-start enabled");
+  console.log(`LaunchAgent created: ${plistPath}`);
+  console.log(`Command: ${executablePath} ${args.join(" ")}`);
+
+  const result = spawnSync("launchctl", ["bootstrap", `gui/${process.getuid()}`, plistPath], { stdio: "inherit" });
+  if (result.status === 0) {
+    console.log("\nLaunchAgent loaded successfully");
+  } else {
+    console.log("\nNote: LaunchAgent will start on next login");
+    console.log("Or manually load with: launchctl bootstrap gui/$(id -u) " + plistPath);
+  }
+}
+
+function setupLinux(disable: boolean): void {
+  const home = process.env.HOME;
+  if (!home) {
+    console.error("HOME environment variable not set");
+    process.exit(1);
+  }
+
+  const systemdUserDir = path.join(home, ".config", "systemd", "user");
+  const servicePath = path.join(systemdUserDir, "codecast.service");
+
+  if (disable) {
+    if (!fs.existsSync(servicePath)) {
+      console.log("Auto-start is not enabled");
+      return;
+    }
+    spawnSync("systemctl", ["--user", "disable", "--now", "codecast.service"], { stdio: "inherit" });
+    fs.unlinkSync(servicePath);
+    console.log("Auto-start disabled");
+    console.log(`Removed: ${servicePath}`);
+    return;
+  }
+
+  if (!fs.existsSync(systemdUserDir)) {
+    fs.mkdirSync(systemdUserDir, { recursive: true });
+  }
+
+  const { executablePath, args } = getExecutableInfo();
+  const execStart = [executablePath, ...args].join(" ");
+
+  const serviceContent = `[Unit]
+Description=Codecast Sync Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${execStart}
+Restart=always
+RestartSec=10
+Environment=HOME=${home}
+
+[Install]
+WantedBy=default.target
+`;
+
+  fs.writeFileSync(servicePath, serviceContent, { mode: 0o644 });
+  console.log("Auto-start enabled");
+  console.log(`Systemd service created: ${servicePath}`);
+  console.log(`Command: ${execStart}`);
+
+  spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "inherit" });
+  const result = spawnSync("systemctl", ["--user", "enable", "--now", "codecast.service"], { stdio: "inherit" });
+  if (result.status === 0) {
+    console.log("\nSystemd service enabled and started");
+    console.log("Check status with: systemctl --user status codecast");
+  } else {
+    console.log("\nNote: Run these commands to enable:");
+    console.log("  systemctl --user daemon-reload");
+    console.log("  systemctl --user enable --now codecast.service");
+  }
+}
+
+function setupWindows(disable: boolean): void {
+  const taskName = "CodecastDaemon";
+
+  if (disable) {
+    const result = spawnSync("schtasks", ["/Delete", "/TN", taskName, "/F"], { stdio: "inherit" });
+    if (result.status === 0) {
+      console.log("Auto-start disabled");
+    } else {
+      console.log("Auto-start is not enabled or could not be disabled");
+    }
+    return;
+  }
+
+  const { executablePath, args } = getExecutableInfo();
+  const fullCommand = [executablePath, ...args].join(" ");
+
+  const result = spawnSync("schtasks", [
+    "/Create",
+    "/TN", taskName,
+    "/TR", fullCommand,
+    "/SC", "ONLOGON",
+    "/RL", "LIMITED",
+    "/F"
+  ], { stdio: "inherit" });
+
+  if (result.status === 0) {
+    console.log("Auto-start enabled");
+    console.log(`Task Scheduler task created: ${taskName}`);
+    console.log(`Command: ${fullCommand}`);
+    console.log("\nThe daemon will start automatically on login");
+    console.log("To start now, run: codecast start");
+  } else {
+    console.error("Failed to create scheduled task");
+    console.log("\nManual setup:");
+    console.log("1. Open Task Scheduler (taskschd.msc)");
+    console.log("2. Create a new task that runs on login");
+    console.log(`3. Set the action to: ${fullCommand}`);
+  }
+}
+
+program
+  .command("setup")
+  .description(
+    "Configure daemon to start automatically on login\n\n" +
+    "Supported platforms:\n" +
+    "  - macOS: LaunchAgent\n" +
+    "  - Linux: systemd user service\n" +
+    "  - Windows: Task Scheduler\n\n" +
+    "Examples:\n" +
+    "  codecast setup             # Enable auto-start\n" +
+    "  codecast setup --disable   # Disable auto-start"
+  )
+  .option("--disable", "Disable auto-start on login")
+  .action((options) => {
+    switch (process.platform) {
+      case "darwin":
+        setupMacOS(options.disable);
+        break;
+      case "linux":
+        setupLinux(options.disable);
+        break;
+      case "win32":
+        setupWindows(options.disable);
+        break;
+      default:
+        console.error(`Unsupported platform: ${process.platform}`);
+        console.log("Supported: macOS, Linux, Windows");
+        process.exit(1);
     }
   });
 
