@@ -118,36 +118,34 @@ description: Get codecast dashboard and share links for current session
 allowed-tools: ["Bash"]
 ---
 
-Run this bash command to get the codecast links for the current session:
+Run this bash command to get codecast links for the current session:
 
 \`\`\`bash
-# Get the project dir from PWD
-PROJECT_DIR=$(echo "$PWD" | sed 's|/|\\\\-|g; s|^\\\\-||')
+PROJECT_DIR=$(echo "$PWD" | tr '/' '-')
 SESSIONS_DIR="$HOME/.claude/projects/$PROJECT_DIR"
+SESSION_FILE=$(ls -t "$SESSIONS_DIR"/*.jsonl 2>/dev/null | grep -E '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.jsonl$' | head -1)
 
-# Find most recent UUID session file (not agent-xxx files)
-SESSION_FILE=$(ls -t "$SESSIONS_DIR"/*.jsonl 2>/dev/null | grep -E '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\\\.jsonl$' | head -1)
 if [ -z "$SESSION_FILE" ]; then
-  echo "No session found for current project"
-  exit 1
+  echo '{"error":"No session found for current project"}'
+  exit 0
 fi
 
 SESSION_ID=$(basename "$SESSION_FILE" .jsonl)
-API_TOKEN=$(grep -o '"auth_token":"[^"]*"' ~/.codecast/config.json 2>/dev/null | cut -d'"' -f4)
+API_TOKEN=$(grep '"auth_token"' ~/.codecast/config.json | sed 's/.*: *"\\([^"]*\\)".*/\\1/')
+CONVEX_URL=$(grep '"convex_url"' ~/.codecast/config.json | sed 's/.*: *"\\([^"]*\\)".*/\\1/')
 
-if [ -z "$API_TOKEN" ]; then
-  echo "Codecast not configured. Run: codecast auth"
-  exit 1
+if [ -z "$API_TOKEN" ] || [ -z "$CONVEX_URL" ]; then
+  echo '{"error":"Codecast not configured. Run: codecast auth"}'
+  exit 0
 fi
 
-curl -s -X POST https://little-bobcat-226.convex.site/cli/session-links \\
-  -H "Content-Type: application/json" \\
-  -d "{\\"session_id\\":\\"$SESSION_ID\\",\\"api_token\\":\\"$API_TOKEN\\"}"
+SITE_URL=$(echo "$CONVEX_URL" | sed 's/\\.cloud/.site/')
+curl -s -X POST "$SITE_URL/cli/session-links" -H "Content-Type: application/json" -d "{\\"session_id\\":\\"$SESSION_ID\\",\\"api_token\\":\\"$API_TOKEN\\"}"
 \`\`\`
 
-Parse the JSON response and output:
-- **Dashboard**: the dashboard_url value
-- **Share**: the share_url value (this is the public shareable link)
+Parse the JSON and display:
+- **Dashboard**: dashboard_url
+- **Share**: share_url (public link)
 `;
 
 function installSlashCommand(): void {
