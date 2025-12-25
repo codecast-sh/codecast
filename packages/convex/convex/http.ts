@@ -122,7 +122,7 @@ http.route({
       const payload = JSON.parse(body);
       const action = payload.action;
 
-      const result = await ctx.runMutation(api.githubWebhooks.storeWebhookEvent, {
+      const result = await ctx.runMutation(internal.githubWebhooks.storeWebhookEvent, {
         delivery_id: deliveryId,
         event_type: eventType,
         action,

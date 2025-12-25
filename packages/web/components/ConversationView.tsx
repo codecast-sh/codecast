@@ -1594,6 +1594,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [conversation?.messages]);
 
+  const globalToolResultMap = useMemo(() => {
+    const map: Record<string, ToolResult> = {};
+    if (conversation?.messages) {
+      for (const msg of conversation.messages) {
+        if (msg.role === "user" && msg.tool_results) {
+          for (const tr of msg.tool_results) {
+            map[tr.tool_use_id] = tr;
+          }
+        }
+      }
+    }
+    return map;
+  }, [conversation?.messages]);
+
   const renderItem = (item: TimelineItem, index: number) => {
     if (item.type === 'commit') {
       const commit = item.data;
@@ -1657,6 +1671,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const prevItem = prevNonToolResultIdx >= 0 ? timeline[prevNonToolResultIdx] : null;
       const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
       const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
+      const relevantToolResults = msg.tool_calls
+        ?.map(tc => globalToolResultMap[tc.id])
+        .filter((tr): tr is ToolResult => tr !== undefined);
       return (
         <AssistantBlock
           key={msg._id}
@@ -1664,7 +1681,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           timestamp={msg.timestamp}
           thinking={msg.thinking}
           toolCalls={msg.tool_calls}
-          toolResults={msg.tool_results}
+          toolResults={relevantToolResults}
           images={msg.images}
           messageId={msg._id}
           messageUuid={msg.message_uuid}

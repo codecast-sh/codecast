@@ -155,7 +155,12 @@ export const submitReview = action({
     body: v.optional(v.string()),
     github_access_token: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{
+    success: boolean;
+    review_id: string;
+    github_review_id: number;
+    github_review_url: string;
+  }> => {
     const pr = await ctx.runQuery(api.pull_requests.getPRById, {
       pr_id: args.pull_request_id,
     });
