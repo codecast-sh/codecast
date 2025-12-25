@@ -134,16 +134,26 @@ export const updateNotificationPreferences = mutation({
 
 export const updatePrivacySettings = mutation({
   args: {
-    hide_activity: v.boolean(),
+    hide_activity: v.optional(v.boolean()),
+    encryption_enabled: v.optional(v.boolean()),
+    encryption_master_key: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) {
       throw new Error("Not authenticated");
     }
-    await ctx.db.patch(userId, {
-      hide_activity: args.hide_activity,
-    });
+    const updateData: any = {};
+    if (args.hide_activity !== undefined) {
+      updateData.hide_activity = args.hide_activity;
+    }
+    if (args.encryption_enabled !== undefined) {
+      updateData.encryption_enabled = args.encryption_enabled;
+    }
+    if (args.encryption_master_key !== undefined) {
+      updateData.encryption_master_key = args.encryption_master_key;
+    }
+    await ctx.db.patch(userId, updateData);
   },
 });
 

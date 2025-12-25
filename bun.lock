@@ -83,10 +83,15 @@
         "typescript": "~5.9.2",
       },
     },
+    "packages/shared": {
+      "name": "@codecast/shared",
+      "version": "0.0.1",
+    },
     "packages/web": {
       "name": "@codecast/web",
       "version": "0.1.0",
       "dependencies": {
+        "@codecast/shared": "workspace:*",
         "@convex-dev/auth": "^0.0.79",
         "@radix-ui/react-accordion": "^1.2.12",
         "@radix-ui/react-avatar": "^1.1.11",
@@ -334,6 +339,8 @@
     "@codecast/cli": ["@codecast/cli@workspace:packages/cli"],
 
     "@codecast/convex": ["@codecast/convex@workspace:packages/convex"],
+
+    "@codecast/shared": ["@codecast/shared@workspace:packages/shared"],
 
     "@codecast/web": ["@codecast/web@workspace:packages/web"],
 

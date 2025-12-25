@@ -4,6 +4,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
 import { Label } from "../../../components/ui/label";
+import { encodeBase64 } from "@codecast/shared/encryption";
 
 export default function PrivacyPage() {
   const user = useQuery(api.users.getCurrentUser);
@@ -15,6 +16,21 @@ export default function PrivacyPage() {
 
   const handleToggleHideActivity = async () => {
     await updatePrivacySettings({ hide_activity: !user.hide_activity });
+  };
+
+  const handleToggleEncryption = async () => {
+    if (!user.encryption_enabled) {
+      const masterKey = crypto.getRandomValues(new Uint8Array(32));
+      const masterKeyBase64 = encodeBase64(masterKey);
+      await updatePrivacySettings({
+        encryption_enabled: true,
+        encryption_master_key: masterKeyBase64,
+      });
+    } else {
+      await updatePrivacySettings({
+        encryption_enabled: false,
+      });
+    }
   };
 
   return (
@@ -49,6 +65,26 @@ export default function PrivacyPage() {
               <span
                 className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                   user.hide_activity ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+          <div className="flex items-center justify-between py-3 border-t border-sol-border">
+            <div>
+              <Label className="text-sol-text font-medium">End-to-End Encryption (Enterprise)</Label>
+              <div className="text-sm text-sol-base1">
+                Encrypt all conversation data client-side before syncing to server
+              </div>
+            </div>
+            <button
+              onClick={handleToggleEncryption}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                user.encryption_enabled ? "bg-sol-cyan" : "bg-sol-base02"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  user.encryption_enabled ? "translate-x-6" : "translate-x-1"
                 }`}
               />
             </button>
