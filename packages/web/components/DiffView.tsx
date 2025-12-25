@@ -156,22 +156,27 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
           const lineNumStr = lineNum !== undefined ? String(lineNum).padStart(lineNumWidth) : ' '.repeat(lineNumWidth);
           const prefix = type === 'added' ? '+' : type === 'removed' ? '-' : ' ';
           const bgClass = type === 'added'
-            ? 'bg-sol-green/10'
+            ? 'bg-sol-green/25 border-l-2 border-sol-green'
             : type === 'removed'
-            ? 'bg-sol-red/10'
+            ? 'bg-sol-red/25 border-l-2 border-sol-red'
             : '';
           const textClass = type === 'added'
             ? 'text-sol-green'
             : type === 'removed'
             ? 'text-sol-red'
             : 'text-sol-text-muted';
+          const prefixClass = type === 'added'
+            ? 'text-sol-green font-bold'
+            : type === 'removed'
+            ? 'text-sol-red font-bold'
+            : 'text-sol-text-dim';
 
           const highlightedContent = highlightCode(content, language);
 
           return (
             <div key={i} className={`whitespace-pre ${bgClass}`}>
               <span className="select-none text-sol-text-dim">{lineNumStr}</span>
-              <span className={`select-none ${textClass}`}> {prefix} </span>
+              <span className={`select-none ${prefixClass}`}> {prefix} </span>
               {language ? (
                 <span dangerouslySetInnerHTML={{ __html: highlightedContent }} />
               ) : (
