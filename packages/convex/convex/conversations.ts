@@ -1142,7 +1142,9 @@ export const getSessionLinks = mutation({
     let shareToken = conversation.share_token;
     if (!shareToken) {
       shareToken = generateShareToken();
-      await ctx.db.patch(conversation._id, { share_token: shareToken });
+      await ctx.db.patch(conversation._id, { share_token: shareToken, is_private: false });
+    } else if (conversation.is_private !== false) {
+      await ctx.db.patch(conversation._id, { is_private: false });
     }
 
     return {
