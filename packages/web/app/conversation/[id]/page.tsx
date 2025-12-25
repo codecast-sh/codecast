@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -9,9 +9,11 @@ import { ConversationView, ConversationData } from "../../../components/Conversa
 import { ShareDialog } from "../../../components/ShareDialog";
 import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
+import Link from "next/link";
 
 export default function ConversationPage() {
   const params = useParams();
+  const router = useRouter();
   const id = params.id as string;
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [showShareCopied, setShowShareCopied] = useState(false);
@@ -62,8 +64,34 @@ export default function ConversationPage() {
     }
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "d" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+          return;
+        }
+        e.preventDefault();
+        router.push(`/conversation/${id}/diff`);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [id, router]);
+
   const shareControls = (
     <div className="flex items-center gap-1">
+      {/* Diff viewer toggle */}
+      <Link
+        href={`/conversation/${id}/diff`}
+        className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-magenta transition-colors"
+        title="View diff (d)"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      </Link>
       {/* Team privacy toggle */}
       {conversation?.is_private ? (
         <button
