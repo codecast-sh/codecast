@@ -23,7 +23,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
         return isMatch ? (
           <mark
             key={i}
-            className="bg-amber-500/40 dark:bg-amber-400/30 text-amber-900 dark:text-amber-200 rounded px-0.5"
+            className="bg-sol-yellow/30 text-sol-yellow rounded px-0.5 font-medium"
           >
             {part}
           </mark>
@@ -136,7 +136,8 @@ export function GlobalSearch() {
         setSelectedIndex((i) => Math.max(i - 1, 0));
       } else if (e.key === "Enter" && flatResults[selectedIndex]) {
         e.preventDefault();
-        router.push(`/conversation/${flatResults[selectedIndex].conversationId}`);
+        const url = `/conversation/${flatResults[selectedIndex].conversationId}?highlight=${encodeURIComponent(query)}`;
+        router.push(url);
         setIsOpen(false);
         setQuery("");
       }
@@ -145,7 +146,8 @@ export function GlobalSearch() {
   );
 
   const handleResultClick = (conversationId: string) => {
-    router.push(`/conversation/${conversationId}`);
+    const url = `/conversation/${conversationId}?highlight=${encodeURIComponent(query)}`;
+    router.push(url);
     setIsOpen(false);
     setQuery("");
   };
@@ -201,71 +203,71 @@ export function GlobalSearch() {
               setQuery("");
             }}
           />
-          <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-sol-base02 bg-sol-bg border border-sol-base01/80 border-sol-border rounded-xl shadow-2xl shadow-black/40 overflow-hidden">
+          <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/30 overflow-hidden">
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
                 <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
               </div>
             ) : flatResults.length === 0 ? (
               <div className="px-4 py-8 text-center">
-                <p className="text-sm text-sol-base0 mb-2">No conversations match</p>
-                <p className="text-xs text-sol-base00">Try different keywords</p>
+                <p className="text-sm text-sol-text-secondary mb-2">No conversations match</p>
+                <p className="text-xs text-sol-text-dim">Try different keywords</p>
               </div>
             ) : (
-              <div className="max-h-[600px] overflow-y-auto">
+              <div className="max-h-[600px] overflow-y-auto divide-y divide-sol-border">
                 {flatResults.map((result, index) => (
                   <button
                     key={result.key}
                     onClick={() => handleResultClick(result.conversationId)}
-                    className={`w-full text-left px-4 py-3 border-b border-sol-base02/50 last:border-0 transition-colors ${
+                    className={`w-full text-left px-4 py-3 transition-colors ${
                       index === selectedIndex
-                        ? "bg-sol-base02/80"
-                        : "hover:bg-sol-base02/40"
+                        ? "bg-sol-bg-alt"
+                        : "hover:bg-sol-bg-alt/50"
                     }`}
                   >
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-medium text-sol-base0 truncate max-w-[200px]">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-sm font-medium text-sol-text truncate max-w-[280px]">
                         {result.title}
                       </span>
                       {!result.isOwn && (
-                        <span className="text-[10px] text-sol-base00 px-1.5 py-0.5 bg-sol-base02 rounded">
+                        <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
                           {result.authorName}
                         </span>
                       )}
                       <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded ${
+                        className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
                           result.role === "user"
-                            ? "bg-blue-900/40 text-blue-400"
-                            : "bg-emerald-900/40 text-emerald-400"
+                            ? "bg-sol-blue/20 text-sol-blue"
+                            : "bg-sol-green/20 text-sol-green"
                         }`}
                       >
                         {result.role}
                       </span>
-                      <span className="text-[10px] text-sol-base00 ml-auto">
+                      <span className="text-[10px] text-sol-text-dim ml-auto whitespace-nowrap">
                         {formatTimestamp(result.timestamp)}
                       </span>
                     </div>
-                    <p className="text-sm text-sol-base1 leading-relaxed">
+                    <p className="text-sm text-sol-text-secondary leading-relaxed line-clamp-2">
                       {highlightMatch(getSnippet(result.content, query), query)}
                     </p>
                   </button>
                 ))}
               </div>
             )}
-            <div className="px-3 py-2 bg-sol-base02/50 border-t border-sol-base01/50 flex items-center justify-between text-[10px] text-sol-base00">
+            <div className="px-3 py-2 bg-sol-bg-alt/80 border-t border-sol-border flex items-center justify-between text-[10px] text-sol-text-dim">
               <div className="flex items-center gap-3">
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1 py-0.5 bg-slate-700 rounded text-sol-base0">&#8593;</kbd>
-                  <kbd className="px-1 py-0.5 bg-slate-700 rounded text-sol-base0">&#8595;</kbd>
+                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8593;</kbd>
+                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8595;</kbd>
                   navigate
                 </span>
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1 py-0.5 bg-slate-700 rounded text-sol-base0">&#9166;</kbd>
+                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#9166;</kbd>
                   open
                 </span>
               </div>
               <span className="flex items-center gap-1">
-                <kbd className="px-1 py-0.5 bg-slate-700 rounded text-sol-base0">esc</kbd>
+                <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">esc</kbd>
                 close
               </span>
             </div>

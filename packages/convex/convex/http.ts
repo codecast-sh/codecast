@@ -143,4 +143,69 @@ http.route({
   }),
 });
 
+http.route({
+  path: "/cli/session-links",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    };
+
+    try {
+      const body = await request.json();
+      const { session_id, api_token } = body;
+
+      if (!session_id || !api_token) {
+        return new Response(JSON.stringify({ error: "Missing session_id or api_token" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const result = await ctx.runMutation(api.conversations.getSessionLinks, {
+        session_id,
+        api_token,
+      });
+
+      if (result.error) {
+        return new Response(JSON.stringify({ error: result.error }), {
+          status: result.error === "Unauthorized" ? 401 : 404,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify({
+        conversation_id: result.conversation_id,
+        dashboard_url: `https://codecast.sh/conversation/${result.conversation_id}`,
+        share_url: `https://codecast.sh/share/${result.share_token}`,
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: "Internal error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/session-links",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      },
+    });
+  }),
+});
+
 export default http;

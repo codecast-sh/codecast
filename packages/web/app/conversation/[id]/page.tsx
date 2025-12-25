@@ -1,9 +1,10 @@
 "use client";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import { AuthGuard } from "../../../components/AuthGuard";
+import { DashboardLayout } from "../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
 import { ShareDialog } from "../../../components/ShareDialog";
@@ -16,7 +17,9 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 export default function ConversationPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const id = params.id as string;
+  const highlightQuery = searchParams.get("highlight") || undefined;
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [showShareCopied, setShowShareCopied] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
@@ -146,27 +149,31 @@ export default function ConversationPage() {
 
   return (
     <AuthGuard>
-      <ConversationView
-        conversation={conversation as ConversationData | null | undefined}
-        commits={commits || []}
-        backHref="/dashboard"
-        backLabel="Back"
-        headerExtra={shareControls}
-        hasMoreAbove={hasMoreAbove}
-        isLoadingOlder={isLoadingOlder}
-        onLoadOlder={loadOlder}
-      />
-      <ShareDialog
-        open={showShareDialog}
-        onOpenChange={setShowShareDialog}
-        conversationId={id as Id<"conversations">}
-        conversationTitle={conversation?.title}
-        shareToken={conversation?.share_token}
-        onShareGenerated={(token) => {
-          const url = `${window.location.origin}/share/${token}`;
-          setShareUrl(url);
-        }}
-      />
+      <DashboardLayout hideSidebar>
+        <ConversationView
+          conversation={conversation as ConversationData | null | undefined}
+          commits={commits || []}
+          backHref="/dashboard"
+          backLabel="Back"
+          headerExtra={shareControls}
+          hasMoreAbove={hasMoreAbove}
+          isLoadingOlder={isLoadingOlder}
+          onLoadOlder={loadOlder}
+          highlightQuery={highlightQuery}
+          embedded
+        />
+        <ShareDialog
+          open={showShareDialog}
+          onOpenChange={setShowShareDialog}
+          conversationId={id as Id<"conversations">}
+          conversationTitle={conversation?.title}
+          shareToken={conversation?.share_token}
+          onShareGenerated={(token) => {
+            const url = `${window.location.origin}/share/${token}`;
+            setShareUrl(url);
+          }}
+        />
+      </DashboardLayout>
     </AuthGuard>
   );
 }

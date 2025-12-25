@@ -109,6 +109,8 @@ type ConversationViewProps = {
   hasMoreAbove?: boolean;
   isLoadingOlder?: boolean;
   onLoadOlder?: () => void;
+  highlightQuery?: string;
+  embedded?: boolean;
 };
 
 export interface ConversationViewHandle {
@@ -582,6 +584,13 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
               oldStr={String(parsedInput.old_string)}
               newStr={String(parsedInput.new_string)}
               startLine={startLine}
+              language={language}
+            />
+          ) : tool.name === "Write" && !!parsedInput.content ? (
+            <DiffView
+              oldStr=""
+              newStr={String(parsedInput.content)}
+              startLine={1}
               language={language}
             />
           ) : isBash && parsedInput.command ? (
@@ -1260,7 +1269,7 @@ function MessageInput({ conversationId }: { conversationId: string }) {
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder }, ref) {
+  function ConversationView({ conversation, commits = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, embedded }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -1298,6 +1307,29 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     ];
     return items.sort((a, b) => a.timestamp - b.timestamp);
   }, [messages, commits]);
+
+  // Track if we've already scrolled for this highlight query
+  const hasScrolledToHighlight = useRef(false);
+
+  // Find and highlight first message matching search query
+  useEffect(() => {
+    if (!highlightQuery || messages.length === 0) {
+      setHighlightedMessageId(null);
+      hasScrolledToHighlight.current = false;
+      return;
+    }
+    const query = highlightQuery.toLowerCase();
+    const words = query.split(/\s+/).filter(Boolean);
+    if (words.length === 0) return;
+
+    for (const msg of messages) {
+      const content = msg.content?.toLowerCase() || "";
+      if (words.some(word => content.includes(word))) {
+        setHighlightedMessageId(msg._id);
+        return;
+      }
+    }
+  }, [highlightQuery, messages]);
 
   const handleCopyAll = async () => {
     if (!conversation || messages.length === 0) {
@@ -1467,6 +1499,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [timeline.length, virtualizer]);
 
+  // Scroll to highlighted message from search
+  useEffect(() => {
+    if (highlightedMessageId && timeline.length > 0 && !hasScrolledToHighlight.current) {
+      const itemIndex = timeline.findIndex(item => {
+        if (item.type === 'message') {
+          return item.data._id === highlightedMessageId;
+        }
+        return false;
+      });
+      if (itemIndex >= 0) {
+        hasScrolledToHighlight.current = true;
+        setUserScrolled(true);
+        setTimeout(() => virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" }), 150);
+      }
+    }
+  }, [highlightedMessageId, timeline, virtualizer]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "c") {
@@ -1609,7 +1658,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   return (
-    <main className="h-screen flex flex-col bg-sol-bg">
+    <main className={`flex flex-col bg-sol-bg ${embedded ? "h-[calc(100vh-56px)]" : "h-screen"}`}>
       <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-2 sm:py-3">
           <div className="flex items-center gap-2 sm:gap-3">
