@@ -171,6 +171,114 @@
         - Keyboard shortcuts: a (approve), r (request changes), c (comment), Space (next file)
       </code_review>
 
+      <conversation_diff_viewer>
+        <overview>
+          Split-pane view showing conversation alongside all file changes made during the session.
+          Enables time-travel through code changes with visual connection between conversation context
+          and resulting diffs.
+        </overview>
+
+        <layout>
+          - Three-panel layout using react-resizable-panels:
+            - Left panel: Full conversation view (scrollable)
+            - Center: Vertical timeline strip (thin, ~40px)
+            - Right panel: Diff viewer
+          - Panels are resizable by dragging dividers
+          - Collapse/expand any panel
+        </layout>
+
+        <vertical_timeline>
+          - Thin vertical strip between conversation and diff panes
+          - Shows dots/markers for each file modification (Edit/Write tool calls)
+          - Dots positioned vertically to align with conversation scroll position
+          - Color-coded by file (same file = same color)
+          - Hover shows: file path, change type, timestamp
+          - Click dot: syncs both conversation scroll AND diff pane to that change
+          - Visual indicator for currently selected change
+          - Shows density of changes (clustered dots = intensive editing period)
+        </vertical_timeline>
+
+        <diff_pane>
+          - Header: file path, change stats (+N -M lines)
+          - Syntax-highlighted unified diff view
+          - Diff modes (toggle with 'c' key):
+            - Cumulative: all changes from range start to selected point
+            - Single: just the one edit at selected point
+          - File tree (collapsible): shows all files touched, click to filter
+          - Supports viewing multiple files changed at same point
+        </diff_pane>
+
+        <navigation>
+          - Click Edit/Write tool call in conversation: selects that change, updates diff
+          - Cmd/Ctrl+click second Edit: defines a range (show diff between two points)
+          - Click timeline dot: syncs conversation scroll + diff pane
+          - Optional "sync scroll" toggle: disable auto-scroll of conversation when clicking timeline
+          - Keyboard shortcuts:
+            - [ ] : step to previous/next change
+            - c : toggle cumulative/single diff mode
+            - f : toggle file tree
+            - Escape : clear selection, show full cumulative diff
+        </navigation>
+
+        <range_selection>
+          - Default: full conversation range (all changes)
+          - Single click: select one change point
+          - Cmd+click: select range between two changes
+          - Range shown in diff pane header: "Changes 3-7 of 12"
+          - Cumulative mode within range: shows combined diff for selected range
+        </range_selection>
+
+        <performance>
+          - Lazy diff computation: only compute diffs as user navigates
+          - Memoize computed diffs for instant re-access
+          - Virtualized rendering for long diffs
+          - Web worker for heavy diff computation to keep UI responsive
+        </performance>
+
+        <entry_points>
+          - Conversation page: toggle button to enable split-pane diff view
+          - Direct URL: /conversation/[id]/diff
+          - Keyboard shortcut from conversation: 'd' to toggle diff pane
+        </entry_points>
+      </conversation_diff_viewer>
+
+      <github_pr_integration>
+        <overview>
+          Two-way sync between Codecast and GitHub PRs. Comments flow bidirectionally,
+          and conversations are automatically linked to PRs they created.
+        </overview>
+
+        <two_way_comment_sync>
+          - Real-time sync: comments posted in Codecast appear in GitHub within seconds
+          - Reverse sync: comments posted in GitHub appear in Codecast
+          - Inline comments: line-specific comments sync with correct file/line context
+          - Comment threads: replies sync bidirectionally
+          - Resolved/unresolved state syncs
+          - Author attribution preserved (shows who commented where)
+        </two_way_comment_sync>
+
+        <auto_link_conversation>
+          - When a PR is linked to a Codecast conversation:
+            - Auto-post comment on GitHub PR with link to Codecast conversation
+            - Comment includes: conversation title, key changes made, link to full session
+            - Badge/indicator on PR showing it has linked Codecast context
+          - Detection: match by branch name, commit SHAs, or manual linking
+        </auto_link_conversation>
+
+        <pr_review_workflow>
+          - View PR diff with Codecast session context side-by-side
+          - See which AI session created each change
+          - Add comments that sync to GitHub
+          - Approve/request changes from Codecast (syncs to GitHub)
+        </pr_review_workflow>
+
+        <webhooks>
+          - GitHub webhook for PR events (opened, closed, commented)
+          - Real-time updates via Convex subscriptions
+          - Retry logic for failed syncs
+        </webhooks>
+      </github_pr_integration>
+
       <user_settings>
         - Profile: name, email
         - Daemon status: show if currently connected, last sync time
@@ -619,3 +727,32 @@
 - Bidirectional messaging unlocks remote control/guidance of Claude Code sessions
 - GitHub OAuth: developers already have GitHub, reduces friction
 - Timeline + Code Review: connects code changes to AI sessions, enables team review workflow
+
+### 2025-12-25 - Pivot: Conversation Diff Viewer + GitHub PR Integration
+
+**Trigger:** User request for enhanced code review capabilities with time-travel diff viewing and two-way GitHub PR sync.
+
+**Added:**
+- Conversation Diff Viewer: split-pane view with conversation, vertical timeline, and diff pane
+  - Three-panel layout using react-resizable-panels
+  - Vertical timeline strip showing all file changes as clickable markers
+  - Click Edit/Write in conversation to select that change in diff pane
+  - Cmd+click for range selection (diff between two points)
+  - Diff modes: cumulative (all changes to point) vs single (one edit)
+  - Bidirectional sync: clicking timeline scrolls conversation (optional)
+  - Keyboard shortcuts: [ ] to step, c to toggle mode, f for file tree, d to toggle pane
+  - Entry points: toggle button, /conversation/[id]/diff URL, 'd' shortcut
+- GitHub PR Integration with two-way sync:
+  - Real-time comment sync: Codecast comments appear in GitHub and vice versa
+  - Inline comments sync with correct file/line context
+  - Auto-link: when PR linked to conversation, auto-post comment with Codecast link
+  - PR review workflow: approve/request changes from Codecast syncs to GitHub
+  - GitHub webhooks for real-time PR event updates
+
+**Technical:**
+- Lazy diff computation with memoization
+- Web worker for heavy diff computation
+- Virtualized rendering for long diffs
+- GitHub webhook integration via Convex HTTP actions
+
+**Platform:** Web only (mobile deferred)
