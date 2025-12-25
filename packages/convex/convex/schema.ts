@@ -321,4 +321,21 @@ export default defineSchema({
     .index("by_recipient", ["recipient_user_id"])
     .index("by_recipient_read", ["recipient_user_id", "read"])
     .index("by_recipient_created", ["recipient_user_id", "created_at"]),
+
+  pending_permissions: defineTable({
+    conversation_id: v.id("conversations"),
+    session_id: v.string(),
+    tool_name: v.string(),
+    arguments_preview: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("denied")
+    ),
+    created_at: v.number(),
+    resolved_at: v.optional(v.number()),
+    resolved_by: v.optional(v.id("users")),
+  })
+    .index("by_conversation_status", ["conversation_id", "status"])
+    .index("by_session", ["session_id"]),
 });

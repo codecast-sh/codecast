@@ -19,6 +19,8 @@ import type * as http from "../http.js";
 import type * as messages from "../messages.js";
 import type * as notifications from "../notifications.js";
 import type * as pendingMessages from "../pendingMessages.js";
+import type * as permissions from "../permissions.js";
+import type * as publicComments from "../publicComments.js";
 import type * as pull_requests from "../pull_requests.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as reviews from "../reviews.js";
@@ -46,6 +48,8 @@ declare const fullApi: ApiFromModules<{
   messages: typeof messages;
   notifications: typeof notifications;
   pendingMessages: typeof pendingMessages;
+  permissions: typeof permissions;
+  publicComments: typeof publicComments;
   pull_requests: typeof pull_requests;
   rateLimit: typeof rateLimit;
   reviews: typeof reviews;
