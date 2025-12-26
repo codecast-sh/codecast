@@ -2,12 +2,14 @@
 import { ReactNode, useState, useEffect, lazy, Suspense } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { Group, Panel, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { Button } from "./ui/button";
+import { Logo } from "./Logo";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
@@ -24,6 +26,7 @@ interface DashboardLayoutProps {
 export function DashboardLayout({ children, filter, onFilterChange, directories, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [sidebarSize, setSidebarSize] = useState(18);
 
   useEffect(() => {
     const stored = localStorage.getItem("sidebarCollapsed");
@@ -64,68 +67,111 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
   const isAdmin = user?.role === "admin";
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg">
-      <header className="border-b border-sol-border bg-sol-bg-alt/50 backdrop-blur sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto px-2 sm:px-4 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-3">
-          {!hideSidebar && (
-            <>
-              <button
-                onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-                className="md:hidden p-1.5 sm:p-2 text-sol-text hover:text-sol-yellow transition-colors flex-shrink-0"
-                aria-label="Toggle menu"
-              >
-                <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-              </button>
-              <button
-                onClick={toggleSidebar}
-                className="hidden md:block p-1.5 text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
-                aria-label={isSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-                title={isSidebarCollapsed ? "Show sidebar (s)" : "Hide sidebar (s)"}
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {isSidebarCollapsed ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-                  )}
-                </svg>
-              </button>
-            </>
-          )}
-          <h1 className="text-base sm:text-lg md:text-xl font-semibold text-sol-text tracking-tight whitespace-nowrap flex-shrink-0">
-            codecast
-          </h1>
-          <div className="hidden sm:block flex-1 min-w-0">
-            <GlobalSearch />
+    <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
+      {/* Header spans full width */}
+      <header className="flex-shrink-0 border-b border-sol-border bg-sol-bg/95 backdrop-blur-sm z-20">
+        <div className="px-2 sm:px-4 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-3">
+          {/* Left section: Logo + toggle */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <Logo size="sm" showText={false} />
+            {!hideSidebar && (
+              <>
+                <button
+                  onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+                  className="md:hidden p-1.5 sm:p-2 text-sol-text hover:text-sol-yellow transition-colors"
+                  aria-label="Toggle menu"
+                >
+                  <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                </button>
+                <button
+                  onClick={toggleSidebar}
+                  className="hidden md:block p-1.5 text-sol-text-dim hover:text-sol-text transition-colors"
+                  aria-label={isSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+                  title={isSidebarCollapsed ? "Show sidebar (s)" : "Hide sidebar (s)"}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    {isSidebarCollapsed ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+                    )}
+                  </svg>
+                </button>
+              </>
+            )}
           </div>
-          {isAdmin && (
-            <div className="hidden md:block flex-shrink-0">
-              <Suspense fallback={<Button variant="outline" size="sm" disabled>Invite</Button>}>
-                <InviteModal
-                  trigger={
-                    <Button variant="outline" size="sm">
-                      Invite
-                    </Button>
-                  }
-                />
-              </Suspense>
+
+          {/* Center section: Search */}
+          <div className="hidden sm:flex flex-1 justify-center min-w-0">
+            <div className="w-full max-w-md">
+              <GlobalSearch />
             </div>
-          )}
-          <div className="flex-shrink-0">
+          </div>
+
+          {/* Right section: Actions */}
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            {isAdmin && (
+              <div className="hidden md:block">
+                <Suspense fallback={<Button variant="outline" size="sm" disabled>Invite</Button>}>
+                  <InviteModal
+                    trigger={
+                      <Button variant="outline" size="sm">
+                        Invite
+                      </Button>
+                    }
+                  />
+                </Suspense>
+              </div>
+            )}
             <ThemeToggle />
-          </div>
-          <div className="flex-shrink-0">
             <NotificationBell />
-          </div>
-          <div className="flex-shrink-0">
             <UserMenu />
           </div>
         </div>
       </header>
-      <div className="flex">
-        {showSidebar && (
+
+      {/* Content area with sidebar and main */}
+      <div className="flex-1 min-h-0">
+        <Group orientation="horizontal" id="dashboard-sidebar" style={{ height: '100%' }}>
+          {showSidebar && (
+            <>
+              <Panel
+                id="sidebar"
+                defaultSize={18}
+                minSize={5}
+                maxSize={50}
+                className="hidden md:flex"
+                onResize={(size) => setSidebarSize(size)}
+              >
+                <Sidebar
+                  filter={filter}
+                  onFilterChange={onFilterChange}
+                  directories={directories}
+                  directoryFilter={directoryFilter}
+                  onDirectoryFilterChange={onDirectoryFilterChange}
+                  isMobileOpen={isMobileSidebarOpen}
+                  onMobileClose={() => setIsMobileSidebarOpen(false)}
+                  isNarrow={sidebarSize < 12}
+                />
+              </Panel>
+              <Separator className="w-[2px] bg-sol-border/50 hover:bg-sol-cyan/60 active:bg-sol-cyan transition-colors hidden md:flex items-center justify-center cursor-col-resize" />
+            </>
+          )}
+          <Panel id="main" style={{ overflow: 'auto' }}>
+            <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+              <div className="max-w-6xl mx-auto">
+                {children}
+              </div>
+            </div>
+          </Panel>
+        </Group>
+      </div>
+
+      {/* Mobile sidebar overlay */}
+      {isMobileSidebarOpen && (
+        <div className="md:hidden fixed inset-0 z-40">
           <Sidebar
             filter={filter}
             onFilterChange={onFilterChange}
@@ -135,11 +181,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
             isMobileOpen={isMobileSidebarOpen}
             onMobileClose={() => setIsMobileSidebarOpen(false)}
           />
-        )}
-        <main className={`flex-1 min-w-0 ${showSidebar ? "max-w-5xl mx-auto px-2 sm:px-3 md:px-4 py-3 sm:py-6 md:py-8" : ""}`}>
-          {children}
-        </main>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

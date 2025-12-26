@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -13,6 +14,7 @@ interface SidebarProps {
   onDirectoryFilterChange?: (directory: string | null) => void;
   isMobileOpen?: boolean;
   onMobileClose?: () => void;
+  isNarrow?: boolean;
 }
 
 function formatRelativeDate(timestamp: number): string {
@@ -31,14 +33,13 @@ function formatRelativeDate(timestamp: number): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function getDateGroup(timestamp: number): string {
-  const now = Date.now();
+function getDateGroup(timestamp: number, now: number): string {
   const diffMs = now - timestamp;
   const diffHours = diffMs / 3600000;
   const diffDays = diffMs / 86400000;
 
   if (diffHours < 1) return "Last Hour";
-  if (diffHours < 12) return "Last 12 Hours";
+  if (diffHours < 6) return "Last 6 Hours";
   if (diffDays < 1) return "Last Day";
   if (diffDays < 2) return "Yesterday";
   if (diffDays < 7) return "This Week";
@@ -51,7 +52,7 @@ const bottomNavItems = [
     href: "/cli",
     label: "CLI Setup",
     icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -65,7 +66,7 @@ const bottomNavItems = [
     href: "/settings",
     label: "Settings",
     icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -89,11 +90,19 @@ function getShortPath(projectPath: string): string {
   return parts[parts.length - 1];
 }
 
-export function Sidebar({ filter = "my", onFilterChange, directories = [], directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose }: SidebarProps) {
+export function Sidebar({ filter = "my", onFilterChange, directories = [], directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
   const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
+  const [currentTime, setCurrentTime] = useState(Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const favorites = useQuery(api.conversations.listFavorites);
   const bookmarks = useQuery(api.bookmarks.listBookmarks);
@@ -148,7 +157,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
   const filteredConversations = conversations?.filter(c => !isTrivialSubagent(c) && !isWarmupSession(c)) ?? [];
 
   const groupedSessions = filteredConversations.reduce<Record<string, ConversationItem[]>>((acc, conv) => {
-    const group = getDateGroup(conv.updated_at);
+    const group = getDateGroup(conv.updated_at, currentTime);
     if (!acc[group]) acc[group] = [];
     acc[group].push(conv);
     return acc;
@@ -157,52 +166,57 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
   const sidebarContent = (
     <>
       <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
-        <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
-          Conversations
-        </div>
+        {!isNarrow && (
+          <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
+            Conversations
+          </div>
+        )}
         <div className="space-y-1">
           <button
             onClick={() => handleFilterClick("my")}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
               isDashboard && filter === "my"
                 ? "bg-sol-bg-alt text-sol-text"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
+            title="Private"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
             </svg>
-            <span>Private</span>
+            {!isNarrow && <span>Private</span>}
           </button>
           <button
             onClick={() => handleFilterClick("team")}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
               isDashboard && filter === "team"
                 ? "bg-sol-bg-alt text-sol-text"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
+            title="Team"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
-            <span>Team</span>
+            {!isNarrow && <span>Team</span>}
           </button>
           <Link
             href="/timeline"
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
               isTimeline
                 ? "bg-sol-bg-alt text-sol-text"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
+            title="Timeline"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span>Timeline</span>
+            {!isNarrow && <span>Timeline</span>}
           </Link>
         </div>
 
-        {favorites && favorites.length > 0 && (
+        {!isNarrow && favorites && favorites.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2 flex items-center gap-1.5">
               <svg className="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
@@ -229,7 +243,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
           </div>
         )}
 
-        {bookmarks && bookmarks.length > 0 && (
+        {!isNarrow && bookmarks && bookmarks.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2 flex items-center gap-1.5">
               <svg className="w-3.5 h-3.5 text-sol-cyan" fill="currentColor" viewBox="0 0 24 24">
@@ -255,7 +269,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
           </div>
         )}
 
-        {directories.length > 0 && (
+        {!isNarrow && directories.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
               Projects
@@ -282,13 +296,13 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
           </div>
         )}
 
-        {filteredConversations.length > 0 && (
+        {!isNarrow && filteredConversations.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
               Recent Sessions
             </div>
             <div className="space-y-2">
-              {["Today", "Yesterday", "This Week", "This Month", "Older"].map((group) => {
+              {["Last Hour", "Last 6 Hours", "Last Day", "Yesterday", "This Week", "This Month", "Older"].map((group) => {
                 const items = groupedSessions[group];
                 if (!items || items.length === 0) return null;
                 return (
@@ -329,22 +343,25 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
       </div>
 
       <div className="pt-4 space-y-1 flex-shrink-0">
-        <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
-          Configuration
-        </div>
+        {!isNarrow && (
+          <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
+            Configuration
+          </div>
+        )}
         {bottomNavItems.map((item) => (
           <Link
             key={item.href}
             href={item.href}
             onClick={() => onMobileClose?.()}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+            className={`flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
               pathname === item.href || pathname?.startsWith(item.href + "/")
                 ? "bg-sol-bg-alt text-sol-text"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
+            title={item.label}
           >
             {item.icon}
-            <span>{item.label}</span>
+            {!isNarrow && <span>{item.label}</span>}
           </Link>
         ))}
       </div>
@@ -362,9 +379,9 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
       )}
       <nav
         className={`
-          w-64 sm:w-72 md:w-64 border-r border-sol-border bg-sol-bg-alt/50 h-[calc(100vh-52px)] p-3 sm:p-4 flex flex-col sticky top-[52px]
+          h-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt shadow-[4px_0_16px_-2px_rgba(0,0,0,0.15)] overflow-y-auto
           md:flex
-          ${isMobileOpen ? 'fixed top-[52px] left-0 z-40 w-[85vw] max-w-xs' : 'hidden'}
+          ${isMobileOpen ? 'fixed top-0 left-0 z-40 w-[85vw] max-w-xs h-screen' : 'hidden'}
         `}
       >
         {sidebarContent}

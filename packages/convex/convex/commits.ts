@@ -151,48 +151,12 @@ export const getUserGitHubToken = internalQuery({
   },
 });
 
-export const syncMyRepositoryCommits = action({
+export const syncAllMyRepositories = action({
   args: {
-    repository: v.string(),
     per_page: v.optional(v.number()),
   },
-  returns: v.object({ synced: v.number(), total: v.number() }),
-  handler: async (ctx, args): Promise<{ synced: number; total: number }> => {
-    const token = await ctx.runQuery(internal.commits.getUserGitHubToken, {});
-    if (!token) {
-      throw new Error("GitHub account not connected");
-    }
-
-    const result = await ctx.runAction(api.githubApi.syncRepositoryCommits, {
-      repository: args.repository,
-      github_access_token: token,
-      per_page: args.per_page ?? 50,
-    });
-
-    return result;
-  },
-});
-
-type RepoInfo = {
-  full_name: string;
-  name: string;
-  owner: string;
-  private: boolean;
-  pushed_at: string;
-  default_branch: string;
-};
-
-export const getMyRepositories = action({
-  args: {},
-  returns: v.array(v.object({
-    full_name: v.string(),
-    name: v.string(),
-    owner: v.string(),
-    private: v.boolean(),
-    pushed_at: v.string(),
-    default_branch: v.string(),
-  })),
-  handler: async (ctx): Promise<RepoInfo[]> => {
+  returns: v.object({ repos_synced: v.number(), total_commits: v.number() }),
+  handler: async (ctx, args): Promise<{ repos_synced: number; total_commits: number }> => {
     const token = await ctx.runQuery(internal.commits.getUserGitHubToken, {});
     if (!token) {
       throw new Error("GitHub account not connected");
@@ -200,9 +164,26 @@ export const getMyRepositories = action({
 
     const repos = await ctx.runAction(api.githubApi.getUserRepositories, {
       github_access_token: token,
-      per_page: 20,
+      per_page: 10,
     });
 
-    return repos;
+    let totalCommits = 0;
+    let reposSynced = 0;
+
+    for (const repo of repos) {
+      try {
+        const result = await ctx.runAction(api.githubApi.syncRepositoryCommits, {
+          repository: repo.full_name,
+          github_access_token: token,
+          per_page: args.per_page ?? 30,
+        });
+        totalCommits += result.synced;
+        reposSynced++;
+      } catch (e) {
+        console.error(`Failed to sync ${repo.full_name}:`, e);
+      }
+    }
+
+    return { repos_synced: reposSynced, total_commits: totalCommits };
   },
 });

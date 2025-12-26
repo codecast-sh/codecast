@@ -7,6 +7,7 @@ import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { shouldShowSession } from "../lib/sessionFilters";
 
 type TimelineItem =
   | {
@@ -250,37 +251,6 @@ interface TimelineFeedProps {
   dateRange?: { start?: number; end?: number };
 }
 
-type Conversation = {
-  _id: string;
-  title: string;
-  subtitle?: string | null;
-  first_assistant_message?: string;
-  message_alternates?: Array<{ role: string; content: string }>;
-  author_name: string;
-  updated_at: number;
-  duration_ms: number;
-  message_count: number;
-  is_active: boolean;
-  is_own: boolean;
-};
-
-function isWarmupSession(c: Conversation): boolean {
-  if (c.title?.toLowerCase() === "warmup") return true;
-  if (c.message_count > 3) return false;
-  const firstAssistantMsg =
-    c.first_assistant_message?.toLowerCase() ||
-    c.message_alternates?.find((m) => m.role === "assistant")?.content?.toLowerCase() ||
-    "";
-  const warmupPatterns = [
-    "i'm ready to help",
-    "i'll wait for your task",
-    "what would you like me to help",
-    "i understand. i'm ready",
-    "running in read-only exploration mode",
-  ];
-  return warmupPatterns.some((p) => firstAssistantMsg.includes(p));
-}
-
 export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
   const conversations = useQuery(api.conversations.listConversations, { filter });
   const commits = useQuery(api.commits.getCommitsForTimeline, {
@@ -296,7 +266,7 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
     const titleMap = new Map<string, string>();
 
     for (const conv of conversations.conversations) {
-      if (isWarmupSession(conv as Conversation)) continue;
+      if (!shouldShowSession(conv)) continue;
 
       titleMap.set(conv._id, conv.title || "Untitled Session");
       items.push({

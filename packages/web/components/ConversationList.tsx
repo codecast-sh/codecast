@@ -4,6 +4,7 @@ import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { shouldShowSession, isSubagent } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
@@ -215,34 +216,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
     if (!conversations || conversations.length === 0) return { filteredConversations: [], counts: { long: 0, active: 0, subagent: 0, main: 0 }, directories: [] };
     const convs = conversations as Conversation[];
 
-    const isSubagent = (c: Conversation) =>
-      c.title?.startsWith("Session agent-") ?? false;
-    const isTrivialSubagent = (c: Conversation) => {
-      if (!isSubagent(c)) return false;
-      const userMsgCount = c.message_alternates?.filter(m => m.role === "user").length ?? 0;
-      const aiMsgCount = c.message_alternates?.filter(m => m.role === "assistant").length ?? 0;
-      if (c.ai_message_count !== undefined) {
-        return c.ai_message_count <= 1 && userMsgCount === 0;
-      }
-      return aiMsgCount <= 1 && userMsgCount === 0;
-    };
-
-    const isWarmupSession = (c: Conversation) => {
-      if (c.title?.toLowerCase() === "warmup") return true;
-      if (c.message_count > 3) return false;
-      const firstAssistantMsg = c.first_assistant_message?.toLowerCase() ||
-        c.message_alternates?.find(m => m.role === "assistant")?.content?.toLowerCase() || "";
-      const warmupPatterns = [
-        "i'm ready to help",
-        "i'll wait for your task",
-        "what would you like me to help",
-        "i understand. i'm ready",
-        "running in read-only exploration mode",
-      ];
-      return warmupPatterns.some(p => firstAssistantMsg.includes(p));
-    };
-
-    const nonTrivialConvs = convs.filter(c => !isTrivialSubagent(c) && !isWarmupSession(c));
+    const nonTrivialConvs = convs.filter(c => shouldShowSession(c));
 
     // Derive git root from project_path if git_root is not set
     // Common patterns: /Users/x/src/repo, /home/x/projects/repo, etc.

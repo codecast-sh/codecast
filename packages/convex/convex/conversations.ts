@@ -946,6 +946,7 @@ export const searchConversations = query({
       updatedAt: number;
       authorName: string;
       isOwn: boolean;
+      messageCount: number;
     }> = [];
 
     for (const [convId, messages] of conversationMatches) {
@@ -1011,10 +1012,11 @@ export const searchConversations = query({
         updatedAt: conv.updated_at,
         authorName: conversationUser?.name || "Unknown",
         isOwn,
+        messageCount: conv.message_count || 0,
       });
     }
 
-    return results.sort((a, b) => b.updatedAt - a.updatedAt);
+    return { results: results.sort((a, b) => b.updatedAt - a.updatedAt), totalMatches: searchResults.length };
   },
 });
 
@@ -1278,33 +1280,34 @@ export const searchForCLI = mutation({
           contextLines.add(i);
         }
 
-        const content = m.content || "";
-        const idx = content.toLowerCase().indexOf(searchTermLower);
-        const start = Math.max(0, idx > -1 ? idx - 80 : 0);
-        const end = Math.min(content.length, idx > -1 ? idx + searchTerm.length + 120 : 200);
-        let snippet = content.slice(start, end);
-        if (start > 0) snippet = "..." + snippet;
-        if (end < content.length) snippet = snippet + "...";
-
         return {
           line,
           role: m.role,
-          content: snippet,
+          content: m.content || "",
           timestamp: new Date(m.timestamp).toISOString(),
+          tool_calls_count: m.tool_calls?.length,
+          tool_results_count: m.tool_results?.length,
         };
       });
 
-      const contextMessages: Array<{ line: number; role: string; content: string }> = [];
+      const contextMessages: Array<{
+        line: number;
+        role: string;
+        content: string;
+        tool_calls_count?: number;
+        tool_results_count?: number;
+      }> = [];
       for (const lineNum of contextLines) {
         if (matchedLines.has(lineNum)) continue;
         const msg = allMessages[lineNum - 1];
         if (msg) {
           const content = msg.content || "";
-          const snippet = content.length > 200 ? content.slice(0, 200) + "..." : content;
           contextMessages.push({
             line: lineNum,
             role: msg.role,
-            content: snippet,
+            content,
+            tool_calls_count: msg.tool_calls?.length,
+            tool_results_count: msg.tool_results?.length,
           });
         }
       }
