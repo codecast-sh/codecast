@@ -187,7 +187,8 @@ export function formatSearchResults(result: SearchResult): string {
 
   if (result.conversations.length > 0) {
     const firstId = truncateId(result.conversations[0].id);
-    lines.push(`Use: codecast read ${firstId} <range>  # e.g., codecast read ${firstId} 10:20`);
+    lines.push(`Use: codecast read ${firstId} <range>        # read messages by line range`);
+    lines.push(`     codecast read ${firstId} <range> --full  # include full tool call/result content`);
   }
 
   lines.push("</SEARCHRESULTS>");
@@ -195,7 +196,11 @@ export function formatSearchResults(result: SearchResult): string {
   return lines.join("\n");
 }
 
-export function formatReadResult(result: ReadResult): string {
+interface FormatOptions {
+  full?: boolean;
+}
+
+export function formatReadResult(result: ReadResult, options: FormatOptions = {}): string {
   const lines: string[] = [];
 
   const conv = result.conversation;
@@ -222,11 +227,36 @@ export function formatReadResult(result: ReadResult): string {
     }
 
     if (msg.tool_calls && msg.tool_calls.length > 0) {
-      lines.push(`       [${msg.tool_calls.length} tool call${msg.tool_calls.length === 1 ? "" : "s"}]`);
+      if (options.full) {
+        lines.push(`       <TOOL_CALLS>`);
+        for (const tc of msg.tool_calls as Array<{ name?: string; input?: unknown }>) {
+          lines.push(`       - ${tc.name || "unknown"}`);
+          if (tc.input) {
+            const inputStr = JSON.stringify(tc.input, null, 2);
+            const indented = inputStr.split("\n").map((l) => "         " + l).join("\n");
+            lines.push(indented);
+          }
+        }
+        lines.push(`       </TOOL_CALLS>`);
+      } else {
+        lines.push(`       [${msg.tool_calls.length} tool call${msg.tool_calls.length === 1 ? "" : "s"}]`);
+      }
     }
 
     if (msg.tool_results && msg.tool_results.length > 0) {
-      lines.push(`       [${msg.tool_results.length} tool result${msg.tool_results.length === 1 ? "" : "s"}]`);
+      if (options.full) {
+        lines.push(`       <TOOL_RESULTS>`);
+        for (const tr of msg.tool_results as Array<{ content?: string; isError?: boolean }>) {
+          const prefix = tr.isError ? "[ERROR] " : "";
+          const content = tr.content || "(empty)";
+          const truncated = content.length > 2000 ? content.slice(0, 2000) + "\n... (truncated)" : content;
+          const indented = truncated.split("\n").map((l) => "         " + prefix + l).join("\n");
+          lines.push(indented);
+        }
+        lines.push(`       </TOOL_RESULTS>`);
+      } else {
+        lines.push(`       [${msg.tool_results.length} tool result${msg.tool_results.length === 1 ? "" : "s"}]`);
+      }
     }
 
     lines.push("");
