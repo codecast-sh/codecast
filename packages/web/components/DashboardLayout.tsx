@@ -2,7 +2,7 @@
 import { ReactNode, useState, useEffect, lazy, Suspense } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Group, Panel, Separator } from "react-resizable-panels";
+import { Panel, Group, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
@@ -10,6 +10,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { Button } from "./ui/button";
 import { Logo } from "./Logo";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
@@ -23,17 +24,37 @@ interface DashboardLayoutProps {
   hideSidebar?: boolean;
 }
 
+const LAYOUT_STORAGE_KEY = "dashboard-layout";
+const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
+
+const getInitialLayout = (): { sidebar: number; main: number } => {
+  if (typeof window === 'undefined') return DEFAULT_LAYOUT;
+  const stored = localStorage.getItem(LAYOUT_STORAGE_KEY);
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return DEFAULT_LAYOUT;
+    }
+  }
+  return DEFAULT_LAYOUT;
+};
+
+const getInitialCollapsed = () => {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem("sidebarCollapsed") === "true";
+};
+
 export function DashboardLayout({ children, filter, onFilterChange, directories, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [sidebarSize, setSidebarSize] = useState(18);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
+  const [layout, setLayout] = useState(getInitialLayout);
 
-  useEffect(() => {
-    const stored = localStorage.getItem("sidebarCollapsed");
-    if (stored !== null) {
-      setIsSidebarCollapsed(stored === "true");
-    }
-  }, []);
+  const handleLayoutChange = (newLayout: { [key: string]: number }) => {
+    const updated = { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 };
+    setLayout(updated);
+    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(updated));
+  };
 
   const toggleSidebar = () => {
     const newValue = !isSidebarCollapsed;
@@ -57,7 +78,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [hideSidebar, isSidebarCollapsed]);
 
-  const showSidebar = !hideSidebar && !isSidebarCollapsed;
   const user = useQuery(api.users.getCurrentUser);
   const team = useQuery(
     api.teams.getTeam,
@@ -73,7 +93,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
         <div className="px-2 sm:px-4 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Logo + toggle */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            <Logo size="sm" showText={false} />
+            <Logo size="sm" showText={true} />
             {!hideSidebar && (
               <>
                 <button
@@ -91,13 +111,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
                   aria-label={isSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
                   title={isSidebarCollapsed ? "Show sidebar (s)" : "Hide sidebar (s)"}
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    {isSidebarCollapsed ? (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-                    ) : (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-                    )}
-                  </svg>
+                  {isSidebarCollapsed ? (
+                    <PanelLeftOpen className="w-5 h-5" />
+                  ) : (
+                    <PanelLeftClose className="w-5 h-5" />
+                  )}
                 </button>
               </>
             )}
@@ -134,17 +152,21 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
 
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
-        <Group orientation="horizontal" id="dashboard-sidebar" style={{ height: '100%' }}>
-          {showSidebar && (
-            <>
-              <Panel
-                id="sidebar"
-                defaultSize={18}
-                minSize={5}
-                maxSize={50}
-                className="hidden md:flex"
-                onResize={(size) => setSidebarSize(size)}
-              >
+        {hideSidebar || isSidebarCollapsed ? (
+          <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div className="max-w-6xl mx-auto">
+              {children}
+            </div>
+          </div>
+        ) : (
+          <Group
+            orientation="horizontal"
+            className="h-full"
+            defaultLayout={layout}
+            onLayoutChange={handleLayoutChange}
+          >
+            <Panel id="sidebar" minSize={0}>
+              <div className="h-full bg-sol-bg-alt overflow-auto border-r border-sol-border/50">
                 <Sidebar
                   filter={filter}
                   onFilterChange={onFilterChange}
@@ -153,20 +175,19 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
                   onDirectoryFilterChange={onDirectoryFilterChange}
                   isMobileOpen={isMobileSidebarOpen}
                   onMobileClose={() => setIsMobileSidebarOpen(false)}
-                  isNarrow={sidebarSize < 12}
                 />
-              </Panel>
-              <Separator className="w-[2px] bg-sol-border/50 hover:bg-sol-cyan/60 active:bg-sol-cyan transition-colors hidden md:flex items-center justify-center cursor-col-resize" />
-            </>
-          )}
-          <Panel id="main" style={{ overflow: 'auto' }}>
-            <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
-              <div className="max-w-6xl mx-auto">
-                {children}
               </div>
-            </div>
-          </Panel>
-        </Group>
+            </Panel>
+            <Separator className="w-1.5 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors" />
+            <Panel id="main" minSize={0}>
+              <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+                <div className="max-w-6xl mx-auto">
+                  {children}
+                </div>
+              </div>
+            </Panel>
+          </Group>
+        )}
       </div>
 
       {/* Mobile sidebar overlay */}
