@@ -832,11 +832,13 @@ program
     "  codecast read jx70ntf 12:20             # Read messages 12-20\n" +
     "  codecast read jx70ntf 12:               # Read from message 12 to end\n" +
     "  codecast read jx70ntf :20               # Read first 20 messages\n" +
-    "  codecast read jx70ntf 15                # Read single message 15"
+    "  codecast read jx70ntf 15                # Read single message 15\n" +
+    "  codecast read jx70ntf 10:15 --full      # Show full tool call/result content"
   )
   .argument("<conversation-id>", "Conversation ID (can be truncated)")
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
-  .action(async (conversationId, range) => {
+  .option("-f, --full", "Show full tool call and tool result content")
+  .action(async (conversationId, range, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: codecast auth");
@@ -879,7 +881,7 @@ program
       }
 
       const { formatReadResult } = await import("./formatter.js");
-      console.log(formatReadResult(result));
+      console.log(formatReadResult(result, { full: options.full }));
     } catch (error) {
       console.error("Read failed:", error instanceof Error ? error.message : error);
       process.exit(1);
