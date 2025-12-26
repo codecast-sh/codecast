@@ -1192,9 +1192,11 @@ program
     "Get dashboard and share URLs for the current session\n\n" +
     "Examples:\n" +
     "  codecast links              # Get links for current project\n" +
-    "  codecast links --json       # Output as JSON"
+    "  codecast links --json       # Output as JSON\n" +
+    "  codecast links -s abc123    # Specific session ID"
   )
   .option("--json", "Output as JSON")
+  .option("-s, --session <id>", "Specific session ID (default: most recent)")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -1202,30 +1204,34 @@ program
       process.exit(1);
     }
 
-    const cwd = process.cwd();
-    const projectDir = cwd.replace(/\//g, "-");
-    const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
+    let sessionId = options.session;
 
-    if (!fs.existsSync(sessionsDir)) {
-      console.error("No Claude Code sessions found for current project");
-      process.exit(1);
+    if (!sessionId) {
+      const cwd = process.cwd();
+      const projectDir = cwd.replace(/\//g, "-");
+      const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
+
+      if (!fs.existsSync(sessionsDir)) {
+        console.error("No Claude Code sessions found for current project");
+        process.exit(1);
+      }
+
+      const files = fs.readdirSync(sessionsDir)
+        .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
+        .map(f => ({
+          name: f,
+          path: path.join(sessionsDir, f),
+          mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
+        }))
+        .sort((a, b) => b.mtime - a.mtime);
+
+      if (files.length === 0) {
+        console.error("No session files found for current project");
+        process.exit(1);
+      }
+
+      sessionId = path.basename(files[0].name, ".jsonl");
     }
-
-    const files = fs.readdirSync(sessionsDir)
-      .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
-      .map(f => ({
-        name: f,
-        path: path.join(sessionsDir, f),
-        mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
-      }))
-      .sort((a, b) => b.mtime - a.mtime);
-
-    if (files.length === 0) {
-      console.error("No session files found for current project");
-      process.exit(1);
-    }
-
-    const sessionId = path.basename(files[0].name, ".jsonl");
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {

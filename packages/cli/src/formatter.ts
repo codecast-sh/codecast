@@ -3,6 +3,16 @@ interface SearchMatch {
   role: string;
   content: string;
   timestamp: string;
+  tool_calls_count?: number;
+  tool_results_count?: number;
+}
+
+interface ContextMessage {
+  line: number;
+  role: string;
+  content: string;
+  tool_calls_count?: number;
+  tool_results_count?: number;
 }
 
 interface SearchConversation {
@@ -12,7 +22,7 @@ interface SearchConversation {
   updated_at: string;
   message_count: number;
   matches: SearchMatch[];
-  context: Array<{ line: number; role: string; content: string }>;
+  context: ContextMessage[];
 }
 
 interface SearchResult {
@@ -121,8 +131,12 @@ function wrapText(text: string, indent: string, maxWidth: number = 72): string {
 export function formatSearchResults(result: SearchResult): string {
   const lines: string[] = [];
 
+  lines.push("<SEARCHRESULTS>");
+
   if (result.total_matches === 0) {
-    return "No matches found.\n";
+    lines.push("No matches found.");
+    lines.push("</SEARCHRESULTS>");
+    return lines.join("\n");
   }
 
   lines.push(`Found ${result.total_matches} match${result.total_matches === 1 ? "" : "es"} in ${result.conversations.length} conversation${result.conversations.length === 1 ? "" : "s"}\n`);
@@ -140,15 +154,32 @@ export function formatSearchResults(result: SearchResult): string {
     ].filter(Boolean).join(" | ");
     lines.push(`   ${meta}\n`);
 
-    const allLines = [...conv.matches, ...conv.context].sort((a, b) => a.line - b.line);
+    const allMsgs = [...conv.matches, ...conv.context].sort((a, b) => a.line - b.line);
     const matchLines = new Set(conv.matches.map((m) => m.line));
 
-    for (const msg of allLines) {
+    for (const msg of allMsgs) {
       const lineNum = String(msg.line).padStart(4);
       const role = formatRole(msg.role);
-      const content = wrapText(msg.content, "       ");
       const prefix = matchLines.has(msg.line) ? "" : "-";
-      lines.push(`${prefix}${lineNum}: ${role} ${content}`);
+
+      const toolInfo: string[] = [];
+      if (msg.tool_calls_count) {
+        toolInfo.push(`${msg.tool_calls_count} tool call${msg.tool_calls_count === 1 ? "" : "s"}`);
+      }
+      if (msg.tool_results_count) {
+        toolInfo.push(`${msg.tool_results_count} tool result${msg.tool_results_count === 1 ? "" : "s"}`);
+      }
+
+      if (msg.content) {
+        lines.push(`${prefix}${lineNum}: ${role} ${msg.content}`);
+        if (toolInfo.length > 0) {
+          lines.push(`       [${toolInfo.join(", ")}]`);
+        }
+      } else if (toolInfo.length > 0) {
+        lines.push(`${prefix}${lineNum}: ${role} [${toolInfo.join(", ")}]`);
+      } else {
+        lines.push(`${prefix}${lineNum}: ${role} (empty)`);
+      }
     }
 
     lines.push("");
@@ -158,6 +189,8 @@ export function formatSearchResults(result: SearchResult): string {
     const firstId = truncateId(result.conversations[0].id);
     lines.push(`Use: codecast read ${firstId} <range>  # e.g., codecast read ${firstId} 10:20`);
   }
+
+  lines.push("</SEARCHRESULTS>");
 
   return lines.join("\n");
 }

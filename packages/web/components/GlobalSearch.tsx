@@ -35,7 +35,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   );
 }
 
-function getSnippet(content: string, query: string, maxLen = 120): string {
+function getSnippet(content: string, query: string, maxLen = 200): string {
   const lowerContent = content.toLowerCase();
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -49,8 +49,8 @@ function getSnippet(content: string, query: string, maxLen = 120): string {
 
   if (bestIndex === -1) return content.slice(0, maxLen);
 
-  const start = Math.max(0, bestIndex - 40);
-  const end = Math.min(content.length, bestIndex + 80);
+  const start = Math.max(0, bestIndex - 60);
+  const end = Math.min(content.length, bestIndex + 140);
   let snippet = content.slice(start, end);
 
   if (start > 0) snippet = "..." + snippet;
@@ -76,11 +76,21 @@ export function GlobalSearch() {
 
   const searchResults = useQuery(
     api.conversations.searchConversations,
-    debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 15 } : "skip"
+    debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 30 } : "skip"
   );
 
-  const flatResults = searchResults?.flatMap((r) =>
-    r.matches.map((m, i) => ({
+  const searchData = searchResults && "results" in searchResults ? searchResults : null;
+
+  const flatResults = searchData?.results?.flatMap((r: {
+    conversationId: string;
+    title: string;
+    matches: Array<{ messageId: string; content: string; role: string; timestamp: number }>;
+    updatedAt: number;
+    authorName: string;
+    isOwn: boolean;
+    messageCount: number;
+  }) =>
+    r.matches.map((m: { messageId: string; content: string; role: string; timestamp: number }, i: number) => ({
       conversationId: r.conversationId,
       title: r.title,
       content: m.content,
@@ -88,9 +98,13 @@ export function GlobalSearch() {
       timestamp: m.timestamp,
       authorName: r.authorName,
       isOwn: r.isOwn,
+      messageCount: r.messageCount,
       key: `${r.conversationId}-${i}`,
     }))
   ) || [];
+
+  const totalMatches = searchData?.totalMatches || 0;
+  const sessionCount = searchData?.results?.length || 0;
 
   const formatTimestamp = (ts: number) => {
     const date = new Date(ts);
@@ -197,13 +211,13 @@ export function GlobalSearch() {
       {isOpen && query.length >= 2 && (
         <>
           <div
-            className="fixed inset-0 z-40"
+            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
             onClick={() => {
               setIsOpen(false);
               setQuery("");
             }}
           />
-          <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/30 overflow-hidden">
+          <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-[#002b36] border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
                 <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
@@ -214,7 +228,11 @@ export function GlobalSearch() {
                 <p className="text-xs text-sol-text-dim">Try different keywords</p>
               </div>
             ) : (
-              <div className="max-h-[600px] overflow-y-auto divide-y divide-sol-border">
+              <div className="max-h-[600px] overflow-y-auto">
+                <div className="px-4 py-2 bg-[#073642] border-b border-sol-border text-xs text-sol-text-secondary">
+                  {totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} session{sessionCount !== 1 ? "s" : ""}
+                </div>
+                <div className="divide-y divide-sol-border">
                 {flatResults.map((result, index) => (
                   <button
                     key={result.key}
@@ -243,15 +261,19 @@ export function GlobalSearch() {
                       >
                         {result.role}
                       </span>
+                      <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg-alt rounded">
+                        {result.messageCount} msg{result.messageCount !== 1 ? "s" : ""}
+                      </span>
                       <span className="text-[10px] text-sol-text-dim ml-auto whitespace-nowrap">
                         {formatTimestamp(result.timestamp)}
                       </span>
                     </div>
-                    <p className="text-sm text-sol-text-secondary leading-relaxed line-clamp-2">
+                    <p className="text-sm text-sol-text-secondary leading-relaxed line-clamp-3">
                       {highlightMatch(getSnippet(result.content, query), query)}
                     </p>
                   </button>
                 ))}
+                </div>
               </div>
             )}
             <div className="px-3 py-2 bg-sol-bg-alt/80 border-t border-sol-border flex items-center justify-between text-[10px] text-sol-text-dim">
