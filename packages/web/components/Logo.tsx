@@ -5,78 +5,52 @@ interface LogoProps {
 }
 
 const sizes = {
-  sm: { icon: 20, text: "text-lg" },
-  md: { icon: 28, text: "text-xl" },
-  lg: { icon: 36, text: "text-2xl" },
-  xl: { icon: 48, text: "text-3xl" },
+  sm: { icon: 18, text: "text-base" },
+  md: { icon: 24, text: "text-lg" },
+  lg: { icon: 32, text: "text-xl" },
+  xl: { icon: 40, text: "text-2xl" },
 };
 
 export function Logo({ size = "md", showText = true, className = "" }: LogoProps) {
   const { icon, text } = sizes[size];
 
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <div className={`flex items-center gap-1.5 ${className}`}>
       <svg
         width={icon}
         height={icon}
-        viewBox="0 0 32 32"
+        viewBox="0 0 24 24"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
         className="shrink-0"
       >
-        {/* Outer bracket - left angle */}
+        {/* Left bracket */}
         <path
-          d="M10 6L3 16L10 26"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="text-sol-cyan"
-        />
-        {/* Outer bracket - right angle */}
-        <path
-          d="M22 6L29 16L22 26"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="text-sol-cyan"
-        />
-        {/* Broadcast waves - inner */}
-        <path
-          d="M12.5 12C13.9 10.6 15.8 10 16 10C16.2 10 18.1 10.6 19.5 12"
+          d="M8 4L3 12L8 20"
           stroke="currentColor"
           strokeWidth="2"
           strokeLinecap="round"
-          className="text-sol-yellow"
+          strokeLinejoin="round"
+          className="text-sol-text"
         />
-        {/* Broadcast waves - middle */}
+        {/* Right bracket */}
         <path
-          d="M11 9.5C13.2 7.3 15.5 6.5 16 6.5C16.5 6.5 18.8 7.3 21 9.5"
+          d="M16 4L21 12L16 20"
           stroke="currentColor"
           strokeWidth="2"
           strokeLinecap="round"
-          className="text-sol-orange"
+          strokeLinejoin="round"
+          className="text-sol-text"
         />
-        {/* Center dot */}
-        <circle
-          cx="16"
-          cy="16"
-          r="3"
+        {/* Play triangle */}
+        <path
+          d="M10 8L15 12L10 16V8Z"
           fill="currentColor"
-          className="text-sol-yellow"
-        />
-        {/* Signal line down */}
-        <path
-          d="M16 19V25"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          className="text-sol-yellow"
+          className="text-sol-cyan"
         />
       </svg>
       {showText && (
-        <span className={`font-mono font-semibold tracking-tight ${text}`}>
+        <span className={`font-semibold tracking-tight ${text} text-sol-text`}>
           codecast
         </span>
       )}
@@ -89,54 +63,31 @@ export function LogoIcon({ size = 24, className = "" }: { size?: number; classNa
     <svg
       width={size}
       height={size}
-      viewBox="0 0 32 32"
+      viewBox="0 0 24 24"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
     >
       <path
-        d="M10 6L3 16L10 26"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="text-sol-cyan"
-      />
-      <path
-        d="M22 6L29 16L22 26"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="text-sol-cyan"
-      />
-      <path
-        d="M12.5 12C13.9 10.6 15.8 10 16 10C16.2 10 18.1 10.6 19.5 12"
+        d="M8 4L3 12L8 20"
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
-        className="text-sol-yellow"
+        strokeLinejoin="round"
+        className="text-sol-text"
       />
       <path
-        d="M11 9.5C13.2 7.3 15.5 6.5 16 6.5C16.5 6.5 18.8 7.3 21 9.5"
+        d="M16 4L21 12L16 20"
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
-        className="text-sol-orange"
+        strokeLinejoin="round"
+        className="text-sol-text"
       />
-      <circle
-        cx="16"
-        cy="16"
-        r="3"
+      <path
+        d="M10 8L15 12L10 16V8Z"
         fill="currentColor"
-        className="text-sol-yellow"
-      />
-      <path
-        d="M16 19V25"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        className="text-sol-yellow"
+        className="text-sol-cyan"
       />
     </svg>
   );
