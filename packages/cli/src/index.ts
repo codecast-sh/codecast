@@ -464,8 +464,65 @@ async function runAuth(): Promise<void> {
     startDaemon();
   }
 
+  await promptMemoryEnablement();
+
   console.log("\nStatus:");
   showStatus();
+}
+
+async function promptMemoryEnablement(): Promise<void> {
+  const claudeMdPath = path.join(os.homedir(), ".claude", "CLAUDE.md");
+  const memorySnippet = `
+## Memory
+
+Use \`codecast search "query"\` to search your conversation history for relevant context.
+`;
+
+  if (fs.existsSync(claudeMdPath)) {
+    const content = fs.readFileSync(claudeMdPath, "utf-8");
+    if (content.includes("codecast search")) {
+      return;
+    }
+  }
+
+  const readline = await import("readline");
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const answer = await new Promise<string>((resolve) => {
+    console.log("\n--- Agent Memory ---");
+    console.log("Would you like to enable memory for Claude Code?");
+    console.log("This lets your agent search past conversations for context.\n");
+    rl.question("Enable agent memory? [Y/n] ", (ans) => {
+      rl.close();
+      resolve(ans.trim().toLowerCase());
+    });
+  });
+
+  if (answer === "" || answer === "y" || answer === "yes") {
+    try {
+      const claudeDir = path.join(os.homedir(), ".claude");
+      if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+      }
+
+      let existing = "";
+      if (fs.existsSync(claudeMdPath)) {
+        existing = fs.readFileSync(claudeMdPath, "utf-8");
+      }
+
+      fs.writeFileSync(claudeMdPath, existing + memorySnippet, { mode: 0o600 });
+      console.log(`\nMemory enabled. Added to ${claudeMdPath}`);
+      console.log("Your agent can now use: codecast search \"query\"");
+    } catch (err) {
+      console.error("Could not update CLAUDE.md:", err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.log("\nSkipped. You can enable later by adding to ~/.claude/CLAUDE.md:");
+    console.log('  Use `codecast search "query"` to search conversation history.');
+  }
 }
 
 async function runSync(): Promise<void> {
@@ -770,14 +827,17 @@ program
 program
   .command("search")
   .description(
-    "Search across all conversations\n\n" +
+    "Search conversation history for context\n\n" +
+    "By default, searches only sessions from the current project.\n" +
+    "Use -g to search all sessions globally.\n\n" +
     "Examples:\n" +
-    "  codecast search \"auth implementation\"     # Basic search\n" +
-    "  codecast search \"oauth\" -A 2 -B 1         # With context lines\n" +
-    "  codecast search \"middleware\" -C 3         # Context before and after\n" +
+    "  codecast search \"auth implementation\"     # Search current project\n" +
+    "  codecast search \"oauth\" -g                # Search all sessions\n" +
+    "  codecast search \"middleware\" -C 3         # With context lines\n" +
     "  codecast search \"auth\" --limit 5          # Limit results"
   )
   .argument("<query>", "Search query (min 2 characters)")
+  .option("-g, --global", "Search all sessions (not just current project)")
   .option("-A, --after <n>", "Show N messages after each match", "0")
   .option("-B, --before <n>", "Show N messages before each match", "0")
   .option("-C, --context <n>", "Show N messages before and after each match")
@@ -792,6 +852,7 @@ program
     const contextBefore = options.context ? parseInt(options.context) : parseInt(options.before);
     const contextAfter = options.context ? parseInt(options.context) : parseInt(options.after);
     const limit = parseInt(options.limit);
+    const projectPath = options.global ? undefined : process.cwd();
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
@@ -805,6 +866,7 @@ program
           limit,
           context_before: contextBefore,
           context_after: contextAfter,
+          project_path: projectPath,
         }),
       });
 
@@ -816,7 +878,7 @@ program
       }
 
       const { formatSearchResults } = await import("./formatter.js");
-      console.log(formatSearchResults(result));
+      console.log(formatSearchResults(result, { projectPath }));
     } catch (error) {
       console.error("Search failed:", error instanceof Error ? error.message : error);
       process.exit(1);

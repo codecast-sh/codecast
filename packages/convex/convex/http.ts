@@ -220,7 +220,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, query, limit, context_before, context_after } = body;
+      const { api_token, query, limit, context_before, context_after, project_path } = body;
 
       if (!api_token || !query) {
         return new Response(JSON.stringify({ error: "Missing api_token or query" }), {
@@ -235,6 +235,7 @@ http.route({
         limit,
         context_before,
         context_after,
+        project_path,
       });
 
       if (result.error) {

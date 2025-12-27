@@ -28,6 +28,11 @@ interface SearchConversation {
 interface SearchResult {
   total_matches: number;
   conversations: SearchConversation[];
+  search_scope?: string;
+}
+
+interface SearchOptions {
+  projectPath?: string;
 }
 
 interface ReadMessage {
@@ -128,13 +133,17 @@ function wrapText(text: string, indent: string, maxWidth: number = 72): string {
   return lines.join("\n");
 }
 
-export function formatSearchResults(result: SearchResult): string {
+export function formatSearchResults(result: SearchResult, options: SearchOptions = {}): string {
   const lines: string[] = [];
 
   lines.push("<SEARCHRESULTS>");
 
   if (result.total_matches === 0) {
     lines.push("No matches found.");
+    if (options.projectPath) {
+      lines.push(`\nSearching: ${truncatePath(options.projectPath)}`);
+      lines.push("Use -g to search all sessions globally.");
+    }
     lines.push("</SEARCHRESULTS>");
     return lines.join("\n");
   }
@@ -189,6 +198,11 @@ export function formatSearchResults(result: SearchResult): string {
     const firstId = truncateId(result.conversations[0].id);
     lines.push(`Use: codecast read ${firstId} <range>        # read messages by line range`);
     lines.push(`     codecast read ${firstId} <range> --full  # include full tool call/result content`);
+  }
+
+  if (options.projectPath) {
+    lines.push(`\nSearching: ${truncatePath(options.projectPath)}`);
+    lines.push("Use -g to search all sessions globally.");
   }
 
   lines.push("</SEARCHRESULTS>");
