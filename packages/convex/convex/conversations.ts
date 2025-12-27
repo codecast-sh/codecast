@@ -1164,6 +1164,7 @@ export const searchForCLI = mutation({
     limit: v.optional(v.number()),
     context_before: v.optional(v.number()),
     context_after: v.optional(v.number()),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -1183,6 +1184,7 @@ export const searchForCLI = mutation({
     const limit = args.limit ?? 10;
     const contextBefore = args.context_before ?? 0;
     const contextAfter = args.context_after ?? 0;
+    const projectPath = args.project_path;
 
     const searchResults = await ctx.db
       .query("messages")
@@ -1231,6 +1233,10 @@ export const searchForCLI = mutation({
         if (!user.team_id || conv.team_id?.toString() !== user.team_id.toString()) {
           continue;
         }
+      }
+
+      if (projectPath && conv.project_path !== projectPath) {
+        continue;
       }
 
       const allMessages = await ctx.db
@@ -1328,6 +1334,7 @@ export const searchForCLI = mutation({
     return {
       total_matches: totalMatches,
       conversations: results,
+      search_scope: projectPath || "global",
     };
   },
 });
