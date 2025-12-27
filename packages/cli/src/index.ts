@@ -3,6 +3,7 @@ import { Command } from "commander";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
 import { spawn, spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
