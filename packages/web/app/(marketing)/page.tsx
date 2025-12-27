@@ -203,13 +203,13 @@ export default function LandingPage() {
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-6 pt-20 pb-8">
         <div className="text-center max-w-3xl mx-auto">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium mb-6">
+          <Link href="#mobile-app" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium mb-6 hover:bg-amber-100 transition-colors">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
             </span>
-            Now with iOS app
-          </div>
+            Now with Mobile App
+          </Link>
 
           <h1 className="text-5xl md:text-6xl font-bold text-stone-900 leading-[1.1] tracking-tight mb-6">
             Your AI coding sessions,<br />
@@ -324,7 +324,7 @@ export default function LandingPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-lg mb-1">Real-time sync</h3>
-                    <p className="text-stone-400">Watch your agent work from your phone while you grab coffee. Every message, tool call, and file change syncs instantly.</p>
+                    <p className="text-stone-400">Watch your agent work from anywhere. Send messages, approve changes, and keep coding from your phone or tablet.</p>
                   </div>
                 </div>
 
@@ -422,6 +422,98 @@ export default function LandingPage() {
               </svg>
               Open source
             </span>
+          </div>
+        </div>
+      </section>
+
+      {/* Mobile App */}
+      <section id="mobile-app" className="max-w-6xl mx-auto px-6 py-20">
+        <div className="grid md:grid-cols-2 gap-12 items-center">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium mb-4">
+              iOS & Android
+            </div>
+            <h2 className="text-3xl font-bold text-stone-900 mb-4">
+              Code on the go
+            </h2>
+            <p className="text-lg text-stone-600 leading-relaxed mb-6">
+              Your AI coding sessions, always in your pocket. Watch your agent work in real-time,
+              send messages, review changes, and keep projects moving from anywhere.
+            </p>
+            <ul className="space-y-3 text-stone-600 mb-8">
+              <li className="flex items-center gap-3">
+                <svg className="w-5 h-5 text-green-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                Live session streaming with push notifications
+              </li>
+              <li className="flex items-center gap-3">
+                <svg className="w-5 h-5 text-green-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                Send messages and prompts to your agent
+              </li>
+              <li className="flex items-center gap-3">
+                <svg className="w-5 h-5 text-green-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                Review diffs and approve changes remotely
+              </li>
+              <li className="flex items-center gap-3">
+                <svg className="w-5 h-5 text-green-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                Search your full session history
+              </li>
+            </ul>
+            <div className="flex gap-3">
+              <a href="https://apps.apple.com/app/codecast" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-lg hover:bg-stone-800 transition-colors font-medium">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                </svg>
+                App Store
+              </a>
+              <a href="https://play.google.com/store/apps/details?id=sh.codecast" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-lg hover:bg-stone-800 transition-colors font-medium">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M3.609 1.814L13.792 12 3.61 22.186a.996.996 0 01-.61-.92V2.734a1 1 0 01.609-.92zm10.89 10.893l2.302 2.302-10.937 6.333 8.635-8.635zm3.199-3.198l2.807 1.626a1 1 0 010 1.73l-2.808 1.626L15.206 12l2.492-2.491zM5.864 2.658L16.802 8.99l-2.303 2.303-8.635-8.635z"/>
+                </svg>
+                Play Store
+              </a>
+            </div>
+          </div>
+          <div className="relative">
+            <div className="absolute -inset-4 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-red-500/10 rounded-3xl blur-2xl"></div>
+            <div className="relative bg-stone-900 rounded-[2.5rem] p-3 shadow-2xl max-w-[280px] mx-auto">
+              <div className="bg-[#002b36] rounded-[2rem] overflow-hidden">
+                <div className="h-6 bg-stone-900 flex items-center justify-center">
+                  <div className="w-20 h-4 bg-stone-800 rounded-full"></div>
+                </div>
+                <div className="p-4 space-y-3 font-mono text-xs">
+                  <div className="flex items-center gap-2 text-[#586e75]">
+                    <span className="text-green-400">●</span>
+                    <span>Live session</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <div className="w-5 h-5 rounded bg-[#268bd2] flex items-center justify-center text-[10px] text-white font-bold shrink-0">U</div>
+                    <p className="text-[#93a1a1] text-[11px]">add tests for the auth module</p>
+                  </div>
+                  <div className="ml-7 flex items-center gap-1.5 text-[10px]">
+                    <span className="px-1 py-0.5 rounded bg-[#b58900]/20 text-[#b58900]">Edit</span>
+                    <span className="text-[#657b83]">auth.test.ts</span>
+                    <span className="text-[#859900]">+84</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <div className="w-5 h-5 rounded bg-[#cb4b16] flex items-center justify-center text-[10px] text-white font-bold shrink-0">C</div>
+                    <p className="text-[#eee8d5] text-[11px]">Added 12 test cases covering login, logout, and token refresh.</p>
+                  </div>
+                </div>
+                <div className="p-3 border-t border-[#094959]">
+                  <div className="bg-[#073642] rounded-lg px-3 py-2 text-[11px] text-[#586e75]">
+                    Send a message...
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
