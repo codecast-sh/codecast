@@ -33,7 +33,7 @@ export const updateSyncCursor = mutation({
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId || authUserId.toString() !== args.user_id.toString()) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
     const existing = await ctx.db
       .query("sync_cursors")

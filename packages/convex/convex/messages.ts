@@ -64,7 +64,7 @@ export const addMessage = mutation({
 
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
     if (conversation.user_id.toString() !== authUserId.toString()) {
       throw new Error("Unauthorized: can only add messages to your own conversations");
