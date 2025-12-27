@@ -477,6 +477,21 @@ async function promptMemoryEnablement(): Promise<void> {
 ## Memory
 
 Use \`codecast search "query"\` to search your conversation history for relevant context.
+
+**When to search memory:**
+- User references past work ("how did we implement...", "remember when we...")
+- Debugging regressions ("this used to work", "what changed recently")
+- Understanding decisions ("why is it done this way?")
+- Finding prior solutions to similar problems
+- Continuing work from a previous session
+
+**Commands:**
+\`\`\`bash
+codecast search "auth middleware"     # find relevant conversations
+codecast search "bug fix" -C 2        # with 2 messages context
+codecast read <id> 15:25              # read messages 15-25
+codecast read <id> 15:25 --full       # include tool call/result content
+\`\`\`
 `;
 
   if (fs.existsSync(claudeMdPath)) {
