@@ -61,7 +61,10 @@ interface DaemonState {
   pendingQueueSize?: number;
   timestamp?: number;
   authExpired?: boolean;
+  authFailureCount?: number;
 }
+
+const AUTH_FAILURE_THRESHOLD = 5;
 
 
 function log(message: string): void {
@@ -152,6 +155,28 @@ function saveDaemonState(updates: Partial<DaemonState>): void {
     fs.writeFileSync(STATE_FILE, JSON.stringify(newState, null, 2), { mode: 0o600 });
   } catch (err) {
     log(`Failed to write daemon state: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function handleAuthFailure(): boolean {
+  const state = readDaemonState();
+  const currentCount = (state.authFailureCount || 0) + 1;
+
+  if (currentCount >= AUTH_FAILURE_THRESHOLD) {
+    log(`Auth failed ${currentCount} times consecutively - marking auth as expired`);
+    saveDaemonState({ authExpired: true, authFailureCount: currentCount });
+    return true;
+  }
+
+  log(`Auth failure ${currentCount}/${AUTH_FAILURE_THRESHOLD} - will retry`);
+  saveDaemonState({ authFailureCount: currentCount });
+  return false;
+}
+
+function resetAuthFailureCount(): void {
+  const state = readDaemonState();
+  if (state.authFailureCount && state.authFailureCount > 0) {
+    saveDaemonState({ authFailureCount: 0 });
   }
 }
 
@@ -380,10 +405,12 @@ async function processSessionFile(
       }
     } catch (err) {
       if (err instanceof AuthExpiredError) {
-        log("⚠️  Authentication expired - sync paused");
-        saveDaemonState({ authExpired: true });
-        setPosition(filePath, stats.size);
-        return;
+        if (handleAuthFailure()) {
+          log("⚠️  Authentication expired - sync paused");
+          setPosition(filePath, stats.size);
+          return;
+        }
+        // Let it fall through to retry queue
       }
 
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -453,11 +480,14 @@ async function processSessionFile(
         images: msg.images,
         subtype: msg.subtype,
       });
+      resetAuthFailureCount();
     } catch (err) {
       if (err instanceof AuthExpiredError) {
-        log("⚠️  Authentication expired - sync paused");
-        saveDaemonState({ authExpired: true });
-        return;
+        if (handleAuthFailure()) {
+          log("⚠️  Authentication expired - sync paused");
+          return;
+        }
+        // Continue to error handling - will retry
       }
 
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -685,10 +715,12 @@ async function processCursorSession(
       }
     } catch (err) {
       if (err instanceof AuthExpiredError) {
-        log("⚠️  Authentication expired - sync paused");
-        saveDaemonState({ authExpired: true });
-        setPosition(dbPath, maxRowId);
-        return;
+        if (handleAuthFailure()) {
+          log("⚠️  Authentication expired - sync paused");
+          setPosition(dbPath, maxRowId);
+          return;
+        }
+        // Let it fall through to retry queue
       }
 
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -742,11 +774,14 @@ async function processCursorSession(
         images: msg.images,
         subtype: msg.subtype,
       });
+      resetAuthFailureCount();
     } catch (err) {
       if (err instanceof AuthExpiredError) {
-        log("⚠️  Authentication expired - sync paused");
-        saveDaemonState({ authExpired: true });
-        return;
+        if (handleAuthFailure()) {
+          log("⚠️  Authentication expired - sync paused");
+          return;
+        }
+        // Continue to error handling - will retry
       }
 
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -968,10 +1003,12 @@ async function processCodexSession(
         }
       } catch (err) {
         if (err instanceof AuthExpiredError) {
-          log("⚠️  Authentication expired - sync paused");
-          saveDaemonState({ authExpired: true });
-          setPosition(filePath, stats.size);
-          return;
+          if (handleAuthFailure()) {
+            log("⚠️  Authentication expired - sync paused");
+            setPosition(filePath, stats.size);
+            return;
+          }
+          // Let it fall through to retry queue
         }
 
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -1027,11 +1064,14 @@ async function processCodexSession(
           images: msg.images,
           subtype: msg.subtype,
         });
+        resetAuthFailureCount();
       } catch (err) {
         if (err instanceof AuthExpiredError) {
-          log("⚠️  Authentication expired - sync paused");
-          saveDaemonState({ authExpired: true });
-          return;
+          if (handleAuthFailure()) {
+            log("⚠️  Authentication expired - sync paused");
+            return;
+          }
+          // Continue to error handling - will retry
         }
 
         const errMsg = err instanceof Error ? err.message : String(err);

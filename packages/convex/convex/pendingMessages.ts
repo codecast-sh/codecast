@@ -32,7 +32,7 @@ export const sendMessageToSession = mutation({
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
 
     const conversation = await ctx.db.get(args.conversation_id);
@@ -75,7 +75,7 @@ export const updateMessageStatus = mutation({
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
 
     const message = await ctx.db.get(args.message_id);
@@ -104,7 +104,7 @@ export const retryMessage = mutation({
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
 
     const message = await ctx.db.get(args.message_id);
@@ -133,7 +133,7 @@ export const getPendingMessages = query({
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
 
     const targetUserId = args.user_id || authUserId;
@@ -161,7 +161,7 @@ export const getMessageStatus = query({
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
 
     const message = await ctx.db.get(args.message_id);

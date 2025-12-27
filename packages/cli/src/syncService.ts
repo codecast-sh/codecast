@@ -20,14 +20,28 @@ function truncate(str: string, maxLen: number): string {
 
 function isAuthError(error: any): boolean {
   const message = (error?.message || String(error)).toLowerCase();
+
+  // Skip transient server errors - these are NOT auth errors
+  if (
+    message.includes("server error") ||
+    message.includes("request id:") ||
+    message.includes("optimisticconcurrencycontrolfailure") ||
+    message.includes("rate limit") ||
+    message.includes("timeout") ||
+    message.includes("network") ||
+    message.includes("econnrefused") ||
+    message.includes("econnreset")
+  ) {
+    return false;
+  }
+
+  // Only match definitive auth errors, not generic "unauthorized"
   return (
-    message.includes("unauthenticated") ||
     message.includes("invalid token") ||
     message.includes("token expired") ||
+    message.includes("token not found") ||
     message.includes("authentication failed") ||
-    (message.includes("auth") && message.includes("expired")) ||
-    message.includes("401") ||
-    message.includes("unauthorized")
+    (message.includes("auth") && message.includes("expired"))
   );
 }
 

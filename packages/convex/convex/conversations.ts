@@ -64,7 +64,7 @@ export const createConversation = mutation({
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
     if (authUserId.toString() !== args.user_id.toString()) {
       throw new Error("Unauthorized: can only create conversations for yourself");
@@ -1076,7 +1076,7 @@ export const setPrivacyBySessionId = mutation({
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
 
     const conversation = await ctx.db
@@ -1455,7 +1455,7 @@ export const updateTitle = mutation({
 
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
-      throw new Error("Unauthorized: valid session or API token required");
+      throw new Error("Authentication failed: invalid token or session");
     }
 
     const isOwner = conversation.user_id.toString() === authUserId.toString();
