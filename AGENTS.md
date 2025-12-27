@@ -1,10 +1,16 @@
 # Agent Notes
 
+## Dev Server
+
+Run dev server:
+```bash
+./dev.sh      # http://local.codecast.sh (usually already running at this address)
+./dev.sh 1    # http://local.1.codecast.sh
+./dev.sh 2    # http://local.2.codecast.sh
+```
+
 ## Test Credentials
-For testing the web app locally, use:
-- Email: ashot@almostcandid.com
-- Password: TEST_USER_PASS
-These are also stored in packages/web/.env.local as TEST_USER_EMAIL and TEST_USER_PASSWORD.
+For testing the web app locally see email and password in packages/web/.env.local as TEST_USER_EMAIL and TEST_USER_PASSWORD.
 
 ## Debugging Lessons
 

@@ -379,9 +379,9 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
       )}
       <nav
         className={`
-          h-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt shadow-[4px_0_16px_-2px_rgba(0,0,0,0.15)] overflow-y-auto
+          h-full w-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt/80 shadow-[6px_0_20px_rgba(0,0,0,0.12)] overflow-y-auto
           md:flex
-          ${isMobileOpen ? 'fixed top-0 left-0 z-40 w-[85vw] max-w-xs h-screen' : 'hidden'}
+          ${isMobileOpen ? 'fixed top-0 left-0 z-40 w-[85vw] max-w-xs h-screen bg-sol-bg-alt' : 'hidden'}
         `}
       >
         {sidebarContent}

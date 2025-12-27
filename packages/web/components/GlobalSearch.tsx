@@ -211,7 +211,7 @@ export function GlobalSearch() {
       {isOpen && query.length >= 2 && (
         <>
           <div
-            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+            className="fixed inset-0 z-40 bg-black/30"
             onClick={() => {
               setIsOpen(false);
               setQuery("");
