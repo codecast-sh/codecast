@@ -19,12 +19,13 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const reason = searchParams.get("reason");
   const returnTo = searchParams.get("return_to");
+  const redirectTo = returnTo || "/dashboard";
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.push(returnTo || "/dashboard");
+      router.replace(redirectTo);
     }
-  }, [isAuthenticated, isLoading, router, returnTo]);
+  }, [isAuthenticated, isLoading, router, redirectTo]);
 
   if (isLoading || isAuthenticated) {
     return (
@@ -52,6 +53,7 @@ function LoginForm() {
 
     try {
       await signIn("password", { email, password, flow: "signIn" });
+      router.replace(redirectTo);
     } catch (err) {
       if (err instanceof Error) {
         if (err.message.includes("Invalid") || err.message.includes("credentials")) {

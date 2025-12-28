@@ -19,12 +19,13 @@ function SignUpForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to");
+  const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/dashboard";
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.push(returnTo ? decodeURIComponent(returnTo) : "/dashboard");
+      router.replace(redirectTo);
     }
-  }, [isAuthenticated, isLoading, router, returnTo]);
+  }, [isAuthenticated, isLoading, router, redirectTo]);
 
   if (isLoading || isAuthenticated) {
     return (
@@ -56,6 +57,7 @@ function SignUpForm() {
 
     try {
       await signIn("password", { email, password, flow: "signUp" });
+      router.replace(redirectTo);
     } catch (err) {
       if (err instanceof Error) {
         if (
