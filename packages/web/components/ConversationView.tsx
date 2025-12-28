@@ -2133,7 +2133,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {timeline.length > 0 && (
-        <div className="absolute bottom-20 right-6 z-30 flex flex-col gap-2">
+        <div className="fixed bottom-24 right-8 z-30 flex flex-col gap-2">
           {!userScrolled && (
             <button
               onClick={() => {
