@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
@@ -852,10 +852,6 @@ export const getSharedConversation = query({
 
     const conversation = conversations[0];
 
-    if (conversation.is_private !== false) {
-      return null;
-    }
-
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q) =>
@@ -1100,6 +1096,54 @@ export const setPrivacyBySessionId = mutation({
   },
 });
 
+export const makeAllPrivate = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized: must be logged in");
+    }
+
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .filter((q) => q.neq(q.field("is_private"), true))
+      .collect();
+
+    let updated = 0;
+    for (const conv of conversations) {
+      await ctx.db.patch(conv._id, { is_private: true });
+      updated++;
+    }
+
+    return { updated, total: conversations.length };
+  },
+});
+
+export const makeAllPrivateAdmin = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batchSize = args.limit ?? 100;
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_private", (q) =>
+        q.eq("user_id", args.user_id).eq("is_private", false)
+      )
+      .take(batchSize);
+
+    let updated = 0;
+    for (const conv of conversations) {
+      await ctx.db.patch(conv._id, { is_private: true });
+      updated++;
+    }
+
+    return { updated, hasMore: conversations.length === batchSize };
+  },
+});
+
 export const getConversationBySessionId = query({
   args: {
     session_id: v.string(),
@@ -1144,9 +1188,7 @@ export const getSessionLinks = mutation({
     let shareToken = conversation.share_token;
     if (!shareToken) {
       shareToken = generateShareToken();
-      await ctx.db.patch(conversation._id, { share_token: shareToken, is_private: false });
-    } else if (conversation.is_private !== false) {
-      await ctx.db.patch(conversation._id, { is_private: false });
+      await ctx.db.patch(conversation._id, { share_token: shareToken });
     }
 
     return {
@@ -1713,10 +1755,6 @@ export const forkConversation = mutation({
     }
 
     const original = originalConversations[0];
-
-    if (original.is_private !== false) {
-      throw new Error("Cannot fork a private conversation");
-    }
 
     const authUser = await ctx.db.get(authUserId);
     if (!authUser) {
