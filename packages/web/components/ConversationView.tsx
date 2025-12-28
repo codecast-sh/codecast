@@ -1958,7 +1958,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   return (
-    <main className={`flex flex-col bg-sol-bg ${embedded ? "" : "h-screen"}`}>
+    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "" : "h-screen"}`}>
       <header className={`border-b border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "sticky top-0 z-20 -mx-[9999px] px-[9999px]" : ""}`}>
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1">
           <div className="flex items-center gap-2 min-w-0">
@@ -2131,6 +2131,39 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         )}
       </div>
+
+      {timeline.length > 0 && (
+        <div className="absolute bottom-20 right-6 z-30 flex flex-col gap-2">
+          {!userScrolled && (
+            <button
+              onClick={() => {
+                virtualizer.scrollToIndex(0, { align: "start", behavior: "smooth" });
+                setUserScrolled(true);
+              }}
+              className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
+              aria-label="Scroll to top"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+              </svg>
+            </button>
+          )}
+          {userScrolled && (
+            <button
+              onClick={() => {
+                virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
+                setUserScrolled(false);
+              }}
+              className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
+              aria-label="Scroll to bottom"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
 
       {pendingPermissions && pendingPermissions.length > 0 && (
         <div className={`border-t border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
