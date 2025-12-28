@@ -8,6 +8,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const hasBeenAuthenticated = useRef(false);
   const [authCheckComplete, setAuthCheckComplete] = useState(false);
+  const checkCount = useRef(0);
 
   if (isAuthenticated) {
     hasBeenAuthenticated.current = true;
@@ -15,10 +16,16 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!isLoading) {
-      const timer = setTimeout(() => setAuthCheckComplete(true), 100);
-      return () => clearTimeout(timer);
+      if (isAuthenticated) {
+        setAuthCheckComplete(true);
+      } else {
+        checkCount.current += 1;
+        const delay = checkCount.current === 1 ? 500 : 100;
+        const timer = setTimeout(() => setAuthCheckComplete(true), delay);
+        return () => clearTimeout(timer);
+      }
     }
-  }, [isLoading]);
+  }, [isLoading, isAuthenticated]);
 
   useEffect(() => {
     if (authCheckComplete && !isAuthenticated) {
