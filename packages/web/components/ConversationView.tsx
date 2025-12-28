@@ -2137,7 +2137,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           {!userScrolled && (
             <button
               onClick={() => {
-                virtualizer.scrollToIndex(0, { align: "start", behavior: "smooth" });
+                if (embedded && containerRef.current) {
+                  let el = containerRef.current.parentElement;
+                  while (el) {
+                    const style = getComputedStyle(el);
+                    if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+                      el.scrollTo({ top: 0, behavior: 'smooth' });
+                      break;
+                    }
+                    el = el.parentElement;
+                  }
+                } else {
+                  virtualizer.scrollToIndex(0, { align: "start", behavior: "smooth" });
+                }
                 setUserScrolled(true);
               }}
               className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
@@ -2151,7 +2163,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           {userScrolled && (
             <button
               onClick={() => {
-                virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
+                if (embedded && containerRef.current) {
+                  let el = containerRef.current.parentElement;
+                  while (el) {
+                    const style = getComputedStyle(el);
+                    if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+                      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+                      break;
+                    }
+                    el = el.parentElement;
+                  }
+                } else {
+                  virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
+                }
                 setUserScrolled(false);
               }}
               className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
