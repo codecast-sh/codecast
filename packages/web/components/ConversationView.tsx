@@ -1656,8 +1656,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const container = containerRef.current;
     if (!container) return;
 
+    // When embedded, find the scrollable parent (DashboardLayout's scroll container)
+    const getScrollContainer = () => {
+      if (!embedded) return container;
+      let el = container.parentElement;
+      while (el) {
+        const style = getComputedStyle(el);
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+          return el;
+        }
+        el = el.parentElement;
+      }
+      return container;
+    };
+
+    const scrollContainer = getScrollContainer();
+
     const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = container;
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
       setUserScrolled(!isNearBottom);
 
@@ -1669,9 +1685,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     };
 
-    container.addEventListener("scroll", handleScroll);
-    return () => container.removeEventListener("scroll", handleScroll);
-  }, [hasMoreAbove, isLoadingOlder, onLoadOlder]);
+    scrollContainer.addEventListener("scroll", handleScroll);
+    return () => scrollContainer.removeEventListener("scroll", handleScroll);
+  }, [embedded, hasMoreAbove, isLoadingOlder, onLoadOlder]);
 
   // Restore scroll position after loading older messages
   useEffect(() => {
