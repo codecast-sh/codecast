@@ -1298,7 +1298,7 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
-function MessageInput({ conversationId }: { conversationId: string }) {
+function MessageInput({ conversationId, embedded }: { conversationId: string; embedded?: boolean }) {
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
@@ -1329,7 +1329,7 @@ function MessageInput({ conversationId }: { conversationId: string }) {
   };
 
   return (
-    <div className="border-t border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
+    <div className={`border-t border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
       <form onSubmit={handleSubmit} className="max-w-4xl mx-auto px-4 py-3">
         <div className="flex items-center gap-2">
           <input
@@ -1848,7 +1848,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <main className={`flex flex-col bg-sol-bg ${embedded ? "" : "h-screen"}`}>
-      <header className="border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
+      <header className={`border-b border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0 ${embedded ? "sticky top-0 z-20 -mx-[9999px] px-[9999px]" : ""}`}>
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1.5 sm:py-2">
           <div className="flex items-center gap-2 min-w-0">
             <Link
@@ -2022,7 +2022,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {pendingPermissions && pendingPermissions.length > 0 && (
-        <div className="border-t border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0">
+        <div className={`border-t border-sol-border bg-sol-bg-alt/80 backdrop-blur shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
           <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-3 space-y-2">
             {pendingPermissions.map((permission) => (
               <PermissionCard key={permission._id} permission={permission} />
@@ -2032,7 +2032,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       {conversation && conversation.status === "active" && (
-        <MessageInput conversationId={conversation._id} />
+        <MessageInput conversationId={conversation._id} embedded={embedded} />
       )}
 
       {commentMessageId && conversation && (
