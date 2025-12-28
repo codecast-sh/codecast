@@ -25,8 +25,8 @@ export function EmptyState({ title, description, action }: EmptyStateProps) {
           />
         </svg>
       </div>
-      <h3 className="text-lg font-medium text-white mb-2">{title}</h3>
-      <p className="text-sol-base0 max-w-sm mb-4">{description}</p>
+      <h3 className="text-lg font-medium text-sol-text mb-2">{title}</h3>
+      <p className="text-sol-text-muted max-w-sm mb-4">{description}</p>
       {action && (
         <a
           href={action.href}
