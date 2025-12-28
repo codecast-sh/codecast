@@ -607,7 +607,7 @@ export const listConversations = query({
       return { conversations: [], nextCursor: null };
     }
 
-    const limit = args.limit ?? 500;
+    const limit = args.limit ?? 50;
     const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
     let conversations;
@@ -617,7 +617,7 @@ export const listConversations = query({
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .order("desc");
 
-      const allResults = await query.take(limit + 1 + (cursorTimestamp ? 500 : 0));
+      const allResults = await query.take(limit + 1 + (cursorTimestamp ? 100 : 0));
 
       let filtered = allResults;
       if (cursorTimestamp) {
@@ -625,7 +625,7 @@ export const listConversations = query({
       }
       conversations = filtered.slice(0, limit + 1);
     } else {
-      const fetchLimit = cursorTimestamp ? 500 : (limit + 1) * 2;
+      const fetchLimit = cursorTimestamp ? 200 : (limit + 1) * 3;
       const allConversations = await ctx.db
         .query("conversations")
         .order("desc")
@@ -661,16 +661,15 @@ export const listConversations = query({
             q.eq("conversation_id", c._id)
           )
           .order("asc")
-          .take(20);
+          .take(5);
 
-        // Also fetch recent messages to get latest todos
         const recentMessages = await ctx.db
           .query("messages")
           .withIndex("by_conversation_id", (q) =>
             q.eq("conversation_id", c._id)
           )
           .order("desc")
-          .take(10);
+          .take(5);
 
         // Combine and dedupe
         const messageIds = new Set<string>();
@@ -1165,6 +1164,7 @@ export const searchForCLI = mutation({
     context_before: v.optional(v.number()),
     context_after: v.optional(v.number()),
     project_path: v.optional(v.string()),
+    user_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -1185,6 +1185,7 @@ export const searchForCLI = mutation({
     const contextBefore = args.context_before ?? 0;
     const contextAfter = args.context_after ?? 0;
     const projectPath = args.project_path;
+    const userOnly = args.user_only ?? false;
 
     const searchResults = await ctx.db
       .query("messages")
@@ -1193,6 +1194,7 @@ export const searchForCLI = mutation({
 
     const conversationMatches = new Map<string, typeof searchResults>();
     for (const msg of searchResults) {
+      if (userOnly && msg.role !== "user") continue;
       const convId = msg.conversation_id.toString();
       if (!conversationMatches.has(convId)) {
         conversationMatches.set(convId, []);
