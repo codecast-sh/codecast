@@ -52,7 +52,6 @@ function LoginForm() {
 
     try {
       await signIn("password", { email, password, flow: "signIn" });
-      router.push(returnTo || "/dashboard");
     } catch (err) {
       if (err instanceof Error) {
         if (err.message.includes("Invalid") || err.message.includes("credentials")) {
@@ -65,7 +64,6 @@ function LoginForm() {
       } else {
         setError("An unexpected error occurred.");
       }
-    } finally {
       setLoading(false);
     }
   };

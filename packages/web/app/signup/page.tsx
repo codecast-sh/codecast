@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useAuthActions } from "@convex-dev/auth/react";
+import { useConvexAuth } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Logo } from "../../components/Logo";
 
-export default function SignUpPage() {
+function SignUpForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -14,9 +15,24 @@ export default function SignUpPage() {
   const [loading, setLoading] = useState(false);
 
   const { signIn } = useAuthActions();
+  const { isAuthenticated, isLoading } = useConvexAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to");
+
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      router.push(returnTo ? decodeURIComponent(returnTo) : "/dashboard");
+    }
+  }, [isAuthenticated, isLoading, router, returnTo]);
+
+  if (isLoading || isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-sol-bg">
+        <div className="text-sol-text-muted">Loading...</div>
+      </div>
+    );
+  }
 
   const handleGitHubSignIn = async () => {
     setLoading(true);
@@ -40,7 +56,6 @@ export default function SignUpPage() {
 
     try {
       await signIn("password", { email, password, flow: "signUp" });
-      router.push(returnTo ? decodeURIComponent(returnTo) : "/dashboard");
     } catch (err) {
       if (err instanceof Error) {
         if (
@@ -57,7 +72,6 @@ export default function SignUpPage() {
       } else {
         setError("An unexpected error occurred.");
       }
-    } finally {
       setLoading(false);
     }
   };
@@ -172,7 +186,7 @@ export default function SignUpPage() {
           <p className="mt-6 text-center text-sm text-sol-text-muted">
             Already have an account?{" "}
             <Link
-              href="/"
+              href="/login"
               className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
             >
               Sign In
@@ -181,5 +195,17 @@ export default function SignUpPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function SignUpPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-sol-bg">
+        <div className="text-sol-text-muted">Loading...</div>
+      </div>
+    }>
+      <SignUpForm />
+    </Suspense>
   );
 }
