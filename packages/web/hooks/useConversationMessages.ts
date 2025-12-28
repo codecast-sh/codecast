@@ -59,12 +59,22 @@ export function useConversationMessages(conversationId: string) {
   );
 
   useEffect(() => {
-    if (initialData && !cachedConversation) {
-      setCachedConversation(initialData);
-      setCachedMessages(initialData.messages || []);
-      setLastTimestamp(initialData.last_timestamp);
+    if (initialData) {
+      setCachedConversation((prev: any) => {
+        if (!prev) {
+          setCachedMessages(initialData.messages || []);
+          setLastTimestamp(initialData.last_timestamp);
+          return initialData;
+        }
+        return {
+          ...prev,
+          is_private: initialData.is_private,
+          share_token: initialData.share_token,
+          title: initialData.title,
+        };
+      });
     }
-  }, [initialData, cachedConversation]);
+  }, [initialData]);
 
   useEffect(() => {
     if (newMessagesResult && newMessagesResult.messages?.length > 0) {
