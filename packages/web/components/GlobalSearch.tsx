@@ -167,7 +167,7 @@ export function GlobalSearch() {
   };
 
   return (
-    <div className="relative flex-1 max-w-2xl mx-8">
+    <div className="relative flex-1 max-w-2xl mx-8 z-[9999]">
       <div
         className={`relative transition-all duration-200 ${
           isOpen ? "scale-105" : ""
@@ -209,15 +209,7 @@ export function GlobalSearch() {
       </div>
 
       {isOpen && query.length >= 2 && (
-        <>
-          <div
-            className="fixed inset-0 z-40 bg-black/30"
-            onClick={() => {
-              setIsOpen(false);
-              setQuery("");
-            }}
-          />
-          <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-[#002b36] border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
+        <div className="absolute top-full left-1/2 -translate-x-1/2 w-[200%] mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
                 <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
@@ -229,7 +221,7 @@ export function GlobalSearch() {
               </div>
             ) : (
               <div className="max-h-[600px] overflow-y-auto">
-                <div className="px-4 py-2 bg-[#073642] border-b border-sol-border text-xs text-sol-text-secondary">
+                <div className="px-4 py-2 border-b border-sol-border text-xs text-sol-text-secondary">
                   {totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} session{sessionCount !== 1 ? "s" : ""}
                 </div>
                 <div className="divide-y divide-sol-border">
@@ -239,8 +231,8 @@ export function GlobalSearch() {
                     onClick={() => handleResultClick(result.conversationId)}
                     className={`w-full text-left px-4 py-3 transition-colors ${
                       index === selectedIndex
-                        ? "bg-sol-bg-alt"
-                        : "hover:bg-sol-bg-alt/50"
+                        ? "bg-sol-base02/50"
+                        : "bg-transparent hover:bg-sol-base02/30"
                     }`}
                   >
                     <div className="flex items-center gap-2 mb-1.5">
@@ -293,8 +285,7 @@ export function GlobalSearch() {
                 close
               </span>
             </div>
-          </div>
-        </>
+        </div>
       )}
     </div>
   );

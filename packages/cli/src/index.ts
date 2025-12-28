@@ -476,21 +476,13 @@ async function promptMemoryEnablement(): Promise<void> {
   const memorySnippet = `
 ## Memory
 
-Use \`codecast search "query"\` to search your conversation history for relevant context.
+Search past conversations when the user references prior work, asks about decisions, or when debugging regressions.
 
-**When to search memory:**
-- User references past work ("how did we implement...", "remember when we...")
-- Debugging regressions ("this used to work", "what changed recently")
-- Understanding decisions ("why is it done this way?")
-- Finding prior solutions to similar problems
-- Continuing work from a previous session
-
-**Commands:**
 \`\`\`bash
-codecast search "auth middleware"     # find relevant conversations
-codecast search "bug fix" -C 2        # with 2 messages context
+codecast search "auth middleware"     # search current project
+codecast search "bug fix" -u -C 2     # user messages only, with context
 codecast read <id> 15:25              # read messages 15-25
-codecast read <id> 15:25 --full       # include tool call/result content
+codecast read <id> 15:25 --full       # include tool call content
 \`\`\`
 `;
 
@@ -845,14 +837,17 @@ program
   .description(
     "Search conversation history for context\n\n" +
     "By default, searches only sessions from the current project.\n" +
-    "Use -g to search all sessions globally.\n\n" +
+    "Use -g to search all sessions globally.\n" +
+    "Use -u to search only user messages.\n\n" +
     "Examples:\n" +
-    "  codecast search \"auth implementation\"     # Search current project\n" +
-    "  codecast search \"oauth\" -g                # Search all sessions\n" +
-    "  codecast search \"middleware\" -C 3         # With context lines\n" +
-    "  codecast search \"auth\" --limit 5          # Limit results"
+    "  codecast search \"auth implementation\"     # search current project\n" +
+    "  codecast search \"auth\" -u                 # search user messages only\n" +
+    "  codecast search \"oauth\" -g                # search all sessions\n" +
+    "  codecast search \"middleware\" -C 3         # with context lines\n" +
+    "  codecast search \"auth\" --limit 5          # limit results"
   )
   .argument("<query>", "Search query (min 2 characters)")
+  .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
   .option("-g, --global", "Search all sessions (not just current project)")
   .option("-A, --after <n>", "Show N messages after each match", "0")
   .option("-B, --before <n>", "Show N messages before each match", "0")
@@ -869,6 +864,7 @@ program
     const contextAfter = options.context ? parseInt(options.context) : parseInt(options.after);
     const limit = parseInt(options.limit);
     const projectPath = options.global ? undefined : process.cwd();
+    const userOnly = options.userOnly ?? false;
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
@@ -883,6 +879,7 @@ program
           context_before: contextBefore,
           context_after: contextAfter,
           project_path: projectPath,
+          user_only: userOnly,
         }),
       });
 

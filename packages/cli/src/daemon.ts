@@ -1240,10 +1240,38 @@ async function waitForConfig(): Promise<{ config: Config; convexUrl: string }> {
   }
 }
 
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireLock(): boolean {
+  if (fs.existsSync(PID_FILE)) {
+    try {
+      const existingPid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
+      if (!isNaN(existingPid) && isProcessRunning(existingPid)) {
+        return false;
+      }
+    } catch {
+      // PID file exists but is unreadable or invalid, continue
+    }
+  }
+  fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
+  return true;
+}
+
 async function main(): Promise<void> {
   ensureConfigDir();
 
-  fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
+  if (!acquireLock()) {
+    const existingPid = fs.readFileSync(PID_FILE, "utf-8").trim();
+    console.error(`Daemon already running (PID: ${existingPid}). Exiting.`);
+    process.exit(0);
+  }
 
   process.on("uncaughtException", (err) => {
     log(`Uncaught exception: ${err.message}`);
