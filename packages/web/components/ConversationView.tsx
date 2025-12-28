@@ -1434,6 +1434,101 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [highlightQuery, messages]);
 
+  // Highlight all text occurrences of search query in the DOM
+  useEffect(() => {
+    if (!highlightQuery || !containerRef.current) return;
+
+    const words = highlightQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return;
+
+    const pattern = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const regex = new RegExp(`(${pattern})`, 'gi');
+
+    const applyHighlights = () => {
+      if (!containerRef.current) return;
+
+      // Find text nodes that haven't been processed yet
+      const walker = document.createTreeWalker(
+        containerRef.current,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
+
+      const textNodes: Text[] = [];
+      let node;
+      while ((node = walker.nextNode())) {
+        // Skip if parent is already a highlight mark or script/style
+        const parent = node.parentNode as HTMLElement;
+        if (!parent) continue;
+        if (parent.hasAttribute?.('data-search-highlight')) continue;
+        if (parent.nodeName === 'SCRIPT' || parent.nodeName === 'STYLE' || parent.nodeName === 'MARK') continue;
+        textNodes.push(node as Text);
+      }
+
+      textNodes.forEach(textNode => {
+        const text = textNode.textContent || '';
+        if (!regex.test(text)) return;
+        regex.lastIndex = 0;
+
+        const parent = textNode.parentNode;
+        if (!parent) return;
+
+        const fragment = document.createDocumentFragment();
+        let lastIndex = 0;
+        let match;
+
+        while ((match = regex.exec(text)) !== null) {
+          if (match.index > lastIndex) {
+            fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+          }
+          const mark = document.createElement('mark');
+          mark.setAttribute('data-search-highlight', 'true');
+          mark.className = 'bg-sol-yellow/30 text-sol-yellow rounded px-0.5 font-medium';
+          mark.textContent = match[0];
+          fragment.appendChild(mark);
+          lastIndex = regex.lastIndex;
+        }
+
+        if (lastIndex < text.length) {
+          fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+        }
+
+        if (fragment.childNodes.length > 0) {
+          parent.replaceChild(fragment, textNode);
+        }
+      });
+    };
+
+    // Apply highlights initially and on DOM changes (for virtualized content)
+    const observer = new MutationObserver(() => {
+      requestAnimationFrame(applyHighlights);
+    });
+
+    // Initial highlight after a brief delay to let virtualizer render
+    const timeoutId = setTimeout(applyHighlights, 100);
+
+    observer.observe(containerRef.current, {
+      childList: true,
+      subtree: true
+    });
+
+    return () => {
+      clearTimeout(timeoutId);
+      observer.disconnect();
+      // Cleanup highlights
+      if (containerRef.current) {
+        const marks = containerRef.current.querySelectorAll('mark[data-search-highlight]');
+        marks.forEach(mark => {
+          const parent = mark.parentNode;
+          if (parent) {
+            parent.replaceChild(document.createTextNode(mark.textContent || ''), mark);
+            parent.normalize();
+          }
+        });
+      }
+    };
+  }, [highlightQuery]);
+
   const handleCopyAll = async () => {
     if (!conversation || messages.length === 0) {
       toast.error("No messages to copy");
