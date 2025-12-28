@@ -632,8 +632,6 @@ export const listConversations = query({
         .take(fetchLimit);
 
       let filtered = allConversations.filter((c) => {
-        const isOwn = c.user_id.toString() === userId.toString();
-        if (isOwn) return true;
         if (c.is_private !== false) return false;
         if (user.team_id && c.team_id?.toString() === user.team_id.toString()) {
           return true;
@@ -1866,5 +1864,119 @@ export const listFavorites = query({
         agent_type: conv.agent_type,
         is_favorite: conv.is_favorite,
       }));
+  },
+});
+
+export const getMessageFeed = query({
+  args: {
+    filter: v.union(v.literal("my"), v.literal("team")),
+    limit: v.optional(v.number()),
+    cursor: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return { messages: [], nextCursor: null };
+    }
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      return { messages: [], nextCursor: null };
+    }
+
+    const limit = args.limit ?? 50;
+
+    const accessibleConvIds = new Set<string>();
+    if (args.filter === "my") {
+      const myConvs = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      for (const c of myConvs) {
+        accessibleConvIds.add(c._id);
+      }
+    } else {
+      if (user.team_id) {
+        const teamConvs = await ctx.db
+          .query("conversations")
+          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id))
+          .filter((q) => q.eq(q.field("is_private"), false))
+          .collect();
+        for (const c of teamConvs) {
+          accessibleConvIds.add(c._id);
+        }
+      }
+    }
+
+    if (accessibleConvIds.size === 0) {
+      return { messages: [], nextCursor: null };
+    }
+
+    let messagesQuery = ctx.db
+      .query("messages")
+      .withIndex("by_timestamp")
+      .order("desc");
+
+    if (args.cursor) {
+      messagesQuery = ctx.db
+        .query("messages")
+        .withIndex("by_timestamp", (q) => q.lt("timestamp", args.cursor!))
+        .order("desc");
+    }
+
+    const allMessages = await messagesQuery.take(500);
+
+    const filteredMessages = allMessages.filter(
+      (m) => accessibleConvIds.has(m.conversation_id) && (m.role === "user" || m.role === "assistant")
+    );
+
+    const conversationCache = new Map<string, {
+      title: string;
+      session_id: string;
+      author_name: string;
+      is_own: boolean;
+    }>();
+
+    const resultMessages = filteredMessages.slice(0, limit + 1);
+    const hasMore = resultMessages.length > limit;
+    const finalMessages = hasMore ? resultMessages.slice(0, limit) : resultMessages;
+
+    for (const msg of finalMessages) {
+      if (!conversationCache.has(msg.conversation_id)) {
+        const conv = await ctx.db.get(msg.conversation_id);
+        if (conv) {
+          const convUser = await ctx.db.get(conv.user_id);
+          conversationCache.set(msg.conversation_id, {
+            title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : `Session ${conv.session_id.slice(0, 8)}`),
+            session_id: conv.session_id,
+            author_name: convUser?.name || convUser?.email?.split("@")[0] || "Unknown",
+            is_own: conv.user_id.toString() === userId.toString(),
+          });
+        }
+      }
+    }
+
+    const messagesWithConversation = finalMessages.map((msg) => {
+      const convInfo = conversationCache.get(msg.conversation_id);
+      return {
+        _id: msg._id,
+        conversation_id: msg.conversation_id,
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        has_tool_calls: msg.tool_calls && msg.tool_calls.length > 0,
+        has_tool_results: msg.tool_results && msg.tool_results.length > 0,
+        conversation_title: convInfo?.title || "Unknown",
+        conversation_session_id: convInfo?.session_id || "",
+        author_name: convInfo?.author_name || "Unknown",
+        is_own: convInfo?.is_own ?? false,
+      };
+    });
+
+    const nextCursor = hasMore ? finalMessages[finalMessages.length - 1].timestamp : null;
+
+    return {
+      messages: messagesWithConversation,
+      nextCursor,
+    };
   },
 });
