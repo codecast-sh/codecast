@@ -1329,7 +1329,7 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
   };
 
   return (
-    <div className={`border-t border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "sticky bottom-0 z-20 -mx-[9999px] px-[9999px]" : ""}`}>
+    <div className={`border-t border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
       <form onSubmit={handleSubmit} className="max-w-4xl mx-auto px-4 py-2">
         <div className="flex items-center gap-2">
           <input
@@ -2022,7 +2022,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {pendingPermissions && pendingPermissions.length > 0 && (
-        <div className={`border-t border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "sticky bottom-0 z-20 -mx-[9999px] px-[9999px]" : ""}`}>
+        <div className={`border-t border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
           <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-2 space-y-2">
             {pendingPermissions.map((permission) => (
               <PermissionCard key={permission._id} permission={permission} />
