@@ -81,6 +81,7 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
+    .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
     .index("by_agent_type", ["agent_type"])
     .index("by_share_token", ["share_token"])
