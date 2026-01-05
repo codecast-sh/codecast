@@ -82,18 +82,29 @@ function AccountsContent() {
                 )}
               </div>
             </div>
-            <div>
+            <div className="flex gap-2">
               {hasGitHub ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDisconnectGitHub}
-                  disabled={isUnlinking || !hasEmail}
-                  className="text-sol-orange border-sol-orange/30 hover:bg-sol-orange/10"
-                  title={!hasEmail ? "Add email/password login before disconnecting GitHub" : undefined}
-                >
-                  {isUnlinking ? "Disconnecting..." : "Disconnect"}
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleConnectGitHub}
+                    className="text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/10"
+                    title="Re-authorize to update permissions"
+                  >
+                    Reconfigure
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDisconnectGitHub}
+                    disabled={isUnlinking || !hasEmail}
+                    className="text-sol-orange border-sol-orange/30 hover:bg-sol-orange/10"
+                    title={!hasEmail ? "Add email/password login before disconnecting GitHub" : undefined}
+                  >
+                    {isUnlinking ? "Disconnecting..." : "Disconnect"}
+                  </Button>
+                </>
               ) : (
                 <Button
                   onClick={handleConnectGitHub}
@@ -169,7 +180,18 @@ function AccountsContent() {
             </span>
             Link AI sessions to commits and PRs
           </li>
+          <li className="flex items-center gap-2">
+            <span className={hasGitHub ? "text-sol-green" : "text-sol-base01"}>
+              {hasGitHub ? "✓" : "○"}
+            </span>
+            Sync commit history with diffs
+          </li>
         </ul>
+        {hasGitHub && (
+          <p className="mt-4 text-xs text-sol-base01">
+            Use "Reconfigure" to update GitHub permissions if you need access to additional repositories or organizations.
+          </p>
+        )}
       </Card>
     </div>
   );
