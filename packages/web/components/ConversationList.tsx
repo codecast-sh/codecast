@@ -419,7 +419,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
       }}
       onBlur={() => setFocusedIndex(-1)}>
       {/* Filter bar */}
-      <div className="flex flex-wrap gap-1.5 sm:gap-2 items-center">
+      <div className="flex flex-wrap gap-1.5 sm:gap-2 items-center pt-2">
         {/* Time filters */}
         <button
           onClick={() => setTimeFilter("all")}
@@ -537,11 +537,10 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
                   aria-label={createConversationAriaLabel(conv)}
                   aria-current={isFocused ? "true" : undefined}
                 >
-                  <div className="absolute inset-0 bg-gradient-to-br from-sol-bg-alt/40 to-sol-bg/40 rounded-xl blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                  <div className={`relative bg-sol-bg-alt/40 border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 hover:border-sol-yellow/40 transition-all duration-200 backdrop-blur-sm ${
+                  <div className={`relative bg-white dark:bg-sol-bg-alt/60 border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 hover:border-sol-yellow/50 transition-all duration-200 shadow-sm hover:shadow-md dark:shadow-none ${
                     isFocused
                       ? "ring-2 ring-sol-yellow border-sol-yellow/60"
-                      : "border-sol-border/30"
+                      : "border-sol-border/40"
                   }`}>
                   <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
@@ -698,10 +697,10 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
                         aria-label={`Subagent: ${createConversationAriaLabel(child)}`}
                         aria-current={isChildFocused ? "true" : undefined}
                       >
-                        <div className={`relative bg-sol-bg-alt/40 border rounded-lg p-3 hover:border-violet-500/40 transition-all duration-200 ${
+                        <div className={`relative bg-white dark:bg-sol-bg-alt/60 border rounded-lg p-3 hover:border-violet-500/50 transition-all duration-200 shadow-sm hover:shadow-md dark:shadow-none ${
                           isChildFocused
                             ? "ring-2 ring-sol-yellow border-sol-yellow/60"
-                            : "border-sol-border/60"
+                            : "border-sol-border/40"
                         }`}>
                         <div className="flex items-center gap-2 mb-1">
                           <AgentIcon agentType={child.agent_type} className="w-3.5 h-3.5 shrink-0" />

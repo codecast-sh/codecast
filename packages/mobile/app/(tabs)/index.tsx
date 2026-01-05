@@ -1,9 +1,9 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, Dimensions } from 'react-native';
-import { Text, View } from '@/components/Themed';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Text as RNText } from 'react-native';
 import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
+import { Theme, Spacing, FontSize, BorderRadius } from '@/constants/Theme';
 
 type Conversation = {
   _id: string;
@@ -26,18 +26,12 @@ function formatRelativeTime(timestamp: number): string {
   const diffDays = Math.floor(diffMs / 86400000);
 
   if (diffMinutes < 1) return "just now";
-  if (diffMinutes === 1) return "1 min ago";
-  if (diffMinutes < 60) return `${diffMinutes} min ago`;
-  if (diffHours === 1) return "1 hr ago";
-  if (diffHours < 24) return `${diffHours} hr ago`;
-  if (diffDays === 1) return "yesterday";
+  if (diffMinutes < 60) return `${diffMinutes}m`;
+  if (diffHours < 24) return `${diffHours}h`;
+  if (diffDays < 7) return `${diffDays}d`;
 
   const date = new Date(timestamp);
-  const thisYear = new Date().getFullYear();
-  if (date.getFullYear() === thisYear) {
-    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  }
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 type ConversationItemProps = {
@@ -47,33 +41,36 @@ type ConversationItemProps = {
 
 function ConversationItem({ conversation, onPress }: ConversationItemProps) {
   return (
-    <TouchableOpacity onPress={onPress} style={styles.conversationItem}>
-      <View style={styles.conversationHeader}>
-        <Text style={styles.conversationTitle} numberOfLines={1}>
-          {conversation.title}
-        </Text>
-        {conversation.is_active && (
-          <View style={styles.activeBadge}>
-            <Text style={styles.activeBadgeText}>ACTIVE</Text>
-          </View>
-        )}
-      </View>
+    <TouchableOpacity
+      onPress={onPress}
+      style={styles.conversationItem}
+      activeOpacity={0.6}
+    >
+      <RNView style={styles.conversationContent}>
+        <RNView style={styles.conversationHeader}>
+          <RNView style={styles.titleRow}>
+            <RNView style={conversation.is_active ? styles.activeDot : styles.inactiveDot} />
+            <RNText style={styles.conversationTitle} numberOfLines={1}>
+              {conversation.title}
+            </RNText>
+          </RNView>
+          <RNText style={styles.messageCount}>
+            {conversation.message_count}
+          </RNText>
+        </RNView>
 
-      <View style={styles.conversationMeta}>
-        <Text style={styles.metaText}>
-          {formatRelativeTime(conversation.updated_at)}
-        </Text>
-        <Text style={styles.metaSeparator}>•</Text>
-        <Text style={styles.metaText}>
-          {conversation.message_count} msg{conversation.message_count !== 1 ? 's' : ''}
-        </Text>
-        {!conversation.is_own && (
-          <>
-            <Text style={styles.metaSeparator}>•</Text>
-            <Text style={styles.metaText}>{conversation.author_name}</Text>
-          </>
-        )}
-      </View>
+        <RNView style={styles.conversationMeta}>
+          <RNText style={styles.metaText}>
+            {formatRelativeTime(conversation.updated_at)}
+          </RNText>
+          {!conversation.is_own && (
+            <>
+              <RNText style={styles.metaSeparator}>·</RNText>
+              <RNText style={styles.authorText}>{conversation.author_name}</RNText>
+            </>
+          )}
+        </RNView>
+      </RNView>
     </TouchableOpacity>
   );
 }
@@ -103,126 +100,167 @@ export default function SessionsScreen() {
   );
 
   const renderEmpty = () => (
-    <View style={styles.emptyContainer}>
-      <Text style={styles.emptyText}>
+    <RNView style={styles.emptyContainer}>
+      <RNText style={styles.emptyText}>
         {filter === "my"
           ? "No conversations yet.\nYour synced sessions will appear here."
           : "No team conversations yet.\nInvite team members to start sharing."}
-      </Text>
-    </View>
+      </RNText>
+    </RNView>
   );
 
   return (
-    <View style={styles.container}>
-      <View style={styles.tabs}>
+    <RNView style={styles.container}>
+      <RNView style={styles.tabs}>
         <TouchableOpacity
           style={[styles.tab, filter === "my" && styles.tabActive]}
           onPress={() => setFilter("my")}
+          activeOpacity={0.7}
         >
-          <Text style={[styles.tabText, filter === "my" && styles.tabTextActive]}>
-            My Sessions
-          </Text>
+          <RNText style={[styles.tabText, filter === "my" && styles.tabTextActive]}>
+            Sessions
+          </RNText>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.tab, filter === "team" && styles.tabActive]}
           onPress={() => setFilter("team")}
+          activeOpacity={0.7}
         >
-          <Text style={[styles.tabText, filter === "team" && styles.tabTextActive]}>
+          <RNText style={[styles.tabText, filter === "team" && styles.tabTextActive]}>
             Team
-          </Text>
+          </RNText>
         </TouchableOpacity>
-      </View>
+      </RNView>
 
       <FlatList
         data={conversations}
         renderItem={renderItem}
         keyExtractor={(item) => item._id}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Theme.textMuted}
+          />
         }
         ListEmptyComponent={result === undefined ? null : renderEmpty}
-        contentContainerStyle={conversations.length === 0 ? styles.emptyList : undefined}
+        contentContainerStyle={conversations.length === 0 ? styles.emptyList : styles.listContent}
+        showsVerticalScrollIndicator={false}
       />
-    </View>
+    </RNView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: Theme.bg,
   },
   tabs: {
     flexDirection: 'row',
+    backgroundColor: Theme.bgAlt,
     borderBottomWidth: 1,
-    borderBottomColor: '#333',
+    borderBottomColor: Theme.borderLight,
   },
   tab: {
     flex: 1,
-    paddingVertical: 16,
+    paddingVertical: 14,
     alignItems: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
   },
   tabActive: {
-    borderBottomWidth: 2,
-    borderBottomColor: '#fff',
+    borderBottomColor: Theme.text,
   },
   tabText: {
-    fontSize: 16,
-    color: '#888',
+    fontSize: 15,
+    color: Theme.textMuted,
+    fontWeight: '500',
   },
   tabTextActive: {
-    color: '#fff',
+    color: Theme.text,
     fontWeight: '600',
   },
+  listContent: {
+    paddingBottom: Spacing.xl,
+  },
   conversationItem: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#222',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.bgHighlight,
+    backgroundColor: Theme.bg,
+  },
+  conversationContent: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 14,
   },
   conversationHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: Spacing.md,
+  },
+  activeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Theme.greenBright,
+    marginRight: Spacing.sm,
+  },
+  inactiveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'transparent',
+    marginRight: Spacing.sm,
   },
   conversationTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '500',
+    color: Theme.text,
     flex: 1,
+    letterSpacing: -0.2,
   },
-  activeBadge: {
-    backgroundColor: '#10b981',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginLeft: 8,
-  },
-  activeBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '700',
+  messageCount: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '400',
   },
   conversationMeta: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginLeft: 14,
   },
   metaText: {
     fontSize: 13,
-    color: '#888',
+    color: Theme.textDim,
+  },
+  authorText: {
+    fontSize: 13,
+    color: Theme.textMuted,
   },
   metaSeparator: {
-    color: '#666',
+    color: Theme.textMuted0,
     marginHorizontal: 6,
+    fontSize: 13,
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 32,
+    padding: Spacing.xxxl,
   },
   emptyText: {
-    fontSize: 16,
-    color: '#888',
+    fontSize: 15,
+    color: Theme.textMuted,
     textAlign: 'center',
-    lineHeight: 24,
+    lineHeight: 22,
   },
   emptyList: {
     flex: 1,

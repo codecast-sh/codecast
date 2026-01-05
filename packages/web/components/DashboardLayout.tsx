@@ -153,7 +153,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
         {hideSidebar || isSidebarCollapsed ? (
-          <div className="h-full overflow-y-auto overflow-x-hidden px-4 sm:px-6 lg:px-8">
+          <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
             <div className="max-w-6xl mx-auto">
               {children}
             </div>
@@ -178,9 +178,9 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
                 />
               </div>
             </Panel>
-            <Separator className="w-px hover:w-0.5 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-all" />
+            <Separator className="w-1.5 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors" />
             <Panel id="main" minSize={0}>
-              <div className="h-full overflow-y-auto overflow-x-hidden px-4 sm:px-6 lg:px-8">
+              <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
                 <div className="max-w-6xl mx-auto">
                   {children}
                 </div>

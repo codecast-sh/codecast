@@ -47,11 +47,15 @@ export function usePushNotifications() {
     });
 
     return () => {
-      if (notificationListener.current) {
+      if (notificationListener.current && typeof Notifications.removeNotificationSubscription === 'function') {
         Notifications.removeNotificationSubscription(notificationListener.current);
+      } else if (notificationListener.current) {
+        notificationListener.current.remove();
       }
-      if (responseListener.current) {
+      if (responseListener.current && typeof Notifications.removeNotificationSubscription === 'function') {
         Notifications.removeNotificationSubscription(responseListener.current);
+      } else if (responseListener.current) {
+        responseListener.current.remove();
       }
     };
   }, []);

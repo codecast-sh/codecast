@@ -3,6 +3,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import * as SecureStore from 'expo-secure-store';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 import { ConvexProvider, ConvexReactClient } from 'convex/react';
@@ -12,6 +13,18 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
+
+const secureStorage = {
+  getItem: async (key: string) => {
+    return await SecureStore.getItemAsync(key);
+  },
+  setItem: async (key: string, value: string) => {
+    await SecureStore.setItemAsync(key, value);
+  },
+  removeItem: async (key: string) => {
+    await SecureStore.deleteItemAsync(key);
+  },
+};
 
 export {
   ErrorBoundary,
@@ -51,7 +64,7 @@ function RootLayoutNav() {
 
   return (
     <ConvexProvider client={convex}>
-      <ConvexAuthProvider client={convex}>
+      <ConvexAuthProvider client={convex} storage={secureStorage}>
         <AuthProvider>
           <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
             <AuthGate>

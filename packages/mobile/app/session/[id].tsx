@@ -1,14 +1,12 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
-import { Text, View } from '@/components/Themed';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, View as RNView, Text as RNText } from 'react-native';
+import { useLocalSearchParams, Stack } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState } from 'react';
-import SyntaxHighlighter from 'react-native-syntax-highlighter';
-import { atomOneDark } from 'react-syntax-highlighter/styles/hljs';
 import * as Haptics from 'expo-haptics';
 import { PermissionCard } from '@/components/PermissionCard';
+import { Theme, Spacing } from '@/constants/Theme';
 
 type ToolCall = {
   id: string;
@@ -75,14 +73,10 @@ function extractCodeBlocks(text: string): Array<{ type: 'text' | 'code'; content
 
 function formatTimestamp(ts: number): string {
   return new Date(ts).toLocaleTimeString([], {
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
   });
 }
-
-type MessageBubbleProps = {
-  message: Message;
-};
 
 function ToolCallItem({ toolCall, expanded, onToggle }: {
   toolCall: ToolCall;
@@ -90,22 +84,22 @@ function ToolCallItem({ toolCall, expanded, onToggle }: {
   onToggle: () => void;
 }) {
   return (
-    <View style={styles.toolCallContainer}>
-      <TouchableOpacity onPress={onToggle} style={styles.toolCallHeader}>
-        <Text style={styles.toolCallName}>{toolCall.name}</Text>
-        <Text style={styles.toolCallToggle}>{expanded ? '▼' : '▶'}</Text>
+    <RNView style={styles.toolCallContainer}>
+      <TouchableOpacity onPress={onToggle} style={styles.toolCallHeader} activeOpacity={0.7}>
+        <RNText style={styles.toolCallName}>{toolCall.name}</RNText>
+        <RNText style={styles.toolCallToggle}>{expanded ? '▼' : '▶'}</RNText>
       </TouchableOpacity>
 
       {expanded && (
-        <View style={styles.toolCallContent}>
-          <Text style={styles.toolCallInput}>{toolCall.input}</Text>
-        </View>
+        <RNView style={styles.toolCallContent}>
+          <RNText style={styles.toolCallInput}>{toolCall.input}</RNText>
+        </RNView>
       )}
-    </View>
+    </RNView>
   );
 }
 
-function MessageBubble({ message }: MessageBubbleProps) {
+function MessageBubble({ message }: { message: Message }) {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   const isUser = message.role === 'user';
@@ -129,45 +123,42 @@ function MessageBubble({ message }: MessageBubbleProps) {
   }
 
   return (
-    <View style={[styles.messageContainer, isUser ? styles.userMessage : styles.assistantMessage]}>
-      <View style={styles.messageHeader}>
-        <Text style={styles.messageRole}>{isUser ? 'You' : 'Assistant'}</Text>
-        <Text style={styles.messageTime}>{formatTimestamp(message.timestamp)}</Text>
-      </View>
+    <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble]}>
+      <RNView style={styles.bubbleHeader}>
+        <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
+          {isUser ? 'You' : 'Assistant'}
+        </RNText>
+        <RNText style={styles.bubbleTime}>{formatTimestamp(message.timestamp)}</RNText>
+      </RNView>
 
       {content && (
-        <View style={styles.messageContent}>
+        <RNView style={styles.bubbleContent}>
           {extractCodeBlocks(content).map((block, idx) => {
             if (block.type === 'code') {
               return (
-                <View key={idx} style={styles.codeBlock}>
-                  <View style={styles.codeHeader}>
-                    <Text style={styles.codeLanguage}>{block.language}</Text>
-                  </View>
+                <RNView key={idx} style={styles.codeBlock}>
+                  <RNView style={styles.codeHeader}>
+                    <RNText style={styles.codeLanguage}>{block.language}</RNText>
+                  </RNView>
                   <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-                    <SyntaxHighlighter
-                      language={block.language}
-                      style={atomOneDark}
-                      customStyle={styles.codeContent}
-                      fontSize={12}
-                    >
-                      {block.content}
-                    </SyntaxHighlighter>
+                    <RNView style={styles.codeContent}>
+                      <RNText style={styles.codeText}>{block.content}</RNText>
+                    </RNView>
                   </ScrollView>
-                </View>
+                </RNView>
               );
             }
             return (
-              <Text key={idx} style={styles.messageText}>
+              <RNText key={idx} style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}>
                 {block.content}
-              </Text>
+              </RNText>
             );
           })}
-        </View>
+        </RNView>
       )}
 
       {message.tool_calls && message.tool_calls.length > 0 && (
-        <View style={styles.toolCallsContainer}>
+        <RNView style={styles.toolCallsContainer}>
           {message.tool_calls.map((toolCall) => (
             <ToolCallItem
               key={toolCall.id}
@@ -176,9 +167,9 @@ function MessageBubble({ message }: MessageBubbleProps) {
               onToggle={() => toggleTool(toolCall.id)}
             />
           ))}
-        </View>
+        </RNView>
       )}
-    </View>
+    </RNView>
   );
 }
 
@@ -191,12 +182,7 @@ type PendingMessage = {
   retry_count: number;
 };
 
-type MessageInputProps = {
-  conversationId: Id<"conversations">;
-  isActive: boolean;
-};
-
-function MessageInput({ conversationId, isActive }: MessageInputProps) {
+function MessageInput({ conversationId, isActive }: { conversationId: Id<"conversations">; isActive: boolean }) {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -251,74 +237,37 @@ function MessageInput({ conversationId, isActive }: MessageInputProps) {
   };
 
   return (
-    <View style={styles.messageInputContainer}>
-      {conversationPendingMessages.length > 0 && (
-        <View style={styles.pendingMessagesContainer}>
-          {conversationPendingMessages.map((msg) => (
-            <View key={msg._id} style={styles.pendingMessageItem}>
-              <View style={styles.pendingMessageContent}>
-                <Text style={styles.pendingMessageText} numberOfLines={1}>
-                  {msg.content}
-                </Text>
-                <View style={styles.pendingMessageStatus}>
-                  {msg.status === 'pending' && (
-                    <Text style={styles.statusPending}>⏱ Pending</Text>
-                  )}
-                  {msg.status === 'delivered' && (
-                    <Text style={styles.statusDelivered}>✓ Delivered</Text>
-                  )}
-                  {msg.status === 'failed' && (
-                    <>
-                      <Text style={styles.statusFailed}>✕ Failed</Text>
-                      <TouchableOpacity
-                        style={styles.retryButton}
-                        onPress={() => handleRetry(msg._id as Id<"pending_messages">)}
-                      >
-                        <Text style={styles.retryButtonText}>Retry</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
-                </View>
-              </View>
-            </View>
-          ))}
-        </View>
-      )}
+    <RNView style={styles.inputContainer}>
       {error && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorBannerText}>{error}</Text>
+        <RNView style={styles.errorBanner}>
+          <RNText style={styles.errorBannerText}>{error}</RNText>
           <TouchableOpacity onPress={() => setError(null)}>
-            <Text style={styles.errorBannerDismiss}>✕</Text>
+            <RNText style={styles.errorBannerDismiss}>×</RNText>
           </TouchableOpacity>
-        </View>
+        </RNView>
       )}
-      <View style={styles.inputRow}>
+      <RNView style={styles.inputRow}>
         <TextInput
           style={styles.textInput}
           value={message}
           onChangeText={setMessage}
           placeholder="Type a message..."
-          placeholderTextColor="#666"
+          placeholderTextColor={Theme.textMuted0}
           multiline
           maxLength={10000}
           editable={!isSending}
-          onSubmitEditing={handleSend}
           blurOnSubmit={false}
         />
         <TouchableOpacity
-          style={[
-            styles.sendButton,
-            (!message.trim() || isSending) && styles.sendButtonDisabled
-          ]}
+          style={[styles.sendButton, (!message.trim() || isSending) && styles.sendButtonDisabled]}
           onPress={handleSend}
           disabled={!message.trim() || isSending}
+          activeOpacity={0.7}
         >
-          <Text style={styles.sendButtonText}>
-            {isSending ? '...' : '→'}
-          </Text>
+          <RNText style={styles.sendButtonText}>{isSending ? '...' : '→'}</RNText>
         </TouchableOpacity>
-      </View>
-    </View>
+      </RNView>
+    </RNView>
   );
 }
 
@@ -337,208 +286,244 @@ export default function SessionDetailScreen() {
 
   if (conversation === undefined) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#fff" />
-        <Text style={styles.loadingText}>Loading conversation...</Text>
-      </View>
+      <RNView style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={Theme.textMuted} />
+        <RNText style={styles.loadingText}>Loading...</RNText>
+      </RNView>
     );
   }
 
   if (!conversation) {
     return (
-      <View style={styles.errorContainer}>
-        <Text style={styles.errorText}>Conversation not found</Text>
-      </View>
+      <RNView style={styles.errorContainer}>
+        <RNText style={styles.errorText}>Conversation not found</RNText>
+      </RNView>
     );
   }
-
-  const renderMessage = ({ item }: { item: Message }) => (
-    <MessageBubble message={item} />
-  );
 
   const isActive = conversation.status === 'active';
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
-    >
-      <View style={styles.header}>
-        <Text style={styles.title} numberOfLines={1}>
-          {conversation.title}
-        </Text>
-        <View style={styles.headerRight}>
-          <Text style={styles.messageCount}>
-            {conversation.messages.length} messages
-          </Text>
-          {isActive && (
-            <View style={styles.activeIndicator}>
-              <View style={styles.activeDot} />
-              <Text style={styles.activeText}>Active</Text>
-            </View>
-          )}
-        </View>
-      </View>
-
-      <FlatList
-        data={conversation.messages}
-        renderItem={renderMessage}
-        keyExtractor={(item) => item._id}
-        contentContainerStyle={styles.messageList}
-        ListHeaderComponent={
-          pendingPermissions && pendingPermissions.length > 0 ? (
-            <View style={styles.permissionsContainer}>
-              {pendingPermissions.map((permission) => (
-                <PermissionCard key={permission._id} permission={permission} />
-              ))}
-            </View>
-          ) : null
-        }
+    <>
+      <Stack.Screen
+        options={{
+          title: 'Conversation',
+          headerBackTitle: 'Sessions',
+          headerStyle: { backgroundColor: Theme.bgAlt },
+          headerTintColor: Theme.text,
+          headerTitleStyle: { color: Theme.text, fontWeight: '600', fontSize: 17 },
+        }}
       />
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
+        <RNView style={styles.sessionHeader}>
+          <RNText style={styles.sessionTitle} numberOfLines={2}>
+            {conversation.title}
+          </RNText>
+          <RNView style={styles.sessionMeta}>
+            <RNText style={styles.messageCount}>
+              {conversation.messages.length} messages
+            </RNText>
+            {isActive && (
+              <RNView style={styles.activeIndicator}>
+                <RNView style={styles.activeDot} />
+                <RNText style={styles.activeText}>Active</RNText>
+              </RNView>
+            )}
+          </RNView>
+        </RNView>
 
-      <MessageInput conversationId={id as Id<"conversations">} isActive={isActive} />
-    </KeyboardAvoidingView>
+        <FlatList
+          data={conversation.messages}
+          renderItem={({ item }) => <MessageBubble message={item} />}
+          keyExtractor={(item) => item._id}
+          contentContainerStyle={styles.messageList}
+          showsVerticalScrollIndicator={false}
+          ListHeaderComponent={
+            pendingPermissions && pendingPermissions.length > 0 ? (
+              <RNView style={styles.permissionsContainer}>
+                {pendingPermissions.map((permission) => (
+                  <PermissionCard key={permission._id} permission={permission} />
+                ))}
+              </RNView>
+            ) : null
+          }
+        />
+
+        <MessageInput conversationId={id as Id<"conversations">} isActive={isActive} />
+      </KeyboardAvoidingView>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: Theme.bg,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: Theme.bg,
   },
   loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#888',
+    marginTop: 12,
+    fontSize: 15,
+    color: Theme.textMuted,
   },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: Theme.bg,
     padding: 20,
   },
   errorText: {
-    fontSize: 16,
-    color: '#ff6b6b',
+    fontSize: 15,
+    color: Theme.red,
     textAlign: 'center',
   },
-  header: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
+  sessionHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: Theme.bg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.bgHighlight,
   },
-  title: {
-    fontSize: 18,
+  sessionTitle: {
+    fontSize: 17,
     fontWeight: '600',
-    marginBottom: 4,
+    color: Theme.text,
+    marginBottom: 6,
+    lineHeight: 22,
   },
-  headerRight: {
+  sessionMeta: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
   messageCount: {
     fontSize: 13,
-    color: '#888',
+    color: Theme.textMuted,
   },
   activeIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
   },
   activeDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#4ade80',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Theme.greenBright,
   },
   activeText: {
-    fontSize: 12,
-    color: '#4ade80',
-    fontWeight: '600',
+    fontSize: 13,
+    color: Theme.greenBright,
+    fontWeight: '500',
   },
   messageList: {
     padding: 16,
+    paddingBottom: 8,
   },
   permissionsContainer: {
     marginBottom: 16,
   },
-  messageContainer: {
-    marginBottom: 16,
-    padding: 12,
-    borderRadius: 8,
+  messageBubble: {
+    marginBottom: 12,
+    borderRadius: 12,
+    overflow: 'hidden',
   },
-  userMessage: {
-    backgroundColor: '#1a4d2e',
+  userBubble: {
+    backgroundColor: Theme.userBubble,
     alignSelf: 'flex-end',
     maxWidth: '85%',
+    borderBottomRightRadius: 4,
   },
-  assistantMessage: {
-    backgroundColor: '#1a1a2e',
+  assistantBubble: {
+    backgroundColor: Theme.assistantBubble,
     alignSelf: 'flex-start',
-    maxWidth: '95%',
+    maxWidth: '92%',
+    borderBottomLeftRadius: 4,
   },
-  messageHeader: {
+  bubbleHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 4,
   },
-  messageRole: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#888',
-    textTransform: 'uppercase',
-  },
-  messageTime: {
+  bubbleRole: {
     fontSize: 11,
-    color: '#666',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
-  messageContent: {
-    marginTop: 4,
+  userRole: {
+    color: 'rgba(255,255,255,0.7)',
   },
-  messageText: {
+  assistantRole: {
+    color: 'rgba(253,246,227,0.6)',
+  },
+  bubbleTime: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.5)',
+  },
+  bubbleContent: {
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  bubbleText: {
     fontSize: 15,
-    lineHeight: 22,
-    color: '#e0e0e0',
+    lineHeight: 21,
+  },
+  userText: {
+    color: Theme.userBubbleText,
+  },
+  assistantText: {
+    color: Theme.assistantBubbleText,
   },
   codeBlock: {
     marginVertical: 8,
-    borderRadius: 6,
+    borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: '#282c34',
+    backgroundColor: '#073642',
   },
   codeHeader: {
-    backgroundColor: '#21252b',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: '#181a1f',
+    backgroundColor: '#002b36',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
   codeLanguage: {
-    fontSize: 11,
-    color: '#abb2bf',
+    fontSize: 10,
+    color: Theme.textMuted0,
     fontWeight: '600',
     textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   codeContent: {
-    margin: 0,
-    padding: 12,
-    backgroundColor: '#282c34',
+    padding: 10,
+  },
+  codeText: {
+    fontFamily: 'SpaceMono',
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#93a1a1',
   },
   toolCallsContainer: {
-    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    gap: 6,
   },
   toolCallContainer: {
-    marginBottom: 8,
-    backgroundColor: '#0d1117',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#30363d',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderRadius: 8,
+    overflow: 'hidden',
   },
   toolCallHeader: {
     flexDirection: 'row',
@@ -549,83 +534,34 @@ const styles = StyleSheet.create({
   toolCallName: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#58a6ff',
+    color: Theme.cyan,
   },
   toolCallToggle: {
-    fontSize: 12,
-    color: '#888',
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.5)',
   },
   toolCallContent: {
     padding: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#30363d',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.1)',
   },
   toolCallInput: {
-    fontSize: 12,
-    color: '#8b949e',
-    fontFamily: 'monospace',
-  },
-  messageInputContainer: {
-    borderTopWidth: 1,
-    borderTopColor: '#333',
-    backgroundColor: '#0d1117',
-  },
-  pendingMessagesContainer: {
-    padding: 12,
-    gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
-  },
-  pendingMessageItem: {
-    backgroundColor: '#1a1a2e',
-    borderRadius: 8,
-    padding: 10,
-  },
-  pendingMessageContent: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-  },
-  pendingMessageText: {
-    flex: 1,
-    color: '#e0e0e0',
-    fontSize: 14,
-  },
-  pendingMessageStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  statusPending: {
-    fontSize: 12,
-    color: '#fbbf24',
-  },
-  statusDelivered: {
-    fontSize: 12,
-    color: '#4ade80',
-  },
-  statusFailed: {
-    fontSize: 12,
-    color: '#ff6b6b',
-  },
-  retryButton: {
-    backgroundColor: '#1e40af',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  retryButtonText: {
-    color: '#fff',
     fontSize: 11,
-    fontWeight: '600',
+    color: 'rgba(255,255,255,0.6)',
+    fontFamily: 'SpaceMono',
+  },
+  inputContainer: {
+    backgroundColor: Theme.bgAlt,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight,
   },
   errorBanner: {
-    backgroundColor: '#ff6b6b',
+    backgroundColor: Theme.red,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   errorBannerText: {
     color: '#fff',
@@ -634,29 +570,33 @@ const styles = StyleSheet.create({
   },
   errorBannerDismiss: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 18,
+    fontWeight: '600',
     paddingLeft: 12,
   },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    padding: 12,
-    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
   },
   textInput: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: Theme.bg,
     borderRadius: 20,
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    color: '#e0e0e0',
+    paddingTop: 10,
+    paddingBottom: 10,
+    color: Theme.text,
     fontSize: 15,
     maxHeight: 100,
     minHeight: 40,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
   },
   sendButton: {
-    backgroundColor: '#4ade80',
+    backgroundColor: Theme.blue,
     width: 40,
     height: 40,
     borderRadius: 20,
@@ -664,12 +604,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sendButtonDisabled: {
-    backgroundColor: '#333',
-    opacity: 0.5,
+    backgroundColor: Theme.bgHighlight,
   },
   sendButtonText: {
-    fontSize: 20,
-    color: '#0d1117',
-    fontWeight: 'bold',
+    fontSize: 18,
+    color: '#fff',
+    fontWeight: '600',
   },
 });

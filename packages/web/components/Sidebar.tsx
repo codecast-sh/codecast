@@ -1,9 +1,10 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useAuthActions } from "@convex-dev/auth/react";
 import { cleanTitle } from "../lib/conversationProcessor";
 
 interface SidebarProps {
@@ -47,42 +48,6 @@ function getDateGroup(timestamp: number, now: number): string {
   return "Older";
 }
 
-const bottomNavItems = [
-  {
-    href: "/cli",
-    label: "CLI Setup",
-    icon: (
-      <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={1.5}
-          d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-        />
-      </svg>
-    ),
-  },
-  {
-    href: "/settings",
-    label: "Settings",
-    icon: (
-      <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={1.5}
-          d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-        />
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={1.5}
-          d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-        />
-      </svg>
-    ),
-  },
-];
 
 function getShortPath(projectPath: string): string {
   const parts = projectPath.split("/").filter(Boolean);
@@ -95,7 +60,12 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
   const router = useRouter();
   const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
   const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
+  const isFeed = pathname === "/feed" || pathname?.startsWith("/feed/");
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const { signOut } = useAuthActions();
+  const user = useQuery(api.users.getCurrentUser);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -104,15 +74,34 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleLogout = async () => {
+    await signOut();
+    router.push("/");
+  };
+
+  const displayName = user?.name || user?.email?.split("@")[0] || "User";
+  const initials = displayName.slice(0, 1).toUpperCase();
+
   const favorites = useQuery(api.conversations.listFavorites);
   const bookmarks = useQuery(api.bookmarks.listBookmarks);
   const { conversations } = useQuery(api.conversations.listConversations, { filter: "my", limit: 100 }) ?? { conversations: [] };
 
   const handleFilterClick = (newFilter: "my" | "team") => {
     if (!isDashboard) {
-      router.push("/dashboard");
+      router.push(newFilter === "team" ? "/dashboard?filter=team" : "/dashboard");
+    } else {
+      onFilterChange?.(newFilter);
     }
-    onFilterChange?.(newFilter);
     onMobileClose?.();
   };
 
@@ -176,7 +165,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
             onClick={() => handleFilterClick("my")}
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
               isDashboard && filter === "my"
-                ? "bg-sol-bg-alt text-sol-text"
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
             title="Private"
@@ -190,7 +179,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
             onClick={() => handleFilterClick("team")}
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
               isDashboard && filter === "team"
-                ? "bg-sol-bg-alt text-sol-text"
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
             title="Team"
@@ -204,7 +193,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
             href="/timeline"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
               isTimeline
-                ? "bg-sol-bg-alt text-sol-text"
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
             title="Timeline"
@@ -213,6 +202,20 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             {!isNarrow && <span>Timeline</span>}
+          </Link>
+          <Link
+            href="/feed"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+              isFeed
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+            }`}
+            title="Feed"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
+            </svg>
+            {!isNarrow && <span>Feed</span>}
           </Link>
         </div>
 
@@ -281,7 +284,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
                   onClick={() => handleDirectoryClick(dir)}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors motion-reduce:transition-none text-left text-sm ${
                     directoryFilter === dir
-                      ? "bg-sol-bg-alt text-sol-text"
+                      ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                       : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
                   }`}
                   title={dir}
@@ -316,7 +319,7 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
                           onClick={onMobileClose}
                           className={`flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group ${
                             pathname === `/conversation/${conv._id}`
-                              ? "bg-sol-bg-alt text-sol-text"
+                              ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                               : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
                           }`}
                         >
@@ -342,28 +345,56 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
         )}
       </div>
 
-      <div className="pt-4 space-y-1 flex-shrink-0">
-        {!isNarrow && (
-          <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
-            Configuration
-          </div>
-        )}
-        {bottomNavItems.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={() => onMobileClose?.()}
-            className={`flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
-              pathname === item.href || pathname?.startsWith(item.href + "/")
-                ? "bg-sol-bg-alt text-sol-text"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
-            }`}
-            title={item.label}
+      <div className="pt-4 flex-shrink-0" ref={userMenuRef}>
+        <div className="relative">
+          <button
+            onClick={() => setUserMenuOpen(!userMenuOpen)}
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors hover:bg-sol-bg-alt/50`}
+            title={displayName}
           >
-            {item.icon}
-            {!isNarrow && <span>{item.label}</span>}
-          </Link>
-        ))}
+            <div className="w-8 h-8 rounded-full bg-sol-bg-highlight flex items-center justify-center text-sol-text flex-shrink-0">
+              <span className="text-sm font-medium">{initials}</span>
+            </div>
+            {!isNarrow && (
+              <>
+                <span className="flex-1 text-left text-sol-text-muted truncate">{displayName}</span>
+                <svg className={`w-4 h-4 text-sol-text-dim transition-transform ${userMenuOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 15l7-7 7 7" />
+                </svg>
+              </>
+            )}
+          </button>
+          {userMenuOpen && (
+            <div className="absolute bottom-full left-0 right-0 mb-1 bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
+              <button
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  onMobileClose?.();
+                  router.push("/settings");
+                }}
+                className="w-full px-4 py-2 text-left text-sm text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors flex items-center gap-3"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Settings
+              </button>
+              <button
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  handleLogout();
+                }}
+                className="w-full px-4 py-2 text-left text-sm text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors flex items-center gap-3"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                Sign out
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </>
   );

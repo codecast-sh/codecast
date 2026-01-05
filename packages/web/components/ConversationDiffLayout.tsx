@@ -5,7 +5,7 @@ import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "reac
 import { ConversationView, ConversationData, ConversationViewHandle } from "./ConversationView";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { extractFileChanges } from "../lib/fileChangeExtractor";
-import { ChevronLeft, ChevronRight, Keyboard, Link as LinkIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, Keyboard, Link as LinkIcon, PanelRightOpen, PanelRightClose } from "lucide-react";
 import { Button } from "./ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
@@ -18,7 +18,13 @@ interface ConversationDiffLayoutProps {
 }
 
 const STORAGE_KEY = "conversation-diff-layout";
+const DIFF_PANEL_COLLAPSED_KEY = "diffPanelCollapsed";
 const MOBILE_BREAKPOINT = 768;
+
+const getInitialDiffPanelCollapsed = () => {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(DIFF_PANEL_COLLAPSED_KEY) === "true";
+};
 
 export function ConversationDiffLayout({
   conversation,
@@ -27,7 +33,7 @@ export function ConversationDiffLayout({
   const heightClass = embedded ? "h-[calc(100vh-56px)]" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(getInitialDiffPanelCollapsed);
   const [showHelp, setShowHelp] = useState(false);
   const conversationRef = useRef<ConversationViewHandle>(null);
 
@@ -61,6 +67,12 @@ export function ConversationDiffLayout({
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
+  const toggleRightPanelWithPersist = () => {
+    const newValue = !rightCollapsed;
+    setRightCollapsed(newValue);
+    localStorage.setItem(DIFF_PANEL_COLLAPSED_KEY, String(newValue));
+  };
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -85,6 +97,10 @@ export function ConversationDiffLayout({
           e.preventDefault();
           toggleFileTree();
           break;
+        case "d":
+          e.preventDefault();
+          toggleRightPanelWithPersist();
+          break;
         case "Escape":
           e.preventDefault();
           clearSelection();
@@ -98,7 +114,7 @@ export function ConversationDiffLayout({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [nextChange, prevChange, toggleDiffMode, toggleFileTree, clearSelection]);
+  }, [nextChange, prevChange, toggleDiffMode, toggleFileTree, clearSelection, rightCollapsed]);
 
   const handleLayoutChange = (layout: Record<string, number>) => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
@@ -149,15 +165,17 @@ export function ConversationDiffLayout({
         defaultLayout={getDefaultLayout()}
         className="h-full"
       >
-        {!leftCollapsed && (
-          <>
-            <Panel
-              defaultSize={40}
-              minSize={20}
-              maxSize={70}
-              id="conversation-panel"
-            >
-              <div className="h-full relative">
+        {/* Left content area: Conversation + Timeline */}
+        <Panel
+          defaultSize={rightCollapsed ? 100 : 43}
+          minSize={20}
+          maxSize={rightCollapsed ? 100 : 70}
+          id="content-panel"
+        >
+          <div className="h-full flex relative">
+            {/* Conversation */}
+            {!leftCollapsed && (
+              <div className="flex-1 h-full relative min-w-0">
                 <ConversationView
                   ref={conversationRef}
                   conversation={conversation}
@@ -173,91 +191,86 @@ export function ConversationDiffLayout({
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
               </div>
-            </Panel>
-            <PanelResizeHandle className="w-1 bg-border hover:bg-primary/20 transition-colors cursor-col-resize" />
-          </>
-        )}
+            )}
+            {leftCollapsed && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="absolute top-2 left-2 z-20 h-8 w-8"
+                onClick={() => setLeftCollapsed(false)}
+                title="Show conversation panel"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </Button>
+            )}
 
-        {/* Timeline Panel */}
-        <Panel
-          defaultSize={3}
-          minSize={2}
-          maxSize={5}
-          id="timeline-panel"
-          className="relative"
-        >
-          <div className="h-full border-x border-border bg-muted/30 relative">
-            <TimelineStrip conversationRef={conversationRef} />
-            {/* Sync Scroll Toggle Button */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-20 h-8 w-8 ${syncScroll ? "text-primary" : "text-muted-foreground"}`}
-              onClick={toggleSyncScroll}
-              title={syncScroll ? "Disable scroll sync" : "Enable scroll sync"}
-            >
-              <LinkIcon className={`h-4 w-4 ${syncScroll ? "" : "opacity-50"}`} />
-            </Button>
+            {/* Timeline Strip */}
+            <div className="w-10 h-full border-l border-border bg-muted/30 relative flex-shrink-0">
+              <TimelineStrip conversationRef={conversationRef} />
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-20 h-8 w-8 ${syncScroll ? "text-primary" : "text-muted-foreground"}`}
+                onClick={toggleSyncScroll}
+                title={syncScroll ? "Disable scroll sync" : "Enable scroll sync"}
+              >
+                <LinkIcon className={`h-4 w-4 ${syncScroll ? "" : "opacity-50"}`} />
+              </Button>
+            </div>
           </div>
         </Panel>
 
-        <PanelResizeHandle className="w-1 bg-border hover:bg-primary/20 transition-colors cursor-col-resize" />
-
+        {/* Single resize handle between content and diff */}
         {!rightCollapsed && (
-          <Panel
-            defaultSize={57}
-            minSize={30}
-            maxSize={80}
-            id="diff-panel"
-          >
-            <div className="h-full relative">
-              <DiffPane />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-2 left-2 z-10 h-6 w-6 opacity-50 hover:opacity-100"
-                onClick={() => setRightCollapsed(true)}
-                title="Collapse diff panel"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-2 right-2 z-10 h-6 w-6 opacity-50 hover:opacity-100"
-                onClick={() => setShowHelp(true)}
-                title="Keyboard shortcuts (?)"
-              >
-                <Keyboard className="h-4 w-4" />
-              </Button>
-            </div>
-          </Panel>
+          <>
+            <PanelResizeHandle className="w-1.5 bg-border hover:bg-primary/20 transition-colors cursor-col-resize" />
+
+            {/* Diff Panel */}
+            <Panel
+              defaultSize={57}
+              minSize={30}
+              maxSize={80}
+              id="diff-panel"
+            >
+              <div className="h-full relative">
+                <DiffPane />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute top-2 right-2 z-10 h-6 w-6 opacity-50 hover:opacity-100"
+                  onClick={() => setShowHelp(true)}
+                  title="Keyboard shortcuts (?)"
+                >
+                  <Keyboard className="h-4 w-4" />
+                </Button>
+              </div>
+            </Panel>
+          </>
         )}
       </PanelGroup>
 
-      {/* Collapse buttons for when panels are hidden */}
-      {leftCollapsed && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="absolute top-2 left-2 z-20 h-8 w-8"
-          onClick={() => setLeftCollapsed(false)}
-          title="Show conversation panel"
+      {/* Right panel toggle in top-right when collapsed */}
+      {rightCollapsed && (
+        <button
+          onClick={toggleRightPanelWithPersist}
+          className="absolute top-2 right-2 z-20 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Show diff panel"
+          title="Show diff panel (d)"
         >
-          <ChevronRight className="h-5 w-5" />
-        </Button>
+          <PanelRightOpen className="w-5 h-5" />
+        </button>
       )}
 
-      {rightCollapsed && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="absolute top-2 right-2 z-20 h-8 w-8"
-          onClick={() => setRightCollapsed(false)}
-          title="Show diff panel"
+      {/* Right panel toggle in header area when expanded */}
+      {!rightCollapsed && (
+        <button
+          onClick={toggleRightPanelWithPersist}
+          className="absolute top-2 right-12 z-20 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Hide diff panel"
+          title="Hide diff panel (d)"
         >
-          <ChevronLeft className="h-5 w-5" />
-        </Button>
+          <PanelRightClose className="w-5 h-5" />
+        </button>
       )}
 
       <KeyboardShortcutsHelp isOpen={showHelp} onClose={() => setShowHelp(false)} />
@@ -265,8 +278,30 @@ export function ConversationDiffLayout({
   );
 }
 
+function formatTimeAgo(timestamp: number): string {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (seconds < 60) return "just now";
+  if (minutes === 1) return "1 min ago";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (hours === 1) return "1 hour ago";
+  if (hours < 24) return `${hours} hours ago`;
+  if (days === 1) return "yesterday";
+  return `${days} days ago`;
+}
+
+function getFileName(filePath: string): string {
+  return filePath.split('/').pop() || filePath;
+}
+
 function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<ConversationViewHandle | null> }) {
   const { changes, selectedChangeIndex, rangeStart, rangeEnd, selectChange, selectRange, syncScroll } = useDiffViewerStore();
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
   const handleDotClick = (index: number, messageId: string, e: React.MouseEvent) => {
     if (e.metaKey || e.ctrlKey) {
@@ -298,20 +333,42 @@ function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<C
         const inRange = isInRange(index);
         const fileColor = getFileColor(change.filePath);
         const isCommit = change.changeType === "commit";
+        const isHovered = hoveredIndex === index;
 
         return (
-          <button
-            key={change.id}
-            onClick={(e) => handleDotClick(index, change.messageId, e)}
-            className={`
-              w-3 h-3 transition-all shrink-0 relative z-10
-              ${isCommit ? "rounded-sm" : "rounded-full"}
-              ${isSelected ? "scale-150 ring-2 ring-primary/50" : "hover:scale-125"}
-              ${inRange && !isSelected ? "ring-1 ring-primary/30" : ""}
-            `}
-            style={{ backgroundColor: fileColor }}
-            title={isCommit ? `Git commit: ${change.commitMessage}` : `${change.filePath} - ${change.changeType}`}
-          />
+          <div key={change.id} className="relative shrink-0">
+            <button
+              onClick={(e) => handleDotClick(index, change.messageId, e)}
+              onMouseEnter={() => setHoveredIndex(index)}
+              onMouseLeave={() => setHoveredIndex(null)}
+              className={`
+                w-3 h-3 transition-all relative z-10
+                ${isCommit ? "rounded-sm" : "rounded-full"}
+                ${isSelected ? "scale-150 ring-2 ring-primary/50" : "hover:scale-125"}
+                ${inRange && !isSelected ? "ring-1 ring-primary/30" : ""}
+              `}
+              style={{ backgroundColor: fileColor }}
+            />
+            {isHovered && (
+              <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 z-50 pointer-events-none">
+                <div className="bg-popover text-popover-foreground border border-border rounded-md shadow-lg px-2.5 py-1.5 text-xs whitespace-nowrap">
+                  <div className="font-medium">
+                    {isCommit ? "Git commit" : getFileName(change.filePath)}
+                  </div>
+                  <div className="text-muted-foreground mt-0.5 flex items-center gap-1.5">
+                    <span className="capitalize">{change.changeType}</span>
+                    <span className="text-muted-foreground/50">-</span>
+                    <span>{formatTimeAgo(change.timestamp)}</span>
+                  </div>
+                  {isCommit && change.commitMessage && (
+                    <div className="text-muted-foreground mt-1 max-w-[200px] truncate">
+                      {change.commitMessage}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         );
       })}
       {rangeStart !== null && rangeEnd !== null && (
