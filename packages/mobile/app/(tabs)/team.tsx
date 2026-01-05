@@ -1,10 +1,10 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, ScrollView } from 'react-native';
-import { Text, View } from '@/components/Themed';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, ScrollView, View as RNView, Text as RNText } from 'react-native';
 import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { Theme, Spacing } from '@/constants/Theme';
 
 type ActivityEvent = {
   _id: Id<"team_activity_events">;
@@ -38,93 +38,65 @@ function formatRelativeTime(timestamp: number): string {
   const diffDays = Math.floor(diffMs / 86400000);
 
   if (diffMinutes < 1) return "just now";
-  if (diffMinutes === 1) return "1 min ago";
-  if (diffMinutes < 60) return `${diffMinutes} min ago`;
-  if (diffHours === 1) return "1 hr ago";
-  if (diffHours < 24) return `${diffHours} hr ago`;
-  if (diffDays === 1) return "yesterday";
+  if (diffMinutes < 60) return `${diffMinutes}m`;
+  if (diffHours < 24) return `${diffHours}h`;
+  if (diffDays < 7) return `${diffDays}d`;
 
   const date = new Date(timestamp);
-  const thisYear = new Date().getFullYear();
-  if (date.getFullYear() === thisYear) {
-    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  }
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function getEventColor(eventType: string): string {
   switch (eventType) {
     case "session_started":
     case "session_completed":
-      return "#eab308";
+      return Theme.accent;
     case "commit_pushed":
-      return "#8b5cf6";
+      return Theme.violet;
     case "member_joined":
-      return "#10b981";
+      return Theme.greenBright;
     case "member_left":
-      return "#ef4444";
+      return Theme.red;
     case "pr_created":
     case "pr_merged":
-      return "#3b82f6";
+      return Theme.blue;
     default:
-      return "#888";
+      return Theme.textMuted;
   }
 }
 
-type ActivityEventItemProps = {
-  event: ActivityEvent;
-  onPress?: () => void;
-};
-
-function ActivityEventItem({ event, onPress }: ActivityEventItemProps) {
-  const actorName = event.actor?.name || event.actor?.email || "Unknown";
+function ActivityEventItem({ event, onPress }: { event: ActivityEvent; onPress?: () => void }) {
+  const actorName = event.actor?.name || event.actor?.email?.split('@')[0] || "Unknown";
   const eventColor = getEventColor(event.event_type);
 
   const content = (
-    <View style={styles.eventCard}>
-      <View style={[styles.eventIndicator, { backgroundColor: eventColor }]} />
-      <View style={styles.eventContent}>
-        <View style={styles.eventHeader}>
-          <Text style={styles.eventTitle} numberOfLines={2}>
+    <RNView style={styles.eventCard}>
+      <RNView style={[styles.eventIndicator, { backgroundColor: eventColor }]} />
+      <RNView style={styles.eventContent}>
+        <RNView style={styles.eventHeader}>
+          <RNText style={styles.eventTitle} numberOfLines={2}>
             {event.title}
-          </Text>
-          <Text style={styles.eventTime}>
+          </RNText>
+          <RNText style={styles.eventTime}>
             {formatRelativeTime(event.timestamp)}
-          </Text>
-        </View>
-        <View style={styles.eventMeta}>
-          <Text style={styles.metaText}>{actorName}</Text>
-          {event.metadata?.git_branch && (
-            <>
-              <Text style={styles.metaSeparator}>•</Text>
-              <Text style={styles.metaText}>{event.metadata.git_branch}</Text>
-            </>
-          )}
+          </RNText>
+        </RNView>
+        <RNView style={styles.eventMeta}>
+          <RNText style={styles.metaText}>{actorName}</RNText>
           {event.metadata?.message_count !== undefined && (
             <>
-              <Text style={styles.metaSeparator}>•</Text>
-              <Text style={styles.metaText}>{event.metadata.message_count} msg</Text>
+              <RNText style={styles.metaSeparator}>·</RNText>
+              <RNText style={styles.metaText}>{event.metadata.message_count} msgs</RNText>
             </>
           )}
-          {event.metadata?.files_changed !== undefined && (
-            <>
-              <Text style={styles.metaSeparator}>•</Text>
-              <Text style={styles.metaText}>{event.metadata.files_changed} files</Text>
-            </>
-          )}
-        </View>
-        {event.description && (
-          <Text style={styles.eventDescription} numberOfLines={1}>
-            {event.description}
-          </Text>
-        )}
-      </View>
-    </View>
+        </RNView>
+      </RNView>
+    </RNView>
   );
 
   if (onPress) {
     return (
-      <TouchableOpacity onPress={onPress} style={styles.eventTouchable}>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
         {content}
       </TouchableOpacity>
     );
@@ -133,16 +105,10 @@ function ActivityEventItem({ event, onPress }: ActivityEventItemProps) {
   return content;
 }
 
-type FilterOption = {
-  label: string;
-  value: string | undefined;
-};
-
-const EVENT_TYPE_FILTERS: FilterOption[] = [
-  { label: "All Events", value: undefined },
+const EVENT_TYPE_FILTERS = [
+  { label: "All", value: undefined },
   { label: "Sessions", value: "session_completed" },
   { label: "Commits", value: "commit_pushed" },
-  { label: "Members", value: "member_joined" },
   { label: "PRs", value: "pr_created" },
 ];
 
@@ -190,69 +156,71 @@ export default function TeamScreen() {
     const isOnline = item.daemon_last_seen && Date.now() - item.daemon_last_seen < 60000;
 
     return (
-      <View style={styles.memberCard}>
-        <View style={styles.memberAvatar}>
-          <Text style={styles.memberAvatarText}>
+      <RNView style={styles.memberCard}>
+        <RNView style={styles.memberAvatar}>
+          <RNText style={styles.memberAvatarText}>
             {item.name?.[0]?.toUpperCase() || item.email?.[0]?.toUpperCase() || "?"}
-          </Text>
-          {isOnline && <View style={styles.onlineIndicator} />}
-        </View>
-        <View style={styles.memberInfo}>
-          <Text style={styles.memberName}>{item.name || "Unnamed"}</Text>
-          <Text style={styles.memberEmail}>{item.email}</Text>
-          <Text style={styles.memberLastSeen}>{lastSeen}</Text>
-        </View>
+          </RNText>
+          {isOnline && <RNView style={styles.onlineIndicator} />}
+        </RNView>
+        <RNView style={styles.memberInfo}>
+          <RNText style={styles.memberName}>{item.name || "Unnamed"}</RNText>
+          <RNText style={styles.memberEmail}>{item.email}</RNText>
+          <RNText style={styles.memberLastSeen}>Last seen {lastSeen}</RNText>
+        </RNView>
         {item.role === "admin" && (
-          <View style={styles.adminBadge}>
-            <Text style={styles.adminBadgeText}>ADMIN</Text>
-          </View>
+          <RNView style={styles.adminBadge}>
+            <RNText style={styles.adminBadgeText}>Admin</RNText>
+          </RNView>
         )}
-      </View>
+      </RNView>
     );
   };
 
   const renderEmpty = () => (
-    <View style={styles.emptyContainer}>
-      <Text style={styles.emptyText}>
+    <RNView style={styles.emptyContainer}>
+      <RNText style={styles.emptyText}>
         {view === "activity"
-          ? "No team activity yet.\nTeam activity will appear as members work."
+          ? "No team activity yet.\nActivity will appear as members work."
           : "No team members found."}
-      </Text>
-    </View>
+      </RNText>
+    </RNView>
   );
 
   if (!currentUser?.team_id) {
     return (
-      <View style={styles.container}>
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>
+      <RNView style={styles.container}>
+        <RNView style={styles.emptyContainer}>
+          <RNText style={styles.emptyText}>
             You are not part of a team.{'\n'}Join or create a team to see activity.
-          </Text>
-        </View>
-      </View>
+          </RNText>
+        </RNView>
+      </RNView>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.tabs}>
+    <RNView style={styles.container}>
+      <RNView style={styles.tabs}>
         <TouchableOpacity
           style={[styles.tab, view === "activity" && styles.tabActive]}
           onPress={() => setView("activity")}
+          activeOpacity={0.7}
         >
-          <Text style={[styles.tabText, view === "activity" && styles.tabTextActive]}>
+          <RNText style={[styles.tabText, view === "activity" && styles.tabTextActive]}>
             Activity
-          </Text>
+          </RNText>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.tab, view === "directory" && styles.tabActive]}
           onPress={() => setView("directory")}
+          activeOpacity={0.7}
         >
-          <Text style={[styles.tabText, view === "directory" && styles.tabTextActive]}>
+          <RNText style={[styles.tabText, view === "directory" && styles.tabTextActive]}>
             Directory
-          </Text>
+          </RNText>
         </TouchableOpacity>
-      </View>
+      </RNView>
 
       {view === "activity" && (
         <>
@@ -270,15 +238,16 @@ export default function TeamScreen() {
                   eventTypeFilter === filter.value && styles.filterChipActive,
                 ]}
                 onPress={() => setEventTypeFilter(filter.value)}
+                activeOpacity={0.7}
               >
-                <Text
+                <RNText
                   style={[
                     styles.filterChipText,
                     eventTypeFilter === filter.value && styles.filterChipTextActive,
                   ]}
                 >
                   {filter.label}
-                </Text>
+                </RNText>
               </TouchableOpacity>
             ))}
           </ScrollView>
@@ -287,10 +256,11 @@ export default function TeamScreen() {
             renderItem={renderActivityItem}
             keyExtractor={(item) => item._id}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Theme.textMuted} />
             }
             ListEmptyComponent={activityResult === undefined ? null : renderEmpty}
             contentContainerStyle={events.length === 0 ? styles.emptyList : styles.listContent}
+            showsVerticalScrollIndicator={false}
           />
         </>
       )}
@@ -301,88 +271,93 @@ export default function TeamScreen() {
           renderItem={renderTeamMemberItem}
           keyExtractor={(item) => item._id}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Theme.textMuted} />
           }
           ListEmptyComponent={teamMembers === undefined ? null : renderEmpty}
           contentContainerStyle={(teamMembers?.length || 0) === 0 ? styles.emptyList : styles.listContent}
+          showsVerticalScrollIndicator={false}
         />
       )}
-    </View>
+    </RNView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: Theme.bg,
   },
   tabs: {
     flexDirection: 'row',
+    backgroundColor: Theme.bgAlt,
     borderBottomWidth: 1,
-    borderBottomColor: '#333',
+    borderBottomColor: Theme.borderLight,
   },
   tab: {
     flex: 1,
-    paddingVertical: 16,
+    paddingVertical: 14,
     alignItems: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
   },
   tabActive: {
-    borderBottomWidth: 2,
-    borderBottomColor: '#fff',
+    borderBottomColor: Theme.text,
   },
   tabText: {
-    fontSize: 16,
-    color: '#888',
+    fontSize: 15,
+    color: Theme.textMuted,
+    fontWeight: '500',
   },
   tabTextActive: {
-    color: '#fff',
+    color: Theme.text,
     fontWeight: '600',
   },
   filterContainer: {
-    maxHeight: 60,
-    borderBottomWidth: 1,
-    borderBottomColor: '#222',
+    maxHeight: 52,
+    backgroundColor: Theme.bg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.bgHighlight,
   },
   filterContent: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
     gap: 8,
   },
   filterChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#222',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: Theme.bgAlt,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: Theme.borderLight,
   },
   filterChipActive: {
-    backgroundColor: '#eab308',
-    borderColor: '#eab308',
+    backgroundColor: Theme.accent,
+    borderColor: Theme.accent,
   },
   filterChipText: {
-    fontSize: 14,
-    color: '#888',
+    fontSize: 13,
+    color: Theme.textMuted,
+    fontWeight: '500',
   },
   filterChipTextActive: {
-    color: '#000',
+    color: '#fff',
     fontWeight: '600',
   },
   listContent: {
     padding: 16,
   },
-  eventTouchable: {
-    marginBottom: 12,
-  },
   eventCard: {
     flexDirection: 'row',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333',
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
     overflow: 'hidden',
+    marginBottom: 10,
   },
   eventIndicator: {
-    width: 4,
+    width: 3,
   },
   eventContent: {
     flex: 1,
@@ -392,18 +367,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 6,
+    marginBottom: 4,
   },
   eventTitle: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '500',
-    color: '#fff',
+    color: Theme.text,
     marginRight: 8,
+    lineHeight: 19,
   },
   eventTime: {
     fontSize: 11,
-    color: '#666',
+    color: Theme.textMuted0,
   },
   eventMeta: {
     flexDirection: 'row',
@@ -412,41 +388,36 @@ const styles = StyleSheet.create({
   },
   metaText: {
     fontSize: 12,
-    color: '#888',
+    color: Theme.textMuted,
   },
   metaSeparator: {
-    color: '#666',
-    marginHorizontal: 6,
-  },
-  eventDescription: {
-    fontSize: 12,
-    color: '#888',
-    marginTop: 4,
+    color: Theme.textMuted0,
+    marginHorizontal: 5,
   },
   memberCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#333',
-    marginBottom: 12,
+    padding: 14,
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    marginBottom: 10,
   },
   memberAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#333',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Theme.bgHighlight,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
     position: 'relative',
   },
   memberAvatarText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '600',
-    color: '#fff',
+    color: Theme.text,
   },
   onlineIndicator: {
     position: 'absolute',
@@ -455,38 +426,38 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: '#10b981',
+    backgroundColor: Theme.greenBright,
     borderWidth: 2,
-    borderColor: '#1a1a1a',
+    borderColor: Theme.bgAlt,
   },
   memberInfo: {
     flex: 1,
   },
   memberName: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '500',
-    color: '#fff',
+    color: Theme.text,
     marginBottom: 2,
   },
   memberEmail: {
     fontSize: 13,
-    color: '#888',
+    color: Theme.textMuted,
     marginBottom: 2,
   },
   memberLastSeen: {
     fontSize: 11,
-    color: '#666',
+    color: Theme.textMuted0,
   },
   adminBadge: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: Theme.blue,
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 3,
     borderRadius: 4,
   },
   adminBadgeText: {
     color: '#fff',
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   emptyContainer: {
     flex: 1,
@@ -495,10 +466,10 @@ const styles = StyleSheet.create({
     padding: 32,
   },
   emptyText: {
-    fontSize: 16,
-    color: '#888',
+    fontSize: 15,
+    color: Theme.textMuted,
     textAlign: 'center',
-    lineHeight: 24,
+    lineHeight: 22,
   },
   emptyList: {
     flex: 1,

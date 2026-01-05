@@ -1,10 +1,11 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
-import { Text, View } from '@/components/Themed';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Text as RNText } from 'react-native';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { Theme, Spacing } from '@/constants/Theme';
 
 type Comment = {
   _id: Id<"comments">;
@@ -28,18 +29,12 @@ function formatRelativeTime(timestamp: number): string {
   const diffDays = Math.floor(diffMs / 86400000);
 
   if (diffMinutes < 1) return "just now";
-  if (diffMinutes === 1) return "1 min ago";
-  if (diffMinutes < 60) return `${diffMinutes} min ago`;
-  if (diffHours === 1) return "1 hr ago";
-  if (diffHours < 24) return `${diffHours} hr ago`;
-  if (diffDays === 1) return "yesterday";
+  if (diffMinutes < 60) return `${diffMinutes}m`;
+  if (diffHours < 24) return `${diffHours}h`;
+  if (diffDays < 7) return `${diffDays}d`;
 
   const date = new Date(timestamp);
-  const thisYear = new Date().getFullYear();
-  if (date.getFullYear() === thisYear) {
-    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  }
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 type NotificationItemProps = {
@@ -48,32 +43,30 @@ type NotificationItemProps = {
 };
 
 function NotificationItem({ comment, onPress }: NotificationItemProps) {
-  const userName = comment.user_name || comment.user_email || "Unknown";
+  const userName = comment.user_name || comment.user_email?.split('@')[0] || "Unknown";
   const conversationTitle = comment.conversation_title || "Untitled conversation";
 
   return (
-    <TouchableOpacity onPress={onPress} style={styles.notificationCard}>
-      <View style={styles.notificationHeader}>
-        <View style={styles.notificationAvatar}>
-          <Text style={styles.notificationAvatarText}>
-            {userName[0]?.toUpperCase() || "?"}
-          </Text>
-        </View>
-        <View style={styles.notificationContent}>
-          <View style={styles.notificationMeta}>
-            <Text style={styles.notificationUserName}>{userName}</Text>
-            <Text style={styles.notificationTime}>
-              {formatRelativeTime(comment.created_at)}
-            </Text>
-          </View>
-          <Text style={styles.notificationConversation} numberOfLines={1}>
-            commented on {conversationTitle}
-          </Text>
-          <Text style={styles.notificationText} numberOfLines={2}>
-            {comment.content}
-          </Text>
-        </View>
-      </View>
+    <TouchableOpacity onPress={onPress} style={styles.notificationCard} activeOpacity={0.7}>
+      <RNView style={styles.notificationAvatar}>
+        <RNText style={styles.notificationAvatarText}>
+          {userName[0]?.toUpperCase() || "?"}
+        </RNText>
+      </RNView>
+      <RNView style={styles.notificationContent}>
+        <RNView style={styles.notificationHeader}>
+          <RNText style={styles.notificationUserName}>{userName}</RNText>
+          <RNText style={styles.notificationTime}>
+            {formatRelativeTime(comment.created_at)}
+          </RNText>
+        </RNView>
+        <RNText style={styles.notificationContext} numberOfLines={1}>
+          commented on {conversationTitle}
+        </RNText>
+        <RNText style={styles.notificationText} numberOfLines={2}>
+          {comment.content}
+        </RNText>
+      </RNView>
     </TouchableOpacity>
   );
 }
@@ -103,109 +96,118 @@ export default function NotificationsScreen() {
   );
 
   const renderEmpty = () => (
-    <View style={styles.emptyContainer}>
-      <Text style={styles.emptyText}>
-        No notifications yet.{'\n'}Comments on your conversations will appear here.
-      </Text>
-    </View>
+    <RNView style={styles.emptyContainer}>
+      <RNView style={styles.emptyIcon}>
+        <FontAwesome name="bell-o" size={28} color={Theme.textMuted0} />
+      </RNView>
+      <RNText style={styles.emptyTitle}>No notifications</RNText>
+      <RNText style={styles.emptyText}>
+        Comments on your conversations{'\n'}will appear here.
+      </RNText>
+    </RNView>
   );
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Notifications</Text>
-      </View>
+    <RNView style={styles.container}>
       <FlatList
         data={[]}
         renderItem={renderItem}
         keyExtractor={(item) => item._id}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Theme.textMuted}
+          />
         }
         ListEmptyComponent={renderEmpty}
         contentContainerStyle={styles.emptyList}
+        showsVerticalScrollIndicator={false}
       />
-    </View>
+    </RNView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-  },
-  header: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#fff',
+    backgroundColor: Theme.bg,
   },
   notificationCard: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#222',
-    backgroundColor: '#1a1a1a',
-  },
-  notificationHeader: {
     flexDirection: 'row',
+    padding: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.bgHighlight,
+    backgroundColor: Theme.bg,
   },
   notificationAvatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#333',
+    backgroundColor: Theme.bgHighlight,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: Spacing.md,
   },
   notificationAvatarText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#fff',
+    color: Theme.text,
   },
   notificationContent: {
     flex: 1,
   },
-  notificationMeta: {
+  notificationHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   notificationUserName: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
-    color: '#fff',
+    color: Theme.text,
   },
   notificationTime: {
     fontSize: 12,
-    color: '#666',
+    color: Theme.textMuted0,
   },
-  notificationConversation: {
+  notificationContext: {
     fontSize: 13,
-    color: '#888',
+    color: Theme.textMuted,
     marginBottom: 4,
   },
   notificationText: {
     fontSize: 14,
-    color: '#ddd',
+    color: Theme.textSecondary,
     lineHeight: 20,
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 32,
+    padding: Spacing.xxxl,
+  },
+  emptyIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: Theme.bgAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.lg,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: Theme.text,
+    marginBottom: Spacing.sm,
   },
   emptyText: {
-    fontSize: 16,
-    color: '#888',
+    fontSize: 15,
+    color: Theme.textMuted,
     textAlign: 'center',
-    lineHeight: 24,
+    lineHeight: 22,
   },
   emptyList: {
     flex: 1,

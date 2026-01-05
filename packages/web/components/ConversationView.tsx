@@ -4,7 +4,6 @@ import { useEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef }
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
-import "highlight.js/styles/base16/solarized-dark.css";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
@@ -1373,6 +1372,7 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
   function ConversationView({ conversation, commits = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, embedded }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
@@ -1410,6 +1410,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     ];
     return items.sort((a, b) => a.timestamp - b.timestamp);
   }, [messages, commits]);
+
+  // Find the actual scrollable container (may be parent when embedded)
+  const getScrollContainer = (): HTMLElement | null => {
+    const container = containerRef.current;
+    if (!container) return null;
+    if (!embedded) return container;
+    let el = container.parentElement;
+    while (el) {
+      const style = getComputedStyle(el);
+      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return container;
+  };
 
   // Track if we've already scrolled for this highlight query
   const hasScrolledToHighlight = useRef(false);
@@ -1574,7 +1590,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const virtualizer = useVirtualizer({
     count: timeline.length,
-    getScrollElement: () => containerRef.current,
+    getScrollElement: () => scrollContainerRef.current || containerRef.current,
     estimateSize: (index) => {
       const item = timeline[index];
       if (!item) return 100;
@@ -1653,24 +1669,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }), [timeline, virtualizer]);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    // When embedded, find the scrollable parent (DashboardLayout's scroll container)
-    const getScrollContainer = () => {
-      if (!embedded) return container;
-      let el = container.parentElement;
-      while (el) {
-        const style = getComputedStyle(el);
-        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-          return el;
-        }
-        el = el.parentElement;
-      }
-      return container;
-    };
-
     const scrollContainer = getScrollContainer();
+    if (!scrollContainer) return;
+
+    // Update ref so virtualizer uses correct scroll element
+    scrollContainerRef.current = scrollContainer;
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
@@ -1691,33 +1694,33 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   // Restore scroll position after loading older messages
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !shouldRestoreScrollRef.current) return;
+    const scrollContainer = scrollContainerRef.current || containerRef.current;
+    if (!scrollContainer || !shouldRestoreScrollRef.current) return;
 
     // After messages are prepended, adjust scroll to maintain position
-    const newScrollHeight = container.scrollHeight;
+    const newScrollHeight = scrollContainer.scrollHeight;
     const scrollDiff = newScrollHeight - prevScrollHeightRef.current;
     if (scrollDiff > 0) {
-      container.scrollTop += scrollDiff;
+      scrollContainer.scrollTop += scrollDiff;
     }
     shouldRestoreScrollRef.current = false;
   }, [messages.length]);
 
   useEffect(() => {
-    if (!userScrolled && timeline.length > 0) {
+    if (!userScrolled && timeline.length > 0 && !highlightQuery) {
       virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
     }
-  }, [timeline.length, userScrolled, virtualizer]);
+  }, [timeline.length, userScrolled, virtualizer, highlightQuery]);
 
   const hasInitialScrolled = useRef(false);
   useEffect(() => {
-    if (timeline.length > 0 && !hasInitialScrolled.current && !window.location.hash) {
+    if (timeline.length > 0 && !hasInitialScrolled.current && !window.location.hash && !highlightQuery) {
       hasInitialScrolled.current = true;
       setTimeout(() => {
         virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
       }, 100);
     }
-  }, [timeline.length, virtualizer]);
+  }, [timeline.length, virtualizer, highlightQuery]);
 
   useEffect(() => {
     if (timeline.length && window.location.hash) {

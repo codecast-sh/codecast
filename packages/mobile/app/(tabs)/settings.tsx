@@ -1,8 +1,8 @@
-import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView } from 'react-native';
-import { Text, View } from '@/components/Themed';
+import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView, View as RNView, Text as RNText } from 'react-native';
 import { useAuth } from '@/lib/auth';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
+import { Theme, Spacing } from '@/constants/Theme';
 
 export default function SettingsScreen() {
   const {
@@ -74,113 +74,138 @@ export default function SettingsScreen() {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Settings</Text>
-      </View>
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <RNView style={styles.section}>
+        <RNText style={styles.sectionTitle}>Account</RNText>
+        <RNView style={styles.card}>
+          <RNView style={styles.userInfo}>
+            <RNView style={styles.avatar}>
+              <RNText style={styles.avatarText}>
+                {currentUser?.name?.[0]?.toUpperCase() || currentUser?.email?.[0]?.toUpperCase() || "?"}
+              </RNText>
+            </RNView>
+            <RNView style={styles.userDetails}>
+              <RNText style={styles.userName}>{currentUser?.name || "User"}</RNText>
+              <RNText style={styles.userEmail}>{currentUser?.email}</RNText>
+            </RNView>
+          </RNView>
+        </RNView>
+      </RNView>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Notifications</Text>
-
-        <View style={styles.setting}>
-          <View style={styles.settingText}>
-            <Text style={styles.settingLabel}>Enable Notifications</Text>
-            <Text style={styles.settingDescription}>
-              Receive push notifications for team activity
-            </Text>
-          </View>
-          <Switch
-            value={currentUser?.notifications_enabled ?? false}
-            onValueChange={handleToggleNotifications}
-            trackColor={{ false: '#ccc', true: '#d97706' }}
-            thumbColor="#fff"
-          />
-        </View>
-
-        {currentUser?.notifications_enabled && (
-          <>
-            <View style={styles.setting}>
-              <View style={styles.settingText}>
-                <Text style={styles.settingLabel}>Team Session Starts</Text>
-                <Text style={styles.settingDescription}>
-                  Notify when a team member starts a new session
-                </Text>
-              </View>
-              <Switch
-                value={currentUser?.notification_preferences?.team_session_start ?? true}
-                onValueChange={() => handleToggleNotificationType('team_session_start')}
-                trackColor={{ false: '#ccc', true: '#d97706' }}
-                thumbColor="#fff"
-              />
-            </View>
-
-            <View style={styles.setting}>
-              <View style={styles.settingText}>
-                <Text style={styles.settingLabel}>Mentions</Text>
-                <Text style={styles.settingDescription}>
-                  Notify when someone mentions you in a comment
-                </Text>
-              </View>
-              <Switch
-                value={currentUser?.notification_preferences?.mention ?? true}
-                onValueChange={() => handleToggleNotificationType('mention')}
-                trackColor={{ false: '#ccc', true: '#d97706' }}
-                thumbColor="#fff"
-              />
-            </View>
-
-            <View style={styles.setting}>
-              <View style={styles.settingText}>
-                <Text style={styles.settingLabel}>Permission Requests</Text>
-                <Text style={styles.settingDescription}>
-                  Notify when a session requests permission
-                </Text>
-              </View>
-              <Switch
-                value={currentUser?.notification_preferences?.permission_request ?? true}
-                onValueChange={() => handleToggleNotificationType('permission_request')}
-                trackColor={{ false: '#ccc', true: '#d97706' }}
-                thumbColor="#fff"
-              />
-            </View>
-          </>
-        )}
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Security</Text>
-
-        {isBiometricAvailable && (
-          <View style={styles.setting}>
-            <View style={styles.settingText}>
-              <Text style={styles.settingLabel}>Biometric Unlock</Text>
-              <Text style={styles.settingDescription}>
-                Use Face ID or Touch ID to unlock the app
-              </Text>
-            </View>
+      <RNView style={styles.section}>
+        <RNText style={styles.sectionTitle}>Notifications</RNText>
+        <RNView style={styles.card}>
+          <RNView style={styles.setting}>
+            <RNView style={styles.settingText}>
+              <RNText style={styles.settingLabel}>Push Notifications</RNText>
+              <RNText style={styles.settingDescription}>
+                Receive notifications for team activity
+              </RNText>
+            </RNView>
             <Switch
-              value={isBiometricEnabled}
-              onValueChange={handleToggleBiometric}
-              trackColor={{ false: '#ccc', true: '#d97706' }}
+              value={currentUser?.notifications_enabled ?? false}
+              onValueChange={handleToggleNotifications}
+              trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
               thumbColor="#fff"
+              ios_backgroundColor={Theme.bgHighlight}
             />
-          </View>
-        )}
+          </RNView>
 
-        {!isBiometricAvailable && (
-          <View style={styles.setting}>
-            <Text style={styles.settingDisabled}>
-              Biometric authentication not available on this device
-            </Text>
-          </View>
-        )}
-      </View>
+          {currentUser?.notifications_enabled && (
+            <>
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Team Sessions</RNText>
+                  <RNText style={styles.settingDescription}>
+                    When a team member starts a session
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={currentUser?.notification_preferences?.team_session_start ?? true}
+                  onValueChange={() => handleToggleNotificationType('team_session_start')}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
 
-      <View style={styles.section}>
-        <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
-          <Text style={styles.signOutButtonText}>Sign Out</Text>
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Mentions</RNText>
+                  <RNText style={styles.settingDescription}>
+                    When someone mentions you
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={currentUser?.notification_preferences?.mention ?? true}
+                  onValueChange={() => handleToggleNotificationType('mention')}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
+
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Permission Requests</RNText>
+                  <RNText style={styles.settingDescription}>
+                    When a session needs approval
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={currentUser?.notification_preferences?.permission_request ?? true}
+                  onValueChange={() => handleToggleNotificationType('permission_request')}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
+            </>
+          )}
+        </RNView>
+      </RNView>
+
+      <RNView style={styles.section}>
+        <RNText style={styles.sectionTitle}>Security</RNText>
+        <RNView style={styles.card}>
+          {isBiometricAvailable ? (
+            <RNView style={styles.setting}>
+              <RNView style={styles.settingText}>
+                <RNText style={styles.settingLabel}>Biometric Unlock</RNText>
+                <RNText style={styles.settingDescription}>
+                  Use Face ID or Touch ID
+                </RNText>
+              </RNView>
+              <Switch
+                value={isBiometricEnabled}
+                onValueChange={handleToggleBiometric}
+                trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                thumbColor="#fff"
+                ios_backgroundColor={Theme.bgHighlight}
+              />
+            </RNView>
+          ) : (
+            <RNView style={styles.setting}>
+              <RNText style={styles.settingDisabled}>
+                Biometric authentication not available
+              </RNText>
+            </RNView>
+          )}
+        </RNView>
+      </RNView>
+
+      <RNView style={styles.section}>
+        <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut} activeOpacity={0.7}>
+          <RNText style={styles.signOutButtonText}>Sign Out</RNText>
         </TouchableOpacity>
-      </View>
+      </RNView>
+
+      <RNView style={styles.footer}>
+        <RNText style={styles.footerText}>Codecast v1.0.0</RNText>
+      </RNView>
     </ScrollView>
   );
 }
@@ -188,75 +213,110 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f8f8',
-  },
-  header: {
-    padding: 20,
-    paddingTop: 60,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1a1a1a',
+    backgroundColor: Theme.bg,
   },
   section: {
-    marginTop: 20,
-    backgroundColor: '#fff',
-    paddingVertical: 8,
+    marginTop: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
   },
   sectionTitle: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#888',
+    color: Theme.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
+    marginBottom: Spacing.sm,
+    marginLeft: Spacing.xs,
+  },
+  card: {
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    overflow: 'hidden',
+  },
+  userInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Spacing.lg,
+  },
+  avatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: Theme.bgHighlight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: Spacing.md,
+  },
+  avatarText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: Theme.text,
+  },
+  userDetails: {
+    flex: 1,
+  },
+  userName: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: Theme.text,
+    marginBottom: 2,
+  },
+  userEmail: {
+    fontSize: 14,
+    color: Theme.textMuted,
   },
   setting: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    paddingHorizontal: Spacing.lg,
     paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+  },
+  settingDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Theme.borderLight,
+    marginLeft: Spacing.lg,
   },
   settingText: {
     flex: 1,
-    marginRight: 12,
+    marginRight: Spacing.md,
   },
   settingLabel: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#1a1a1a',
+    color: Theme.text,
     marginBottom: 2,
   },
   settingDescription: {
     fontSize: 13,
-    color: '#888',
+    color: Theme.textMuted,
   },
   settingDisabled: {
     fontSize: 14,
-    color: '#aaa',
+    color: Theme.textMuted0,
     fontStyle: 'italic',
   },
   signOutButton: {
-    backgroundColor: '#fff',
-    padding: 16,
-    marginHorizontal: 20,
+    backgroundColor: Theme.bgAlt,
+    padding: Spacing.lg,
     borderRadius: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e74c3c',
+    borderColor: Theme.red,
   },
   signOutButtonText: {
-    color: '#e74c3c',
+    color: Theme.red,
     fontSize: 16,
     fontWeight: '600',
+  },
+  footer: {
+    alignItems: 'center',
+    paddingVertical: Spacing.xxxl,
+  },
+  footerText: {
+    fontSize: 13,
+    color: Theme.textMuted0,
   },
 });

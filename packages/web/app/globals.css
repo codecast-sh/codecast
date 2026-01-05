@@ -13,6 +13,28 @@
   --sol-text-muted: #586e75;
   --sol-text-dim: #657b83;
   --sol-text-muted0: #839496;
+
+  /* Solarized accent colors (work on both light/dark) */
+  --sol-yellow: #b58900;
+  --sol-orange: #cb4b16;
+  --sol-red: #dc322f;
+  --sol-magenta: #d33682;
+  --sol-violet: #6c71c4;
+  --sol-blue: #268bd2;
+  --sol-cyan: #2aa198;
+  --sol-green: #859900;
+
+  /* Syntax highlighting - Light mode optimized */
+  --hljs-keyword: #859900;
+  --hljs-string: #2aa198;
+  --hljs-number: #d33682;
+  --hljs-function: #268bd2;
+  --hljs-comment: #93a1a1;
+  --hljs-type: #b58900;
+  --hljs-variable: #cb4b16;
+  --hljs-attr: #b58900;
+  --hljs-tag: #268bd2;
+  --hljs-built-in: #dc322f;
 }
 
 .dark {
@@ -26,6 +48,9 @@
   --sol-text-muted: #93a1a1;
   --sol-text-dim: #657b83;
   --sol-text-muted0: #839496;
+
+  /* Syntax highlighting - Dark mode (same accent colors work well) */
+  --hljs-comment: #586e75;
 }
 
 @layer components {
@@ -273,5 +298,86 @@
 .animate-fadeIn {
   animation: fadeIn 0.4s ease-out forwards;
   opacity: 0;
+}
+
+/* Highlight.js Solarized theme overrides */
+.hljs {
+  color: var(--sol-text-secondary);
+  background: var(--sol-bg-alt);
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--hljs-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-addition {
+  color: var(--hljs-keyword);
+}
+
+.hljs-string,
+.hljs-doctag,
+.hljs-regexp {
+  color: var(--hljs-string);
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-bullet,
+.hljs-link {
+  color: var(--hljs-number);
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-title.function_ {
+  color: var(--hljs-function);
+}
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-title.class_ {
+  color: var(--hljs-type);
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-deletion {
+  color: var(--hljs-variable);
+}
+
+.hljs-attr,
+.hljs-attribute {
+  color: var(--hljs-attr);
+}
+
+.hljs-tag,
+.hljs-name {
+  color: var(--hljs-tag);
+}
+
+.hljs-built_in,
+.hljs-builtin-name {
+  color: var(--hljs-built-in);
+}
+
+.hljs-meta,
+.hljs-symbol {
+  color: var(--sol-violet);
+}
+
+.hljs-params {
+  color: var(--sol-text-secondary);
+}
+
+.hljs-property {
+  color: var(--hljs-attr);
+}
+
+.hljs-punctuation {
+  color: var(--sol-text-muted);
 }
 

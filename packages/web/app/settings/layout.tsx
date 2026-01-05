@@ -6,6 +6,7 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { Button } from "../../components/ui/button";
 
 const tabs = [
+  { name: "CLI Setup", path: "/settings/cli" },
   { name: "Profile", path: "/settings/profile" },
   { name: "Accounts", path: "/settings/accounts" },
   { name: "Team", path: "/settings/team" },

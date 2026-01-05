@@ -10,12 +10,26 @@ import { reportWebVitals } from "../../lib/reportWebVitals";
 export default function DashboardPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [filter, setFilter] = useState<"my" | "team">("my");
+  const filterParam = searchParams.get("filter");
+  const [filter, setFilter] = useState<"my" | "team">(
+    filterParam === "team" ? "team" : "my"
+  );
   const [directories, setDirectories] = useState<string[]>([]);
   const [directoryFilter, setDirectoryFilter] = useState<string | null>(null);
   const [memberFilter, setMemberFilter] = useState<string | null>(
     searchParams.get("member")
   );
+
+  const handleFilterChange = useCallback((newFilter: "my" | "team") => {
+    setFilter(newFilter);
+    const params = new URLSearchParams(searchParams.toString());
+    if (newFilter === "team") {
+      params.set("filter", "team");
+    } else {
+      params.delete("filter");
+    }
+    router.replace(`/dashboard?${params.toString()}`, { scroll: false });
+  }, [searchParams, router]);
 
   const handleDirectoriesChange = useCallback((dirs: string[]) => {
     setDirectories(dirs);
@@ -40,6 +54,13 @@ export default function DashboardPage() {
   }, [searchParams]);
 
   useEffect(() => {
+    const newFilter = filterParam === "team" ? "team" : "my";
+    if (newFilter !== filter) {
+      setFilter(newFilter);
+    }
+  }, [filterParam]);
+
+  useEffect(() => {
     reportWebVitals((metric) => {
       console.log(`[Dashboard Vitals] ${metric.name}:`, metric.value);
     });
@@ -60,7 +81,7 @@ export default function DashboardPage() {
     <AuthGuard>
       <DashboardLayout
         filter={filter}
-        onFilterChange={setFilter}
+        onFilterChange={handleFilterChange}
         directories={directories}
         directoryFilter={directoryFilter}
         onDirectoryFilterChange={setDirectoryFilter}

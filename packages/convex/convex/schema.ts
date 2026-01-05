@@ -143,6 +143,7 @@ export default defineSchema({
     .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
     .index("by_conversation_uuid", ["conversation_id", "message_uuid"])
     .index("by_message_uuid", ["message_uuid"])
+    .index("by_timestamp", ["timestamp"])
     .searchIndex("search_content", {
       searchField: "content",
       filterFields: ["conversation_id"],
