@@ -176,10 +176,12 @@ export const getUserActiveRepositories = internalQuery({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
+    // Take limited conversations to avoid byte limit - most recent 200 should cover active repos
     const conversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
+      .order("desc")
+      .take(200);
 
     const repos = new Set<string>();
     for (const conv of conversations) {
@@ -277,10 +279,12 @@ export const getActiveRepositoriesForUser = internalQuery({
     user_id: v.id("users"),
   },
   handler: async (ctx, args) => {
+    // Take limited conversations to avoid byte limit - most recent 200 should cover active repos
     const conversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .collect();
+      .order("desc")
+      .take(200);
 
     const repos = new Set<string>();
     for (const conv of conversations) {
