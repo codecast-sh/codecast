@@ -19,7 +19,7 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const reason = searchParams.get("reason");
   const returnTo = searchParams.get("return_to");
-  const redirectTo = returnTo || "/dashboard";
+  const redirectTo = returnTo || "/";
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
@@ -53,7 +53,7 @@ function LoginForm() {
 
     try {
       await signIn("password", { email, password, flow: "signIn" });
-      router.replace(redirectTo);
+      // Don't manually redirect - let useEffect handle it when isAuthenticated updates
     } catch (err) {
       if (err instanceof Error) {
         if (err.message.includes("Invalid") || err.message.includes("credentials")) {
