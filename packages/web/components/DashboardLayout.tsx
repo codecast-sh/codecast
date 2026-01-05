@@ -1,6 +1,7 @@
 "use client";
 import { ReactNode, useState, useEffect, lazy, Suspense } from "react";
 import { useQuery } from "convex/react";
+import { usePathname } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
@@ -10,7 +11,8 @@ import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { Button } from "./ui/button";
 import { Logo } from "./Logo";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose } from "lucide-react";
+import { useDiffViewerStore } from "../store/diffViewerStore";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
@@ -49,6 +51,16 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
   const [layout, setLayout] = useState(getInitialLayout);
+  const [mounted, setMounted] = useState(false);
+  const pathname = usePathname();
+  const diffPanelOpen = useDiffViewerStore((state) => state.diffPanelOpen);
+  const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
+
+  const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
     const updated = { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 };
@@ -130,6 +142,20 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            {mounted && isOnConversationPage && (
+              <button
+                onClick={toggleDiffPanel}
+                className="hidden md:block p-1.5 text-sol-text-dim hover:text-sol-text transition-colors"
+                aria-label={diffPanelOpen ? "Hide diff panel" : "Show diff panel"}
+                title={diffPanelOpen ? "Hide diff panel (d)" : "Show diff panel (d)"}
+              >
+                {diffPanelOpen ? (
+                  <PanelRightClose className="w-5 h-5" />
+                ) : (
+                  <PanelRightOpen className="w-5 h-5" />
+                )}
+              </button>
+            )}
             {isAdmin && (
               <div className="hidden md:block">
                 <Suspense fallback={<Button variant="outline" size="sm" disabled>Invite</Button>}>
@@ -180,11 +206,17 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
             </Panel>
             <Separator className="w-1.5 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors" />
             <Panel id="main" minSize={0}>
-              <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
-                <div className="max-w-6xl mx-auto">
+              {diffPanelOpen && isOnConversationPage ? (
+                <div className="h-full overflow-hidden">
                   {children}
                 </div>
-              </div>
+              ) : (
+                <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+                  <div className="max-w-6xl mx-auto">
+                    {children}
+                  </div>
+                </div>
+              )}
             </Panel>
           </Group>
         )}

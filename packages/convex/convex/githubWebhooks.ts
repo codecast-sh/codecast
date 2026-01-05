@@ -29,10 +29,20 @@ export const storeWebhookEvent = internalMutation({
       created_at: Date.now(),
     });
 
-    if (args.event_type === "pull_request" && args.action === "opened") {
-      void ctx.scheduler.runAfter(0, internal.githubWebhooks.processPROpenedEvent, {
-        event_id: eventId,
-      });
+    if (args.event_type === "pull_request") {
+      if (args.action === "opened") {
+        void ctx.scheduler.runAfter(0, internal.githubWebhooks.processPROpenedEvent, {
+          event_id: eventId,
+        });
+      } else if (args.action === "synchronize") {
+        void ctx.scheduler.runAfter(0, internal.githubWebhooks.processPRSynchronizeEvent, {
+          event_id: eventId,
+        });
+      } else if (args.action === "closed") {
+        void ctx.scheduler.runAfter(0, internal.githubWebhooks.processPRClosedEvent, {
+          event_id: eventId,
+        });
+      }
     }
 
     return { success: true, duplicate: false };
@@ -43,7 +53,7 @@ export const processPROpenedEvent = internalAction({
   args: {
     event_id: v.id("github_webhook_events"),
   },
-  handler: async (ctx, args): Promise<{ success: boolean; reason?: string; comment_posted?: boolean }> => {
+  handler: async (ctx, args): Promise<{ success: boolean; reason?: string; comment_posted?: boolean; files_synced?: boolean }> => {
     const event = await ctx.runQuery(internal.githubWebhooks.getWebhookEvent, {
       event_id: args.event_id,
     });
@@ -60,7 +70,7 @@ export const processPROpenedEvent = internalAction({
     const prNumber: number = pr.number;
     const headRef: string = pr.head.ref;
 
-    const result: { matched_conversation_id: Id<"conversations"> | null; pr_id: Id<"pull_requests"> | null } = await ctx.runMutation(internal.githubWebhooks.matchPRToConversation, {
+    const result: { matched_conversation_id: Id<"conversations"> | null; pr_id: Id<"pull_requests"> | null; github_access_token: string | null } = await ctx.runMutation(internal.githubWebhooks.matchPRToConversation, {
       event_id: args.event_id,
       repository: repositoryFullName,
       pr_number: prNumber,
@@ -73,6 +83,30 @@ export const processPROpenedEvent = internalAction({
       updated_at: new Date(pr.updated_at).getTime(),
     });
 
+    let filesSynced = false;
+    if (result.pr_id && result.github_access_token) {
+      try {
+        const filesData = await ctx.runAction(internal.githubApi.getPRFiles, {
+          repository: repositoryFullName,
+          pr_number: prNumber,
+          github_access_token: result.github_access_token,
+        });
+
+        await ctx.runMutation(api.pull_requests.updatePRFiles, {
+          pr_id: result.pr_id,
+          files: filesData.files,
+          additions: filesData.additions,
+          deletions: filesData.deletions,
+          changed_files: filesData.changed_files,
+          commits_count: filesData.commits_count,
+          base_ref: filesData.base_ref,
+        });
+        filesSynced = true;
+      } catch (error) {
+        console.error("Failed to fetch PR files:", error);
+      }
+    }
+
     if (result.matched_conversation_id && result.pr_id) {
       const postResult: { posted: boolean; reason?: string } = await ctx.runMutation(internal.githubWebhooks.postPRCommentIfNeeded, {
         pr_id: result.pr_id,
@@ -81,10 +115,104 @@ export const processPROpenedEvent = internalAction({
         pr_number: prNumber,
       });
 
-      return { success: true, comment_posted: postResult.posted };
+      return { success: true, comment_posted: postResult.posted, files_synced: filesSynced };
     }
 
-    return { success: true, comment_posted: false };
+    return { success: true, comment_posted: false, files_synced: filesSynced };
+  },
+});
+
+export const processPRSynchronizeEvent = internalAction({
+  args: {
+    event_id: v.id("github_webhook_events"),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; reason?: string }> => {
+    const event = await ctx.runQuery(internal.githubWebhooks.getWebhookEvent, {
+      event_id: args.event_id,
+    });
+
+    if (!event || event.processed) {
+      return { success: false, reason: "Event not found or already processed" };
+    }
+
+    const payload = JSON.parse(event.payload) as any;
+    const pr = payload.pull_request;
+    const repositoryFullName: string = payload.repository.full_name;
+    const prNumber: number = pr.number;
+    const githubPrId: number = pr.id;
+
+    const prData = await ctx.runQuery(internal.githubWebhooks.getPRByGithubId, {
+      github_pr_id: githubPrId,
+    });
+
+    if (!prData) {
+      await ctx.runMutation(internal.githubWebhooks.markEventProcessed, { event_id: args.event_id });
+      return { success: false, reason: "PR not found in database" };
+    }
+
+    const token = await ctx.runQuery(internal.githubWebhooks.getTokenForPR, {
+      pr_id: prData._id,
+    });
+
+    if (!token) {
+      await ctx.runMutation(internal.githubWebhooks.markEventProcessed, { event_id: args.event_id });
+      return { success: false, reason: "No GitHub token available" };
+    }
+
+    try {
+      const filesData = await ctx.runAction(internal.githubApi.getPRFiles, {
+        repository: repositoryFullName,
+        pr_number: prNumber,
+        github_access_token: token,
+      });
+
+      await ctx.runMutation(api.pull_requests.updatePRFiles, {
+        pr_id: prData._id,
+        files: filesData.files,
+        additions: filesData.additions,
+        deletions: filesData.deletions,
+        changed_files: filesData.changed_files,
+        commits_count: filesData.commits_count,
+        base_ref: filesData.base_ref,
+      });
+
+      await ctx.runMutation(internal.githubWebhooks.markEventProcessed, { event_id: args.event_id });
+      return { success: true };
+    } catch (error) {
+      console.error("Failed to sync PR files on synchronize:", error);
+      await ctx.runMutation(internal.githubWebhooks.markEventProcessed, { event_id: args.event_id });
+      return { success: false, reason: `Error: ${error}` };
+    }
+  },
+});
+
+export const processPRClosedEvent = internalAction({
+  args: {
+    event_id: v.id("github_webhook_events"),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; reason?: string }> => {
+    const event = await ctx.runQuery(internal.githubWebhooks.getWebhookEvent, {
+      event_id: args.event_id,
+    });
+
+    if (!event || event.processed) {
+      return { success: false, reason: "Event not found or already processed" };
+    }
+
+    const payload = JSON.parse(event.payload) as any;
+    const pr = payload.pull_request;
+    const githubPrId: number = pr.id;
+    const merged: boolean = pr.merged;
+    const mergedAt: string | null = pr.merged_at;
+
+    await ctx.runMutation(api.pull_requests.updatePRState, {
+      github_pr_id: githubPrId,
+      state: merged ? "merged" : "closed",
+      merged_at: mergedAt ? new Date(mergedAt).getTime() : undefined,
+    });
+
+    await ctx.runMutation(internal.githubWebhooks.markEventProcessed, { event_id: args.event_id });
+    return { success: true };
   },
 });
 
@@ -94,6 +222,62 @@ export const getWebhookEvent = internalQuery({
   },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.event_id);
+  },
+});
+
+export const getPRByGithubId = internalQuery({
+  args: {
+    github_pr_id: v.number(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("pull_requests")
+      .withIndex("by_github_pr_id", (q) => q.eq("github_pr_id", args.github_pr_id))
+      .first();
+  },
+});
+
+export const getTokenForPR = internalQuery({
+  args: {
+    pr_id: v.id("pull_requests"),
+  },
+  handler: async (ctx, args) => {
+    const pr = await ctx.db.get(args.pr_id);
+    if (!pr || pr.linked_session_ids.length === 0) {
+      return null;
+    }
+
+    for (const sessionId of pr.linked_session_ids) {
+      const conversation = await ctx.db.get(sessionId);
+      if (conversation) {
+        const user = await ctx.db.get(conversation.user_id);
+        if (user?.github_access_token) {
+          return user.github_access_token;
+        }
+      }
+    }
+
+    const teamMembers = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("team_id"), pr.team_id))
+      .collect();
+
+    for (const member of teamMembers) {
+      if (member.github_access_token) {
+        return member.github_access_token;
+      }
+    }
+
+    return null;
+  },
+});
+
+export const markEventProcessed = internalMutation({
+  args: {
+    event_id: v.id("github_webhook_events"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.event_id, { processed: true });
   },
 });
 
@@ -120,7 +304,30 @@ export const matchPRToConversation = internalMutation({
 
     if (!teamId) {
       await ctx.db.patch(args.event_id, { processed: true });
-      return { matched_conversation_id: null, pr_id: null };
+      return { matched_conversation_id: null, pr_id: null, github_access_token: null };
+    }
+
+    let githubAccessToken: string | null = null;
+    for (const conversation of conversations) {
+      const user = await ctx.db.get(conversation.user_id);
+      if (user?.github_access_token) {
+        githubAccessToken = user.github_access_token;
+        break;
+      }
+    }
+
+    if (!githubAccessToken) {
+      const teamMembers = await ctx.db
+        .query("users")
+        .filter((q) => q.eq(q.field("team_id"), teamId))
+        .collect();
+
+      for (const member of teamMembers) {
+        if (member.github_access_token) {
+          githubAccessToken = member.github_access_token;
+          break;
+        }
+      }
     }
 
     const prId = await ctx.db.insert("pull_requests", {
@@ -144,6 +351,7 @@ export const matchPRToConversation = internalMutation({
     return {
       matched_conversation_id: conversations[0]?._id || null,
       pr_id: prId,
+      github_access_token: githubAccessToken,
     };
   },
 });

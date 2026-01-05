@@ -1,16 +1,17 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
+import { Panel, Group, Separator } from "react-resizable-panels";
 import { ConversationView, ConversationData, ConversationViewHandle } from "./ConversationView";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { extractFileChanges } from "../lib/fileChangeExtractor";
-import { ChevronLeft, ChevronRight, Keyboard, Link as LinkIcon, PanelRightOpen, PanelRightClose } from "lucide-react";
+import { Keyboard } from "lucide-react";
 import { Button } from "./ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 import { FileTreeSidebar } from "./FileTreeSidebar";
 import { DiffView } from "./DiffView";
+import type { FileChange } from "../store/diffViewerStore";
 
 interface ConversationDiffLayoutProps {
   conversation: ConversationData;
@@ -18,35 +19,39 @@ interface ConversationDiffLayoutProps {
 }
 
 const STORAGE_KEY = "conversation-diff-layout";
-const DIFF_PANEL_COLLAPSED_KEY = "diffPanelCollapsed";
 const MOBILE_BREAKPOINT = 768;
 
-const getInitialDiffPanelCollapsed = () => {
-  if (typeof window === 'undefined') return false;
-  return localStorage.getItem(DIFF_PANEL_COLLAPSED_KEY) === "true";
+const getInitialLayout = (): number[] => {
+  if (typeof window === 'undefined') return [40, 60];
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length === 2) {
+        return parsed;
+      }
+    } catch {}
+  }
+  return [40, 60];
 };
 
 export function ConversationDiffLayout({
   conversation,
   embedded,
 }: ConversationDiffLayoutProps) {
-  const heightClass = embedded ? "h-[calc(100vh-56px)]" : "h-screen";
+  const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(getInitialDiffPanelCollapsed);
   const [showHelp, setShowHelp] = useState(false);
+  const [layout, setLayout] = useState(getInitialLayout);
   const conversationRef = useRef<ConversationViewHandle>(null);
 
   const {
-    selectedChangeIndex,
     changes,
     nextChange,
     prevChange,
     toggleDiffMode,
     toggleFileTree,
     clearSelection,
-    syncScroll,
-    toggleSyncScroll,
     setChanges
   } = useDiffViewerStore();
 
@@ -66,12 +71,6 @@ export function ConversationDiffLayout({
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
-
-  const toggleRightPanelWithPersist = () => {
-    const newValue = !rightCollapsed;
-    setRightCollapsed(newValue);
-    localStorage.setItem(DIFF_PANEL_COLLAPSED_KEY, String(newValue));
-  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -97,10 +96,6 @@ export function ConversationDiffLayout({
           e.preventDefault();
           toggleFileTree();
           break;
-        case "d":
-          e.preventDefault();
-          toggleRightPanelWithPersist();
-          break;
         case "Escape":
           e.preventDefault();
           clearSelection();
@@ -114,22 +109,11 @@ export function ConversationDiffLayout({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [nextChange, prevChange, toggleDiffMode, toggleFileTree, clearSelection, rightCollapsed]);
+  }, [nextChange, prevChange, toggleDiffMode, toggleFileTree, clearSelection]);
 
-  const handleLayoutChange = (layout: Record<string, number>) => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
-  };
-
-  const getDefaultLayout = (): Record<string, number> | undefined => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        return JSON.parse(stored);
-      } catch {
-        // fallback to defaults
-      }
-    }
-    return undefined;
+  const handleLayoutChange = (sizes: number[]) => {
+    setLayout(sizes);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sizes));
   };
 
   if (isMobile) {
@@ -159,227 +143,51 @@ export function ConversationDiffLayout({
 
   return (
     <div className={`${heightClass} w-full relative`}>
-      <PanelGroup
+      <Group
         orientation="horizontal"
         onLayoutChange={handleLayoutChange}
-        defaultLayout={getDefaultLayout()}
+        defaultLayout={layout}
         className="h-full"
       >
-        {/* Left content area: Conversation + Timeline */}
-        <Panel
-          defaultSize={rightCollapsed ? 100 : 43}
-          minSize={20}
-          maxSize={rightCollapsed ? 100 : 70}
-          id="content-panel"
-        >
-          <div className="h-full flex relative">
-            {/* Conversation */}
-            {!leftCollapsed && (
-              <div className="flex-1 h-full relative min-w-0">
-                <ConversationView
-                  ref={conversationRef}
-                  conversation={conversation}
-                  backHref="/dashboard"
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="absolute top-2 right-2 z-10 h-6 w-6 opacity-50 hover:opacity-100"
-                  onClick={() => setLeftCollapsed(true)}
-                  title="Collapse conversation panel"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
-            {leftCollapsed && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-2 left-2 z-20 h-8 w-8"
-                onClick={() => setLeftCollapsed(false)}
-                title="Show conversation panel"
-              >
-                <ChevronRight className="h-5 w-5" />
-              </Button>
-            )}
+        {/* Conversation Panel */}
+        <Panel id="content-panel" minSize={15}>
+          <div className="h-full relative">
+            <ConversationView
+              ref={conversationRef}
+              conversation={conversation}
+              backHref="/dashboard"
+            />
+          </div>
+        </Panel>
 
+        {/* Resize handle - on LEFT of timeline */}
+        <Separator className="w-1 bg-sol-border hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors" />
+
+        {/* Timeline + Diff Panel */}
+        <Panel id="diff-panel" minSize={20}>
+          <div className="h-full flex">
             {/* Timeline Strip */}
-            <div className="w-10 h-full border-l border-border bg-muted/30 relative flex-shrink-0">
+            <div className="w-10 h-full border-r border-sol-border bg-sol-bg-alt/30 relative flex-shrink-0">
               <TimelineStrip conversationRef={conversationRef} />
+            </div>
+            {/* Diff Content */}
+            <div className="flex-1 h-full relative min-w-0">
+              <DiffPane />
               <Button
                 variant="ghost"
                 size="icon"
-                className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-20 h-8 w-8 ${syncScroll ? "text-primary" : "text-muted-foreground"}`}
-                onClick={toggleSyncScroll}
-                title={syncScroll ? "Disable scroll sync" : "Enable scroll sync"}
+                className="absolute top-2 right-2 z-10 h-6 w-6 opacity-50 hover:opacity-100"
+                onClick={() => setShowHelp(true)}
+                title="Keyboard shortcuts (?)"
               >
-                <LinkIcon className={`h-4 w-4 ${syncScroll ? "" : "opacity-50"}`} />
+                <Keyboard className="h-4 w-4" />
               </Button>
             </div>
           </div>
         </Panel>
-
-        {/* Single resize handle between content and diff */}
-        {!rightCollapsed && (
-          <>
-            <PanelResizeHandle className="w-1.5 bg-border hover:bg-primary/20 transition-colors cursor-col-resize" />
-
-            {/* Diff Panel */}
-            <Panel
-              defaultSize={57}
-              minSize={30}
-              maxSize={80}
-              id="diff-panel"
-            >
-              <div className="h-full relative">
-                <DiffPane />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="absolute top-2 right-2 z-10 h-6 w-6 opacity-50 hover:opacity-100"
-                  onClick={() => setShowHelp(true)}
-                  title="Keyboard shortcuts (?)"
-                >
-                  <Keyboard className="h-4 w-4" />
-                </Button>
-              </div>
-            </Panel>
-          </>
-        )}
-      </PanelGroup>
-
-      {/* Right panel toggle in top-right when collapsed */}
-      {rightCollapsed && (
-        <button
-          onClick={toggleRightPanelWithPersist}
-          className="absolute top-2 right-2 z-20 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-          aria-label="Show diff panel"
-          title="Show diff panel (d)"
-        >
-          <PanelRightOpen className="w-5 h-5" />
-        </button>
-      )}
-
-      {/* Right panel toggle in header area when expanded */}
-      {!rightCollapsed && (
-        <button
-          onClick={toggleRightPanelWithPersist}
-          className="absolute top-2 right-12 z-20 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-          aria-label="Hide diff panel"
-          title="Hide diff panel (d)"
-        >
-          <PanelRightClose className="w-5 h-5" />
-        </button>
-      )}
+      </Group>
 
       <KeyboardShortcutsHelp isOpen={showHelp} onClose={() => setShowHelp(false)} />
-    </div>
-  );
-}
-
-function formatTimeAgo(timestamp: number): string {
-  const now = Date.now();
-  const diff = now - timestamp;
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (seconds < 60) return "just now";
-  if (minutes === 1) return "1 min ago";
-  if (minutes < 60) return `${minutes} min ago`;
-  if (hours === 1) return "1 hour ago";
-  if (hours < 24) return `${hours} hours ago`;
-  if (days === 1) return "yesterday";
-  return `${days} days ago`;
-}
-
-function getFileName(filePath: string): string {
-  return filePath.split('/').pop() || filePath;
-}
-
-function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<ConversationViewHandle | null> }) {
-  const { changes, selectedChangeIndex, rangeStart, rangeEnd, selectChange, selectRange, syncScroll } = useDiffViewerStore();
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-
-  const handleDotClick = (index: number, messageId: string, e: React.MouseEvent) => {
-    if (e.metaKey || e.ctrlKey) {
-      if (selectedChangeIndex !== null && selectedChangeIndex !== index) {
-        selectRange(selectedChangeIndex, index);
-      } else {
-        selectChange(index);
-      }
-    } else {
-      selectChange(index);
-    }
-
-    if (syncScroll && conversationRef.current) {
-      conversationRef.current.scrollToMessage(messageId);
-    }
-  };
-
-  const isInRange = (index: number) => {
-    if (rangeStart !== null && rangeEnd !== null) {
-      return index >= rangeStart && index <= rangeEnd;
-    }
-    return false;
-  };
-
-  return (
-    <div className="h-full w-full flex flex-col items-center py-4 gap-2 overflow-y-auto relative">
-      {changes.map((change, index) => {
-        const isSelected = selectedChangeIndex === index;
-        const inRange = isInRange(index);
-        const fileColor = getFileColor(change.filePath);
-        const isCommit = change.changeType === "commit";
-        const isHovered = hoveredIndex === index;
-
-        return (
-          <div key={change.id} className="relative shrink-0">
-            <button
-              onClick={(e) => handleDotClick(index, change.messageId, e)}
-              onMouseEnter={() => setHoveredIndex(index)}
-              onMouseLeave={() => setHoveredIndex(null)}
-              className={`
-                w-3 h-3 transition-all relative z-10
-                ${isCommit ? "rounded-sm" : "rounded-full"}
-                ${isSelected ? "scale-150 ring-2 ring-primary/50" : "hover:scale-125"}
-                ${inRange && !isSelected ? "ring-1 ring-primary/30" : ""}
-              `}
-              style={{ backgroundColor: fileColor }}
-            />
-            {isHovered && (
-              <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 z-50 pointer-events-none">
-                <div className="bg-popover text-popover-foreground border border-border rounded-md shadow-lg px-2.5 py-1.5 text-xs whitespace-nowrap">
-                  <div className="font-medium">
-                    {isCommit ? "Git commit" : getFileName(change.filePath)}
-                  </div>
-                  <div className="text-muted-foreground mt-0.5 flex items-center gap-1.5">
-                    <span className="capitalize">{change.changeType}</span>
-                    <span className="text-muted-foreground/50">-</span>
-                    <span>{formatTimeAgo(change.timestamp)}</span>
-                  </div>
-                  {isCommit && change.commitMessage && (
-                    <div className="text-muted-foreground mt-1 max-w-[200px] truncate">
-                      {change.commitMessage}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })}
-      {rangeStart !== null && rangeEnd !== null && (
-        <div
-          className="absolute w-1 bg-primary/20 left-1/2 -translate-x-1/2 rounded-full z-0"
-          style={{
-            top: `${(rangeStart / changes.length) * 100}%`,
-            height: `${((rangeEnd - rangeStart) / changes.length) * 100}%`,
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -524,4 +332,110 @@ function getFileColor(filePath: string): string {
   }
 
   return colors[Math.abs(hash) % colors.length];
+}
+
+function formatTimeAgo(timestamp: number): string {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (seconds < 60) return "just now";
+  if (minutes === 1) return "1 min ago";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (hours === 1) return "1 hour ago";
+  if (hours < 24) return `${hours} hours ago`;
+  if (days === 1) return "yesterday";
+  return `${days} days ago`;
+}
+
+function getFileName(filePath: string): string {
+  return filePath.split('/').pop() || filePath;
+}
+
+function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<ConversationViewHandle | null> }) {
+  const { changes, selectedChangeIndex, rangeStart, rangeEnd, selectChange, selectRange, syncScroll } = useDiffViewerStore();
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
+  const handleDotClick = (index: number, messageId: string, e: React.MouseEvent) => {
+    if (e.metaKey || e.ctrlKey) {
+      if (selectedChangeIndex !== null && selectedChangeIndex !== index) {
+        selectRange(selectedChangeIndex, index);
+      } else {
+        selectChange(index);
+      }
+    } else {
+      selectChange(index);
+    }
+
+    if (syncScroll && conversationRef.current) {
+      conversationRef.current.scrollToMessage(messageId);
+    }
+  };
+
+  const isInRange = (index: number) => {
+    if (rangeStart !== null && rangeEnd !== null) {
+      return index >= rangeStart && index <= rangeEnd;
+    }
+    return false;
+  };
+
+  return (
+    <div className="h-full w-full flex flex-col items-center py-4 gap-2 overflow-y-auto relative">
+      {changes.map((change, index) => {
+        const isSelected = selectedChangeIndex === index;
+        const inRange = isInRange(index);
+        const fileColor = getFileColor(change.filePath);
+        const isCommit = change.changeType === "commit";
+        const isHovered = hoveredIndex === index;
+
+        return (
+          <div key={change.id} className="relative shrink-0">
+            <button
+              onClick={(e) => handleDotClick(index, change.messageId, e)}
+              onMouseEnter={() => setHoveredIndex(index)}
+              onMouseLeave={() => setHoveredIndex(null)}
+              className={`
+                w-3 h-3 transition-all relative z-10
+                ${isCommit ? "rounded-sm" : "rounded-full"}
+                ${isSelected ? "scale-150 ring-2 ring-primary/50" : "hover:scale-125"}
+                ${inRange && !isSelected ? "ring-1 ring-primary/30" : ""}
+              `}
+              style={{ backgroundColor: fileColor }}
+            />
+            {isHovered && (
+              <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 z-50 pointer-events-none">
+                <div className="bg-popover text-popover-foreground border border-border rounded-md shadow-lg px-2.5 py-1.5 text-xs whitespace-nowrap">
+                  <div className="font-medium">
+                    {isCommit ? "Git commit" : getFileName(change.filePath)}
+                  </div>
+                  <div className="text-muted-foreground mt-0.5 flex items-center gap-1.5">
+                    <span className="capitalize">{change.changeType}</span>
+                    <span className="text-muted-foreground/50">-</span>
+                    <span>{formatTimeAgo(change.timestamp)}</span>
+                  </div>
+                  {isCommit && change.commitMessage && (
+                    <div className="text-muted-foreground mt-1 max-w-[200px] truncate">
+                      {change.commitMessage}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {rangeStart !== null && rangeEnd !== null && (
+        <div
+          className="absolute w-1 bg-primary/20 left-1/2 -translate-x-1/2 rounded-full z-0"
+          style={{
+            top: `${(rangeStart / changes.length) * 100}%`,
+            height: `${((rangeEnd - rangeStart) / changes.length) * 100}%`,
+          }}
+        />
+      )}
+    </div>
+  );
 }

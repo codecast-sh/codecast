@@ -33,6 +33,13 @@ export function clearDiffCache() {
   diffCache.clear();
 }
 
+const DIFF_PANEL_OPEN_KEY = "diffPanelOpen";
+
+const getInitialDiffPanelOpen = () => {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(DIFF_PANEL_OPEN_KEY) === "true";
+};
+
 interface DiffViewerState {
   selectedChangeIndex: number | null;
   rangeStart: number | null;
@@ -42,6 +49,7 @@ interface DiffViewerState {
   showFileTree: boolean;
   changes: FileChange[];
   selectedFile: string | null;
+  diffPanelOpen: boolean;
 
   selectChange: (index: number) => void;
   selectRange: (start: number, end: number) => void;
@@ -53,6 +61,8 @@ interface DiffViewerState {
   selectFile: (filePath: string | null) => void;
   nextChange: () => void;
   prevChange: () => void;
+  toggleDiffPanel: () => void;
+  setDiffPanelOpen: (open: boolean) => void;
 
   getSelectedChanges: () => FileChange[];
   getFilesList: () => string[];
@@ -68,6 +78,7 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   showFileTree: true,
   changes: [],
   selectedFile: null,
+  diffPanelOpen: getInitialDiffPanelOpen(),
 
   selectChange: (index) =>
     set({
@@ -101,6 +112,17 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   toggleSyncScroll: () => set((state) => ({ syncScroll: !state.syncScroll })),
 
   toggleFileTree: () => set((state) => ({ showFileTree: !state.showFileTree })),
+
+  toggleDiffPanel: () => set((state) => {
+    const newValue = !state.diffPanelOpen;
+    localStorage.setItem(DIFF_PANEL_OPEN_KEY, String(newValue));
+    return { diffPanelOpen: newValue };
+  }),
+
+  setDiffPanelOpen: (open) => {
+    localStorage.setItem(DIFF_PANEL_OPEN_KEY, String(open));
+    set({ diffPanelOpen: open });
+  },
 
   setChanges: (changes) => {
     diffCache.clear();
