@@ -6,9 +6,8 @@ import { useEffect, useState, useMemo } from "react";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { ConversationView, ConversationData } from "../../../components/ConversationView";
+import { ConversationData } from "../../../components/ConversationView";
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
-import { ShareDialog } from "../../../components/ShareDialog";
 import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
@@ -23,8 +22,6 @@ export default function ConversationPage() {
   const highlightQuery = searchParams.get("highlight") || undefined;
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [showShareCopied, setShowShareCopied] = useState(false);
-  const [showShareDialog, setShowShareDialog] = useState(false);
-  const diffPanelOpen = useDiffViewerStore((state) => state.diffPanelOpen);
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
   const isUUID = useMemo(() => UUID_REGEX.test(id), [id]);
@@ -49,6 +46,7 @@ export default function ConversationPage() {
   });
 
   const setPrivacy = useMutation(api.conversations.setPrivacy);
+  const generateShareLink = useMutation(api.conversations.generateShareLink);
 
   useEffect(() => {
     if (conversation?.share_token) {
@@ -57,13 +55,35 @@ export default function ConversationPage() {
     }
   }, [conversation?.share_token]);
 
-  const handleShare = () => {
-    setShowShareDialog(true);
+  const handleShare = async () => {
+    try {
+      let url = shareUrl;
+      if (!url) {
+        const token = await generateShareLink({ conversation_id: id as Id<"conversations"> });
+        url = `${window.location.origin}/share/${token}`;
+        setShareUrl(url);
+      }
+      await navigator.clipboard.writeText(url);
+      toast.success("Share link copied to clipboard");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to generate share link");
+    }
   };
 
   const handleCopyShareUrl = async () => {
     if (shareUrl) {
-      await navigator.clipboard.writeText(shareUrl);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = shareUrl;
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
       setShowShareCopied(true);
       toast.success("Share link copied to clipboard");
       setTimeout(() => setShowShareCopied(false), 2000);
@@ -146,15 +166,11 @@ export default function ConversationPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        {diffPanelOpen && conversation ? (
-          <ConversationDiffLayout conversation={conversation as ConversationData} embedded />
-        ) : (
-          <ConversationView
-            conversation={conversation as ConversationData | null | undefined}
+        {conversation && (
+          <ConversationDiffLayout
+            conversation={conversation as ConversationData}
             commits={commits || []}
             pullRequests={pullRequests || []}
-            backHref="/dashboard"
-            backLabel="Back"
             headerExtra={shareControls}
             hasMoreAbove={hasMoreAbove}
             isLoadingOlder={isLoadingOlder}
@@ -163,17 +179,6 @@ export default function ConversationPage() {
             embedded
           />
         )}
-        <ShareDialog
-          open={showShareDialog}
-          onOpenChange={setShowShareDialog}
-          conversationId={id as Id<"conversations">}
-          conversationTitle={conversation?.title}
-          shareToken={conversation?.share_token}
-          onShareGenerated={(token) => {
-            const url = `${window.location.origin}/share/${token}`;
-            setShareUrl(url);
-          }}
-        />
       </DashboardLayout>
     </AuthGuard>
   );
