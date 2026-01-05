@@ -39,7 +39,7 @@ function LoginForm() {
     setLoading(true);
     setError("");
     try {
-      await signIn("github");
+      await signIn("github", { redirectTo });
     } catch (err) {
       setError("GitHub sign in failed. Please try again.");
       setLoading(false);
