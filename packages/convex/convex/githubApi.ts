@@ -202,6 +202,7 @@ export const syncRepositoryCommits = action({
     repository: v.string(),
     github_access_token: v.string(),
     per_page: v.optional(v.number()),
+    max_pages: v.optional(v.number()),
     since: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -212,30 +213,18 @@ export const syncRepositoryCommits = action({
     }
 
     const perPage = args.per_page ?? 100;
-    let url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/commits?per_page=${perPage}`;
-    if (args.since) {
-      url += `&since=${args.since}`;
-    }
-
-    const response = await fetch(url, {
-      headers: {
-        "Authorization": `Bearer ${args.github_access_token}`,
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`GitHub API error: ${response.status} ${errorText}`);
-    }
-
-    const commits = await response.json();
+    const maxPages = args.max_pages ?? 5;
     let synced = 0;
+    let total = 0;
+    let page = 1;
 
-    for (const commit of commits) {
-      const commitUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/commits/${commit.sha}`;
-      const detailResponse = await fetch(commitUrl, {
+    while (page <= maxPages) {
+      let url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/commits?per_page=${perPage}&page=${page}`;
+      if (args.since) {
+        url += `&since=${args.since}`;
+      }
+
+      const response = await fetch(url, {
         headers: {
           "Authorization": `Bearer ${args.github_access_token}`,
           "Accept": "application/vnd.github+json",
@@ -243,34 +232,79 @@ export const syncRepositoryCommits = action({
         },
       });
 
-      if (!detailResponse.ok) {
-        console.error(`Failed to fetch commit details for ${commit.sha}`);
-        continue;
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`GitHub API error: ${response.status} ${errorText}`);
       }
 
-      const commitDetail = await detailResponse.json();
+      const commits = await response.json();
+      if (commits.length === 0) {
+        break;
+      }
 
-      try {
-        await ctx.runMutation(api.commits.addCommit, {
-          sha: commit.sha,
-          message: commit.commit.message,
-          author_name: commit.commit.author?.name || commit.author?.login || "Unknown",
-          author_email: commit.commit.author?.email || "",
-          timestamp: new Date(commit.commit.author?.date || commit.commit.committer?.date).getTime(),
-          files_changed: commitDetail.files?.length || 0,
-          insertions: commitDetail.stats?.additions || 0,
-          deletions: commitDetail.stats?.deletions || 0,
-          repository: args.repository,
+      total += commits.length;
+
+      for (const commit of commits) {
+        const commitUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/commits/${commit.sha}`;
+        const detailResponse = await fetch(commitUrl, {
+          headers: {
+            "Authorization": `Bearer ${args.github_access_token}`,
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
         });
-        synced++;
-      } catch (e) {
-        console.error(`Failed to add commit ${commit.sha}:`, e);
+
+        if (!detailResponse.ok) {
+          console.error(`Failed to fetch commit details for ${commit.sha}`);
+          continue;
+        }
+
+        const commitDetail = await detailResponse.json();
+
+        const files = commitDetail.files?.map((file: any) => {
+          let patch = file.patch;
+          if (patch && patch.length > MAX_PATCH_SIZE) {
+            patch = patch.substring(0, MAX_PATCH_SIZE) + "\n... [truncated, patch too large]";
+          }
+          return {
+            filename: file.filename,
+            status: file.status,
+            additions: file.additions || 0,
+            deletions: file.deletions || 0,
+            changes: file.changes || 0,
+            patch,
+          };
+        }) || [];
+
+        try {
+          await ctx.runMutation(api.commits.addCommit, {
+            sha: commit.sha,
+            message: commit.commit.message,
+            author_name: commit.commit.author?.name || commit.author?.login || "Unknown",
+            author_email: commit.commit.author?.email || "",
+            timestamp: new Date(commit.commit.author?.date || commit.commit.committer?.date).getTime(),
+            files_changed: commitDetail.files?.length || 0,
+            insertions: commitDetail.stats?.additions || 0,
+            deletions: commitDetail.stats?.deletions || 0,
+            repository: args.repository,
+            files,
+          });
+          synced++;
+        } catch (e) {
+          console.error(`Failed to add commit ${commit.sha}:`, e);
+        }
+
+        await sleep(100);
       }
 
-      await sleep(100);
+      if (commits.length < perPage) {
+        break;
+      }
+
+      page++;
     }
 
-    return { synced, total: commits.length };
+    return { synced, total, pages_fetched: page };
   },
 });
 
@@ -305,5 +339,81 @@ export const getUserRepositories = action({
       pushed_at: repo.pushed_at,
       default_branch: repo.default_branch,
     }));
+  },
+});
+
+const MAX_PATCH_SIZE = 50 * 1024;
+
+export const getPRFiles = internalAction({
+  args: {
+    repository: v.string(),
+    pr_number: v.number(),
+    github_access_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const [owner, repo] = args.repository.split("/");
+
+    if (!owner || !repo) {
+      throw new Error(`Invalid repository format: ${args.repository}. Expected: owner/repo`);
+    }
+
+    const prUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}`;
+    const prResponse = await fetch(prUrl, {
+      headers: {
+        "Authorization": `Bearer ${args.github_access_token}`,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+
+    if (!prResponse.ok) {
+      const errorText = await prResponse.text();
+      throw new Error(`GitHub API error fetching PR: ${prResponse.status} ${errorText}`);
+    }
+
+    const prData = await prResponse.json();
+
+    const filesUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/files?per_page=100`;
+    const filesResponse = await fetch(filesUrl, {
+      headers: {
+        "Authorization": `Bearer ${args.github_access_token}`,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+
+    if (!filesResponse.ok) {
+      const errorText = await filesResponse.text();
+      throw new Error(`GitHub API error fetching files: ${filesResponse.status} ${errorText}`);
+    }
+
+    const filesData = await filesResponse.json();
+
+    const files = filesData.map((file: any) => {
+      let patch = file.patch;
+      if (patch && patch.length > MAX_PATCH_SIZE) {
+        patch = patch.substring(0, MAX_PATCH_SIZE) + "\n... [truncated, patch too large]";
+      }
+      return {
+        filename: file.filename,
+        status: file.status,
+        additions: file.additions,
+        deletions: file.deletions,
+        changes: file.changes,
+        patch,
+      };
+    });
+
+    return {
+      files,
+      additions: prData.additions,
+      deletions: prData.deletions,
+      changed_files: prData.changed_files,
+      commits_count: prData.commits,
+      base_ref: prData.base?.ref,
+      head_ref: prData.head?.ref,
+      state: prData.merged ? "merged" : prData.state === "closed" ? "closed" : "open",
+      merged_at: prData.merged_at ? new Date(prData.merged_at).getTime() : undefined,
+    };
   },
 });

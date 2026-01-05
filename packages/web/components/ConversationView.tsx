@@ -13,6 +13,7 @@ import { CodeBlock } from "./CodeBlock";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { extractFileChanges } from "../lib/fileChangeExtractor";
 import { CommitCard } from "./CommitCard";
+import { PRCard } from "./PRCard";
 import { DiffView } from "./DiffView";
 import {
   DropdownMenu,
@@ -87,6 +88,15 @@ export type ConversationData = {
   } | null;
 };
 
+type CommitFile = {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+};
+
 type Commit = {
   _id: string;
   sha: string;
@@ -97,11 +107,43 @@ type Commit = {
   deletions: number;
   author_name: string;
   author_email: string;
+  repository?: string;
+  files?: CommitFile[];
+};
+
+type PRFile = {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+};
+
+type PullRequest = {
+  _id: Id<"pull_requests">;
+  number: number;
+  title: string;
+  body: string;
+  state: "open" | "closed" | "merged";
+  repository: string;
+  author_github_username: string;
+  head_ref?: string;
+  base_ref?: string;
+  additions?: number;
+  deletions?: number;
+  changed_files?: number;
+  commits_count?: number;
+  files?: PRFile[];
+  created_at: number;
+  updated_at: number;
+  merged_at?: number;
 };
 
 type ConversationViewProps = {
   conversation: ConversationData | null | undefined;
   commits?: Commit[];
+  pullRequests?: PullRequest[];
   backHref: string;
   backLabel?: string;
   headerExtra?: React.ReactNode;
@@ -1370,7 +1412,7 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, embedded }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, embedded }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -1398,18 +1440,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     conversation?._id ? { conversation_id: conversation._id } : "skip"
   );
 
-  // Merge messages and commits into a single timeline
+  // Merge messages, commits, and PRs into a single timeline
   type TimelineItem =
     | { type: 'message'; data: Message; timestamp: number }
-    | { type: 'commit'; data: Commit; timestamp: number };
+    | { type: 'commit'; data: Commit; timestamp: number }
+    | { type: 'pull_request'; data: PullRequest; timestamp: number };
 
   const timeline: TimelineItem[] = useMemo(() => {
     const items: TimelineItem[] = [
       ...messages.map(msg => ({ type: 'message' as const, data: msg, timestamp: msg.timestamp })),
       ...commits.map(commit => ({ type: 'commit' as const, data: commit, timestamp: commit.timestamp })),
+      ...pullRequests.map(pr => ({ type: 'pull_request' as const, data: pr, timestamp: pr.created_at })),
     ];
     return items.sort((a, b) => a.timestamp - b.timestamp);
-  }, [messages, commits]);
+  }, [messages, commits, pullRequests]);
 
   // Find the actual scrollable container (may be parent when embedded)
   const getScrollContainer = (): HTMLElement | null => {
@@ -1822,6 +1866,34 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           deletions={commit.deletions}
           authorName={commit.author_name}
           authorEmail={commit.author_email}
+          repository={commit.repository}
+          files={commit.files}
+        />
+      );
+    }
+
+    if (item.type === 'pull_request') {
+      const pr = item.data;
+      return (
+        <PRCard
+          key={pr._id}
+          _id={pr._id}
+          number={pr.number}
+          title={pr.title}
+          body={pr.body}
+          state={pr.state}
+          repository={pr.repository}
+          author_github_username={pr.author_github_username}
+          head_ref={pr.head_ref}
+          base_ref={pr.base_ref}
+          additions={pr.additions}
+          deletions={pr.deletions}
+          changed_files={pr.changed_files}
+          commits_count={pr.commits_count}
+          files={pr.files}
+          created_at={pr.created_at}
+          updated_at={pr.updated_at}
+          merged_at={pr.merged_at}
         />
       );
     }

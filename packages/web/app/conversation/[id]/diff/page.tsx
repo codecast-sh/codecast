@@ -1,7 +1,7 @@
 "use client";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { AuthGuard } from "../../../../components/AuthGuard";
 import { DashboardLayout } from "../../../../components/DashboardLayout";
@@ -14,11 +14,16 @@ import { useDiffViewerStore } from "../../../../store/diffViewerStore";
 export default function ConversationDiffPage() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const id = params.id as string;
   const changeParam = searchParams.get("change");
 
   const { conversation } = useConversationMessages(id);
-  const { selectChange } = useDiffViewerStore();
+  const { selectChange, setDiffPanelOpen } = useDiffViewerStore();
+
+  useEffect(() => {
+    setDiffPanelOpen(true);
+  }, [setDiffPanelOpen]);
 
   useEffect(() => {
     if (changeParam) {
@@ -32,7 +37,7 @@ export default function ConversationDiffPage() {
   if (!conversation) {
     return (
       <AuthGuard>
-        <DashboardLayout hideSidebar>
+        <DashboardLayout>
           <div className="h-[calc(100vh-56px)] w-full flex items-center justify-center">
             <div className="text-muted-foreground">Loading conversation...</div>
           </div>
@@ -43,7 +48,7 @@ export default function ConversationDiffPage() {
 
   return (
     <AuthGuard>
-      <DashboardLayout hideSidebar>
+      <DashboardLayout>
         <ConversationDiffLayout conversation={conversation as ConversationData} embedded />
       </DashboardLayout>
     </AuthGuard>

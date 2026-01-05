@@ -243,6 +243,14 @@ export default defineSchema({
     deletions: v.number(),
     repository: v.optional(v.string()),
     pr_number: v.optional(v.number()),
+    files: v.optional(v.array(v.object({
+      filename: v.string(),
+      status: v.string(),
+      additions: v.number(),
+      deletions: v.number(),
+      changes: v.number(),
+      patch: v.optional(v.string()),
+    }))),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_timestamp", ["timestamp"])
@@ -262,8 +270,22 @@ export default defineSchema({
     ),
     author_github_username: v.string(),
     head_ref: v.optional(v.string()),
+    base_ref: v.optional(v.string()),
     linked_session_ids: v.array(v.id("conversations")),
     pr_comment_posted: v.optional(v.boolean()),
+    files: v.optional(v.array(v.object({
+      filename: v.string(),
+      status: v.string(),
+      additions: v.number(),
+      deletions: v.number(),
+      changes: v.number(),
+      patch: v.optional(v.string()),
+    }))),
+    additions: v.optional(v.number()),
+    deletions: v.optional(v.number()),
+    changed_files: v.optional(v.number()),
+    commits_count: v.optional(v.number()),
+    files_synced_at: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
     merged_at: v.optional(v.number()),

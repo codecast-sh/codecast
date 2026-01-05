@@ -182,3 +182,99 @@ export const getPRById = query({
     return await ctx.db.get(args.pr_id);
   },
 });
+
+export const updatePRFiles = mutation({
+  args: {
+    pr_id: v.id("pull_requests"),
+    files: v.array(v.object({
+      filename: v.string(),
+      status: v.string(),
+      additions: v.number(),
+      deletions: v.number(),
+      changes: v.number(),
+      patch: v.optional(v.string()),
+    })),
+    additions: v.number(),
+    deletions: v.number(),
+    changed_files: v.number(),
+    commits_count: v.number(),
+    base_ref: v.optional(v.string()),
+    state: v.optional(v.union(
+      v.literal("open"),
+      v.literal("closed"),
+      v.literal("merged")
+    )),
+    merged_at: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const pr = await ctx.db.get(args.pr_id);
+    if (!pr) {
+      throw new Error(`PR with id ${args.pr_id} not found`);
+    }
+
+    const updates: any = {
+      files: args.files,
+      additions: args.additions,
+      deletions: args.deletions,
+      changed_files: args.changed_files,
+      commits_count: args.commits_count,
+      files_synced_at: Date.now(),
+      updated_at: Date.now(),
+    };
+
+    if (args.base_ref) {
+      updates.base_ref = args.base_ref;
+    }
+    if (args.state) {
+      updates.state = args.state;
+    }
+    if (args.merged_at) {
+      updates.merged_at = args.merged_at;
+    }
+
+    await ctx.db.patch(args.pr_id, updates);
+    return args.pr_id;
+  },
+});
+
+export const updatePRState = mutation({
+  args: {
+    github_pr_id: v.number(),
+    state: v.union(
+      v.literal("open"),
+      v.literal("closed"),
+      v.literal("merged")
+    ),
+    merged_at: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const pr = await ctx.db
+      .query("pull_requests")
+      .withIndex("by_github_pr_id", (q) => q.eq("github_pr_id", args.github_pr_id))
+      .first();
+
+    if (!pr) {
+      return null;
+    }
+
+    await ctx.db.patch(pr._id, {
+      state: args.state,
+      merged_at: args.merged_at,
+      updated_at: Date.now(),
+    });
+
+    return pr._id;
+  },
+});
+
+export const getPRsForConversation = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const allPRs = await ctx.db.query("pull_requests").collect();
+    return allPRs.filter((pr) =>
+      pr.linked_session_ids.includes(args.conversation_id)
+    );
+  },
+});

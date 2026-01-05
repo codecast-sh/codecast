@@ -7,10 +7,11 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
+import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
 import { ShareDialog } from "../../../components/ShareDialog";
 import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
-import Link from "next/link";
+import { useDiffViewerStore } from "../../../store/diffViewerStore";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -23,6 +24,8 @@ export default function ConversationPage() {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [showShareCopied, setShowShareCopied] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const diffPanelOpen = useDiffViewerStore((state) => state.diffPanelOpen);
+  const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
   const isUUID = useMemo(() => UUID_REGEX.test(id), [id]);
 
@@ -39,6 +42,9 @@ export default function ConversationPage() {
 
   const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useConversationMessages(id);
   const commits = useQuery(api.commits.getCommitsForConversation, {
+    conversation_id: id as Id<"conversations">,
+  });
+  const pullRequests = useQuery(api.pull_requests.getPRsForConversation, {
     conversation_id: id as Id<"conversations">,
   });
 
@@ -90,26 +96,16 @@ export default function ConversationPage() {
           return;
         }
         e.preventDefault();
-        router.push(`/conversation/${id}/diff`);
+        toggleDiffPanel();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [id, router]);
+  }, [toggleDiffPanel]);
 
   const shareControls = (
     <div className="flex items-center gap-1">
-      {/* Diff viewer toggle */}
-      <Link
-        href={`/conversation/${id}/diff`}
-        className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-magenta transition-colors"
-        title="View diff (d)"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-        </svg>
-      </Link>
       {/* Team privacy toggle */}
       {conversation?.is_private ? (
         <button
@@ -150,18 +146,23 @@ export default function ConversationPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <ConversationView
-          conversation={conversation as ConversationData | null | undefined}
-          commits={commits || []}
-          backHref="/dashboard"
-          backLabel="Back"
-          headerExtra={shareControls}
-          hasMoreAbove={hasMoreAbove}
-          isLoadingOlder={isLoadingOlder}
-          onLoadOlder={loadOlder}
-          highlightQuery={highlightQuery}
-          embedded
-        />
+        {diffPanelOpen && conversation ? (
+          <ConversationDiffLayout conversation={conversation as ConversationData} embedded />
+        ) : (
+          <ConversationView
+            conversation={conversation as ConversationData | null | undefined}
+            commits={commits || []}
+            pullRequests={pullRequests || []}
+            backHref="/dashboard"
+            backLabel="Back"
+            headerExtra={shareControls}
+            hasMoreAbove={hasMoreAbove}
+            isLoadingOlder={isLoadingOlder}
+            onLoadOlder={loadOlder}
+            highlightQuery={highlightQuery}
+            embedded
+          />
+        )}
         <ShareDialog
           open={showShareDialog}
           onOpenChange={setShowShareDialog}
