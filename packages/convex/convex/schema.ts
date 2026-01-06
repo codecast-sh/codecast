@@ -254,7 +254,8 @@ export default defineSchema({
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_timestamp", ["timestamp"])
-    .index("by_sha", ["sha"]),
+    .index("by_sha", ["sha"])
+    .index("by_repository", ["repository"]),
 
   pull_requests: defineTable({
     team_id: v.id("teams"),

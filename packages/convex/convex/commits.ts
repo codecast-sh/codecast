@@ -114,6 +114,39 @@ export const getCommitsForConversation = query({
   },
 });
 
+export const getCommitBySha = query({
+  args: {
+    sha: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("commits")
+      .withIndex("by_sha", (q) => q.eq("sha", args.sha))
+      .first();
+  },
+});
+
+export const getCommitsByRepository = query({
+  args: {
+    repository: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const commits = await ctx.db
+      .query("commits")
+      .withIndex("by_repository", (q) => q.eq("repository", args.repository))
+      .collect();
+
+    commits.sort((a, b) => b.timestamp - a.timestamp);
+
+    if (args.limit) {
+      return commits.slice(0, args.limit);
+    }
+
+    return commits;
+  },
+});
+
 export const getCommitsForTimeline = query({
   args: {
     start_time: v.optional(v.number()),

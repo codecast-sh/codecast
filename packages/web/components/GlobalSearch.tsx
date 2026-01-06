@@ -23,7 +23,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
         return isMatch ? (
           <mark
             key={i}
-            className="bg-sol-yellow/30 text-sol-yellow rounded px-0.5 font-medium"
+            className="bg-amber-300/40 text-amber-900 dark:text-amber-200 rounded px-0.5 font-medium"
           >
             {part}
           </mark>
@@ -231,12 +231,12 @@ export function GlobalSearch() {
                     onClick={() => handleResultClick(result.conversationId)}
                     className={`w-full text-left px-4 py-3 transition-colors ${
                       index === selectedIndex
-                        ? "bg-sol-base02/50"
-                        : "bg-transparent hover:bg-sol-base02/30"
+                        ? "bg-amber-200/50 dark:bg-amber-900/30"
+                        : "bg-transparent hover:bg-amber-100/30 dark:hover:bg-amber-900/20"
                     }`}
                   >
                     <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-sm font-medium text-sol-text truncate max-w-[280px]">
+                      <span className="text-sm font-medium text-sol-text truncate max-w-[400px]">
                         {result.title}
                       </span>
                       {!result.isOwn && (
@@ -245,10 +245,10 @@ export function GlobalSearch() {
                         </span>
                       )}
                       <span
-                        className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                        className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${
                           result.role === "user"
-                            ? "bg-sol-blue/20 text-sol-blue"
-                            : "bg-sol-green/20 text-sol-green"
+                            ? "bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-500/30"
+                            : "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
                         }`}
                       >
                         {result.role}

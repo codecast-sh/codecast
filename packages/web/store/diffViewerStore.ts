@@ -182,8 +182,8 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   },
 
   getFilesList: () => {
-    const { changes } = get();
-    const uniqueFiles = new Set(changes.map((c) => c.filePath));
+    const selectedChanges = get().getSelectedChanges();
+    const uniqueFiles = new Set(selectedChanges.map((c) => c.filePath));
     return Array.from(uniqueFiles).sort();
   },
 

@@ -65,10 +65,11 @@ export const generateTitle = internalAction({
 
 Title: 3-8 words, captures the main topic/goal
 
-Subtitle: A concise narrative (2-4 sentences) OR bullet points describing:
+Subtitle: Bullet points (preferred) or a concise narrative describing:
 - What was built, fixed, or changed
 - Key files or components affected
 - Current state (working, in progress, blocked)
+Use bullet points for clarity when multiple things happened.
 
 Respond in this exact JSON format only, no markdown:
 {"title": "...", "subtitle": "..."}
@@ -159,6 +160,6 @@ export const getConversationForTitle = internalQuery({
 
 export function shouldGenerateTitle(messageCount: number): boolean {
   if (messageCount === 2) return true;
-  if (messageCount > 2 && (messageCount - 2) % 30 === 0) return true;
+  if (messageCount > 2 && (messageCount - 2) % 15 === 0) return true;
   return false;
 }

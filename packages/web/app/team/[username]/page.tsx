@@ -192,7 +192,7 @@ export default function UserProfilePage() {
                       {conversation.title || "Untitled Conversation"}
                     </div>
                     {conversation.subtitle && (
-                      <div className="text-sm text-sol-base1 truncate">
+                      <div className="text-sm text-sol-base1 line-clamp-3 whitespace-pre-line">
                         {conversation.subtitle}
                       </div>
                     )}

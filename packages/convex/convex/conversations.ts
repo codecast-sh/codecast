@@ -943,8 +943,6 @@ export const searchConversations = query({
     }> = [];
 
     for (const [convId, messages] of conversationMatches) {
-      if (results.length >= limit) break;
-
       const conv = await ctx.db.get(messages[0].conversation_id);
       if (!conv) continue;
 
@@ -1009,7 +1007,8 @@ export const searchConversations = query({
       });
     }
 
-    return { results: results.sort((a, b) => b.updatedAt - a.updatedAt), totalMatches: searchResults.length };
+    const sorted = results.sort((a, b) => b.updatedAt - a.updatedAt);
+    return { results: sorted.slice(0, limit), totalMatches: searchResults.length };
   },
 });
 
@@ -1264,8 +1263,6 @@ export const searchForCLI = mutation({
     let totalMatches = 0;
 
     for (const [convId, messages] of conversationMatches) {
-      if (results.length >= limit) break;
-
       const conv = await ctx.db.get(messages[0].conversation_id);
       if (!conv) continue;
 
@@ -1375,7 +1372,7 @@ export const searchForCLI = mutation({
 
     return {
       total_matches: totalMatches,
-      conversations: results,
+      conversations: results.slice(0, limit),
       search_scope: projectPath || "global",
     };
   },
