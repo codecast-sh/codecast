@@ -27,6 +27,18 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { CommentPanel } from "./CommentPanel";
 import { PermissionCard } from "./PermissionCard";
+import { copyToClipboard } from "../lib/utils";
+
+function parseSearchTerms(query: string): string[] {
+  const terms: string[] = [];
+  const regex = /"([^"]+)"|(\S+)/g;
+  let match;
+  while ((match = regex.exec(query)) !== null) {
+    const term = match[1] || match[2];
+    if (term) terms.push(term.toLowerCase());
+  }
+  return terms;
+}
 
 type ToolCall = {
   id: string;
@@ -151,6 +163,7 @@ type ConversationViewProps = {
   isLoadingOlder?: boolean;
   onLoadOlder?: () => void;
   highlightQuery?: string;
+  onClearHighlight?: () => void;
   embedded?: boolean;
 };
 
@@ -435,7 +448,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
       </div>
 
       <div className="px-3 pb-2">
-        <div className="text-sol-text-secondary text-xs font-mono whitespace-pre-wrap leading-relaxed">
+        <div className="text-sol-text-secondary text-xs font-mono whitespace-pre-wrap break-words leading-relaxed">
           {truncatedPrompt}
         </div>
         {prompt.length > 300 && !expanded && (
@@ -670,6 +683,7 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
 }
 
 function TodoWriteBlock({ tool }: { tool: ToolCall }) {
+  const [showTooltip, setShowTooltip] = useState(false);
   let parsedInput: { todos?: Array<{ content: string; status: string; activeForm?: string }> } = {};
   try {
     parsedInput = JSON.parse(tool.input);
@@ -679,46 +693,56 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
   if (todos.length === 0) return null;
 
   const completed = todos.filter(t => t.status === 'completed').length;
-  const inProgress = todos.filter(t => t.status === 'in_progress').length;
+  const activeTodo = todos.find(t => t.status === 'in_progress');
 
   return (
-    <div className="my-2">
-      <div className="flex items-center gap-2 py-0.5">
-        <span className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0" />
-        <span className="font-mono text-sm font-medium text-pink-600 dark:text-sol-magenta">
-          TodoWrite
-        </span>
-        <span className="text-sol-text-dim text-sm font-mono">
-          {completed}/{todos.length} done
-          {inProgress > 0 && `, ${inProgress} in progress`}
+    <div className="relative inline-block">
+      <div
+        className="my-1 inline-flex items-center gap-2 py-0.5 px-2 rounded bg-sol-bg-alt/50 hover:bg-sol-bg-alt cursor-default transition-colors"
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
+      >
+        <svg className="w-4 h-4 text-violet-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+        </svg>
+        <span className="text-sm text-sol-text-muted">
+          {activeTodo ? (
+            <span className="text-sol-text-secondary">{activeTodo.activeForm || activeTodo.content}</span>
+          ) : (
+            <span>{completed}/{todos.length} done</span>
+          )}
         </span>
       </div>
-      <div className="ml-3.5 mt-1 space-y-0.5">
-        {todos.map((todo, i) => (
-          <div key={i} className="flex items-start gap-2 text-sm">
-            {todo.status === 'completed' ? (
-              <svg className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-            ) : todo.status === 'in_progress' ? (
-              <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4 text-sol-text-dim flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <circle cx="12" cy="12" r="9" strokeWidth={2} />
-              </svg>
-            )}
-            <span className={`${
-              todo.status === 'completed' ? 'text-sol-text-dim line-through' :
-              todo.status === 'in_progress' ? 'text-sol-text-secondary' :
-              'text-sol-text-muted'
-            }`}>
-              {todo.status === 'in_progress' ? (todo.activeForm || todo.content) : todo.content}
-            </span>
+      {showTooltip && (
+        <div className="absolute left-0 top-full mt-1 z-50 bg-sol-bg-alt border border-sol-border rounded p-2 max-w-xs shadow-lg">
+          <div className="space-y-1">
+            {todos.map((todo, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs">
+                {todo.status === 'completed' ? (
+                  <svg className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : todo.status === 'in_progress' ? (
+                  <svg className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                  </svg>
+                )}
+                <span className={`${
+                  todo.status === 'completed' ? 'text-sol-text-dim line-through' :
+                  todo.status === 'in_progress' ? 'text-sol-text' :
+                  'text-sol-text-muted'
+                }`}>
+                  {todo.content}
+                </span>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -744,7 +768,7 @@ function ThinkingBlock({ content }: { content: string }) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
         )}
-        <div className="flex-1 text-sol-text-muted font-mono whitespace-pre-wrap text-xs">
+        <div className="flex-1 text-sol-text-muted font-mono whitespace-pre-wrap break-words text-xs">
           {truncated.text}
           {truncated.truncated && !expanded && "..."}
         </div>
@@ -819,7 +843,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(content);
+      await copyToClipboard(content);
       toast.success("Copied!");
     } catch (err) {
       toast.error("Failed to copy");
@@ -829,7 +853,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   const handleCopyLink = async () => {
     try {
       const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
-      await navigator.clipboard.writeText(url);
+      await copyToClipboard(url);
       toast.success("Link copied!");
     } catch (err) {
       toast.error("Failed to copy link");
@@ -854,7 +878,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group bg-sol-blue/10 border border-sol-blue/30 rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group bg-sol-blue/15 border border-sol-blue/40 rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg" : ""}`}>
       <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
         <button
           onClick={handleCopyLink}
@@ -913,7 +937,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
       </div>
       <div
         ref={contentRef}
-        className={`text-sol-text text-sm pl-8 whitespace-pre-wrap ${effectivelyCollapsed ? "line-clamp-2" : ""}`}
+        className={`text-sol-text text-sm pl-8 whitespace-pre-wrap break-words ${effectivelyCollapsed ? "line-clamp-2" : ""}`}
       >
         {content}
       </div>
@@ -1017,7 +1041,7 @@ function AssistantBlock({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(content || "");
+      await copyToClipboard(content || "");
       toast.success("Copied!");
     } catch (err) {
       toast.error("Failed to copy");
@@ -1027,7 +1051,7 @@ function AssistantBlock({
   const handleCopyLink = async () => {
     try {
       const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
-      await navigator.clipboard.writeText(url);
+      await copyToClipboard(url);
       toast.success("Link copied!");
     } catch (err) {
       toast.error("Failed to copy link");
@@ -1146,7 +1170,7 @@ function AssistantBlock({
         ))}
 
         {hasContent && (
-          <div className={`text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap" : "prose prose-invert prose-sm max-w-none"}`}>
+          <div className={`text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap break-words" : "prose prose-invert prose-sm max-w-none"}`}>
             {collapsed ? (
               <>
                 <span>{truncatedContent}</span>
@@ -1412,7 +1436,7 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, embedded }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, onClearHighlight, embedded }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -1481,13 +1505,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       hasScrolledToHighlight.current = false;
       return;
     }
-    const query = highlightQuery.toLowerCase();
-    const words = query.split(/\s+/).filter(Boolean);
-    if (words.length === 0) return;
+    const terms = parseSearchTerms(highlightQuery);
+    if (terms.length === 0) return;
 
     for (const msg of messages) {
       const content = msg.content?.toLowerCase() || "";
-      if (words.some(word => content.includes(word))) {
+      if (terms.some(term => content.includes(term))) {
         setHighlightedMessageId(msg._id);
         return;
       }
@@ -1498,10 +1521,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   useEffect(() => {
     if (!highlightQuery || !containerRef.current) return;
 
-    const words = highlightQuery.toLowerCase().split(/\s+/).filter(Boolean);
-    if (words.length === 0) return;
+    const terms = parseSearchTerms(highlightQuery);
+    if (terms.length === 0) return;
 
-    const pattern = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const pattern = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
     const regex = new RegExp(`(${pattern})`, 'gi');
 
     const applyHighlights = () => {
@@ -1543,7 +1566,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           }
           const mark = document.createElement('mark');
           mark.setAttribute('data-search-highlight', 'true');
-          mark.className = 'bg-sol-yellow/30 text-sol-yellow rounded px-0.5 font-medium';
+          mark.className = 'bg-amber-300/50 text-amber-900 dark:bg-amber-700/40 dark:text-amber-100 rounded px-0.5 font-medium';
           mark.textContent = match[0];
           fragment.appendChild(mark);
           lastIndex = regex.lastIndex;
@@ -1610,7 +1633,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       .join("\n");
 
     try {
-      await navigator.clipboard.writeText(formattedMessages);
+      await copyToClipboard(formattedMessages);
       toast.success("Conversation copied to clipboard");
     } catch (err) {
       toast.error("Failed to copy to clipboard");
@@ -2056,6 +2079,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
                 {headerExtra}
 
+                {highlightQuery && (
+                  <button
+                    onClick={onClearHighlight}
+                    className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-200/50 dark:bg-amber-800/30 text-amber-800 dark:text-amber-200 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 transition-colors"
+                    title="Clear search highlight"
+                  >
+                    <span className="max-w-[120px] truncate">{highlightQuery}</span>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+
                 <button
                   onClick={handleCopyAll}
                   className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
@@ -2081,7 +2117,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </DropdownMenuItem>
                     {conversation?.session_id && (
                       <DropdownMenuItem onClick={() => {
-                        navigator.clipboard.writeText(`claude --resume ${conversation.session_id}`);
+                        copyToClipboard(`claude --resume ${conversation.session_id}`);
                         toast.success("Resume command copied");
                       }}>
                         Copy resume command

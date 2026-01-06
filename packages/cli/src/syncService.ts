@@ -181,7 +181,10 @@ export class SyncService {
     const images = params.images?.filter(img => {
       const size = img.data.length;
       return size < MAX_TOOL_RESULT_SIZE;
-    }).slice(0, 5);
+    }).slice(0, 5).map(img => ({
+      media_type: img.mediaType,
+      data: img.data,
+    }));
 
     try {
       const messageId = await this.client.mutation(

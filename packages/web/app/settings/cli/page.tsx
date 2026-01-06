@@ -3,6 +3,7 @@
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useState } from "react";
+import { copyToClipboard } from "../../../lib/utils";
 
 export default function CliSettingsPage() {
   const { isAuthenticated } = useConvexAuth();
@@ -17,8 +18,8 @@ export default function CliSettingsPage() {
 
   const createSetupToken = useMutation(api.apiTokens.createSetupToken);
 
-  const copyToClipboard = async (text: string, label: string) => {
-    await navigator.clipboard.writeText(text);
+  const handleCopy = async (text: string, label: string) => {
+    await copyToClipboard(text);
     setCopied(label);
     setTimeout(() => setCopied(null), 2000);
   };
@@ -71,7 +72,7 @@ export default function CliSettingsPage() {
               </code>
               <button
                 onClick={() =>
-                  copyToClipboard(
+                  handleCopy(
                     `curl -fsSL codecast.sh/install | sh -s -- ${setupToken}`,
                     "install"
                   )

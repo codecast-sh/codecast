@@ -1,5 +1,6 @@
 "use client";
 import { toast } from "sonner";
+import { copyToClipboard } from "../lib/utils";
 
 interface CodeBlockProps {
   code: string;
@@ -9,7 +10,7 @@ interface CodeBlockProps {
 export function CodeBlock({ code, language }: CodeBlockProps) {
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(code);
+      await copyToClipboard(code);
       toast.success("Copied!");
     } catch (err) {
       toast.error("Failed to copy");

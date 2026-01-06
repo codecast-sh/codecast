@@ -185,11 +185,10 @@ interface ConversationListProps {
   filter: "my" | "team";
   directoryFilter?: string | null;
   memberFilter?: string | null;
-  onDirectoriesChange?: (directories: string[]) => void;
   onMemberFilterChange?: (memberId: string | null) => void;
 }
 
-export function ConversationList({ filter, directoryFilter, memberFilter, onDirectoriesChange, onMemberFilterChange }: ConversationListProps) {
+export function ConversationList({ filter, directoryFilter, memberFilter, onMemberFilterChange }: ConversationListProps) {
   const router = useRouter();
   const { conversations, hasMore, loadMore, isLoadingMore, isLoading } = useConversationsWithError(filter);
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -317,12 +316,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
 
     return { filteredConversations: filtered, counts, directories };
   }, [conversations, timeFilter, subagentFilter, directoryFilter, memberFilter]);
-
-  useEffect(() => {
-    if (onDirectoriesChange && directories.length > 0) {
-      onDirectoriesChange(directories);
-    }
-  }, [directories, onDirectoriesChange]);
 
   const flatConversations = useMemo(() => {
     const flat: Conversation[] = [];

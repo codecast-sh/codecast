@@ -20,7 +20,6 @@ interface DashboardLayoutProps {
   children: ReactNode;
   filter?: "my" | "team";
   onFilterChange?: (filter: "my" | "team") => void;
-  directories?: string[];
   directoryFilter?: string | null;
   onDirectoryFilterChange?: (directory: string | null) => void;
   hideSidebar?: boolean;
@@ -47,7 +46,7 @@ const getInitialCollapsed = () => {
   return localStorage.getItem("sidebarCollapsed") === "true";
 };
 
-export function DashboardLayout({ children, filter, onFilterChange, directories, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
+export function DashboardLayout({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
   const [layout, setLayout] = useState(getInitialLayout);
@@ -57,6 +56,9 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
   const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
+  const isOnCommitPage = pathname?.includes("/commit/") ?? false;
+  const isOnPRPage = pathname?.includes("/pr/") ?? false;
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage;
 
   useEffect(() => {
     setMounted(true);
@@ -179,11 +181,17 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
         {hideSidebar || isSidebarCollapsed ? (
-          <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
-            <div className="max-w-6xl mx-auto">
+          isFullWidthPage ? (
+            <div className="h-full">
               {children}
             </div>
-          </div>
+          ) : (
+            <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+              <div className="max-w-6xl mx-auto">
+                {children}
+              </div>
+            </div>
+          )
         ) : (
           <Group
             orientation="horizontal"
@@ -196,7 +204,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
                 <Sidebar
                   filter={filter}
                   onFilterChange={onFilterChange}
-                  directories={directories}
                   directoryFilter={directoryFilter}
                   onDirectoryFilterChange={onDirectoryFilterChange}
                   isMobileOpen={isMobileSidebarOpen}
@@ -206,7 +213,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
             </Panel>
             <Separator className="w-1.5 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors" />
             <Panel id="main" minSize={0}>
-              {isOnConversationPage ? (
+              {isFullWidthPage ? (
                 <div className="h-full">
                   {children}
                 </div>
@@ -228,7 +235,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
           <Sidebar
             filter={filter}
             onFilterChange={onFilterChange}
-            directories={directories}
             directoryFilter={directoryFilter}
             onDirectoryFilterChange={onDirectoryFilterChange}
             isMobileOpen={isMobileSidebarOpen}

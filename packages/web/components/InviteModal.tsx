@@ -15,6 +15,7 @@ import {
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import { copyToClipboard } from "../lib/utils";
 
 interface InviteModalProps {
   trigger: React.ReactNode;
@@ -36,7 +37,7 @@ export function InviteModal({ trigger }: InviteModalProps) {
 
   const handleCopyInviteCode = async () => {
     if (inviteUrl) {
-      await navigator.clipboard.writeText(inviteUrl);
+      await copyToClipboard(inviteUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }

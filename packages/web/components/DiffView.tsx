@@ -98,20 +98,31 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
   }
 
   // Build output with separators for gaps
-  const output: Array<DiffLine | 'separator'> = [];
+  type HunkHeader = { type: 'hunk'; oldStart: number; oldCount: number; newStart: number; newCount: number; skippedLines: number };
+  const output: Array<DiffLine | HunkHeader> = [];
   let lastShown = -1;
   for (let i = 0; i < allLines.length; i++) {
     if (showLine.has(i)) {
       if (lastShown >= 0 && i > lastShown + 1) {
-        output.push('separator');
+        const skippedCount = i - lastShown - 1;
+        const prevLine = allLines[lastShown];
+        const nextLine = allLines[i];
+        output.push({
+          type: 'hunk',
+          oldStart: (prevLine.oldNum || prevLine.newNum || 0) + 1,
+          oldCount: skippedCount,
+          newStart: (prevLine.newNum || prevLine.oldNum || 0) + 1,
+          newCount: skippedCount,
+          skippedLines: skippedCount,
+        });
       }
       output.push(allLines[i]);
       lastShown = i;
     }
   }
 
-  // Count actual lines (not separators)
-  const totalLines = output.filter(item => item !== 'separator').length;
+  // Count actual lines (not hunk headers)
+  const totalLines = output.filter(item => !('type' in item && item.type === 'hunk')).length;
   const needsTruncation = totalLines > maxLines && !fullyExpanded;
 
   // Truncate output if needed
@@ -120,7 +131,7 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
     let lineCount = 0;
     const truncated: typeof output = [];
     for (const item of output) {
-      if (item === 'separator') {
+      if ('type' in item && item.type === 'hunk') {
         truncated.push(item);
       } else {
         if (lineCount < maxLines) {
@@ -144,14 +155,14 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
       )}
       <div className="p-2">
         {displayOutput.map((item, i) => {
-          if (item === 'separator') {
+          if ('type' in item && item.type === 'hunk') {
             return (
-              <div key={`sep-${i}`} className="text-center py-0.5 text-sol-text-dim">
-                ···
+              <div key={`hunk-${i}`} className="py-1 px-2 my-1 bg-sol-blue/10 text-sol-blue text-[10px] font-mono rounded">
+                @@ -{item.oldStart},{item.oldCount} +{item.newStart},{item.newCount} @@ <span className="text-sol-text-dim">({item.skippedLines} lines hidden)</span>
               </div>
             );
           }
-          const { type, content, oldNum, newNum } = item;
+          const { type, content, oldNum, newNum } = item as DiffLine;
           const lineNum = type === 'removed' ? oldNum : newNum;
           const lineNumStr = lineNum !== undefined ? String(lineNum).padStart(lineNumWidth) : ' '.repeat(lineNumWidth);
           const prefix = type === 'added' ? '+' : type === 'removed' ? '-' : ' ';

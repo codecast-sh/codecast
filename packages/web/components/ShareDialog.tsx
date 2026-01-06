@@ -16,6 +16,7 @@ import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
 import { Switch } from "./ui/switch";
 import { toast } from "sonner";
+import { copyToClipboard } from "../lib/utils";
 
 interface ShareDialogProps {
   open: boolean;
@@ -72,7 +73,7 @@ export function ShareDialog({
       }
 
       if (shareUrl) {
-        await navigator.clipboard.writeText(shareUrl);
+        await copyToClipboard(shareUrl);
         toast.success("Share link copied to clipboard");
       }
 
@@ -84,7 +85,7 @@ export function ShareDialog({
 
   const handleCopyLink = async () => {
     if (shareUrl) {
-      await navigator.clipboard.writeText(shareUrl);
+      await copyToClipboard(shareUrl);
       toast.success("Link copied to clipboard");
     }
   };

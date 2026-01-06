@@ -1,16 +1,16 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { shouldShowSession } from "../lib/sessionFilters";
 
 interface SidebarProps {
   filter?: "my" | "team";
   onFilterChange?: (filter: "my" | "team") => void;
-  directories?: string[];
   directoryFilter?: string | null;
   onDirectoryFilterChange?: (directory: string | null) => void;
   isMobileOpen?: boolean;
@@ -55,7 +55,7 @@ function getShortPath(projectPath: string): string {
   return parts[parts.length - 1];
 }
 
-export function Sidebar({ filter = "my", onFilterChange, directories = [], directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
+export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
@@ -115,35 +115,38 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
 
   type ConversationItem = NonNullable<typeof conversations>[number];
 
-  const isSubagent = (c: ConversationItem) =>
-    c.title?.startsWith("Session agent-") ?? false;
+  const filteredConversations = useMemo(() =>
+    conversations?.filter(c => shouldShowSession(c)) ?? [],
+    [conversations]
+  );
 
-  const isTrivialSubagent = (c: ConversationItem) => {
-    if (!isSubagent(c)) return false;
-    const userMsgCount = c.message_alternates?.filter(m => m.role === "user").length ?? 0;
-    const aiMsgCount = c.message_alternates?.filter(m => m.role === "assistant").length ?? 0;
-    if (c.ai_message_count !== undefined) {
-      return c.ai_message_count <= 1 && userMsgCount === 0;
+  const computedDirectories = useMemo(() => {
+    const deriveGitRoot = (c: ConversationItem): string | null => {
+      if (c.git_root) return c.git_root;
+      if (!c.project_path) return null;
+      const parts = c.project_path.split('/');
+      const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
+      if (srcIndex >= 0 && srcIndex < parts.length - 1) {
+        return parts.slice(0, srcIndex + 2).join('/');
+      }
+      return c.project_path;
+    };
+
+    const dirLastUpdated = new Map<string, number>();
+    for (const c of filteredConversations) {
+      const dir = deriveGitRoot(c);
+      if (dir) {
+        const existing = dirLastUpdated.get(dir) || 0;
+        if (c.updated_at > existing) {
+          dirLastUpdated.set(dir, c.updated_at);
+        }
+      }
     }
-    return aiMsgCount <= 1 && userMsgCount === 0;
-  };
+    return Array.from(dirLastUpdated.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([path]) => path);
+  }, [filteredConversations]);
 
-  const isWarmupSession = (c: ConversationItem) => {
-    if (c.title?.toLowerCase() === "warmup") return true;
-    if (c.message_count > 3) return false;
-    const firstAssistantMsg = c.first_assistant_message?.toLowerCase() ||
-      c.message_alternates?.find(m => m.role === "assistant")?.content?.toLowerCase() || "";
-    const warmupPatterns = [
-      "i'm ready to help",
-      "i'll wait for your task",
-      "what would you like me to help",
-      "i understand. i'm ready",
-      "running in read-only exploration mode",
-    ];
-    return warmupPatterns.some(p => firstAssistantMsg.includes(p));
-  };
-
-  const filteredConversations = conversations?.filter(c => !isTrivialSubagent(c) && !isWarmupSession(c)) ?? [];
 
   const groupedSessions = filteredConversations.reduce<Record<string, ConversationItem[]>>((acc, conv) => {
     const group = getDateGroup(conv.updated_at, currentTime);
@@ -272,13 +275,13 @@ export function Sidebar({ filter = "my", onFilterChange, directories = [], direc
           </div>
         )}
 
-        {!isNarrow && directories.length > 0 && (
+        {!isNarrow && computedDirectories.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
               Projects
             </div>
             <div className="space-y-0.5">
-              {directories.slice(0, 8).map((dir) => (
+              {computedDirectories.slice(0, 8).map((dir) => (
                 <button
                   key={dir}
                   onClick={() => handleDirectoryClick(dir)}

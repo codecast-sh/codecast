@@ -34,6 +34,20 @@ type TimelineItem =
       deletions: number;
       conversation_id?: string;
       repository?: string;
+    }
+  | {
+      type: "pr";
+      id: string;
+      number: number;
+      title: string;
+      body: string;
+      state: "open" | "closed" | "merged";
+      author_github_username: string;
+      timestamp: number;
+      repository: string;
+      additions?: number;
+      deletions?: number;
+      changed_files?: number;
     };
 
 function getRelativeTime(timestamp: number): string {
@@ -247,6 +261,15 @@ function CommitCard({
     </div>
   );
 
+  if (item.repository) {
+    const [owner, repo] = item.repository.split("/");
+    return (
+      <Link href={`/commit/${owner}/${repo}/${item.sha}`} className="group block">
+        {content}
+      </Link>
+    );
+  }
+
   if (item.conversation_id) {
     return (
       <Link href={`/conversation/${item.conversation_id}/diff`} className="group block">
@@ -255,20 +278,107 @@ function CommitCard({
     );
   }
 
-  if (item.repository) {
-    return (
-      <a
-        href={`https://github.com/${item.repository}/commit/${item.sha}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="group block"
-      >
-        {content}
-      </a>
-    );
-  }
-
   return content;
+}
+
+function PRIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM4 6a2 2 0 1 1 4 0 2 2 0 0 1-4 0zm2 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm-2 3a2 2 0 1 1 4 0 2 2 0 0 1-4 0zm16-6a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm-2 3a2 2 0 1 1 4 0 2 2 0 0 1-4 0zM6.5 7v8h1V7h-1zm12 5v5h-1v-5h1zm-11 1H13v-1H7.5v1zm0 2.5c0-1.5 1.5-2.5 3-2.5h2.5v-1H10.5c-2.25 0-4 1.5-4 3.5v.5h1v-.5z" />
+    </svg>
+  );
+}
+
+function PRCard({ item }: { item: Extract<TimelineItem, { type: "pr" }> }) {
+  const repoName = item.repository.split("/").pop() || item.repository;
+  const [owner, repo] = item.repository.split("/");
+
+  const stateConfig = {
+    open: {
+      color: "text-sol-green",
+      bgColor: "bg-sol-green/20",
+      borderColor: "border-sol-green/30",
+      label: "Open",
+    },
+    merged: {
+      color: "text-sol-violet",
+      bgColor: "bg-sol-violet/20",
+      borderColor: "border-sol-violet/30",
+      label: "Merged",
+    },
+    closed: {
+      color: "text-sol-red",
+      bgColor: "bg-sol-red/20",
+      borderColor: "border-sol-red/30",
+      label: "Closed",
+    },
+  };
+
+  const state = stateConfig[item.state];
+
+  return (
+    <Link href={`/pr/${owner}/${repo}/${item.number}`} className="group block">
+      <div className="relative bg-white/60 border border-sol-border/40 rounded-xl p-4 hover:border-sol-green/50 transition-all duration-200 shadow-sm hover:shadow-md">
+        <div className="flex items-start gap-3">
+          <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-gradient-to-br from-sol-green to-sol-green/80 flex items-center justify-center shadow-sm">
+            <PRIcon className="w-5 h-5 text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-3 mb-1.5">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${state.bgColor} ${state.color} border ${state.borderColor}`}>
+                    {state.label}
+                  </span>
+                  <span className="text-[11px] font-mono text-sol-text-dim/60">#{item.number}</span>
+                  <span className="text-[11px] font-mono text-sol-text-dim/60">{repoName}</span>
+                </div>
+                <h3 className="text-sol-text font-medium text-[14px] leading-snug line-clamp-2 group-hover:text-sol-green transition-colors">
+                  {item.title}
+                </h3>
+              </div>
+              <span className="text-[11px] text-sol-text-dim/60 shrink-0">
+                {getRelativeTime(item.timestamp)}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs text-sol-text-dim/70 flex-wrap">
+              <span className="inline-flex items-center gap-1">
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.5}
+                    d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                  />
+                </svg>
+                {item.author_github_username}
+              </span>
+              {item.additions !== undefined && item.deletions !== undefined && (
+                <span className="inline-flex items-center gap-1">
+                  <span className="text-sol-green font-medium">+{item.additions}</span>
+                  <span className="text-sol-red font-medium">-{item.deletions}</span>
+                </span>
+              )}
+              {item.changed_files !== undefined && (
+                <span className="inline-flex items-center gap-1">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1.5}
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  {item.changed_files} {item.changed_files === 1 ? "file" : "files"}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
 }
 
 interface TimelineFeedProps {
@@ -282,9 +392,10 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
     start_time: dateRange?.start,
     end_time: dateRange?.end,
   });
+  const prs = useQuery(api.pull_requests.getPRsForTimeline, {});
 
   const { timelineItems, sessionTitleMap } = useMemo(() => {
-    if (!conversations?.conversations || !commits)
+    if (!conversations?.conversations || !commits || !prs)
       return { timelineItems: [], sessionTitleMap: new Map<string, string>() };
 
     const items: TimelineItem[] = [];
@@ -324,12 +435,29 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
       });
     }
 
+    for (const pr of prs) {
+      items.push({
+        type: "pr",
+        id: pr._id,
+        number: pr.number,
+        title: pr.title,
+        body: pr.body,
+        state: pr.state,
+        author_github_username: pr.author_github_username,
+        timestamp: pr.updated_at,
+        repository: pr.repository,
+        additions: pr.additions,
+        deletions: pr.deletions,
+        changed_files: pr.changed_files,
+      });
+    }
+
     items.sort((a, b) => b.timestamp - a.timestamp);
 
     return { timelineItems: items, sessionTitleMap: titleMap };
-  }, [conversations, commits]);
+  }, [conversations, commits, prs]);
 
-  if (conversations === undefined || commits === undefined) {
+  if (conversations === undefined || commits === undefined || prs === undefined) {
     return <LoadingSkeleton />;
   }
 
@@ -391,19 +519,24 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
             </h2>
           </div>
           <div className="space-y-3">
-            {group.items.map((item) =>
-              item.type === "session" ? (
-                <SessionCard key={item.id} item={item} />
-              ) : (
-                <CommitCard
-                  key={item.id}
-                  item={item}
-                  sessionTitle={
-                    item.conversation_id ? sessionTitleMap.get(item.conversation_id) : undefined
-                  }
-                />
-              )
-            )}
+            {group.items.map((item) => {
+              if (item.type === "session") {
+                return <SessionCard key={item.id} item={item} />;
+              } else if (item.type === "commit") {
+                return (
+                  <CommitCard
+                    key={item.id}
+                    item={item}
+                    sessionTitle={
+                      item.conversation_id ? sessionTitleMap.get(item.conversation_id) : undefined
+                    }
+                  />
+                );
+              } else if (item.type === "pr") {
+                return <PRCard key={item.id} item={item} />;
+              }
+              return null;
+            })}
           </div>
         </div>
       ))}

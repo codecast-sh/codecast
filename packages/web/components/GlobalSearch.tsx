@@ -4,13 +4,24 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 
+function parseSearchTerms(query: string): string[] {
+  const terms: string[] = [];
+  const regex = /"([^"]+)"|(\S+)/g;
+  let match;
+  while ((match = regex.exec(query)) !== null) {
+    const term = match[1] || match[2];
+    if (term) terms.push(term.toLowerCase());
+  }
+  return terms;
+}
+
 function highlightMatch(text: string, query: string): React.ReactNode {
   if (!query.trim()) return text;
 
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return text;
+  const terms = parseSearchTerms(query);
+  if (terms.length === 0) return text;
 
-  const pattern = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
   const regex = new RegExp(`(${pattern})`, "gi");
   const parts = text.split(regex);
 
@@ -19,7 +30,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   return (
     <>
       {parts.map((part, i) => {
-        const isMatch = words.some((w) => part.toLowerCase() === w);
+        const isMatch = terms.some((t) => part.toLowerCase() === t);
         return isMatch ? (
           <mark
             key={i}
@@ -35,13 +46,13 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   );
 }
 
-function getSnippet(content: string, query: string, maxLen = 200): string {
+function getSnippet(content: string, query: string, maxLen = 300): string {
   const lowerContent = content.toLowerCase();
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = parseSearchTerms(query);
 
   let bestIndex = -1;
-  for (const word of words) {
-    const idx = lowerContent.indexOf(word);
+  for (const term of terms) {
+    const idx = lowerContent.indexOf(term);
     if (idx !== -1 && (bestIndex === -1 || idx < bestIndex)) {
       bestIndex = idx;
     }
@@ -49,8 +60,8 @@ function getSnippet(content: string, query: string, maxLen = 200): string {
 
   if (bestIndex === -1) return content.slice(0, maxLen);
 
-  const start = Math.max(0, bestIndex - 60);
-  const end = Math.min(content.length, bestIndex + 140);
+  const start = Math.max(0, bestIndex - 80);
+  const end = Math.min(content.length, bestIndex + 220);
   let snippet = content.slice(start, end);
 
   if (start > 0) snippet = "..." + snippet;
@@ -64,6 +75,7 @@ export function GlobalSearch() {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [userOnly, setUserOnly] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
@@ -76,7 +88,7 @@ export function GlobalSearch() {
 
   const searchResults = useQuery(
     api.conversations.searchConversations,
-    debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 30 } : "skip"
+    debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 30, userOnly } : "skip"
   );
 
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
@@ -154,9 +166,14 @@ export function GlobalSearch() {
         router.push(url);
         setIsOpen(false);
         setQuery("");
+      } else if (e.key === "a" && (e.metaKey || e.ctrlKey) && flatResults.length > 0) {
+        e.preventDefault();
+        router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&userOnly=true" : ""}`);
+        setIsOpen(false);
+        setQuery("");
       }
     },
-    [flatResults, selectedIndex, router]
+    [flatResults, selectedIndex, router, query, userOnly]
   );
 
   const handleResultClick = (conversationId: string) => {
@@ -167,7 +184,7 @@ export function GlobalSearch() {
   };
 
   return (
-    <div className="relative flex-1 max-w-2xl mx-8 z-[9999]">
+    <div className="relative flex-1 max-w-3xl mx-8 z-[9999]">
       <div
         className={`relative transition-all duration-200 ${
           isOpen ? "scale-105" : ""
@@ -209,7 +226,7 @@ export function GlobalSearch() {
       </div>
 
       {isOpen && query.length >= 2 && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 w-[200%] mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
+        <div className="absolute top-full left-1/2 -translate-x-1/2 w-[150%] min-w-[700px] mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
                 <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
@@ -270,6 +287,16 @@ export function GlobalSearch() {
             )}
             <div className="px-3 py-2 bg-sol-bg-alt/80 border-t border-sol-border flex items-center justify-between text-[10px] text-sol-text-dim">
               <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 cursor-pointer select-none text-sol-text-secondary hover:text-sol-text transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={userOnly}
+                    onChange={(e) => setUserOnly(e.target.checked)}
+                    className="w-3 h-3 rounded border-sol-border bg-sol-bg text-amber-500 focus:ring-amber-500/50 focus:ring-offset-0 cursor-pointer"
+                  />
+                  user only
+                </label>
+                <span className="text-sol-border">|</span>
                 <span className="flex items-center gap-1">
                   <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8593;</kbd>
                   <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8595;</kbd>
@@ -280,10 +307,25 @@ export function GlobalSearch() {
                   open
                 </span>
               </div>
-              <span className="flex items-center gap-1">
-                <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">esc</kbd>
-                close
-              </span>
+              <div className="flex items-center gap-3">
+                {flatResults.length > 0 && (
+                  <button
+                    onClick={() => {
+                      router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&userOnly=true" : ""}`);
+                      setIsOpen(false);
+                      setQuery("");
+                    }}
+                    className="flex items-center gap-1 text-amber-600 dark:text-amber-400 hover:underline"
+                  >
+                    <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8984;A</kbd>
+                    see all
+                  </button>
+                )}
+                <span className="flex items-center gap-1">
+                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">esc</kbd>
+                  close
+                </span>
+              </div>
             </div>
         </div>
       )}
