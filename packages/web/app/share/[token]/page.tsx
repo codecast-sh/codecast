@@ -62,6 +62,7 @@ export default function SharedConversationPage() {
         commits={[]}
         backHref="/"
         backLabel="Home"
+        showMessageInput={false}
         headerExtra={
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-sol-base00 px-2 py-1 bg-sol-base02 rounded">

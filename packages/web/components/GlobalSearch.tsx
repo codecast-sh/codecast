@@ -46,7 +46,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   );
 }
 
-function getSnippet(content: string, query: string, maxLen = 300): string {
+function getSnippet(content: string, query: string, maxLen = 400): string {
   const lowerContent = content.toLowerCase();
   const terms = parseSearchTerms(query);
 
@@ -60,8 +60,8 @@ function getSnippet(content: string, query: string, maxLen = 300): string {
 
   if (bestIndex === -1) return content.slice(0, maxLen);
 
-  const start = Math.max(0, bestIndex - 80);
-  const end = Math.min(content.length, bestIndex + 220);
+  const start = Math.max(0, bestIndex - 100);
+  const end = Math.min(content.length, bestIndex + 300);
   let snippet = content.slice(start, end);
 
   if (start > 0) snippet = "..." + snippet;
@@ -154,26 +154,27 @@ export function GlobalSearch() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      const results = searchData?.results || [];
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelectedIndex((i) => Math.min(i + 1, flatResults.length - 1));
+        setSelectedIndex((i) => Math.min(i + 1, results.length - 1));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
-      } else if (e.key === "Enter" && flatResults[selectedIndex]) {
+      } else if (e.key === "Enter" && results[selectedIndex]) {
         e.preventDefault();
-        const url = `/conversation/${flatResults[selectedIndex].conversationId}?highlight=${encodeURIComponent(query)}`;
+        const url = `/conversation/${results[selectedIndex].conversationId}?highlight=${encodeURIComponent(query)}`;
         router.push(url);
         setIsOpen(false);
         setQuery("");
-      } else if (e.key === "a" && (e.metaKey || e.ctrlKey) && flatResults.length > 0) {
+      } else if (e.key === "/" && results.length > 0) {
         e.preventDefault();
         router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&userOnly=true" : ""}`);
         setIsOpen(false);
         setQuery("");
       }
     },
-    [flatResults, selectedIndex, router, query, userOnly]
+    [searchData?.results, selectedIndex, router, query, userOnly]
   );
 
   const handleResultClick = (conversationId: string) => {
@@ -183,8 +184,11 @@ export function GlobalSearch() {
     setQuery("");
   };
 
+  // Group results by session for display
+  const groupedResults = searchData?.results || [];
+
   return (
-    <div className="relative flex-1 max-w-3xl mx-8 z-[9999]">
+    <div className="relative flex-1 min-w-[500px] max-w-[800px] mx-8 z-[9999]">
       <div
         className={`relative transition-all duration-200 ${
           isOpen ? "scale-105" : ""
@@ -226,12 +230,12 @@ export function GlobalSearch() {
       </div>
 
       {isOpen && query.length >= 2 && (
-        <div className="absolute top-full left-1/2 -translate-x-1/2 w-[150%] min-w-[700px] mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
+        <div className="absolute top-full left-0 w-full mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
                 <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
               </div>
-            ) : flatResults.length === 0 ? (
+            ) : groupedResults.length === 0 ? (
               <div className="px-4 py-8 text-center">
                 <p className="text-sm text-sol-text-secondary mb-2">No conversations match</p>
                 <p className="text-xs text-sol-text-dim">Try different keywords</p>
@@ -241,46 +245,62 @@ export function GlobalSearch() {
                 <div className="px-4 py-2 border-b border-sol-border text-xs text-sol-text-secondary">
                   {totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} session{sessionCount !== 1 ? "s" : ""}
                 </div>
-                <div className="divide-y divide-sol-border">
-                {flatResults.map((result, index) => (
-                  <button
-                    key={result.key}
-                    onClick={() => handleResultClick(result.conversationId)}
-                    className={`w-full text-left px-4 py-3 transition-colors ${
-                      index === selectedIndex
-                        ? "bg-amber-200/50 dark:bg-amber-900/30"
-                        : "bg-transparent hover:bg-amber-100/30 dark:hover:bg-amber-900/20"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-sm font-medium text-sol-text truncate max-w-[400px]">
-                        {result.title}
-                      </span>
-                      {!result.isOwn && (
-                        <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg-alt rounded border border-sol-border">
-                          {result.authorName}
+                <div className="space-y-1 py-1">
+                {groupedResults.map((session: any, sessionIndex: number) => (
+                  <div key={session.conversationId} className="mx-1">
+                    <button
+                      onClick={() => handleResultClick(session.conversationId)}
+                      className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+                        sessionIndex === selectedIndex
+                          ? "bg-amber-200/60 dark:bg-amber-900/40"
+                          : "bg-sol-bg-alt/60 hover:bg-amber-100/40 dark:hover:bg-amber-900/20"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-sol-text truncate max-w-[500px]">
+                          {session.title}
                         </span>
-                      )}
-                      <span
-                        className={`text-[10px] font-medium px-1.5 py-0.5 rounded border ${
-                          result.role === "user"
-                            ? "bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-500/30"
-                            : "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                        }`}
-                      >
-                        {result.role}
-                      </span>
-                      <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg-alt rounded">
-                        {result.messageCount} msg{result.messageCount !== 1 ? "s" : ""}
-                      </span>
-                      <span className="text-[10px] text-sol-text-dim ml-auto whitespace-nowrap">
-                        {formatTimestamp(result.timestamp)}
-                      </span>
+                        {!session.isOwn && (
+                          <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border">
+                            {session.authorName}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded">
+                          {session.messageCount} msgs
+                        </span>
+                        <span className="text-[10px] text-sol-text-dim ml-auto whitespace-nowrap">
+                          {formatTimestamp(session.updatedAt)}
+                        </span>
+                      </div>
+                    </button>
+                    <div className="ml-3 mt-1 space-y-1 border-l-2 border-sol-border/40 pl-3">
+                      {session.matches.slice(0, 3).map((match: any, matchIndex: number) => (
+                        <button
+                          key={`${session.conversationId}-${matchIndex}`}
+                          onClick={() => handleResultClick(session.conversationId)}
+                          className="w-full text-left px-2 py-1.5 rounded hover:bg-sol-bg-alt/50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span
+                              className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                                match.role === "user"
+                                  ? "bg-blue-500/20 text-blue-700 dark:text-blue-300"
+                                  : "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                              }`}
+                            >
+                              {match.role}
+                            </span>
+                            <span className="text-[10px] text-sol-text-dim">
+                              {formatTimestamp(match.timestamp)}
+                            </span>
+                          </div>
+                          <p className="text-sm text-sol-text-secondary leading-relaxed line-clamp-3">
+                            {highlightMatch(getSnippet(match.content, query), query)}
+                          </p>
+                        </button>
+                      ))}
                     </div>
-                    <p className="text-sm text-sol-text-secondary leading-relaxed line-clamp-3">
-                      {highlightMatch(getSnippet(result.content, query), query)}
-                    </p>
-                  </button>
+                  </div>
                 ))}
                 </div>
               </div>
@@ -308,18 +328,18 @@ export function GlobalSearch() {
                 </span>
               </div>
               <div className="flex items-center gap-3">
-                {flatResults.length > 0 && (
-                  <button
+                {groupedResults.length > 0 && (
+                  <span
                     onClick={() => {
                       router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&userOnly=true" : ""}`);
                       setIsOpen(false);
                       setQuery("");
                     }}
-                    className="flex items-center gap-1 text-amber-600 dark:text-amber-400 hover:underline"
+                    className="flex items-center gap-1 cursor-pointer text-sol-text-secondary hover:text-sol-text transition-colors"
                   >
-                    <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8984;A</kbd>
+                    <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">/</kbd>
                     see all
-                  </button>
+                  </span>
                 )}
                 <span className="flex items-center gap-1">
                   <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">esc</kbd>

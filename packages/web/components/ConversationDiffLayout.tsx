@@ -109,6 +109,7 @@ export function ConversationDiffLayout({
           toggleDiffMode();
           break;
         case "f":
+          if (e.metaKey || e.ctrlKey) return;
           e.preventDefault();
           toggleFileTree();
           break;

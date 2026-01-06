@@ -188,35 +188,46 @@ export function MessageFeed({ filter }: MessageFeedProps) {
     return deduplicated;
   }, [result?.messages, loadedMessages, cursor, showOnlyUser]);
 
+  const loadMoreRef = useRef(false);
+
   const loadMore = useCallback(() => {
-    if (result?.nextCursor && !isLoadingMore) {
+    if (result?.nextCursor && !isLoadingMore && !loadMoreRef.current) {
+      loadMoreRef.current = true;
       setIsLoadingMore(true);
       setLoadedMessages(messages);
       setCursor(result.nextCursor);
-      setTimeout(() => setIsLoadingMore(false), 100);
+      // Give time for query to complete before allowing another load
+      setTimeout(() => {
+        setIsLoadingMore(false);
+        loadMoreRef.current = false;
+      }, 500);
     }
   }, [result?.nextCursor, isLoadingMore, messages]);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const hasNextCursor = !!result?.nextCursor;
 
   useEffect(() => {
+    if (!hasNextCursor || isLoadingMore) return;
+
     const sentinel = sentinelRef.current;
-    if (!sentinel || !result?.nextCursor) return;
+    if (!sentinel) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && !isLoadingMore) {
+        if (entries[0].isIntersecting) {
           loadMore();
         }
       },
-      { rootMargin: "200px" }
+      { threshold: 0, rootMargin: "200px" }
     );
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [result?.nextCursor, isLoadingMore, loadMore]);
+  }, [hasNextCursor, isLoadingMore, loadMore]);
 
-  if (result === undefined) {
+  // Only show loading skeleton on initial load, not during pagination
+  if (result === undefined && loadedMessages.length === 0) {
     return <LoadingSkeleton />;
   }
 
@@ -298,10 +309,14 @@ export function MessageFeed({ filter }: MessageFeedProps) {
       ))}
 
       {result?.nextCursor && (
-        <div ref={sentinelRef} className="flex justify-center py-6">
-          <div className="text-sm text-sol-text-muted">
-            {isLoadingMore ? "Loading..." : ""}
-          </div>
+        <div ref={sentinelRef} className="flex justify-center py-8">
+          <button
+            onClick={loadMore}
+            disabled={isLoadingMore}
+            className="px-4 py-2 text-sm text-sol-text-muted hover:text-sol-text bg-sol-bg-alt hover:bg-sol-bg-alt/80 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {isLoadingMore ? "Loading..." : "Load more"}
+          </button>
         </div>
       )}
     </div>
