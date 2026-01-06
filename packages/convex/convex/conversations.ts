@@ -49,6 +49,9 @@ function contentMatchesSearch(content: string, terms: { phrases: string[]; words
   for (const phrase of terms.phrases) {
     if (!lowerContent.includes(phrase)) return false;
   }
+  for (const word of terms.words) {
+    if (!lowerContent.includes(word)) return false;
+  }
   return true;
 }
 
@@ -944,13 +947,13 @@ export const searchConversations = query({
       .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
       .take(200);
 
-    // Filter for exact phrase matches and group by conversation
+    // Filter for all terms and group by conversation
     const conversationMatches = new Map<string, typeof searchResults>();
     for (const msg of searchResults) {
       if (userOnly && msg.role !== "user") {
         continue;
       }
-      if (terms.phrases.length > 0 && !contentMatchesSearch(msg.content || "", terms)) {
+      if (!contentMatchesSearch(msg.content || "", terms)) {
         continue;
       }
       const convId = msg.conversation_id.toString();
@@ -2063,5 +2066,29 @@ export const getMessageFeed = query({
       messages: messagesWithConversation,
       nextCursor,
     };
+  },
+});
+
+export const clearParentMessageUuid = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Unauthorized");
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Can only modify your own conversations");
+    }
+    await ctx.db.patch(args.conversation_id, {
+      parent_message_uuid: undefined,
+    });
+    return true;
   },
 });

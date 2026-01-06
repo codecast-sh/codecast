@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef } from "react";
+import { useEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -54,7 +54,8 @@ type ToolResult = {
 
 type ImageData = {
   media_type: string;
-  data: string;
+  data?: string;
+  storage_id?: string;
 };
 
 type Message = {
@@ -768,10 +769,29 @@ function ThinkingBlock({ content }: { content: string }) {
 }
 
 function ImageBlock({ image }: { image: ImageData }) {
+  const storageUrl = useQuery(
+    api.images.getImageUrl,
+    image.storage_id ? { storageId: image.storage_id as Id<"_storage"> } : "skip"
+  );
+
+  const src = image.storage_id
+    ? storageUrl ?? undefined
+    : image.data
+      ? `data:${image.media_type};base64,${image.data}`
+      : undefined;
+
+  if (!src) {
+    return (
+      <div className="my-2 w-64 h-32 rounded border border-sol-border bg-sol-bg-alt flex items-center justify-center">
+        <span className="text-sol-text-dim text-xs">Loading image...</span>
+      </div>
+    );
+  }
+
   return (
     <div className="my-2">
       <img
-        src={`data:${image.media_type};base64,${image.data}`}
+        src={src}
         alt="User provided image"
         className="max-w-md rounded border border-sol-border"
       />
@@ -1071,9 +1091,9 @@ function AssistantBlock({
   }
 
   return (
-    <div id={`msg-${messageId}`} className={`group scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
       {hasContent && (
-        <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
+        <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5">
           <button
             onClick={handleCopyLink}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
@@ -1384,10 +1404,10 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
   };
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-30 pointer-events-none">
-      <div className="h-24 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent" />
-      <div className="bg-sol-bg pb-4 -mt-1">
-        <form onSubmit={handleSubmit} className="max-w-2xl mx-auto px-4 pointer-events-auto">
+    <div className="sticky bottom-0 z-30 pointer-events-none">
+      <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent" />
+      <div className="bg-sol-bg pb-4 pointer-events-auto">
+        <form onSubmit={handleSubmit} className="max-w-2xl mx-auto px-4">
           <div className="flex items-center gap-2 bg-sol-bg-alt border border-sol-border rounded-full px-4 py-2 shadow-lg">
             <input
               type="text"
@@ -1440,6 +1460,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const prevScrollHeightRef = useRef<number>(0);
   const shouldRestoreScrollRef = useRef(false);
+  const prevTimelineLengthRef = useRef<number>(0);
+  const isNearBottomRef = useRef(true);
 
   const messages = conversation?.messages || [];
 
@@ -1698,17 +1720,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
       return 100;
     },
-    overscan: 5,
+    overscan: 50,
     paddingEnd: 100,
   });
 
-  useEffect(() => {
-    virtualizer.measure();
-    // Force scroll recalculation after measuring
-    requestAnimationFrame(() => {
-      containerRef.current?.dispatchEvent(new Event('scroll'));
-    });
-  }, [collapsed, expandedSequences, virtualizer]);
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: (messageId: string) => {
@@ -1738,7 +1753,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
-      setUserScrolled(!isNearBottom);
+      isNearBottomRef.current = isNearBottom;
+
+      // Only set userScrolled to true when scrolling away from bottom
+      // Don't reset it to false - let the auto-scroll effect handle that
+      if (!isNearBottom) {
+        setUserScrolled(true);
+      }
 
       // Load older messages when near top (within 300px)
       if (scrollTop < 300 && hasMoreAbove && !isLoadingOlder && onLoadOlder) {
@@ -1767,10 +1788,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [messages.length]);
 
   useEffect(() => {
-    if (!userScrolled && timeline.length > 0 && !highlightQuery) {
+    const hasNewMessages = timeline.length > prevTimelineLengthRef.current;
+    prevTimelineLengthRef.current = timeline.length;
+
+    // Only auto-scroll when new messages arrive and user is near bottom
+    if (hasNewMessages && timeline.length > 0 && !highlightQuery && isNearBottomRef.current) {
       virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
+      setUserScrolled(false);
     }
-  }, [timeline.length, userScrolled, virtualizer, highlightQuery]);
+  }, [timeline.length, virtualizer, highlightQuery]);
 
   const hasInitialScrolled = useRef(false);
   useEffect(() => {
@@ -2049,7 +2075,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   return (
-    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "" : "h-screen"}`}>
+    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
       <header className={`border-b border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "sticky top-0 z-20 -mx-[9999px] px-[9999px]" : ""}`}>
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1">
           <div className="flex items-center gap-2 min-w-0">
@@ -2095,6 +2121,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </svg>
                 </button>
 
+                {conversation?.session_id && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        await copyToClipboard(`claude --resume ${conversation.session_id}`);
+                        toast.success("Resume command copied");
+                      } catch {
+                        toast.error("Failed to copy");
+                      }
+                    }}
+                    className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+                    title="Copy resume command"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+                )}
+
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
@@ -2108,14 +2153,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       {collapsed ? "Expand messages" : "Collapse messages"}
                       <span className="ml-auto text-[10px] text-sol-text-dim">Cmd+Shift+C</span>
                     </DropdownMenuItem>
-                    {conversation?.session_id && (
-                      <DropdownMenuItem onClick={() => {
-                        copyToClipboard(`claude --resume ${conversation.session_id}`);
-                        toast.success("Resume command copied");
-                      }}>
-                        Copy resume command
-                      </DropdownMenuItem>
-                    )}
                     {conversation.git_branch && (
                       <DropdownMenuItem onClick={() => setDiffExpanded(!diffExpanded)}>
                         {diffExpanded ? "Hide git diff" : "Show git diff"}
@@ -2168,7 +2205,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         />
       )}
 
-      <div ref={containerRef} className={`flex-1 ${embedded ? "" : "overflow-y-auto"} ${showMessageInput && conversation?.status === "active" ? "pb-32" : ""}`}>
+      <div ref={containerRef} className={`flex-1 min-h-0 ${embedded ? "" : "overflow-y-auto"}`} style={{ overflowAnchor: "auto" }}>
+        <div className="min-h-full flex flex-col">
         {!conversation ? (
           <ConversationSkeleton />
         ) : timeline.length === 0 ? (
@@ -2177,8 +2215,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         ) : (
           <div
+            className="flex-1"
             style={{
-              height: virtualizer.getTotalSize(),
+              minHeight: virtualizer.getTotalSize(),
               width: "100%",
               position: "relative",
             }}
@@ -2234,6 +2273,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             })}
           </div>
         )}
+
+          {showMessageInput && conversation && conversation.status === "active" && (
+            <MessageInput conversationId={conversation._id} embedded={embedded} />
+          )}
+        </div>
       </div>
 
       {timeline.length > 0 && (
@@ -2301,10 +2345,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             ))}
           </div>
         </div>
-      )}
-
-      {showMessageInput && conversation && conversation.status === "active" && (
-        <MessageInput conversationId={conversation._id} embedded={embedded} />
       )}
 
       {commentMessageId && conversation && (

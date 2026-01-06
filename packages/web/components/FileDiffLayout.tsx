@@ -732,9 +732,10 @@ export function FileDiffLayout({
   onFileComment,
   renderFileExtra,
 }: FileDiffLayoutProps) {
-  const [selectedFile, setSelectedFile] = useState<string | null>(
-    files.length > 0 ? files[0].filename : null
-  );
+  // Strip common prefix once for consistent comparisons
+  const strippedFiles = useMemo(() => stripCommonPrefix(files), [files]);
+
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [layout, setLayout] = useState(getInitialLayout);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
@@ -761,18 +762,18 @@ export function FileDiffLayout({
   }, []);
 
   useEffect(() => {
-    if (files.length > 0 && !selectedFile) {
-      setSelectedFile(files[0].filename);
+    if (strippedFiles.length > 0 && !selectedFile) {
+      setSelectedFile(strippedFiles[0].filename);
       setCurrentFileIndex(0);
     }
-  }, [files, selectedFile]);
+  }, [strippedFiles, selectedFile]);
 
   useEffect(() => {
-    const index = files.findIndex((f) => f.filename === selectedFile);
+    const index = strippedFiles.findIndex((f) => f.filename === selectedFile);
     if (index >= 0) {
       setCurrentFileIndex(index);
     }
-  }, [selectedFile, files]);
+  }, [selectedFile, strippedFiles]);
 
   useEffect(() => {
     if (selectedFileRef.current) {
@@ -794,8 +795,8 @@ export function FileDiffLayout({
         case "j":
         case "]":
           e.preventDefault();
-          if (currentFileIndex < files.length - 1) {
-            const nextFile = files[currentFileIndex + 1];
+          if (currentFileIndex < strippedFiles.length - 1) {
+            const nextFile = strippedFiles[currentFileIndex + 1];
             setSelectedFile(nextFile.filename);
             setCurrentFileIndex(currentFileIndex + 1);
           }
@@ -804,7 +805,7 @@ export function FileDiffLayout({
         case "[":
           e.preventDefault();
           if (currentFileIndex > 0) {
-            const prevFile = files[currentFileIndex - 1];
+            const prevFile = strippedFiles[currentFileIndex - 1];
             setSelectedFile(prevFile.filename);
             setCurrentFileIndex(currentFileIndex - 1);
           }
@@ -826,7 +827,7 @@ export function FileDiffLayout({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentFileIndex, files, toggleViewMode]);
+  }, [currentFileIndex, strippedFiles, toggleViewMode]);
 
   const handleLayoutChange = (newLayout: Layout) => {
     setLayout(newLayout);
@@ -838,7 +839,7 @@ export function FileDiffLayout({
     if (isMobile) setSidebarOpen(false);
   };
 
-  const selectedFileData = files.find((f) => f.filename === selectedFile) || null;
+  const selectedFileData = strippedFiles.find((f) => f.filename === selectedFile) || null;
 
   const showHeader = title || subtitle || headerExtra;
 
@@ -924,7 +925,7 @@ export function FileDiffLayout({
         </div>
         <div className="flex-1 min-h-0">
           <UnifiedDiffView
-            files={files}
+            files={strippedFiles}
             onComment={onFileComment}
             renderExtra={renderFileExtra}
           />
@@ -979,7 +980,7 @@ export function FileDiffLayout({
           {sidebarOpen && (
             <div className="absolute inset-0 z-20 bg-sol-bg">
               <FileSidebar
-                files={files}
+                files={strippedFiles}
                 selectedFile={selectedFile}
                 onSelectFile={handleSelectFile}
                 header={sidebarHeader}
@@ -1018,7 +1019,7 @@ export function FileDiffLayout({
         >
           <Panel id="file-tree" minSize={10}>
             <FileSidebar
-              files={files}
+              files={strippedFiles}
               selectedFile={selectedFile}
               onSelectFile={handleSelectFile}
               header={sidebarHeader}

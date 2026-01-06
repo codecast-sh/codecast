@@ -5,6 +5,10 @@ import { hashPath } from "./hash.js";
 const MAX_CONTENT_SIZE = 100_000;
 const MAX_TOOL_RESULT_SIZE = 50_000;
 const MAX_TOTAL_MESSAGE_SIZE = 900_000;
+const MAX_IMAGE_SIZE = 5_000_000;
+const MAX_IMAGES_PER_MESSAGE = 10;
+
+const MIN_REQUEST_INTERVAL_MS = 250;
 
 export class AuthExpiredError extends Error {
   constructor(message: string = "Authentication token expired") {
@@ -82,12 +86,27 @@ export class SyncService {
   private subscriptionClient: ConvexClient;
   private userId?: string;
   private apiToken?: string;
+  private lastRequestTime = 0;
+  private throttleQueue: Promise<void> = Promise.resolve();
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
     this.subscriptionClient = new ConvexClient(config.convexUrl);
     this.userId = config.userId;
     this.apiToken = config.authToken;
+  }
+
+  private async throttle(): Promise<void> {
+    const ticket = this.throttleQueue.then(async () => {
+      const now = Date.now();
+      const elapsed = now - this.lastRequestTime;
+      if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+        await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - elapsed));
+      }
+      this.lastRequestTime = Date.now();
+    });
+    this.throttleQueue = ticket;
+    await ticket;
   }
 
   getClient(): ConvexHttpClient {
@@ -106,7 +125,33 @@ export class SyncService {
     this.apiToken = token;
   }
 
+  async uploadImage(base64Data: string, mediaType: string): Promise<string | null> {
+    try {
+      const uploadUrl = await this.client.mutation(
+        "images:generateUploadUrl" as any,
+        { api_token: this.apiToken }
+      );
+      const binaryData = Buffer.from(base64Data, "base64");
+      if (binaryData.length > MAX_IMAGE_SIZE) {
+        return null;
+      }
+      const response = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": mediaType },
+        body: binaryData,
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const result = await response.json();
+      return result.storageId;
+    } catch {
+      return null;
+    }
+  }
+
   async createConversation(params: CreateConversationParams): Promise<string> {
+    await this.throttle();
     const projectHash = params.projectPath
       ? hashPath(params.projectPath)
       : undefined;
@@ -156,6 +201,7 @@ export class SyncService {
     images?: Array<{ mediaType: string; data: string }>;
     subtype?: string;
   }): Promise<string> {
+    await this.throttle();
     const redactedContent = truncate(redactSecrets(params.content), MAX_CONTENT_SIZE);
     const redactedThinking = params.thinking
       ? truncate(redactSecrets(params.thinking), MAX_CONTENT_SIZE)
@@ -178,13 +224,16 @@ export class SyncService {
       is_error: tr.isError,
     }));
 
-    const images = params.images?.filter(img => {
-      const size = img.data.length;
-      return size < MAX_TOOL_RESULT_SIZE;
-    }).slice(0, 5).map(img => ({
-      media_type: img.mediaType,
-      data: img.data,
-    }));
+    const images: Array<{ media_type: string; storage_id?: string; data?: string }> = [];
+    if (params.images && params.images.length > 0) {
+      const imagesToProcess = params.images.slice(0, MAX_IMAGES_PER_MESSAGE);
+      for (const img of imagesToProcess) {
+        const storageId = await this.uploadImage(img.data, img.mediaType);
+        if (storageId) {
+          images.push({ media_type: img.mediaType, storage_id: storageId });
+        }
+      }
+    }
 
     try {
       const messageId = await this.client.mutation(
@@ -197,7 +246,7 @@ export class SyncService {
           thinking: redactedThinking,
           tool_calls: toolCalls,
           tool_results: toolResults,
-          images,
+          images: images.length > 0 ? images : undefined,
           subtype: params.subtype,
           timestamp: params.timestamp,
           api_token: this.apiToken,

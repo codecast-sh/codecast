@@ -127,7 +127,8 @@ export default defineSchema({
     }))),
     images: v.optional(v.array(v.object({
       media_type: v.string(),
-      data: v.string(),
+      data: v.optional(v.string()),
+      storage_id: v.optional(v.id("_storage")),
     }))),
     subtype: v.optional(v.string()),
     timestamp: v.number(),
