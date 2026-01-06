@@ -12,6 +12,29 @@ interface TreeNode {
   changeCount: number;
 }
 
+function getCommonPrefix(paths: string[]): string {
+  if (paths.length === 0) return "";
+  if (paths.length === 1) {
+    const parts = paths[0].split("/");
+    return parts.slice(0, -1).join("/");
+  }
+
+  const splitPaths = paths.map(p => p.split("/"));
+  const minLen = Math.min(...splitPaths.map(p => p.length - 1));
+
+  let commonParts: string[] = [];
+  for (let i = 0; i < minLen; i++) {
+    const part = splitPaths[0][i];
+    if (splitPaths.every(p => p[i] === part)) {
+      commonParts.push(part);
+    } else {
+      break;
+    }
+  }
+
+  return commonParts.join("/");
+}
+
 function buildFileTree(filePaths: string[], changeCounts: Map<string, number>): TreeNode {
   const root: TreeNode = {
     name: "",
@@ -21,19 +44,22 @@ function buildFileTree(filePaths: string[], changeCounts: Map<string, number>): 
     changeCount: 0,
   };
 
+  const prefix = getCommonPrefix(filePaths);
+  const prefixLen = prefix ? prefix.length + 1 : 0;
+
   for (const path of filePaths) {
-    const parts = path.split("/");
+    const relativePath = path.slice(prefixLen);
+    const parts = relativePath.split("/");
     let current = root;
 
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i];
       const isFile = i === parts.length - 1;
-      const fullPath = parts.slice(0, i + 1).join("/");
 
       if (!current.children.has(part)) {
         current.children.set(part, {
           name: part,
-          fullPath,
+          fullPath: path,
           isFile,
           children: new Map(),
           changeCount: isFile ? (changeCounts.get(path) || 0) : 0,
@@ -60,7 +86,7 @@ function FileTreeNode({
   onFileClick: (filePath: string) => void;
   getFileColor: (filePath: string) => string;
 }) {
-  const [isExpanded, setIsExpanded] = useState(depth < 2);
+  const [isExpanded, setIsExpanded] = useState(true);
 
   if (node.isFile) {
     const isSelected = selectedFile === node.fullPath;
@@ -74,7 +100,7 @@ function FileTreeNode({
           hover:bg-accent rounded transition-colors
           ${isSelected ? "bg-accent" : ""}
         `}
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        style={{ paddingLeft: `${depth * 8 + 4}px` }}
       >
         <div
           className="w-2 h-2 rounded-full shrink-0"
@@ -98,7 +124,7 @@ function FileTreeNode({
         <button
           onClick={() => setIsExpanded(!isExpanded)}
           className="w-full text-left px-2 py-1 text-sm font-mono flex items-center gap-1 hover:bg-accent/50 rounded transition-colors"
-          style={{ paddingLeft: `${depth * 12 + 8}px` }}
+          style={{ paddingLeft: `${depth * 8 + 4}px` }}
         >
           {hasChildren ? (
             isExpanded ? (

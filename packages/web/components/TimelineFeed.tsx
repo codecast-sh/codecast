@@ -106,7 +106,7 @@ function SessionCard({ item }: { item: Extract<TimelineItem, { type: "session" }
                   {cleanedTitle}
                 </h3>
                 {item.subtitle && item.subtitle !== cleanedTitle && (
-                  <p className="text-sol-text-muted text-xs mt-0.5 line-clamp-1">{item.subtitle}</p>
+                  <p className="text-sol-text-muted text-xs mt-0.5 line-clamp-3 whitespace-pre-line">{item.subtitle}</p>
                 )}
               </div>
               <div className="flex flex-col items-end shrink-0 gap-0.5">
@@ -180,9 +180,21 @@ function CommitCard({
           <div className="flex items-start justify-between gap-3 mb-1.5">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
-                <code className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20">
-                  {shortSha}
-                </code>
+                {item.repository ? (
+                  <a
+                    href={`https://github.com/${item.repository}/commit/${item.sha}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20 hover:bg-sol-violet/20 hover:border-sol-violet/40 transition-colors"
+                  >
+                    {shortSha}
+                  </a>
+                ) : (
+                  <code className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20">
+                    {shortSha}
+                  </code>
+                )}
                 {repoName && (
                   <span className="text-[11px] font-mono text-sol-text-dim/60">{repoName}</span>
                 )}
@@ -237,9 +249,22 @@ function CommitCard({
 
   if (item.conversation_id) {
     return (
-      <Link href={`/conversation/${item.conversation_id}`} className="group block">
+      <Link href={`/conversation/${item.conversation_id}/diff`} className="group block">
         {content}
       </Link>
+    );
+  }
+
+  if (item.repository) {
+    return (
+      <a
+        href={`https://github.com/${item.repository}/commit/${item.sha}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="group block"
+      >
+        {content}
+      </a>
     );
   }
 

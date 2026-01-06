@@ -4,7 +4,7 @@ import open from "open";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { spawn, spawnSync } from "child_process";
+import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
@@ -1284,12 +1284,23 @@ program
     let sessionId = options.session;
 
     if (!sessionId) {
-      const cwd = process.cwd();
-      const projectDir = cwd.replace(/\//g, "-");
+      // Find git root - Claude Code stores sessions at the git root level
+      let projectRoot = process.cwd();
+      try {
+        projectRoot = execSync("git rev-parse --show-toplevel", {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "ignore"],
+        }).trim();
+      } catch {
+        // Not a git repo, use CWD
+      }
+
+      const projectDir = projectRoot.replace(/\//g, "-");
       const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
 
       if (!fs.existsSync(sessionsDir)) {
         console.error("No Claude Code sessions found for current project");
+        console.error(`Looked in: ${sessionsDir}`);
         process.exit(1);
       }
 

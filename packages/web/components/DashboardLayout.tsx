@@ -207,7 +207,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directories,
             <Separator className="w-1.5 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors" />
             <Panel id="main" minSize={0}>
               {isOnConversationPage ? (
-                <div className="h-full overflow-hidden">
+                <div className="h-full">
                   {children}
                 </div>
               ) : (

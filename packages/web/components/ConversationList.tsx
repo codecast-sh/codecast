@@ -582,7 +582,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onDire
 
                       {/* Subtitle */}
                       {conv.subtitle && (
-                        <p className="text-sm text-sol-text-muted mb-2 line-clamp-2">{conv.subtitle}</p>
+                        <p className="text-sm text-sol-text-muted mb-2 line-clamp-4 whitespace-pre-line">{conv.subtitle}</p>
                       )}
 
                       {(() => {

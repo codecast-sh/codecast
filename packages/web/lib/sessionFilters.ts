@@ -9,7 +9,7 @@ export type FilterableSession = {
 };
 
 export function isSubagent(c: FilterableSession): boolean {
-  return c.agent_type === "subagent" || (c.subagent_types?.length ?? 0) > 0;
+  return c.agent_type === "subagent";
 }
 
 export function isTrivialSubagent(c: FilterableSession): boolean {

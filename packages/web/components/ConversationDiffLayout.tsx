@@ -13,11 +13,6 @@ import { FileTreeSidebar } from "./FileTreeSidebar";
 import { DiffView } from "./DiffView";
 import type { FileChange } from "../store/diffViewerStore";
 
-interface ConversationDiffLayoutProps {
-  conversation: ConversationData;
-  embedded?: boolean;
-}
-
 const STORAGE_KEY = "conversation-diff-layout";
 const MOBILE_BREAKPOINT = 768;
 
@@ -35,9 +30,28 @@ const getInitialLayout = (): number[] => {
   return [40, 60];
 };
 
+interface ConversationDiffLayoutProps {
+  conversation: ConversationData;
+  embedded?: boolean;
+  headerExtra?: React.ReactNode;
+  commits?: any[];
+  pullRequests?: any[];
+  hasMoreAbove?: boolean;
+  isLoadingOlder?: boolean;
+  onLoadOlder?: () => void;
+  highlightQuery?: string;
+}
+
 export function ConversationDiffLayout({
   conversation,
   embedded,
+  headerExtra,
+  commits,
+  pullRequests,
+  hasMoreAbove,
+  isLoadingOlder,
+  onLoadOlder,
+  highlightQuery,
 }: ConversationDiffLayoutProps) {
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
@@ -52,7 +66,8 @@ export function ConversationDiffLayout({
     toggleDiffMode,
     toggleFileTree,
     clearSelection,
-    setChanges
+    setChanges,
+    diffPanelOpen,
   } = useDiffViewerStore();
 
   useEffect(() => {
@@ -116,6 +131,21 @@ export function ConversationDiffLayout({
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sizes));
   };
 
+  const conversationViewProps = {
+    ref: conversationRef,
+    conversation,
+    backHref: "/dashboard",
+    headerExtra,
+    commits: commits || [],
+    pullRequests: pullRequests || [],
+    hasMoreAbove,
+    isLoadingOlder,
+    onLoadOlder,
+    highlightQuery,
+    embedded,
+  };
+
+  // Mobile: tabs layout
   if (isMobile) {
     return (
       <div className={`${heightClass} w-full`}>
@@ -127,11 +157,7 @@ export function ConversationDiffLayout({
             </TabsTrigger>
           </TabsList>
           <TabsContent value="conversation" className="flex-1 overflow-auto m-0">
-            <ConversationView
-              ref={conversationRef}
-              conversation={conversation}
-              backHref="/dashboard"
-            />
+            <ConversationView {...conversationViewProps} />
           </TabsContent>
           <TabsContent value="diff" className="flex-1 overflow-auto m-0">
             <DiffPane />
@@ -141,6 +167,16 @@ export function ConversationDiffLayout({
     );
   }
 
+  // Desktop: diff panel closed - simple layout
+  if (!diffPanelOpen) {
+    return (
+      <div className={`${heightClass} w-full overflow-y-auto`}>
+        <ConversationView {...conversationViewProps} />
+      </div>
+    );
+  }
+
+  // Desktop: diff panel open - resizable panels
   return (
     <div className={`${heightClass} w-full relative`}>
       <Group
@@ -151,12 +187,8 @@ export function ConversationDiffLayout({
       >
         {/* Conversation Panel */}
         <Panel id="content-panel" minSize={15}>
-          <div className="h-full relative">
-            <ConversationView
-              ref={conversationRef}
-              conversation={conversation}
-              backHref="/dashboard"
-            />
+          <div className="h-full relative overflow-y-auto">
+            <ConversationView {...conversationViewProps} />
           </div>
         </Panel>
 
