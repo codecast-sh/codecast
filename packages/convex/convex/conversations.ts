@@ -1017,7 +1017,7 @@ export const searchConversations = query({
       results.push({
         conversationId: conv._id,
         title,
-        matches: messages.slice(0, 3).map((m) => {
+        matches: messages.slice(0, 5).map((m) => {
           const content = m.content || "";
           const lowerContent = content.toLowerCase();
           let bestIdx = -1;
@@ -1926,50 +1926,58 @@ export const getMessageFeed = query({
 
     const limit = args.limit ?? 30;
 
-    // Get recent conversations (limited to avoid reading too much data)
-    let recentConvs;
-    if (args.filter === "my") {
-      recentConvs = await ctx.db
-        .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .order("desc")
-        .take(50);
-    } else {
-      if (!user.team_id) {
-        return { messages: [], nextCursor: null };
-      }
-      recentConvs = await ctx.db
-        .query("conversations")
-        .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id))
-        .filter((q) => q.eq(q.field("is_private"), false))
-        .order("desc")
-        .take(50);
-    }
-
-    if (recentConvs.length === 0) {
-      return { messages: [], nextCursor: null };
-    }
-
-    // Build conversation info cache
+    // Cache for conversation access and info
     const conversationCache = new Map<string, {
+      hasAccess: boolean;
       title: string;
       session_id: string;
       author_name: string;
       is_own: boolean;
-    }>();
+    } | null>();
 
-    for (const conv of recentConvs) {
+    const checkConversationAccess = async (convId: Id<"conversations">) => {
+      const cached = conversationCache.get(convId);
+      if (cached !== undefined) return cached;
+
+      const conv = await ctx.db.get(convId);
+      if (!conv) {
+        conversationCache.set(convId, null);
+        return null;
+      }
+
+      const isOwn = conv.user_id.toString() === userId.toString();
+      let hasAccess = false;
+
+      if (args.filter === "my") {
+        hasAccess = isOwn;
+      } else {
+        // Team filter: check team membership and privacy
+        if (conv.is_private !== false) {
+          hasAccess = false;
+        } else if (user.team_id && conv.team_id?.toString() === user.team_id.toString()) {
+          hasAccess = true;
+        }
+      }
+
+      if (!hasAccess) {
+        conversationCache.set(convId, null);
+        return null;
+      }
+
       const convUser = await ctx.db.get(conv.user_id);
-      conversationCache.set(conv._id, {
+      const info = {
+        hasAccess: true,
         title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : `Session ${conv.session_id.slice(0, 8)}`),
         session_id: conv.session_id,
         author_name: convUser?.name || convUser?.email?.split("@")[0] || "Unknown",
-        is_own: conv.user_id.toString() === userId.toString(),
-      });
-    }
+        is_own: isOwn,
+      };
+      conversationCache.set(convId, info);
+      return info;
+    };
 
-    // Collect messages from each conversation
-    const allMessages: Array<{
+    // Filter messages by access and content - fetch in batches if needed
+    const filteredMessages: Array<{
       _id: string;
       conversation_id: string;
       role: string;
@@ -1977,64 +1985,77 @@ export const getMessageFeed = query({
       timestamp: number;
       has_tool_calls: boolean;
       has_tool_results: boolean;
+      convInfo: NonNullable<Awaited<ReturnType<typeof checkConversationAccess>>>;
     }> = [];
 
-    for (const conv of recentConvs) {
+    let currentCursor = args.cursor;
+    let attempts = 0;
+    const maxAttempts = 10; // Limit iterations to avoid timeout
+
+    while (filteredMessages.length < limit + 1 && attempts < maxAttempts) {
+      attempts++;
+
+      // Query messages using timestamp index
       let msgQuery = ctx.db
         .query("messages")
-        .withIndex("by_conversation_timestamp", (q) => {
-          let q2 = q.eq("conversation_id", conv._id);
-          if (args.cursor) {
-            return q2.lt("timestamp", args.cursor);
-          }
-          return q2;
-        })
-        .order("desc");
+        .withIndex("by_timestamp");
 
-      const messages = await msgQuery.take(10);
+      if (currentCursor !== undefined) {
+        const cursor = currentCursor;
+        msgQuery = msgQuery.filter((q) => q.lt(q.field("timestamp"), cursor));
+      }
 
-      for (const msg of messages) {
-        if (msg.role === "user" || msg.role === "assistant") {
-          // Skip messages with no meaningful content
-          const hasContent = msg.content && msg.content.trim().length > 10;
-          if (!hasContent) continue;
+      const rawMessages = await msgQuery.order("desc").take(200);
 
-          allMessages.push({
-            _id: msg._id,
-            conversation_id: msg.conversation_id,
-            role: msg.role,
-            content: msg.content,
-            timestamp: msg.timestamp,
-            has_tool_calls: (msg.tool_calls && msg.tool_calls.length > 0) || false,
-            has_tool_results: (msg.tool_results && msg.tool_results.length > 0) || false,
-          });
-        }
+      if (rawMessages.length === 0) break; // No more messages
+
+      for (const msg of rawMessages) {
+        if (filteredMessages.length >= limit + 1) break;
+
+        // Only user/assistant messages
+        if (msg.role !== "user" && msg.role !== "assistant") continue;
+
+        // Skip messages with no meaningful content
+        const hasContent = msg.content && msg.content.trim().length > 10;
+        if (!hasContent) continue;
+
+        const convInfo = await checkConversationAccess(msg.conversation_id);
+        if (!convInfo) continue;
+
+        filteredMessages.push({
+          _id: msg._id,
+          conversation_id: msg.conversation_id,
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.timestamp,
+          has_tool_calls: (msg.tool_calls && msg.tool_calls.length > 0) || false,
+          has_tool_results: (msg.tool_results && msg.tool_results.length > 0) || false,
+          convInfo,
+        });
+      }
+
+      // Update cursor for next batch
+      if (rawMessages.length > 0) {
+        currentCursor = rawMessages[rawMessages.length - 1].timestamp;
       }
     }
 
-    // Sort by timestamp descending
-    allMessages.sort((a, b) => b.timestamp - a.timestamp);
+    const hasMore = filteredMessages.length > limit;
+    const finalMessages = hasMore ? filteredMessages.slice(0, limit) : filteredMessages;
 
-    const resultMessages = allMessages.slice(0, limit + 1);
-    const hasMore = resultMessages.length > limit;
-    const finalMessages = hasMore ? resultMessages.slice(0, limit) : resultMessages;
-
-    const messagesWithConversation = finalMessages.map((msg) => {
-      const convInfo = conversationCache.get(msg.conversation_id);
-      return {
-        _id: msg._id,
-        conversation_id: msg.conversation_id,
-        role: msg.role,
-        content: msg.content,
-        timestamp: msg.timestamp,
-        has_tool_calls: msg.has_tool_calls,
-        has_tool_results: msg.has_tool_results,
-        conversation_title: convInfo?.title || "Unknown",
-        conversation_session_id: convInfo?.session_id || "",
-        author_name: convInfo?.author_name || "Unknown",
-        is_own: convInfo?.is_own ?? false,
-      };
-    });
+    const messagesWithConversation = finalMessages.map((msg) => ({
+      _id: msg._id,
+      conversation_id: msg.conversation_id,
+      role: msg.role,
+      content: msg.content,
+      timestamp: msg.timestamp,
+      has_tool_calls: msg.has_tool_calls,
+      has_tool_results: msg.has_tool_results,
+      conversation_title: msg.convInfo.title,
+      conversation_session_id: msg.convInfo.session_id,
+      author_name: msg.convInfo.author_name,
+      is_own: msg.convInfo.is_own,
+    }));
 
     const nextCursor = hasMore ? finalMessages[finalMessages.length - 1].timestamp : null;
 

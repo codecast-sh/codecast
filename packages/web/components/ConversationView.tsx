@@ -2168,7 +2168,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         />
       )}
 
-      <div ref={containerRef} className={`flex-1 ${embedded ? "" : "overflow-y-auto"}`}>
+      <div ref={containerRef} className={`flex-1 ${embedded ? "" : "overflow-y-auto"} ${showMessageInput && conversation?.status === "active" ? "pb-32" : ""}`}>
         {!conversation ? (
           <ConversationSkeleton />
         ) : timeline.length === 0 ? (

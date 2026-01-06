@@ -142,7 +142,43 @@ interface FileTreeNode {
   file?: DiffFile;
 }
 
-function buildFileTree(files: DiffFile[]): FileTreeNode[] {
+function findCommonPrefix(paths: string[]): string {
+  if (paths.length === 0) return "";
+  if (paths.length === 1) {
+    const parts = paths[0].split("/");
+    return parts.slice(0, -1).join("/");
+  }
+
+  const splitPaths = paths.map(p => p.split("/"));
+  const minLen = Math.min(...splitPaths.map(p => p.length));
+
+  let commonParts: string[] = [];
+  for (let i = 0; i < minLen - 1; i++) {
+    const part = splitPaths[0][i];
+    if (splitPaths.every(p => p[i] === part)) {
+      commonParts.push(part);
+    } else {
+      break;
+    }
+  }
+
+  return commonParts.join("/");
+}
+
+function stripCommonPrefix(files: DiffFile[]): DiffFile[] {
+  const prefix = findCommonPrefix(files.map(f => f.filename));
+  if (!prefix) return files;
+
+  const prefixWithSlash = prefix + "/";
+  return files.map(f => ({
+    ...f,
+    filename: f.filename.startsWith(prefixWithSlash)
+      ? f.filename.slice(prefixWithSlash.length)
+      : f.filename
+  }));
+}
+
+function buildFileTreeFromStripped(files: DiffFile[]): FileTreeNode[] {
   const root: FileTreeNode[] = [];
 
   for (const file of files) {
@@ -297,35 +333,33 @@ function FileSidebar({
   selectedFileRef?: React.RefObject<HTMLButtonElement | null>;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => {
-    const dirs = new Set<string>();
-    for (const file of files) {
-      const parts = file.filename.split("/");
-      for (let i = 1; i < parts.length; i++) {
-        dirs.add(parts.slice(0, i).join("/"));
-      }
-    }
-    return dirs;
-  });
+
+  const strippedFiles = useMemo(() => stripCommonPrefix(files), [files]);
 
   const allDirPaths = useMemo(() => {
     const dirs = new Set<string>();
-    for (const file of files) {
+    for (const file of strippedFiles) {
       const parts = file.filename.split("/");
       for (let i = 1; i < parts.length; i++) {
         dirs.add(parts.slice(0, i).join("/"));
       }
     }
     return dirs;
-  }, [files]);
+  }, [strippedFiles]);
+
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setExpandedDirs(allDirPaths);
+  }, [allDirPaths]);
 
   const filteredFiles = useMemo(() => {
-    if (!searchQuery.trim()) return files;
+    if (!searchQuery.trim()) return strippedFiles;
     const query = searchQuery.toLowerCase();
-    return files.filter((f) => f.filename.toLowerCase().includes(query));
-  }, [files, searchQuery]);
+    return strippedFiles.filter((f) => f.filename.toLowerCase().includes(query));
+  }, [strippedFiles, searchQuery]);
 
-  const fileTree = useMemo(() => buildFileTree(filteredFiles), [filteredFiles]);
+  const fileTree = useMemo(() => buildFileTreeFromStripped(filteredFiles), [filteredFiles]);
 
   const toggleDir = (path: string) => {
     setExpandedDirs((prev) => {
