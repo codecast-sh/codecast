@@ -165,6 +165,7 @@ type ConversationViewProps = {
   highlightQuery?: string;
   onClearHighlight?: () => void;
   embedded?: boolean;
+  showMessageInput?: boolean;
 };
 
 export interface ConversationViewHandle {
@@ -683,7 +684,6 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
 }
 
 function TodoWriteBlock({ tool }: { tool: ToolCall }) {
-  const [showTooltip, setShowTooltip] = useState(false);
   let parsedInput: { todos?: Array<{ content: string; status: string; activeForm?: string }> } = {};
   try {
     parsedInput = JSON.parse(tool.input);
@@ -693,56 +693,46 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
   if (todos.length === 0) return null;
 
   const completed = todos.filter(t => t.status === 'completed').length;
-  const activeTodo = todos.find(t => t.status === 'in_progress');
+  const inProgress = todos.filter(t => t.status === 'in_progress').length;
 
   return (
-    <div className="relative inline-block">
-      <div
-        className="my-1 inline-flex items-center gap-2 py-0.5 px-2 rounded bg-sol-bg-alt/50 hover:bg-sol-bg-alt cursor-default transition-colors"
-        onMouseEnter={() => setShowTooltip(true)}
-        onMouseLeave={() => setShowTooltip(false)}
-      >
-        <svg className="w-4 h-4 text-violet-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-        </svg>
-        <span className="text-sm text-sol-text-muted">
-          {activeTodo ? (
-            <span className="text-sol-text-secondary">{activeTodo.activeForm || activeTodo.content}</span>
-          ) : (
-            <span>{completed}/{todos.length} done</span>
-          )}
+    <div className="my-2">
+      <div className="flex items-center gap-2 py-0.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-pink-500 flex-shrink-0" />
+        <span className="font-mono text-sm font-medium text-pink-600 dark:text-sol-magenta">
+          TodoWrite
+        </span>
+        <span className="text-sol-text-dim text-sm font-mono">
+          {completed}/{todos.length} done
+          {inProgress > 0 && `, ${inProgress} in progress`}
         </span>
       </div>
-      {showTooltip && (
-        <div className="absolute left-0 top-full mt-1 z-50 bg-sol-bg-alt border border-sol-border rounded p-2 max-w-xs shadow-lg">
-          <div className="space-y-1">
-            {todos.map((todo, i) => (
-              <div key={i} className="flex items-start gap-2 text-xs">
-                {todo.status === 'completed' ? (
-                  <svg className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : todo.status === 'in_progress' ? (
-                  <svg className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                ) : (
-                  <svg className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <circle cx="12" cy="12" r="9" strokeWidth={2} />
-                  </svg>
-                )}
-                <span className={`${
-                  todo.status === 'completed' ? 'text-sol-text-dim line-through' :
-                  todo.status === 'in_progress' ? 'text-sol-text' :
-                  'text-sol-text-muted'
-                }`}>
-                  {todo.content}
-                </span>
-              </div>
-            ))}
+      <div className="ml-3.5 mt-1 space-y-0.5">
+        {todos.map((todo, i) => (
+          <div key={i} className="flex items-start gap-2 text-sm">
+            {todo.status === 'completed' ? (
+              <svg className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : todo.status === 'in_progress' ? (
+              <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4 text-sol-text-dim flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <circle cx="12" cy="12" r="9" strokeWidth={2} />
+              </svg>
+            )}
+            <span className={`${
+              todo.status === 'completed' ? 'text-sol-text-dim line-through' :
+              todo.status === 'in_progress' ? 'text-sol-text-secondary' :
+              'text-sol-text-muted'
+            }`}>
+              {todo.status === 'in_progress' ? (todo.activeForm || todo.content) : todo.content}
+            </span>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
     </div>
   );
 }
@@ -1394,49 +1384,52 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
   };
 
   return (
-    <div className={`border-t border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
-      <form onSubmit={handleSubmit} className="max-w-4xl mx-auto px-4 py-2">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            disabled={isSubmitting}
-            placeholder="Send a message to this session..."
-            className="flex-1 px-3 py-2 bg-sol-bg border border-sol-border rounded text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none focus:ring-1 focus:ring-sol-blue disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={!message.trim() || isSubmitting}
-            className="px-4 py-2 bg-sol-blue hover:bg-sol-cyan text-white rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {isSubmitting ? (
-              <>
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                Sending...
-              </>
-            ) : lastStatus === "delivered" ? (
-              <>
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                Sent
-              </>
-            ) : (
-              "Send"
-            )}
-          </button>
-        </div>
-      </form>
+    <div className="fixed bottom-0 left-0 right-0 z-30 pointer-events-none">
+      <div className="h-24 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent" />
+      <div className="bg-sol-bg pb-4 -mt-1">
+        <form onSubmit={handleSubmit} className="max-w-2xl mx-auto px-4 pointer-events-auto">
+          <div className="flex items-center gap-2 bg-sol-bg-alt border border-sol-border rounded-full px-4 py-2 shadow-lg">
+            <input
+              type="text"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              disabled={isSubmitting}
+              placeholder="Send a message to this session..."
+              className="flex-1 bg-transparent text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={!message.trim() || isSubmitting}
+              className="px-4 py-1.5 bg-sol-blue hover:bg-sol-cyan text-white rounded-full text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {isSubmitting ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Sending...
+                </>
+              ) : lastStatus === "delivered" ? (
+                <>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  Sent
+                </>
+              ) : (
+                "Send"
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, onClearHighlight, embedded }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, onClearHighlight, embedded, showMessageInput = true }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -2310,7 +2303,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       )}
 
-      {conversation && conversation.status === "active" && (
+      {showMessageInput && conversation && conversation.status === "active" && (
         <MessageInput conversationId={conversation._id} embedded={embedded} />
       )}
 

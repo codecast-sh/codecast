@@ -35,7 +35,7 @@ type Conversation = {
   is_own: boolean;
   parent_conversation_id?: string | null;
   children?: Conversation[];
-  latest_todos?: { todos: Array<{ status: string }>; timestamp: number };
+  latest_todos?: { todos: Array<{ status: string; content: string; activeForm?: string }>; timestamp: number };
   latest_usage?: {
     inputTokens: number;
     outputTokens: number;
@@ -75,6 +75,63 @@ function getMessageCountColor(count: number): string {
   if (count < 100) return "bg-blue-500/20 text-blue-400 border-blue-600/40";
   if (count < 200) return "bg-blue-500/30 text-blue-400 border-blue-500/50";
   return "bg-indigo-500/30 text-indigo-400 border-indigo-500/50";
+}
+
+function TodoBadge({ todos }: { todos: Array<{ status: string; content: string; activeForm?: string }> }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const completed = todos.filter(t => t.status === 'completed').length;
+  const activeTodo = todos.find(t => t.status === 'in_progress');
+
+  return (
+    <div className="relative inline-block">
+      <span
+        className="inline-flex items-center gap-1 text-sol-green cursor-default"
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
+      >
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+        </svg>
+        {activeTodo ? (
+          <span className="text-sol-text-secondary text-xs truncate max-w-[120px]">
+            {activeTodo.activeForm || activeTodo.content}
+          </span>
+        ) : (
+          <span>{completed}/{todos.length}</span>
+        )}
+      </span>
+      {showTooltip && (
+        <div className="absolute left-0 top-full mt-1 z-50 bg-sol-bg border border-sol-border rounded p-2 min-w-[180px] max-w-xs shadow-lg">
+          <div className="space-y-1">
+            {todos.map((todo, i) => (
+              <div key={i} className="flex items-start gap-2 text-xs">
+                {todo.status === 'completed' ? (
+                  <svg className="w-3 h-3 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : todo.status === 'in_progress' ? (
+                  <svg className="w-3 h-3 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                ) : (
+                  <svg className="w-3 h-3 text-sol-text-dim flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                  </svg>
+                )}
+                <span className={`${
+                  todo.status === 'completed' ? 'text-sol-text-dim line-through' :
+                  todo.status === 'in_progress' ? 'text-sol-text' :
+                  'text-sol-text-muted'
+                }`}>
+                  {todo.content}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ClaudeIcon({ className = "w-4 h-4" }: { className?: string }) {
@@ -647,12 +704,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                           </span>
                         )}
                         {conv.latest_todos && conv.latest_todos.todos.length > 0 && (
-                          <span className="inline-flex items-center gap-1 text-sol-green">
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                            {conv.latest_todos.todos.filter(t => t.status === 'completed').length}/{conv.latest_todos.todos.length}
-                          </span>
+                          <TodoBadge todos={conv.latest_todos.todos} />
                         )}
                         {conv.subagent_types && conv.subagent_types.length > 0 && conv.subagent_types.map((type) => (
                           <span
