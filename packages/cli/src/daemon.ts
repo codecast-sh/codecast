@@ -1314,9 +1314,9 @@ async function main(): Promise<void> {
   const activeSessions = new Map<string, ActiveSession>();
 
   const retryQueue = new RetryQueue({
-    initialDelayMs: 1000,
-    maxDelayMs: 30000,
-    maxAttempts: 10,
+    initialDelayMs: 3000,
+    maxDelayMs: 60000,
+    maxAttempts: 15,
     onLog: log,
   });
 

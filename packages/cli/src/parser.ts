@@ -107,10 +107,19 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         } else if (block.type === "tool_result") {
           let toolResultContent = block.content;
           if (Array.isArray(block.content)) {
-            toolResultContent = (block.content as Array<{ type: string; text?: string }>)
+            const contentArray = block.content as Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
+            toolResultContent = contentArray
               .filter((c) => c.type === "text" && c.text)
               .map((c) => c.text)
               .join("");
+            for (const item of contentArray) {
+              if (item.type === "image" && item.source) {
+                images.push({
+                  mediaType: item.source.media_type,
+                  data: item.source.data,
+                });
+              }
+            }
           }
           toolResults.push({
             toolUseId: block.tool_use_id,
@@ -166,8 +175,8 @@ export function extractParentUuid(content: string): string | undefined {
   const lines = content.split("\n");
   for (const line of lines) {
     const entry = parseSessionLine(line);
-    if (entry?.parentUuid) {
-      return entry.parentUuid;
+    if (entry?.type === "user") {
+      return entry.parentUuid || undefined;
     }
   }
   return undefined;

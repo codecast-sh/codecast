@@ -161,15 +161,14 @@ export function GlobalSearch() {
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
-      } else if (e.key === "Enter" && results[selectedIndex]) {
+      } else if (e.key === "Enter") {
         e.preventDefault();
-        const url = `/conversation/${results[selectedIndex].conversationId}?highlight=${encodeURIComponent(query)}`;
-        router.push(url);
-        setIsOpen(false);
-        setQuery("");
-      } else if (e.key === "/" && results.length > 0) {
-        e.preventDefault();
-        router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&userOnly=true" : ""}`);
+        if (e.shiftKey && results.length > 0) {
+          router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&userOnly=true" : ""}`);
+        } else if (results[selectedIndex]) {
+          const url = `/conversation/${results[selectedIndex].conversationId}?highlight=${encodeURIComponent(query)}`;
+          router.push(url);
+        }
         setIsOpen(false);
         setQuery("");
       }
@@ -230,7 +229,7 @@ export function GlobalSearch() {
       </div>
 
       {isOpen && query.length >= 2 && (
-        <div className="absolute top-full left-0 w-full mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
+        <div className="absolute top-full left-1/2 -translate-x-1/2 w-[900px] mt-2 bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden">
             {!searchResults ? (
               <div className="px-4 py-8 text-center">
                 <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
@@ -247,38 +246,36 @@ export function GlobalSearch() {
                 </div>
                 <div className="space-y-1 py-1">
                 {groupedResults.map((session: any, sessionIndex: number) => (
-                  <div key={session.conversationId} className="mx-1">
-                    <button
-                      onClick={() => handleResultClick(session.conversationId)}
-                      className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
-                        sessionIndex === selectedIndex
-                          ? "bg-amber-200/60 dark:bg-amber-900/40"
-                          : "bg-sol-bg-alt/60 hover:bg-amber-100/40 dark:hover:bg-amber-900/20"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-sol-text truncate max-w-[500px]">
-                          {session.title}
+                  <button
+                    key={session.conversationId}
+                    onClick={() => handleResultClick(session.conversationId)}
+                    className={`w-full text-left mx-1 rounded-lg transition-colors ${
+                      sessionIndex === selectedIndex
+                        ? "bg-amber-200/60 dark:bg-amber-900/40"
+                        : "hover:bg-amber-100/30 dark:hover:bg-amber-900/20"
+                    }`}
+                  >
+                    <div className="px-3 py-2 flex items-center gap-2">
+                      <span className="text-sm font-semibold text-sol-text truncate max-w-[600px]">
+                        {session.title}
+                      </span>
+                      {!session.isOwn && (
+                        <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border">
+                          {session.authorName}
                         </span>
-                        {!session.isOwn && (
-                          <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border">
-                            {session.authorName}
-                          </span>
-                        )}
-                        <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded">
-                          {session.messageCount} msgs
-                        </span>
-                        <span className="text-[10px] text-sol-text-dim ml-auto whitespace-nowrap">
-                          {formatTimestamp(session.updatedAt)}
-                        </span>
-                      </div>
-                    </button>
-                    <div className="ml-3 mt-1 space-y-1 border-l-2 border-sol-border/40 pl-3">
+                      )}
+                      <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded">
+                        {session.messageCount} msgs
+                      </span>
+                      <span className="text-[10px] text-sol-text-dim ml-auto whitespace-nowrap">
+                        {formatTimestamp(session.updatedAt)}
+                      </span>
+                    </div>
+                    <div className="ml-4 pb-2 space-y-1 border-l-2 border-sol-border/40 pl-3">
                       {session.matches.slice(0, 3).map((match: any, matchIndex: number) => (
-                        <button
+                        <div
                           key={`${session.conversationId}-${matchIndex}`}
-                          onClick={() => handleResultClick(session.conversationId)}
-                          className="w-full text-left px-2 py-1.5 rounded hover:bg-sol-bg-alt/50 transition-colors"
+                          className="px-2 py-1"
                         >
                           <div className="flex items-center gap-2 mb-0.5">
                             <span
@@ -297,10 +294,10 @@ export function GlobalSearch() {
                           <p className="text-sm text-sol-text-secondary leading-relaxed line-clamp-3">
                             {highlightMatch(getSnippet(match.content, query), query)}
                           </p>
-                        </button>
+                        </div>
                       ))}
                     </div>
-                  </div>
+                  </button>
                 ))}
                 </div>
               </div>
@@ -337,7 +334,7 @@ export function GlobalSearch() {
                     }}
                     className="flex items-center gap-1 cursor-pointer text-sol-text-secondary hover:text-sol-text transition-colors"
                   >
-                    <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">/</kbd>
+                    <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">⇧↵</kbd>
                     see all
                   </span>
                 )}

@@ -50,7 +50,8 @@ export const addMessage = mutation({
     }))),
     images: v.optional(v.array(v.object({
       media_type: v.string(),
-      data: v.string(),
+      data: v.optional(v.string()),
+      storage_id: v.optional(v.id("_storage")),
     }))),
     subtype: v.optional(v.string()),
     timestamp: v.optional(v.number()),
@@ -83,6 +84,9 @@ export const addMessage = mutation({
         .first();
 
       if (existing) {
+        if (args.images && args.images.length > 0 && (!existing.images || existing.images.length === 0)) {
+          await ctx.db.patch(existing._id, { images: args.images });
+        }
         return existing._id;
       }
     }

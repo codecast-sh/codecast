@@ -20,6 +20,7 @@ import type * as githubApi from "../githubApi.js";
 import type * as githubWebhooks from "../githubWebhooks.js";
 import type * as health from "../health.js";
 import type * as http from "../http.js";
+import type * as images from "../images.js";
 import type * as messages from "../messages.js";
 import type * as notifications from "../notifications.js";
 import type * as pendingMessages from "../pendingMessages.js";
@@ -53,6 +54,7 @@ declare const fullApi: ApiFromModules<{
   githubWebhooks: typeof githubWebhooks;
   health: typeof health;
   http: typeof http;
+  images: typeof images;
   messages: typeof messages;
   notifications: typeof notifications;
   pendingMessages: typeof pendingMessages;

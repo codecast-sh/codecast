@@ -6,10 +6,11 @@ export type FilterableSession = {
   ai_message_count?: number;
   agent_type?: string | null;
   subagent_types?: string[];
+  parent_conversation_id?: string | null;
 };
 
 export function isSubagent(c: FilterableSession): boolean {
-  return c.agent_type === "subagent";
+  return !!c.parent_conversation_id;
 }
 
 export function isTrivialSubagent(c: FilterableSession): boolean {
@@ -25,10 +26,18 @@ export function isTrivialSubagent(c: FilterableSession): boolean {
 export function isWarmupSession(c: FilterableSession): boolean {
   if (c.title?.toLowerCase() === "warmup") return true;
   if ((c.message_count ?? 0) > 3) return false;
+
+  const firstUserMsg = c.message_alternates?.find((m) => m.role === "user")?.content?.toLowerCase().trim() || "";
   const firstAssistantMsg =
     c.first_assistant_message?.toLowerCase() ||
     c.message_alternates?.find((m) => m.role === "assistant")?.content?.toLowerCase() ||
     "";
+
+  // Filter out conversations with only warmup user message and one AI response
+  if ((c.message_count ?? 0) <= 2 && firstUserMsg === "warmup") {
+    return true;
+  }
+
   const warmupPatterns = [
     "i'm ready to help",
     "i'll wait for your task",

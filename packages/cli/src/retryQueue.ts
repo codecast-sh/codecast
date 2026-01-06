@@ -6,6 +6,18 @@ export interface RetryOperation {
   nextRetryAt: number;
   createdAt: number;
   lastError?: string;
+  rateLimitDelayMs?: number;
+}
+
+export function parseRateLimitDelay(error: string): number | null {
+  const match = error.match(/wait (\d+) seconds/i);
+  if (match) {
+    return parseInt(match[1], 10) * 1000 + 1000;
+  }
+  if (error.toLowerCase().includes('rate limit')) {
+    return 15000;
+  }
+  return null;
 }
 
 export interface RetryQueueConfig {
@@ -46,17 +58,20 @@ export class RetryQueue {
     error?: string
   ): string {
     const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const rateLimitDelay = error ? parseRateLimitDelay(error) : null;
+    const delay = rateLimitDelay ?? this.initialDelayMs;
     const op: RetryOperation = {
       id,
       type,
       params,
       attempts: 0,
-      nextRetryAt: Date.now() + this.initialDelayMs,
+      nextRetryAt: Date.now() + delay,
       createdAt: Date.now(),
       lastError: error,
+      rateLimitDelayMs: rateLimitDelay ?? undefined,
     };
     this.queue.set(id, op);
-    this.log(`Queued ${type} for retry (id: ${id})`);
+    this.log(`Queued ${type} for retry${rateLimitDelay ? ` (rate limited, ${delay}ms)` : ''} (id: ${id})`);
     this.scheduleNextCheck();
     return id;
   }
@@ -138,10 +153,12 @@ export class RetryQueue {
       return;
     }
 
-    const nextDelay = this.calculateNextDelay(op.attempts);
+    const rateLimitDelay = parseRateLimitDelay(error);
+    const nextDelay = rateLimitDelay ?? this.calculateNextDelay(op.attempts);
     op.nextRetryAt = Date.now() + nextDelay;
+    op.rateLimitDelayMs = rateLimitDelay ?? undefined;
     this.log(
-      `Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms (id: ${op.id})`
+      `Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms${rateLimitDelay ? ' (rate limited)' : ''} (id: ${op.id})`
     );
   }
 

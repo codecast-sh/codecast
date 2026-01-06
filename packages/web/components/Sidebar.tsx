@@ -1,10 +1,9 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useEffect, useRef, useMemo } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useState, useEffect, useMemo } from "react";
+import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useAuthActions } from "@convex-dev/auth/react";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
 
@@ -62,10 +61,6 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
   const isFeed = pathname === "/feed" || pathname?.startsWith("/feed/");
   const [currentTime, setCurrentTime] = useState(Date.now());
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const userMenuRef = useRef<HTMLDivElement>(null);
-  const { signOut } = useAuthActions();
-  const user = useQuery(api.users.getCurrentUser);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -73,24 +68,6 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
     }, 60000);
     return () => clearInterval(interval);
   }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
-        setUserMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  const handleLogout = async () => {
-    await signOut();
-    router.push("/");
-  };
-
-  const displayName = user?.name || user?.email?.split("@")[0] || "User";
-  const initials = displayName.slice(0, 1).toUpperCase();
 
   const favorites = useQuery(api.conversations.listFavorites);
   const bookmarks = useQuery(api.bookmarks.listBookmarks);
@@ -346,58 +323,6 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
             </div>
           </div>
         )}
-      </div>
-
-      <div className="pt-4 flex-shrink-0" ref={userMenuRef}>
-        <div className="relative">
-          <button
-            onClick={() => setUserMenuOpen(!userMenuOpen)}
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors hover:bg-sol-bg-alt/50`}
-            title={displayName}
-          >
-            <div className="w-8 h-8 rounded-full bg-sol-bg-highlight flex items-center justify-center text-sol-text flex-shrink-0">
-              <span className="text-sm font-medium">{initials}</span>
-            </div>
-            {!isNarrow && (
-              <>
-                <span className="flex-1 text-left text-sol-text-muted truncate">{displayName}</span>
-                <svg className={`w-4 h-4 text-sol-text-dim transition-transform ${userMenuOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 15l7-7 7 7" />
-                </svg>
-              </>
-            )}
-          </button>
-          {userMenuOpen && (
-            <div className="absolute bottom-full left-0 right-0 mb-1 bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
-              <button
-                onClick={() => {
-                  setUserMenuOpen(false);
-                  onMobileClose?.();
-                  router.push("/settings");
-                }}
-                className="w-full px-4 py-2 text-left text-sm text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors flex items-center gap-3"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                Settings
-              </button>
-              <button
-                onClick={() => {
-                  setUserMenuOpen(false);
-                  handleLogout();
-                }}
-                className="w-full px-4 py-2 text-left text-sm text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors flex items-center gap-3"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                </svg>
-                Sign out
-              </button>
-            </div>
-          )}
-        </div>
       </div>
     </>
   );
