@@ -29,6 +29,29 @@ function generateShareToken(): string {
   return crypto.randomUUID();
 }
 
+function parseSearchTerms(query: string): { phrases: string[]; words: string[]; all: string[] } {
+  const phrases: string[] = [];
+  const words: string[] = [];
+  const regex = /"([^"]+)"|(\S+)/g;
+  let match;
+  while ((match = regex.exec(query)) !== null) {
+    if (match[1]) {
+      phrases.push(match[1].toLowerCase());
+    } else if (match[2]) {
+      words.push(match[2].toLowerCase());
+    }
+  }
+  return { phrases, words, all: [...phrases, ...words] };
+}
+
+function contentMatchesSearch(content: string, terms: { phrases: string[]; words: string[] }): boolean {
+  const lowerContent = content.toLowerCase();
+  for (const phrase of terms.phrases) {
+    if (!lowerContent.includes(phrase)) return false;
+  }
+  return true;
+}
+
 function formatSlugAsTitle(slug: string): string {
   return slug
     .split('-')
@@ -893,6 +916,7 @@ export const searchConversations = query({
   args: {
     query: v.string(),
     limit: v.optional(v.number()),
+    userOnly: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -910,16 +934,25 @@ export const searchConversations = query({
     }
 
     const limit = args.limit ?? 20;
+    const userOnly = args.userOnly ?? false;
+    const terms = parseSearchTerms(searchTerm);
+    const searchQuery = terms.all.join(" ");
 
     // Use full-text search on messages
     const searchResults = await ctx.db
       .query("messages")
-      .withSearchIndex("search_content", (q) => q.search("content", searchTerm))
-      .take(100);
+      .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
+      .take(200);
 
-    // Group by conversation and check access
+    // Filter for exact phrase matches and group by conversation
     const conversationMatches = new Map<string, typeof searchResults>();
     for (const msg of searchResults) {
+      if (userOnly && msg.role !== "user") {
+        continue;
+      }
+      if (terms.phrases.length > 0 && !contentMatchesSearch(msg.content || "", terms)) {
+        continue;
+      }
       const convId = msg.conversation_id.toString();
       if (!conversationMatches.has(convId)) {
         conversationMatches.set(convId, []);
@@ -981,15 +1014,21 @@ export const searchConversations = query({
         || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
         || `Session ${conv.session_id.slice(0, 8)}`;
 
-      const searchTermLower = searchTerm.toLowerCase();
       results.push({
         conversationId: conv._id,
         title,
         matches: messages.slice(0, 3).map((m) => {
           const content = m.content || "";
-          const idx = content.toLowerCase().indexOf(searchTermLower);
-          const start = Math.max(0, idx > -1 ? idx - 100 : 0);
-          const end = Math.min(content.length, idx > -1 ? idx + searchTerm.length + 150 : 250);
+          const lowerContent = content.toLowerCase();
+          let bestIdx = -1;
+          for (const term of terms.all) {
+            const idx = lowerContent.indexOf(term);
+            if (idx !== -1 && (bestIdx === -1 || idx < bestIdx)) {
+              bestIdx = idx;
+            }
+          }
+          const start = Math.max(0, bestIdx > -1 ? bestIdx - 80 : 0);
+          const end = Math.min(content.length, bestIdx > -1 ? bestIdx + 220 : 300);
           let snippet = content.slice(start, end);
           if (start > 0) snippet = "..." + snippet;
           if (end < content.length) snippet = snippet + "...";
@@ -1225,15 +1264,20 @@ export const searchForCLI = mutation({
     const contextAfter = args.context_after ?? 0;
     const projectPath = args.project_path;
     const userOnly = args.user_only ?? false;
+    const terms = parseSearchTerms(searchTerm);
+    const searchQuery = terms.all.join(" ");
 
     const searchResults = await ctx.db
       .query("messages")
-      .withSearchIndex("search_content", (q) => q.search("content", searchTerm))
-      .take(100);
+      .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
+      .take(200);
 
     const conversationMatches = new Map<string, typeof searchResults>();
     for (const msg of searchResults) {
       if (userOnly && msg.role !== "user") continue;
+      if (terms.phrases.length > 0 && !contentMatchesSearch(msg.content || "", terms)) {
+        continue;
+      }
       const convId = msg.conversation_id.toString();
       if (!conversationMatches.has(convId)) {
         conversationMatches.set(convId, []);

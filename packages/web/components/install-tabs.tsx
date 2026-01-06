@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { copyToClipboard } from "../lib/utils";
 
 const INSTALL_COMMANDS = {
   unix: "curl -fsSL codecast.sh/install | sh",
@@ -12,7 +13,7 @@ export function InstallTabs() {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(INSTALL_COMMANDS[platform]);
+    await copyToClipboard(INSTALL_COMMANDS[platform]);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

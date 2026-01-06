@@ -1,33 +1,33 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { ConversationView, ConversationData, ConversationViewHandle } from "./ConversationView";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { extractFileChanges } from "../lib/fileChangeExtractor";
-import { Keyboard } from "lucide-react";
-import { Button } from "./ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
-import { FileTreeSidebar } from "./FileTreeSidebar";
-import { DiffView } from "./DiffView";
+import { FileDiffLayout, DiffFile } from "./FileDiffLayout";
 import type { FileChange } from "../store/diffViewerStore";
 
 const STORAGE_KEY = "conversation-diff-layout";
 const MOBILE_BREAKPOINT = 768;
 
-const getInitialLayout = (): number[] => {
-  if (typeof window === 'undefined') return [40, 60];
+type Layout = { [key: string]: number };
+
+const getInitialLayout = (): Layout => {
+  if (typeof window === 'undefined') return { "content-panel": 40, "diff-panel": 60 };
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed) && parsed.length === 2) {
+      if (typeof parsed === "object" && parsed["content-panel"] && parsed["diff-panel"]) {
         return parsed;
       }
     } catch {}
   }
-  return [40, 60];
+  return { "content-panel": 40, "diff-panel": 60 };
 };
 
 interface ConversationDiffLayoutProps {
@@ -40,6 +40,7 @@ interface ConversationDiffLayoutProps {
   isLoadingOlder?: boolean;
   onLoadOlder?: () => void;
   highlightQuery?: string;
+  onClearHighlight?: () => void;
 }
 
 export function ConversationDiffLayout({
@@ -126,9 +127,9 @@ export function ConversationDiffLayout({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [nextChange, prevChange, toggleDiffMode, toggleFileTree, clearSelection]);
 
-  const handleLayoutChange = (sizes: number[]) => {
-    setLayout(sizes);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sizes));
+  const handleLayoutChange = (newLayout: Layout) => {
+    setLayout(newLayout);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newLayout));
   };
 
   const conversationViewProps = {
@@ -203,17 +204,8 @@ export function ConversationDiffLayout({
               <TimelineStrip conversationRef={conversationRef} />
             </div>
             {/* Diff Content */}
-            <div className="flex-1 h-full relative min-w-0">
+            <div className="flex-1 h-full min-w-0">
               <DiffPane />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-2 right-2 z-10 h-6 w-6 opacity-50 hover:opacity-100"
-                onClick={() => setShowHelp(true)}
-                title="Keyboard shortcuts (?)"
-              >
-                <Keyboard className="h-4 w-4" />
-              </Button>
             </div>
           </div>
         </Panel>
@@ -224,28 +216,162 @@ export function ConversationDiffLayout({
   );
 }
 
-function getFileExtension(filePath: string): string | undefined {
-  const ext = filePath.split(".").pop()?.toLowerCase();
-  const langMap: Record<string, string> = {
-    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
-    py: "python", rb: "ruby", go: "go", rs: "rust", java: "java",
-    cpp: "cpp", c: "c", h: "c", hpp: "cpp", cs: "csharp",
-    json: "json", yaml: "yaml", yml: "yaml", md: "markdown",
-    html: "html", css: "css", scss: "scss", sql: "sql",
-    sh: "bash", bash: "bash", zsh: "bash",
+function computeCumulativeFiles(changes: FileChange[], upToIndex: number | null): DiffFile[] {
+  const endIndex = upToIndex !== null ? upToIndex : changes.length - 1;
+  if (endIndex < 0) return [];
+
+  const relevantChanges = changes.slice(0, endIndex + 1).filter(c => c.changeType !== "commit");
+
+  const fileMap = new Map<string, { change: FileChange; lastIndex: number }>();
+
+  relevantChanges.forEach((change, idx) => {
+    const existing = fileMap.get(change.filePath);
+    if (existing) {
+      fileMap.set(change.filePath, {
+        change: {
+          ...change,
+          oldContent: existing.change.oldContent,
+        },
+        lastIndex: idx,
+      });
+    } else {
+      fileMap.set(change.filePath, { change, lastIndex: idx });
+    }
+  });
+
+  const files: (DiffFile & { lastIndex: number })[] = [];
+  fileMap.forEach(({ change, lastIndex }) => {
+    const oldLines = (change.oldContent || "").split("\n").length;
+    const newLines = change.newContent.split("\n").length;
+    const additions = Math.max(0, newLines - oldLines);
+    const deletions = Math.max(0, oldLines - newLines);
+
+    files.push({
+      filename: change.filePath,
+      status: change.changeType === "write" ? "added" : "modified",
+      additions,
+      deletions,
+      changes: additions + deletions,
+      patch: generateUnifiedPatch(change.filePath, change.oldContent || "", change.newContent),
+      lastIndex,
+    });
+  });
+
+  files.sort((a, b) => b.lastIndex - a.lastIndex);
+
+  return files.map(({ lastIndex, ...file }) => file);
+}
+
+function generateUnifiedPatch(filename: string, oldContent: string, newContent: string): string {
+  const oldLines = oldContent.split("\n");
+  const newLines = newContent.split("\n");
+
+  let patch = `--- a/${filename}\n+++ b/${filename}\n`;
+
+  const m = oldLines.length;
+  const n = newLines.length;
+  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldLines[i - 1] === newLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  const diff: Array<{ type: "add" | "del" | "ctx"; line: string }> = [];
+  let i = m, j = n;
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      diff.unshift({ type: "ctx", line: oldLines[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      diff.unshift({ type: "add", line: newLines[j - 1] });
+      j--;
+    } else {
+      diff.unshift({ type: "del", line: oldLines[i - 1] });
+      i--;
+    }
+  }
+
+  let hunkStart = -1;
+  let hunkLines: string[] = [];
+  let oldStart = 1, newStart = 1, oldCount = 0, newCount = 0;
+
+  const flushHunk = () => {
+    if (hunkLines.length > 0) {
+      patch += `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@\n`;
+      patch += hunkLines.join("\n") + "\n";
+      hunkLines = [];
+    }
   };
-  return ext ? langMap[ext] : undefined;
+
+  let currentOldLine = 1, currentNewLine = 1;
+  let lastChangeIdx = -1;
+
+  diff.forEach((d, idx) => {
+    const isChange = d.type !== "ctx";
+
+    if (isChange) {
+      if (hunkStart === -1 || idx > lastChangeIdx + 4) {
+        flushHunk();
+        const contextStart = Math.max(0, idx - 3);
+        hunkStart = contextStart;
+        oldStart = currentOldLine - (idx - contextStart);
+        newStart = currentNewLine - (idx - contextStart);
+        oldCount = 0;
+        newCount = 0;
+
+        for (let k = contextStart; k < idx; k++) {
+          const prev = diff[k];
+          if (prev.type === "ctx") {
+            hunkLines.push(" " + prev.line);
+            oldCount++;
+            newCount++;
+          }
+        }
+      }
+      lastChangeIdx = idx;
+    }
+
+    if (hunkStart !== -1 && idx <= lastChangeIdx + 3) {
+      if (d.type === "add") {
+        hunkLines.push("+" + d.line);
+        newCount++;
+      } else if (d.type === "del") {
+        hunkLines.push("-" + d.line);
+        oldCount++;
+      } else {
+        hunkLines.push(" " + d.line);
+        oldCount++;
+        newCount++;
+      }
+    }
+
+    if (d.type === "del") currentOldLine++;
+    else if (d.type === "add") currentNewLine++;
+    else { currentOldLine++; currentNewLine++; }
+  });
+
+  flushHunk();
+
+  return patch;
 }
 
 function DiffPane() {
-  const { selectedChangeIndex, rangeStart, rangeEnd, changes, getCurrentDiffContent, showFileTree } = useDiffViewerStore();
+  const { selectedChangeIndex, changes } = useDiffViewerStore();
 
-  const diffContent = getCurrentDiffContent();
+  const diffFiles = useMemo(() => {
+    return computeCumulativeFiles(changes, selectedChangeIndex);
+  }, [changes, selectedChangeIndex]);
 
   if (changes.length === 0) {
     return (
-      <div className="h-full w-full flex bg-background">
-        {showFileTree && <FileTreeSidebar getFileColor={getFileColor} />}
+      <div className="h-full w-full flex flex-col bg-background">
         <div className="flex-1 flex items-center justify-center text-muted-foreground">
           <div className="text-center">
             <p className="text-lg font-medium">No changes yet</p>
@@ -258,90 +384,20 @@ function DiffPane() {
     );
   }
 
-  if (!diffContent) {
-    return (
-      <div className="h-full w-full flex bg-background">
-        {showFileTree && <FileTreeSidebar getFileColor={getFileColor} />}
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <p>Select a change from the timeline to view diff</p>
-        </div>
-      </div>
-    );
-  }
-
-  const getRangeDisplay = () => {
-    if (rangeStart !== null && rangeEnd !== null) {
-      return `Changes ${rangeStart + 1}-${rangeEnd + 1} of ${changes.length}`;
-    }
-    return `Change ${selectedChangeIndex! + 1} of ${changes.length}`;
-  };
-
-  const selectedChange = selectedChangeIndex !== null ? changes[selectedChangeIndex] : null;
-  const isCommit = selectedChange?.changeType === "commit";
-
-  if (isCommit) {
-    return (
-      <div className="h-full w-full flex bg-background">
-        {showFileTree && <FileTreeSidebar getFileColor={getFileColor} />}
-        <div className="flex-1 overflow-auto">
-          <div className="p-4">
-            <div className="mb-4 pb-2 border-b">
-              <h3 className="font-mono text-sm font-medium flex items-center gap-2">
-                <span className="w-3 h-3 rounded-sm bg-primary/70"></span>
-                Git Commit
-              </h3>
-              <p className="text-xs text-muted-foreground mt-1">
-                {getRangeDisplay()}
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              <div className="rounded border border-border bg-muted/30 p-4">
-                <div className="text-xs text-muted-foreground mb-2">Commit Message</div>
-                <div className="font-mono text-sm whitespace-pre-wrap">
-                  {selectedChange.commitMessage}
-                </div>
-                {selectedChange.commitHash && (
-                  <div className="mt-3 pt-3 border-t border-border/50">
-                    <div className="text-xs text-muted-foreground">Hash</div>
-                    <div className="font-mono text-xs text-primary mt-1">
-                      {selectedChange.commitHash}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const language = getFileExtension(diffContent.filePath);
+  const positionLabel = selectedChangeIndex !== null
+    ? `Up to change ${selectedChangeIndex + 1} of ${changes.length}`
+    : `All ${changes.length} changes`;
 
   return (
-    <div className="h-full w-full flex bg-background">
-      {showFileTree && <FileTreeSidebar getFileColor={getFileColor} />}
-      <div className="flex-1 overflow-auto">
-        <div className="p-4">
-          <div className="mb-4 pb-2 border-b">
-            <h3 className="font-mono text-sm font-medium">{diffContent.filePath}</h3>
-            <p className="text-xs text-muted-foreground mt-1">
-              {getRangeDisplay()}
-            </p>
+    <div className="h-full w-full flex flex-col bg-background">
+      <FileDiffLayout
+        files={diffFiles}
+        sidebarHeader={
+          <div className="px-3 py-2 border-b border-sol-border/50 bg-sol-bg-alt/30">
+            <span className="text-xs text-sol-text-dim">{positionLabel}</span>
           </div>
-
-          <div className="rounded overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
-            <DiffView
-              oldStr={diffContent.oldContent || ""}
-              newStr={diffContent.newContent}
-              language={language}
-              contextLines={3}
-              maxLines={50}
-            />
-          </div>
-        </div>
-      </div>
+        }
+      />
     </div>
   );
 }
@@ -389,7 +445,6 @@ function getFileName(filePath: string): string {
 
 function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<ConversationViewHandle | null> }) {
   const { changes, selectedChangeIndex, rangeStart, rangeEnd, selectChange, selectRange, syncScroll } = useDiffViewerStore();
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
   const handleDotClick = (index: number, messageId: string, e: React.MouseEvent) => {
     if (e.metaKey || e.ctrlKey) {
@@ -415,59 +470,56 @@ function TimelineStrip({ conversationRef }: { conversationRef: React.RefObject<C
   };
 
   return (
-    <div className="h-full w-full flex flex-col items-center py-4 gap-2 overflow-y-auto relative">
-      {changes.map((change, index) => {
-        const isSelected = selectedChangeIndex === index;
-        const inRange = isInRange(index);
-        const fileColor = getFileColor(change.filePath);
-        const isCommit = change.changeType === "commit";
-        const isHovered = hoveredIndex === index;
+    <TooltipProvider delayDuration={100}>
+      <div className="h-full w-full flex flex-col items-center py-4 gap-2 overflow-y-auto relative">
+        {changes.map((change, index) => {
+          const isSelected = selectedChangeIndex === index;
+          const inRange = isInRange(index);
+          const fileColor = getFileColor(change.filePath);
+          const isCommit = change.changeType === "commit";
 
-        return (
-          <div key={change.id} className="relative shrink-0">
-            <button
-              onClick={(e) => handleDotClick(index, change.messageId, e)}
-              onMouseEnter={() => setHoveredIndex(index)}
-              onMouseLeave={() => setHoveredIndex(null)}
-              className={`
-                w-3 h-3 transition-all relative z-10
-                ${isCommit ? "rounded-sm" : "rounded-full"}
-                ${isSelected ? "scale-150 ring-2 ring-primary/50" : "hover:scale-125"}
-                ${inRange && !isSelected ? "ring-1 ring-primary/30" : ""}
-              `}
-              style={{ backgroundColor: fileColor }}
-            />
-            {isHovered && (
-              <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 z-50 pointer-events-none">
-                <div className="bg-popover text-popover-foreground border border-border rounded-md shadow-lg px-2.5 py-1.5 text-xs whitespace-nowrap">
-                  <div className="font-medium">
-                    {isCommit ? "Git commit" : getFileName(change.filePath)}
-                  </div>
-                  <div className="text-muted-foreground mt-0.5 flex items-center gap-1.5">
-                    <span className="capitalize">{change.changeType}</span>
-                    <span className="text-muted-foreground/50">-</span>
-                    <span>{formatTimeAgo(change.timestamp)}</span>
-                  </div>
-                  {isCommit && change.commitMessage && (
-                    <div className="text-muted-foreground mt-1 max-w-[200px] truncate">
-                      {change.commitMessage}
-                    </div>
-                  )}
+          return (
+            <Tooltip key={change.id}>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => handleDotClick(index, change.messageId, e)}
+                  className={`
+                    w-3 h-3 transition-all relative z-10 shrink-0
+                    ${isCommit ? "rounded-sm" : "rounded-full"}
+                    ${isSelected ? "scale-150 ring-2 ring-primary/50" : "hover:scale-125"}
+                    ${inRange && !isSelected ? "ring-1 ring-primary/30" : ""}
+                  `}
+                  style={{ backgroundColor: fileColor }}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="right" className="bg-popover text-popover-foreground border-border shadow-md">
+                <div className="font-medium">
+                  {isCommit ? "Git commit" : getFileName(change.filePath)}
                 </div>
-              </div>
-            )}
-          </div>
-        );
-      })}
-      {rangeStart !== null && rangeEnd !== null && (
-        <div
-          className="absolute w-1 bg-primary/20 left-1/2 -translate-x-1/2 rounded-full z-0"
-          style={{
-            top: `${(rangeStart / changes.length) * 100}%`,
-            height: `${((rangeEnd - rangeStart) / changes.length) * 100}%`,
-          }}
-        />
-      )}
-    </div>
+                <div className="text-muted-foreground mt-0.5 flex items-center gap-1.5">
+                  <span className="capitalize">{change.changeType}</span>
+                  <span className="text-muted-foreground/50">-</span>
+                  <span>{formatTimeAgo(change.timestamp)}</span>
+                </div>
+                {isCommit && change.commitMessage && (
+                  <div className="text-muted-foreground mt-1 max-w-[200px] truncate">
+                    {change.commitMessage}
+                  </div>
+                )}
+              </TooltipContent>
+            </Tooltip>
+          );
+        })}
+        {rangeStart !== null && rangeEnd !== null && (
+          <div
+            className="absolute w-1 bg-primary/20 left-1/2 -translate-x-1/2 rounded-full z-0"
+            style={{
+              top: `${(rangeStart / changes.length) * 100}%`,
+              height: `${((rangeEnd - rangeStart) / changes.length) * 100}%`,
+            }}
+          />
+        )}
+      </div>
+    </TooltipProvider>
   );
 }

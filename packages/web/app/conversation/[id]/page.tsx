@@ -11,6 +11,7 @@ import { ConversationDiffLayout } from "../../../components/ConversationDiffLayo
 import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
+import { copyToClipboard } from "../../../lib/utils";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -20,6 +21,11 @@ export default function ConversationPage() {
   const searchParams = useSearchParams();
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
+  const handleClearHighlight = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("highlight");
+    router.replace(url.pathname + url.search);
+  };
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [showShareCopied, setShowShareCopied] = useState(false);
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
@@ -63,7 +69,7 @@ export default function ConversationPage() {
         url = `${window.location.origin}/share/${token}`;
         setShareUrl(url);
       }
-      await navigator.clipboard.writeText(url);
+      await copyToClipboard(url);
       toast.success("Share link copied to clipboard");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to generate share link");
@@ -72,18 +78,7 @@ export default function ConversationPage() {
 
   const handleCopyShareUrl = async () => {
     if (shareUrl) {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
-      } else {
-        const textArea = document.createElement("textarea");
-        textArea.value = shareUrl;
-        textArea.style.position = "fixed";
-        textArea.style.opacity = "0";
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textArea);
-      }
+      await copyToClipboard(shareUrl);
       setShowShareCopied(true);
       toast.success("Share link copied to clipboard");
       setTimeout(() => setShowShareCopied(false), 2000);
@@ -176,6 +171,7 @@ export default function ConversationPage() {
             isLoadingOlder={isLoadingOlder}
             onLoadOlder={loadOlder}
             highlightQuery={highlightQuery}
+            onClearHighlight={handleClearHighlight}
             embedded
           />
         )}

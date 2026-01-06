@@ -2,7 +2,7 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
@@ -63,16 +63,16 @@ function MessageCard({ message }: { message: FeedMessage }) {
       <div
         className={`relative border rounded-xl p-4 transition-all duration-200 shadow-sm hover:shadow-md ${
           isUser
-            ? "bg-sol-blue/5 border-sol-blue/20 hover:border-sol-blue/40"
-            : "bg-sol-violet/5 border-sol-violet/20 hover:border-sol-violet/40"
+            ? "bg-white border-sol-blue/40 hover:border-sol-blue/60"
+            : "bg-sol-bg-alt/60 border-sol-border/40 hover:border-sol-violet/40"
         }`}
       >
         <div className="flex items-start gap-3">
           <div
             className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
               isUser
-                ? "bg-sol-blue/20 text-sol-blue"
-                : "bg-sol-violet/20 text-sol-violet"
+                ? "bg-sol-blue/40 text-sol-blue"
+                : "bg-sol-violet/40 text-sol-violet"
             }`}
           >
             {isUser ? (
@@ -145,6 +145,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
   const [loadedMessages, setLoadedMessages] = useState<FeedMessage[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [prevFilter, setPrevFilter] = useState(filter);
+  const [showOnlyUser, setShowOnlyUser] = useState(false);
 
   // Reset when filter changes
   if (filter !== prevFilter) {
@@ -155,7 +156,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
 
   const result = useQuery(api.conversations.getMessageFeed, {
     filter,
-    limit: 30,
+    limit: 100,
     cursor,
   });
 
@@ -179,8 +180,13 @@ export function MessageFeed({ filter }: MessageFeedProps) {
 
     // Sort by timestamp descending
     deduplicated.sort((a, b) => b.timestamp - a.timestamp);
+
+    // Filter by role if needed
+    if (showOnlyUser) {
+      return deduplicated.filter(msg => msg.role === "user");
+    }
     return deduplicated;
-  }, [result?.messages, loadedMessages, cursor]);
+  }, [result?.messages, loadedMessages, cursor, showOnlyUser]);
 
   const loadMore = useCallback(() => {
     if (result?.nextCursor && !isLoadingMore) {
@@ -190,6 +196,25 @@ export function MessageFeed({ filter }: MessageFeedProps) {
       setTimeout(() => setIsLoadingMore(false), 100);
     }
   }, [result?.nextCursor, isLoadingMore, messages]);
+
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !result?.nextCursor) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !isLoadingMore) {
+          loadMore();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [result?.nextCursor, isLoadingMore, loadMore]);
 
   if (result === undefined) {
     return <LoadingSkeleton />;
@@ -245,6 +270,18 @@ export function MessageFeed({ filter }: MessageFeedProps) {
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setShowOnlyUser(!showOnlyUser)}
+          className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+            showOnlyUser
+              ? "bg-sol-blue/20 text-sol-blue border-sol-blue/30"
+              : "text-sol-text-muted border-sol-border/40 hover:text-sol-text hover:bg-sol-bg-alt"
+          }`}
+        >
+          User only
+        </button>
+      </div>
       {groups.map((group) => (
         <div key={group.label}>
           <div className="pb-2 mb-3">
@@ -261,14 +298,10 @@ export function MessageFeed({ filter }: MessageFeedProps) {
       ))}
 
       {result?.nextCursor && (
-        <div className="flex justify-center pt-4">
-          <button
-            onClick={loadMore}
-            disabled={isLoadingMore}
-            className="px-4 py-2 text-sm text-sol-text-muted hover:text-sol-text bg-sol-bg-alt hover:bg-sol-bg-alt/80 rounded-lg transition-colors disabled:opacity-50"
-          >
-            {isLoadingMore ? "Loading..." : "Load more"}
-          </button>
+        <div ref={sentinelRef} className="flex justify-center py-6">
+          <div className="text-sm text-sol-text-muted">
+            {isLoadingMore ? "Loading..." : ""}
+          </div>
         </div>
       )}
     </div>

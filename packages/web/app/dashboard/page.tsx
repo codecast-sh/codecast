@@ -14,7 +14,6 @@ export default function DashboardPage() {
   const [filter, setFilter] = useState<"my" | "team">(
     filterParam === "team" ? "team" : "my"
   );
-  const [directories, setDirectories] = useState<string[]>([]);
   const [directoryFilter, setDirectoryFilter] = useState<string | null>(null);
   const [memberFilter, setMemberFilter] = useState<string | null>(
     searchParams.get("member")
@@ -30,10 +29,6 @@ export default function DashboardPage() {
     }
     router.replace(`/dashboard?${params.toString()}`, { scroll: false });
   }, [searchParams, router]);
-
-  const handleDirectoriesChange = useCallback((dirs: string[]) => {
-    setDirectories(dirs);
-  }, []);
 
   const handleMemberFilterChange = useCallback((memberId: string | null) => {
     setMemberFilter(memberId);
@@ -82,7 +77,6 @@ export default function DashboardPage() {
       <DashboardLayout
         filter={filter}
         onFilterChange={handleFilterChange}
-        directories={directories}
         directoryFilter={directoryFilter}
         onDirectoryFilterChange={setDirectoryFilter}
       >
@@ -90,7 +84,6 @@ export default function DashboardPage() {
           filter={filter}
           directoryFilter={directoryFilter}
           memberFilter={memberFilter}
-          onDirectoriesChange={handleDirectoriesChange}
           onMemberFilterChange={handleMemberFilterChange}
         />
       </DashboardLayout>

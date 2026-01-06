@@ -139,7 +139,65 @@ export const getCommentsForPR = query({
         q.eq("pull_request_id", args.pull_request_id)
       )
       .collect();
-    return comments;
+    return comments.sort((a, b) => a.created_at - b.created_at);
+  },
+});
+
+export const addCommentToPR = mutation({
+  args: {
+    pull_request_id: v.id("pull_requests"),
+    author_user_id: v.id("users"),
+    file_path: v.optional(v.string()),
+    line_number: v.optional(v.number()),
+    content: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const pr = await ctx.db.get(args.pull_request_id);
+    if (!pr) {
+      throw new Error(`Pull request with id ${args.pull_request_id} not found`);
+    }
+
+    const commentId = await ctx.db.insert("review_comments", {
+      pull_request_id: args.pull_request_id,
+      file_path: args.file_path,
+      line_number: args.line_number,
+      content: args.content,
+      resolved: false,
+      created_at: Date.now(),
+      codecast_origin: true,
+      author_user_id: args.author_user_id,
+    });
+    return commentId;
+  },
+});
+
+export const unresolveComment = mutation({
+  args: {
+    comment_id: v.id("review_comments"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.comment_id, {
+      resolved: false,
+    });
+  },
+});
+
+export const getCommentsForFile = query({
+  args: {
+    pull_request_id: v.id("pull_requests"),
+    file_path: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const allComments = await ctx.db
+      .query("review_comments")
+      .withIndex("by_pull_request", (q) =>
+        q.eq("pull_request_id", args.pull_request_id)
+      )
+      .collect();
+
+    return allComments
+      .filter((c) => c.file_path === args.file_path)
+      .sort((a, b) => a.created_at - b.created_at);
   },
 });
 

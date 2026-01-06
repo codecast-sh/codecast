@@ -30,8 +30,10 @@ export function KeyboardShortcutsHelp({ isOpen, onClose }: KeyboardShortcutsHelp
         </div>
 
         <div className="space-y-3">
-          <ShortcutRow keys={["["]} description="Previous change" />
-          <ShortcutRow keys={["]"]} description="Next change" />
+          <ShortcutRow keys={["j", "]"]} description="Next file/change" />
+          <ShortcutRow keys={["k", "["]} description="Previous file/change" />
+          <ShortcutRow keys={["v"]} description="Toggle unified/split view" />
+          <ShortcutRow keys={["b"]} description="Toggle sidebar" />
           <ShortcutRow keys={["c"]} description="Toggle cumulative/single mode" />
           <ShortcutRow keys={["f"]} description="Toggle file tree" />
           <ShortcutRow keys={["Escape"]} description="Clear selection" />

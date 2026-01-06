@@ -278,3 +278,25 @@ export const getPRsForConversation = query({
     );
   },
 });
+
+export const getPRsForTimeline = query({
+  args: {
+    repository: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    let prs = await ctx.db.query("pull_requests").collect();
+
+    if (args.repository) {
+      prs = prs.filter((pr) => pr.repository === args.repository);
+    }
+
+    prs.sort((a, b) => b.updated_at - a.updated_at);
+
+    if (args.limit) {
+      prs = prs.slice(0, args.limit);
+    }
+
+    return prs;
+  },
+});
