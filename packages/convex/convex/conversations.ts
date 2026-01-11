@@ -1308,8 +1308,11 @@ export const searchForCLI = mutation({
     }> = [];
 
     let totalMatches = 0;
+    let conversationsProcessed = 0;
 
     for (const [convId, messages] of conversationMatches) {
+      if (results.length >= limit) break;
+
       const conv = await ctx.db.get(messages[0].conversation_id);
       if (!conv) continue;
 
@@ -1325,19 +1328,16 @@ export const searchForCLI = mutation({
         continue;
       }
 
-      const allMessages = await ctx.db
+      conversationsProcessed++;
+
+      const firstMessages = await ctx.db
         .query("messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
         .order("asc")
-        .collect();
-
-      const messageLineMap = new Map<string, number>();
-      allMessages.forEach((m, idx) => {
-        messageLineMap.set(m._id.toString(), idx + 1);
-      });
+        .take(20);
 
       let firstUserMessage = "";
-      for (const msg of allMessages.slice(0, 10)) {
+      for (const msg of firstMessages) {
         const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
         if (msg.role === "user" && !hasToolResults) {
           const text = msg.content?.trim();
@@ -1354,64 +1354,26 @@ export const searchForCLI = mutation({
         || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
         || `Session ${conv.session_id.slice(0, 8)}`;
 
-      const searchTermLower = searchTerm.toLowerCase();
       const matchedMessages = messages.slice(0, 5);
       totalMatches += matchedMessages.length;
 
-      const contextLines = new Set<number>();
-      const matchedLines = new Set<number>();
-
-      const formattedMatches = matchedMessages.map((m) => {
-        const line = messageLineMap.get(m._id.toString()) || 0;
-        matchedLines.add(line);
-
-        for (let i = Math.max(1, line - contextBefore); i < line; i++) {
-          contextLines.add(i);
-        }
-        for (let i = line + 1; i <= Math.min(allMessages.length, line + contextAfter); i++) {
-          contextLines.add(i);
-        }
-
-        return {
-          line,
-          role: m.role,
-          content: m.content || "",
-          timestamp: new Date(m.timestamp).toISOString(),
-          tool_calls_count: m.tool_calls?.length,
-          tool_results_count: m.tool_results?.length,
-        };
-      });
-
-      const contextMessages: Array<{
-        line: number;
-        role: string;
-        content: string;
-        tool_calls_count?: number;
-        tool_results_count?: number;
-      }> = [];
-      for (const lineNum of contextLines) {
-        if (matchedLines.has(lineNum)) continue;
-        const msg = allMessages[lineNum - 1];
-        if (msg) {
-          const content = msg.content || "";
-          contextMessages.push({
-            line: lineNum,
-            role: msg.role,
-            content,
-            tool_calls_count: msg.tool_calls?.length,
-            tool_results_count: msg.tool_results?.length,
-          });
-        }
-      }
+      const formattedMatches = matchedMessages.map((m) => ({
+        line: 0,
+        role: m.role,
+        content: m.content || "",
+        timestamp: new Date(m.timestamp).toISOString(),
+        tool_calls_count: m.tool_calls?.length,
+        tool_results_count: m.tool_results?.length,
+      }));
 
       results.push({
         id: conv._id,
         title,
         project_path: conv.project_path || null,
         updated_at: new Date(conv.updated_at).toISOString(),
-        message_count: conv.message_count || allMessages.length,
-        matches: formattedMatches.sort((a, b) => a.line - b.line),
-        context: contextMessages.sort((a, b) => a.line - b.line),
+        message_count: conv.message_count || 0,
+        matches: formattedMatches,
+        context: [],
       });
     }
 

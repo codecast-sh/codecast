@@ -11,7 +11,6 @@ describe("RetryQueue", () => {
       initialDelayMs: 50,
       maxDelayMs: 400,
       maxAttempts: 3,
-      checkIntervalMs: 25,
       onLog: (msg) => logs.push(msg),
     });
   });
