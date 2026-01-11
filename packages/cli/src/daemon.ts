@@ -1317,6 +1317,7 @@ async function main(): Promise<void> {
     initialDelayMs: 3000,
     maxDelayMs: 60000,
     maxAttempts: 15,
+    persistPath: `${CONFIG_DIR}/retry-queue.json`,
     onLog: log,
   });
 
@@ -1401,6 +1402,8 @@ async function main(): Promise<void> {
 
     return false;
   });
+
+  retryQueue.start();
 
   const watcher = new SessionWatcher();
   const fileSyncs = new Map<string, InvalidateSync>();
@@ -1753,7 +1756,7 @@ async function main(): Promise<void> {
     if (pendingOps > 0) {
       log(`Waiting for ${pendingOps} pending operations to complete...`);
 
-      const completed = await retryQueue.waitForCompletion(10000);
+      const completed = await retryQueue.waitForCompletion(60000);
       if (!completed) {
         log(`Shutdown timeout: ${retryQueue.getQueueSize()} operations did not complete`);
       }

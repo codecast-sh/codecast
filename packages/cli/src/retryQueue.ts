@@ -1,3 +1,5 @@
+import fs from "fs";
+
 export interface RetryOperation {
   id: string;
   type: "createConversation" | "addMessage";
@@ -24,12 +26,15 @@ export interface RetryQueueConfig {
   initialDelayMs?: number;
   maxDelayMs?: number;
   maxAttempts?: number;
+  concurrency?: number;
+  persistPath?: string;
   onLog?: (message: string) => void;
 }
 
 const DEFAULT_INITIAL_DELAY = 1000;
 const DEFAULT_MAX_DELAY = 30000;
 const DEFAULT_MAX_ATTEMPTS = 10;
+const DEFAULT_CONCURRENCY = 5;
 
 export class RetryQueue {
   private queue: Map<string, RetryOperation> = new Map();
@@ -38,14 +43,58 @@ export class RetryQueue {
   private initialDelayMs: number;
   private maxDelayMs: number;
   private maxAttempts: number;
+  private concurrency: number;
+  private persistPath: string | null;
   private log: (message: string) => void;
   private processing = false;
+  private rateLimitedUntil = 0;
 
   constructor(config: RetryQueueConfig = {}) {
     this.initialDelayMs = config.initialDelayMs ?? DEFAULT_INITIAL_DELAY;
     this.maxDelayMs = config.maxDelayMs ?? DEFAULT_MAX_DELAY;
     this.maxAttempts = config.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+    this.concurrency = config.concurrency ?? DEFAULT_CONCURRENCY;
+    this.persistPath = config.persistPath ?? null;
     this.log = config.onLog ?? (() => {});
+    this.load();
+  }
+
+  private load(): void {
+    if (!this.persistPath) return;
+    try {
+      if (fs.existsSync(this.persistPath)) {
+        const data = JSON.parse(fs.readFileSync(this.persistPath, "utf-8"));
+        if (Array.isArray(data)) {
+          for (const op of data) {
+            if (op.id && op.type && op.params) {
+              op.nextRetryAt = Date.now() + 1000;
+              this.queue.set(op.id, op);
+            }
+          }
+          if (this.queue.size > 0) {
+            this.log(`Restored ${this.queue.size} operations from disk`);
+          }
+        }
+      }
+    } catch {
+      this.log("Failed to load retry queue from disk");
+    }
+  }
+
+  start(): void {
+    if (this.queue.size > 0) {
+      this.scheduleNextCheck();
+    }
+  }
+
+  private persist(): void {
+    if (!this.persistPath) return;
+    try {
+      const data = Array.from(this.queue.values());
+      fs.writeFileSync(this.persistPath, JSON.stringify(data, null, 2));
+    } catch {
+      this.log("Failed to persist retry queue to disk");
+    }
   }
 
   setExecutor(executor: (op: RetryOperation) => Promise<boolean>): void {
@@ -71,6 +120,7 @@ export class RetryQueue {
       rateLimitDelayMs: rateLimitDelay ?? undefined,
     };
     this.queue.set(id, op);
+    this.persist();
     this.log(`Queued ${type} for retry${rateLimitDelay ? ` (rate limited, ${delay}ms)` : ''} (id: ${id})`);
     this.scheduleNextCheck();
     return id;
@@ -88,16 +138,20 @@ export class RetryQueue {
       return;
     }
 
-    // Find the earliest retry time
-    let earliestRetryAt = Infinity;
+    const now = Date.now();
+
+    let earliestRetryAt = this.rateLimitedUntil > now ? this.rateLimitedUntil : Infinity;
     for (const op of this.queue.values()) {
       if (op.nextRetryAt < earliestRetryAt) {
         earliestRetryAt = op.nextRetryAt;
       }
     }
 
-    // Schedule timer for that time (with a minimum of 10ms to avoid tight loops)
-    const delay = Math.max(10, earliestRetryAt - Date.now());
+    if (this.rateLimitedUntil > now && earliestRetryAt < this.rateLimitedUntil) {
+      earliestRetryAt = this.rateLimitedUntil;
+    }
+
+    const delay = Math.max(10, earliestRetryAt - now);
     this.timer = setTimeout(() => this.processQueue(), delay);
   }
 
@@ -114,31 +168,56 @@ export class RetryQueue {
     this.processing = true;
     const now = Date.now();
 
-    for (const [id, op] of this.queue) {
-      if (op.nextRetryAt > now) continue;
+    if (this.rateLimitedUntil > now) {
+      this.processing = false;
+      this.scheduleNextCheck();
+      return;
+    }
 
+    const readyOps: RetryOperation[] = [];
+    for (const op of this.queue.values()) {
+      if (op.nextRetryAt <= now) {
+        readyOps.push(op);
+      }
+    }
+
+    if (readyOps.length === 0) {
+      this.processing = false;
+      this.scheduleNextCheck();
+      return;
+    }
+
+    const batch = readyOps.slice(0, this.concurrency);
+
+    const processOp = async (op: RetryOperation): Promise<void> => {
       op.attempts++;
       this.log(
-        `Retrying ${op.type} (attempt ${op.attempts}/${this.maxAttempts}, id: ${id})`
+        `Retrying ${op.type} (attempt ${op.attempts}/${this.maxAttempts}, id: ${op.id})`
       );
 
       try {
-        const success = await this.executor(op);
+        const success = await this.executor!(op);
         if (success) {
-          this.queue.delete(id);
-          this.log(`Retry succeeded for ${op.type} (id: ${id})`);
+          this.queue.delete(op.id);
+          this.log(`Retry succeeded for ${op.type} (id: ${op.id})`);
         } else {
           this.handleFailure(op, "Operation returned false");
         }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
+        const rateLimitDelay = parseRateLimitDelay(errorMsg);
+        if (rateLimitDelay) {
+          this.rateLimitedUntil = Date.now() + rateLimitDelay;
+          this.log(`Rate limited globally for ${rateLimitDelay}ms`);
+        }
         this.handleFailure(op, errorMsg);
       }
-    }
+    };
+
+    await Promise.all(batch.map(processOp));
+    this.persist();
 
     this.processing = false;
-
-    // Schedule next check based on remaining items
     this.scheduleNextCheck();
   }
 
@@ -172,6 +251,7 @@ export class RetryQueue {
 
   clear(): void {
     this.queue.clear();
+    this.persist();
     this.stopTimer();
   }
 

@@ -15,7 +15,6 @@ describe("Daemon retry integration", () => {
       initialDelayMs: 50,
       maxDelayMs: 400,
       maxAttempts: 3,
-      checkIntervalMs: 25,
       onLog: (msg) => logs.push(msg),
     });
 
@@ -105,7 +104,6 @@ describe("Daemon retry integration", () => {
       initialDelayMs: 50,
       maxDelayMs: 400,
       maxAttempts: 3,
-      checkIntervalMs: 25,
       onLog: (msg) => logs.push(msg),
     });
 
@@ -149,7 +147,6 @@ describe("Daemon retry integration", () => {
       initialDelayMs: 50,
       maxDelayMs: 400,
       maxAttempts: 3,
-      checkIntervalMs: 25,
       onLog: (msg) => retryLogs.push(msg),
     });
 
