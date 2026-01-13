@@ -278,3 +278,94 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
 
   return lines.join("\n");
 }
+
+interface FeedPreviewMessage {
+  line: number;
+  role: string;
+  content: string;
+  tool_calls_count?: number;
+  tool_results_count?: number;
+}
+
+interface FeedConversation {
+  id: string;
+  title: string;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+  preview: FeedPreviewMessage[];
+}
+
+interface FeedResult {
+  conversations: FeedConversation[];
+  scope: string;
+}
+
+interface FeedOptions {
+  projectPath?: string;
+}
+
+export function formatFeedResults(result: FeedResult, options: FeedOptions = {}): string {
+  const lines: string[] = [];
+
+  lines.push("<FEED>");
+
+  if (result.conversations.length === 0) {
+    lines.push("No conversations found.");
+    if (options.projectPath) {
+      lines.push(`\nScope: ${truncatePath(options.projectPath)}`);
+      lines.push("Use -g to view all sessions globally.");
+    }
+    lines.push("</FEED>");
+    return lines.join("\n");
+  }
+
+  lines.push(`Recent conversations (${result.conversations.length})\n`);
+
+  for (const conv of result.conversations) {
+    const header = `── ${conv.title} `;
+    const padding = "─".repeat(Math.max(0, 60 - header.length));
+    lines.push(header + padding);
+
+    const meta = [
+      truncateId(conv.id),
+      formatDate(conv.updated_at),
+      `${conv.message_count} msgs`,
+      truncatePath(conv.project_path),
+    ].filter(Boolean).join(" | ");
+    lines.push(`   ${meta}\n`);
+
+    for (const msg of conv.preview) {
+      const lineNum = String(msg.line).padStart(4);
+      const role = formatRole(msg.role);
+
+      if (msg.role === "user") {
+        lines.push(`  ${lineNum}: ${role} ${msg.content}`);
+      } else {
+        const toolInfo: string[] = [];
+        if (msg.tool_calls_count) {
+          toolInfo.push(`${msg.tool_calls_count} tool${msg.tool_calls_count === 1 ? "" : "s"}`);
+        }
+        const suffix = toolInfo.length > 0 ? ` [${toolInfo.join(", ")}]` : "";
+        lines.push(`       ${lineNum}: ${role} ${msg.content}${suffix}`);
+      }
+    }
+
+    lines.push("");
+  }
+
+  if (result.conversations.length > 0) {
+    const firstId = truncateId(result.conversations[0].id);
+    lines.push(`Use: codecast read ${firstId} <range>        # read messages by line range`);
+    lines.push(`     codecast read ${firstId} <range> --full  # include full tool call/result content`);
+  }
+
+  if (options.projectPath) {
+    lines.push(`\nScope: ${truncatePath(options.projectPath)}`);
+    lines.push("Use -g to view all sessions globally.");
+  }
+
+  lines.push("</FEED>");
+
+  return lines.join("\n");
+}

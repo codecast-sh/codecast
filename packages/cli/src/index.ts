@@ -899,6 +899,56 @@ program
   });
 
 program
+  .command("feed")
+  .description(
+    "Browse recent conversations like a feed\n\n" +
+    "By default, shows sessions from the current project.\n" +
+    "Use -g to view all sessions globally.\n\n" +
+    "Examples:\n" +
+    "  codecast feed                  # recent sessions in current project\n" +
+    "  codecast feed -g               # recent sessions globally\n" +
+    "  codecast feed --limit 20       # show more sessions"
+  )
+  .option("-g, --global", "Show all sessions (not just current project)")
+  .option("-l, --limit <n>", "Maximum number of conversations to return", "10")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const limit = parseInt(options.limit);
+    const projectPath = options.global ? undefined : process.cwd();
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/feed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          limit,
+          project_path: projectPath,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatFeedResults } = await import("./formatter.js");
+      console.log(formatFeedResults(result, { projectPath }));
+    } catch (error) {
+      console.error("Feed failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
   .command("read")
   .description(
     "Read messages from a conversation\n\n" +
