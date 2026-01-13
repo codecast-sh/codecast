@@ -1417,7 +1417,7 @@ export const readConversationMessages = mutation({
         .query("conversations")
         .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
         .order("desc")
-        .take(500);
+        .take(200);
 
       conv = userConvs.find((c) => c._id.toString().startsWith(args.conversation_id)) ?? null;
 
@@ -1427,7 +1427,7 @@ export const readConversationMessages = mutation({
           .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id))
           .filter((q) => q.eq(q.field("is_private"), false))
           .order("desc")
-          .take(200);
+          .take(100);
         conv = teamConvs.find((c) => c._id.toString().startsWith(args.conversation_id)) ?? null;
       }
     }
@@ -1472,10 +1472,10 @@ export const readConversationMessages = mutation({
 
     const messageCount = conv.message_count || 0;
     const startLine = args.start_line ?? 1;
-    const endLine = args.end_line ?? Math.min(messageCount, 100);
+    const endLine = args.end_line ?? Math.min(messageCount, 20);
 
     const startIdx = Math.max(0, startLine - 1);
-    const count = Math.min(endLine - startIdx, 200);
+    const count = Math.min(endLine - startIdx, 25);
 
     const paginatedMessages = await ctx.db
       .query("messages")
@@ -1485,14 +1485,34 @@ export const readConversationMessages = mutation({
 
     const slicedMessages = paginatedMessages.slice(startIdx);
 
-    const messages = slicedMessages.map((m, idx) => ({
-      line: startIdx + idx + 1,
-      role: m.role,
-      content: m.content || "",
-      timestamp: new Date(m.timestamp).toISOString(),
-      tool_calls: m.tool_calls,
-      tool_results: m.tool_results,
-    }));
+    const messages = slicedMessages.map((m, idx) => {
+      const truncateToolCalls = (calls: typeof m.tool_calls) => {
+        if (!calls) return undefined;
+        return calls.map((tc) => ({
+          id: tc.id,
+          name: tc.name,
+          input: tc.input && tc.input.length > 500 ? tc.input.slice(0, 500) + "..." : tc.input,
+        }));
+      };
+
+      const truncateToolResults = (results: typeof m.tool_results) => {
+        if (!results) return undefined;
+        return results.map((tr) => ({
+          tool_use_id: tr.tool_use_id,
+          content: tr.content && tr.content.length > 1000 ? tr.content.slice(0, 1000) + "..." : tr.content,
+          is_error: tr.is_error,
+        }));
+      };
+
+      return {
+        line: startIdx + idx + 1,
+        role: m.role,
+        content: m.content || "",
+        timestamp: new Date(m.timestamp).toISOString(),
+        tool_calls: truncateToolCalls(m.tool_calls),
+        tool_results: truncateToolResults(m.tool_results),
+      };
+    });
 
     return {
       conversation: {
