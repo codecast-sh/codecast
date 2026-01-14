@@ -72,16 +72,21 @@ function formatDate(isoDate: string): string {
   }
 }
 
-function truncatePath(path: string | null): string {
+function truncatePath(path: string | null, maxLen: number = 38): string {
   if (!path) return "";
   const home = process.env.HOME || "";
   if (home && path.startsWith(home)) {
     path = "~" + path.slice(home.length);
   }
-  if (path.length > 40) {
+  if (path.length > maxLen) {
     const parts = path.split("/");
     if (parts.length > 3) {
-      return parts[0] + "/.../" + parts.slice(-2).join("/");
+      const prefix = parts[0];
+      const suffix = parts.slice(-2).join("/");
+      if ((prefix + "/.../" + suffix).length <= maxLen) {
+        return prefix + "/.../" + suffix;
+      }
+      return ".../" + suffix;
     }
   }
   return path;
@@ -831,7 +836,7 @@ function extractDiffData(sessions: DiffSession[]): {
             const command = (tcInput.command as string) || "";
             const commitMatch = command.match(/git commit\s+(?:-m\s+)?["']([^"']+)["']/);
             if (commitMatch) {
-              commits.push({ hash: "pending", message: commitMatch[1].slice(0, 60) });
+              commits.push({ hash: "pending", message: commitMatch[1].slice(0, 80) });
             }
           }
         }
@@ -846,7 +851,7 @@ function extractDiffData(sessions: DiffSession[]): {
           for (const line of contentLines) {
             const gitCommitMatch = line.match(/\[[\w-]+\s+([a-f0-9]{7,8})\]\s+(.+)/);
             if (gitCommitMatch && !commits.find(c => c.hash === gitCommitMatch[1])) {
-              commits.push({ hash: gitCommitMatch[1], message: gitCommitMatch[2].slice(0, 60) });
+              commits.push({ hash: gitCommitMatch[1], message: gitCommitMatch[2].slice(0, 80) });
             }
           }
         }

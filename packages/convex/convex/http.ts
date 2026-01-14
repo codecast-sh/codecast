@@ -1095,6 +1095,7 @@ http.route({
       const result = await ctx.runMutation(api.fileTouches.findSimilar, {
         api_token,
         file_path,
+        session_id,
         limit,
       });
 
