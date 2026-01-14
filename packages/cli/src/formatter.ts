@@ -84,6 +84,29 @@ function formatDate(isoDate: string): string {
   }
 }
 
+function formatRelativeTime(isoDate: string): string {
+  const date = new Date(isoDate);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMin = Math.floor(diffMs / (1000 * 60));
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffMin < 1) {
+    return "just now";
+  } else if (diffMin < 60) {
+    return `${diffMin} min ago`;
+  } else if (diffHour < 24) {
+    return diffHour === 1 ? "1 hour ago" : `${diffHour} hours ago`;
+  } else if (diffDay === 1) {
+    return "yesterday";
+  } else if (diffDay < 7) {
+    return `${diffDay} days ago`;
+  } else {
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+}
+
 function truncatePath(path: string | null, maxLen: number = 38): string {
   if (!path) return "";
   const home = process.env.HOME || "";
@@ -1499,6 +1522,93 @@ export function formatContextResults(input: ContextInput): string {
   }
 
   lines.push("</CONTEXT>");
+
+  return lines.join("\n");
+}
+
+interface ResumeConversation {
+  id: string;
+  session_id?: string;
+  title: string;
+  subtitle?: string | null;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+  preview?: string;
+  goal?: string;
+}
+
+interface ResumeResult {
+  conversations: ResumeConversation[];
+  query: string;
+}
+
+export function formatResumeResults(result: ResumeResult): string {
+  const lines: string[] = [];
+  const { conversations, query } = result;
+
+  if (conversations.length === 0) {
+    lines.push(`${c.dim}No sessions found matching "${query}"${c.reset}`);
+    lines.push("");
+    lines.push("Try:");
+    lines.push("  codecast resume \"different query\"");
+    lines.push("  codecast feed -g  # browse all sessions");
+    return lines.join("\n");
+  }
+
+  lines.push(`${c.dim}Found ${conversations.length} session${conversations.length === 1 ? "" : "s"} matching "${query}"${c.reset}`);
+  lines.push("");
+
+  for (let i = 0; i < conversations.length; i++) {
+    const conv = conversations[i];
+    const num = `${c.bold}${c.cyan}[${i + 1}]${c.reset}`;
+    const title = conv.title || "Untitled";
+    const relTime = formatRelativeTime(conv.updated_at);
+
+    lines.push(`${num} ${c.bold}${title}${c.reset}`);
+
+    const meta = [
+      `${c.dim}${relTime}${c.reset}`,
+      `${c.dim}${conv.message_count} msgs${c.reset}`,
+    ];
+    if (conv.project_path) {
+      meta.push(`${c.dim}${truncatePath(conv.project_path)}${c.reset}`);
+    }
+    lines.push(`    ${meta.join(" | ")}`);
+
+    const firstMessage = conv.goal || conv.preview;
+    if (firstMessage) {
+      const msgLine = firstMessage.split("\n")[0].trim();
+      const maxLen = 85;
+      if (msgLine.length > maxLen) {
+        lines.push(`    ${c.green}>${c.reset} ${msgLine.slice(0, maxLen)}...`);
+      } else {
+        lines.push(`    ${c.green}>${c.reset} ${msgLine}`);
+      }
+    }
+
+    if (conv.subtitle) {
+      const subtitleLines = conv.subtitle.split("\n").filter((l) => l.trim());
+      const maxLines = 4;
+      const maxLineLen = 83;
+
+      for (let j = 0; j < Math.min(subtitleLines.length, maxLines); j++) {
+        const rawLine = subtitleLines[j].trim();
+        if (rawLine.length > maxLineLen) {
+          lines.push(`      ${rawLine.slice(0, maxLineLen)}...`);
+        } else {
+          lines.push(`      ${rawLine}`);
+        }
+      }
+      if (subtitleLines.length > maxLines) {
+        lines.push(`      ${c.dim}... (${subtitleLines.length - maxLines} more)${c.reset}`);
+      }
+    }
+
+    lines.push("");
+  }
+
+  lines.push(`${c.dim}Enter number to open, or q to quit${c.reset}`);
 
   return lines.join("\n");
 }
