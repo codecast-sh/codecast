@@ -53,7 +53,7 @@ function LoginForm() {
 
     try {
       await signIn("password", { email, password, flow: "signIn" });
-      // Don't manually redirect - let useEffect handle it when isAuthenticated updates
+      router.replace(redirectTo);
     } catch (err) {
       if (err instanceof Error) {
         if (err.message.includes("Invalid") || err.message.includes("credentials")) {

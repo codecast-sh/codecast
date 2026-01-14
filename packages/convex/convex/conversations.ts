@@ -1474,21 +1474,21 @@ export const readConversationMessages = mutation({
     }
 
     if (!conv) {
+      // Search user conversations for prefix match (increased limit for older convos)
       const userConvs = await ctx.db
         .query("conversations")
         .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-        .order("desc")
-        .take(200);
+        .take(2000);
 
       conv = userConvs.find((c) => c._id.toString().startsWith(args.conversation_id)) ?? null;
 
       if (!conv && user.team_id) {
+        // Search team conversations for prefix match
         const teamConvs = await ctx.db
           .query("conversations")
           .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id))
           .filter((q) => q.eq(q.field("is_private"), false))
-          .order("desc")
-          .take(100);
+          .take(1000);
         conv = teamConvs.find((c) => c._id.toString().startsWith(args.conversation_id)) ?? null;
       }
     }
