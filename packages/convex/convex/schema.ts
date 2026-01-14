@@ -78,6 +78,7 @@ export default defineSchema({
     fork_count: v.optional(v.number()),
     forked_from: v.optional(v.id("conversations")),
     is_favorite: v.optional(v.boolean()),
+    short_id: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
@@ -85,7 +86,8 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_agent_type", ["agent_type"])
     .index("by_share_token", ["share_token"])
-    .index("by_session_id", ["session_id"]),
+    .index("by_session_id", ["session_id"])
+    .index("by_short_id", ["short_id"]),
 
   public_conversations: defineTable({
     conversation_id: v.id("conversations"),

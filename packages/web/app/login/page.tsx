@@ -19,7 +19,7 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const reason = searchParams.get("reason");
   const returnTo = searchParams.get("return_to");
-  const redirectTo = returnTo || "/";
+  const redirectTo = returnTo || "/dashboard";
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
