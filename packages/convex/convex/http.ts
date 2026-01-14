@@ -364,7 +364,7 @@ http.route({
         });
       }
 
-      const result = await ctx.runMutation(api.conversations.feedForCLI, {
+      const result = await ctx.runQuery(api.conversations.feedForCLI, {
         api_token,
         limit,
         offset,

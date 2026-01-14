@@ -1382,6 +1382,17 @@ export const searchForCLI = query({
       const matchedMessages = messages.slice(0, 5);
       totalMatches += matchedMessages.length;
 
+      // Get all message IDs for this conversation to compute line numbers
+      const allConvMessages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .order("asc")
+        .collect();
+      const messageIdToLine = new Map<string, number>();
+      allConvMessages.forEach((m, idx) => {
+        messageIdToLine.set(m._id.toString(), idx + 1);
+      });
+
       // Extract snippets around matches (same logic as web search)
       const formattedMatches = matchedMessages.map((m) => {
         const content = m.content || "";
@@ -1404,7 +1415,7 @@ export const searchForCLI = query({
         if (end < content.length) snippet = snippet + "...";
 
         return {
-          line: 0,
+          line: messageIdToLine.get(m._id.toString()) || 0,
           role: m.role,
           content: snippet,
           timestamp: new Date(m.timestamp).toISOString(),
@@ -2133,7 +2144,7 @@ export const clearParentMessageUuid = mutation({
   },
 });
 
-export const feedForCLI = mutation({
+export const feedForCLI = query({
   args: {
     api_token: v.string(),
     limit: v.optional(v.number()),
@@ -2192,7 +2203,18 @@ export const feedForCLI = mutation({
 
     const allConversations = [...ownConversations, ...teamConversations]
       .filter((c) => {
-        if (projectPath && c.project_path !== projectPath) return false;
+        // Use prefix matching for project_path (same as search)
+        if (projectPath) {
+          const convPath = c.project_path || "";
+          const convGitRoot = c.git_root || "";
+          const isPathMatch = convPath === projectPath ||
+            convPath.startsWith(projectPath + "/") ||
+            projectPath.startsWith(convPath + "/") ||
+            convGitRoot === projectPath ||
+            convGitRoot.startsWith(projectPath + "/") ||
+            projectPath.startsWith(convGitRoot + "/");
+          if (!isPathMatch) return false;
+        }
         if (startTime && c.updated_at < startTime) return false;
         if (endTime && c.updated_at > endTime) return false;
         if (matchingConvIds && !matchingConvIds.has(c._id.toString())) return false;
