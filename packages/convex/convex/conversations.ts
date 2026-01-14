@@ -2090,8 +2090,10 @@ export const feedForCLI = mutation({
   args: {
     api_token: v.string(),
     limit: v.optional(v.number()),
+    offset: v.optional(v.number()),
+    start_time: v.optional(v.number()),
+    end_time: v.optional(v.number()),
     project_path: v.optional(v.string()),
-    cursor: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -2104,14 +2106,16 @@ export const feedForCLI = mutation({
     }
 
     const limit = args.limit ?? 10;
+    const offset = args.offset ?? 0;
     const projectPath = args.project_path;
+    const startTime = args.start_time;
+    const endTime = args.end_time ?? Date.now();
 
-    let conversationsQuery = ctx.db
+    const ownConversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-      .order("desc");
-
-    const ownConversations = await conversationsQuery.take(100);
+      .order("desc")
+      .take(200);
 
     let teamConversations: typeof ownConversations = [];
     if (user.team_id) {
@@ -2125,13 +2129,18 @@ export const feedForCLI = mutation({
           )
         )
         .order("desc")
-        .take(50);
+        .take(100);
     }
 
     const allConversations = [...ownConversations, ...teamConversations]
-      .filter((c) => !projectPath || c.project_path === projectPath)
+      .filter((c) => {
+        if (projectPath && c.project_path !== projectPath) return false;
+        if (startTime && c.updated_at < startTime) return false;
+        if (endTime && c.updated_at > endTime) return false;
+        return true;
+      })
       .sort((a, b) => b.updated_at - a.updated_at)
-      .slice(0, limit);
+      .slice(offset, offset + limit);
 
     const results: Array<{
       id: string;

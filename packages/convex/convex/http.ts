@@ -352,7 +352,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, limit, project_path } = body;
+      const { api_token, limit, offset, start_time, end_time, project_path } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -364,6 +364,9 @@ http.route({
       const result = await ctx.runMutation(api.conversations.feedForCLI, {
         api_token,
         limit,
+        offset,
+        start_time,
+        end_time,
         project_path,
       });
 
