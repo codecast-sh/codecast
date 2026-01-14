@@ -1,13 +1,14 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "Codecast",
+    "slug": "codecast",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "mobile",
+    "scheme": "codecast",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "owner": "ashotp",
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
@@ -15,9 +16,11 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.ashotp.mobile",
+      "bundleIdentifier": "com.ashotp.codecast",
       "infoPlist": {
-        "UIBackgroundModes": ["remote-notification"]
+        "UIBackgroundModes": ["remote-notification"],
+        "NSFaceIDUsageDescription": "Use Face ID to securely access your account",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -54,6 +57,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a2698c27-7e77-4406-aae2-063844898e60"
+      }
     }
   }
 }

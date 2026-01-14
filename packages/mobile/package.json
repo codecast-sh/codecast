@@ -6,7 +6,12 @@
     "start": "npx expo start",
     "android": "npx expo start --android",
     "ios": "npx expo start --ios",
-    "web": "npx expo start --web"
+    "web": "npx expo start --web",
+    "build:dev": "eas build --profile development --platform ios",
+    "build:preview": "eas build --profile preview --platform ios",
+    "build:prod": "eas build --profile production --platform ios",
+    "submit:ios": "eas submit --platform ios --latest",
+    "release:ios": "eas build --profile production --platform ios --auto-submit"
   },
   "dependencies": {
     "@convex-dev/auth": "^0.0.90",
