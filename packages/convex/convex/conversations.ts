@@ -1424,6 +1424,9 @@ export const searchForCLI = query({
         };
       });
 
+      // Sort matches by line number (chronological order)
+      formattedMatches.sort((a, b) => a.line - b.line);
+
       results.push({
         id: conv._id,
         title,
