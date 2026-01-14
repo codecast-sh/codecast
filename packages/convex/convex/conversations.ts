@@ -133,6 +133,10 @@ export const createConversation = mutation({
       git_diff_staged: args.git_diff_staged,
       git_root: args.git_root,
     });
+    // Set short_id for O(1) lookup by truncated ID
+    await ctx.db.patch(conversationId, {
+      short_id: conversationId.toString().slice(0, 7),
+    });
 
     if (args.api_token) {
       await ctx.db.patch(args.user_id, {
@@ -1183,6 +1187,36 @@ export const makeAllPrivateAdmin = internalMutation({
   },
 });
 
+export const backfillShortIds = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batchSize = args.limit ?? 100;
+    // Use cursor-based pagination to avoid full table scan
+    const result = await ctx.db
+      .query("conversations")
+      .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
+
+    let updated = 0;
+    for (const conv of result.page) {
+      if (!conv.short_id) {
+        await ctx.db.patch(conv._id, {
+          short_id: conv._id.toString().slice(0, 7),
+        });
+        updated++;
+      }
+    }
+
+    return {
+      updated,
+      cursor: result.continueCursor,
+      isDone: result.isDone,
+    };
+  },
+});
+
 export const getConversationBySessionId = query({
   args: {
     session_id: v.string(),
@@ -1474,23 +1508,11 @@ export const readConversationMessages = mutation({
     }
 
     if (!conv) {
-      // Search user conversations for prefix match (increased limit for older convos)
-      const userConvs = await ctx.db
+      // Try indexed short_id lookup (O(1) instead of iterating)
+      conv = await ctx.db
         .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-        .take(2000);
-
-      conv = userConvs.find((c) => c._id.toString().startsWith(args.conversation_id)) ?? null;
-
-      if (!conv && user.team_id) {
-        // Search team conversations for prefix match
-        const teamConvs = await ctx.db
-          .query("conversations")
-          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id))
-          .filter((q) => q.eq(q.field("is_private"), false))
-          .take(1000);
-        conv = teamConvs.find((c) => c._id.toString().startsWith(args.conversation_id)) ?? null;
-      }
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
+        .first();
     }
 
     if (!conv) {
@@ -1880,6 +1902,10 @@ export const forkConversation = mutation({
       is_private: true,
       status: "completed",
       forked_from: original._id,
+    });
+    // Set short_id for O(1) lookup
+    await ctx.db.patch(newConversationId, {
+      short_id: newConversationId.toString().slice(0, 7),
     });
 
     for (const msg of messages) {
