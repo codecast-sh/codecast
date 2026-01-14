@@ -1722,6 +1722,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     },
     overscan: 50,
     paddingEnd: 100,
+    isScrollingResetDelay: 150,
   });
 
 

@@ -1,3 +1,15 @@
+// ANSI color codes
+const c = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  blue: "\x1b[34m",
+  green: "\x1b[32m",
+  cyan: "\x1b[36m",
+  yellow: "\x1b[33m",
+  magenta: "\x1b[35m",
+};
+
 interface SearchMatch {
   line: number;
   role: string;
@@ -156,47 +168,29 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
   lines.push(`Found ${result.total_matches} match${result.total_matches === 1 ? "" : "es"} in ${result.conversations.length} conversation${result.conversations.length === 1 ? "" : "s"}\n`);
 
   for (const conv of result.conversations) {
-    const header = `── ${conv.title} `;
-    const padding = "─".repeat(Math.max(0, 60 - header.length));
+    lines.push(""); // Extra spacing before each conversation
+    const header = `${c.bold}── ${conv.title} ${c.reset}`;
+    const padding = "─".repeat(Math.max(0, 60 - conv.title.length - 4));
     lines.push(header + padding);
 
     const meta = [
-      truncateId(conv.id),
-      formatDate(conv.updated_at),
-      `${conv.message_count} msgs`,
-      truncatePath(conv.project_path),
+      `${c.cyan}${truncateId(conv.id)}${c.reset}`,
+      `${c.dim}${formatDate(conv.updated_at)}${c.reset}`,
+      `${c.dim}${conv.message_count} msgs${c.reset}`,
+      truncatePath(conv.project_path) ? `${c.dim}${truncatePath(conv.project_path)}${c.reset}` : "",
     ].filter(Boolean).join(" | ");
-    lines.push(`   ${meta}\n`);
-
-    const allMsgs = [...conv.matches, ...conv.context].sort((a, b) => a.line - b.line);
-    const matchLines = new Set(conv.matches.map((m) => m.line));
-
-    for (const msg of allMsgs) {
-      const lineNum = String(msg.line).padStart(4);
-      const role = formatRole(msg.role);
-      const prefix = matchLines.has(msg.line) ? "" : "-";
-
-      const toolInfo: string[] = [];
-      if (msg.tool_calls_count) {
-        toolInfo.push(`${msg.tool_calls_count} tool call${msg.tool_calls_count === 1 ? "" : "s"}`);
-      }
-      if (msg.tool_results_count) {
-        toolInfo.push(`${msg.tool_results_count} tool result${msg.tool_results_count === 1 ? "" : "s"}`);
-      }
-
-      if (msg.content) {
-        lines.push(`${prefix}${lineNum}: ${role} ${msg.content}`);
-        if (toolInfo.length > 0) {
-          lines.push(`       [${toolInfo.join(", ")}]`);
-        }
-      } else if (toolInfo.length > 0) {
-        lines.push(`${prefix}${lineNum}: ${role} [${toolInfo.join(", ")}]`);
-      } else {
-        lines.push(`${prefix}${lineNum}: ${role} (empty)`);
-      }
-    }
-
+    lines.push(meta);
     lines.push("");
+
+    for (const msg of conv.matches) {
+      const role = msg.role === "user"
+        ? `${c.blue}[user]${c.reset}`
+        : `${c.green}[assistant]${c.reset}`;
+      if (msg.content) {
+        lines.push(`${role} ${msg.content}`);
+      }
+      lines.push("");
+    }
   }
 
   if (result.conversations.length > 0) {
