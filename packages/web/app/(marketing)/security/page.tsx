@@ -167,6 +167,9 @@ export default function SecurityPage() {
             <Logo size="md" className="text-stone-900" />
           </Link>
           <div className="flex items-center gap-3">
+            <Link href="/features" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
+              CLI
+            </Link>
             <Link href="/security" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5">
               Security
             </Link>
@@ -507,6 +510,7 @@ const encrypted = await encryptAESGCM(message, sessionKey);
               <h4 className="font-semibold text-stone-900 mb-3 text-sm">Product</h4>
               <ul className="space-y-2 text-sm text-stone-500">
                 <li><Link href="/#how-it-works" className="hover:text-stone-900">How it works</Link></li>
+                <li><Link href="/features" className="hover:text-stone-900">CLI</Link></li>
                 <li><Link href="/security" className="hover:text-stone-900">Security</Link></li>
                 <li><Link href="/pricing" className="hover:text-stone-900">Pricing</Link></li>
                 <li><Link href="/docs" className="hover:text-stone-900">Documentation</Link></li>
