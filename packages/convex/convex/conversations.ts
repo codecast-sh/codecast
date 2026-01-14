@@ -62,6 +62,19 @@ function formatSlugAsTitle(slug: string): string {
     .join(' ');
 }
 
+type MessageLike = {
+  content?: string | null;
+  tool_calls?: unknown[] | null;
+  tool_results?: unknown[] | null;
+};
+
+function isNonEmptyMessage(m: MessageLike): boolean {
+  const hasContent = m.content && m.content.trim();
+  const hasToolCalls = m.tool_calls && m.tool_calls.length > 0;
+  const hasToolResults = m.tool_results && m.tool_results.length > 0;
+  return !!(hasContent || hasToolCalls || hasToolResults);
+}
+
 export const createConversation = mutation({
   args: {
     user_id: v.id("users"),
@@ -1416,14 +1429,15 @@ export const searchForCLI = query({
       const matchedMessages = messages.slice(0, 5);
       totalMatches += matchedMessages.length;
 
-      // Get all message IDs for this conversation to compute line numbers
+      // Get all messages and filter out empty ones (streaming artifacts) to match read numbering
       const allConvMessages = await ctx.db
         .query("messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
         .order("asc")
         .collect();
+      const nonEmptyMessages = allConvMessages.filter(isNonEmptyMessage);
       const messageIdToLine = new Map<string, number>();
-      allConvMessages.forEach((m, idx) => {
+      nonEmptyMessages.forEach((m, idx) => {
         messageIdToLine.set(m._id.toString(), idx + 1);
       });
 
@@ -1560,12 +1574,7 @@ export const readConversationMessages = mutation({
       .order("asc")
       .collect();
 
-    const nonEmptyMessages = allMessages.filter((m) => {
-      const hasContent = m.content && m.content.trim();
-      const hasToolCalls = m.tool_calls && m.tool_calls.length > 0;
-      const hasToolResults = m.tool_results && m.tool_results.length > 0;
-      return hasContent || hasToolCalls || hasToolResults;
-    });
+    const nonEmptyMessages = allMessages.filter(isNonEmptyMessage);
 
     const nonEmptyCount = nonEmptyMessages.length;
     const startLine = args.start_line ?? 1;
