@@ -1553,20 +1553,28 @@ export const readConversationMessages = mutation({
       || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
       || `Session ${conv.session_id.slice(0, 8)}`;
 
-    const messageCount = conv.message_count || 0;
-    const startLine = args.start_line ?? 1;
-    const endLine = args.end_line ?? Math.min(messageCount, 20);
-
-    const startIdx = Math.max(0, startLine - 1);
-    const count = Math.min(endLine - startIdx, 25);
-
-    const paginatedMessages = await ctx.db
+    // Get all messages and filter out empty ones (streaming artifacts)
+    const allMessages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
       .order("asc")
-      .take(startIdx + count);
+      .collect();
 
-    const slicedMessages = paginatedMessages.slice(startIdx);
+    const nonEmptyMessages = allMessages.filter((m) => {
+      const hasContent = m.content && m.content.trim();
+      const hasToolCalls = m.tool_calls && m.tool_calls.length > 0;
+      const hasToolResults = m.tool_results && m.tool_results.length > 0;
+      return hasContent || hasToolCalls || hasToolResults;
+    });
+
+    const nonEmptyCount = nonEmptyMessages.length;
+    const startLine = args.start_line ?? 1;
+    const endLine = args.end_line ?? Math.min(nonEmptyCount, 20);
+
+    const startIdx = Math.max(0, startLine - 1);
+    const count = Math.min(endLine - startLine + 1, 50);
+
+    const slicedMessages = nonEmptyMessages.slice(startIdx, startIdx + count);
 
     const messages = slicedMessages.map((m, idx) => {
       const truncateToolCalls = (calls: typeof m.tool_calls) => {
@@ -1602,7 +1610,7 @@ export const readConversationMessages = mutation({
         id: conv._id,
         title,
         project_path: conv.project_path || null,
-        message_count: messageCount,
+        message_count: nonEmptyCount,
         updated_at: new Date(conv.updated_at).toISOString(),
       },
       messages,

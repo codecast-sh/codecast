@@ -53,7 +53,7 @@ function LoginForm() {
 
     try {
       await signIn("password", { email, password, flow: "signIn" });
-      router.replace(redirectTo);
+      window.location.href = redirectTo;
     } catch (err) {
       if (err instanceof Error) {
         if (err.message.includes("Invalid") || err.message.includes("credentials")) {

@@ -195,15 +195,17 @@ function CommitCard({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
                 {item.repository ? (
-                  <a
-                    href={`https://github.com/${item.repository}/commit/${item.sha}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20 hover:bg-sol-violet/20 hover:border-sol-violet/40 transition-colors"
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      window.open(`https://github.com/${item.repository}/commit/${item.sha}`, '_blank', 'noopener,noreferrer');
+                    }}
+                    className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20 hover:bg-sol-violet/20 hover:border-sol-violet/40 transition-colors cursor-pointer"
                   >
                     {shortSha}
-                  </a>
+                  </button>
                 ) : (
                   <code className="text-[11px] font-mono text-sol-violet bg-sol-violet/10 px-1.5 py-0.5 rounded border border-sol-violet/20">
                     {shortSha}
