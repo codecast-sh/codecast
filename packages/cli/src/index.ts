@@ -38,6 +38,7 @@ interface Config {
   auto_update?: boolean;
   memory_enabled?: boolean;
   memory_version?: string;
+  claude_args?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -879,6 +880,7 @@ program
         if (config.auth_token) console.log(`  auth_token: ${maskToken(config.auth_token)}`);
         console.log(`  web_url: ${config.web_url || WEB_URL}`);
         if (config.excluded_paths) console.log(`  excluded_paths: ${config.excluded_paths}`);
+        if (config.claude_args) console.log(`  claude_args: ${config.claude_args}`);
         if (config.created_at) console.log(`  created_at: ${config.created_at}`);
         if (config.updated_at) console.log(`  updated_at: ${config.updated_at}`);
       } else {
@@ -887,7 +889,7 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths"] as const;
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args"] as const;
     const sensitiveKeys = ["auth_token"];
     type SettableKey = (typeof settableKeys)[number];
 
@@ -1154,6 +1156,189 @@ program
       process.exit(1);
     }
   });
+
+program
+  .command("resume")
+  .description(
+    "Resume a Claude Code session by searching with natural language\n\n" +
+    "Searches your session history and opens the matching session in Claude.\n" +
+    "If multiple matches are found, shows a selection to choose from.\n\n" +
+    "Configure default Claude args:\n" +
+    "  codecast config claude_args \"--dangerously-skip-permissions\"\n\n" +
+    "Examples:\n" +
+    "  codecast resume \"logo design\"          # search and open\n" +
+    "  codecast resume auth -g                 # search globally\n" +
+    "  codecast resume refactor -n 5           # show up to 5 results"
+  )
+  .argument("<query>", "Natural language search query")
+  .option("-g, --global", "Search all sessions (not just current project)")
+  .option("-n, --limit <n>", "Max results to show", "10")
+  .option("--dry-run", "Show matches without opening Claude")
+  .option("--claude-args <args>", "Additional args to pass to claude (overrides config)")
+  .action(async (query, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const limit = parseInt(options.limit);
+    const projectPath = options.global ? undefined : process.cwd();
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/feed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          limit,
+          offset: 0,
+          query,
+          project_path: projectPath,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const extractGoalFromPreview = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
+        if (!preview) return undefined;
+        const firstUser = preview.find((m) => m.role === "user");
+        return firstUser?.content;
+      };
+
+      const queryWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length > 1);
+
+      const rawConversations = (result.conversations || []).map((conv: { id: string; title: string; subtitle?: string | null; project_path: string | null; updated_at: string; message_count: number; session_id?: string; preview?: Array<{ role: string; content: string }> }) => ({
+        ...conv,
+        goal: extractGoalFromPreview(conv.preview),
+      }));
+
+      const conversations = rawConversations.filter((conv: { title: string; subtitle?: string | null; goal?: string }) => {
+        if (queryWords.length <= 1) return true;
+        const searchText = [conv.title, conv.subtitle, conv.goal].filter(Boolean).join(" ").toLowerCase();
+        return queryWords.every((word: string) => searchText.includes(word));
+      });
+
+      if (conversations.length === 0) {
+        console.log(`No sessions found matching "${query}"`);
+        console.log("");
+        console.log("Try:");
+        console.log("  codecast resume \"different query\"");
+        console.log("  codecast feed -g  # browse all sessions");
+        process.exit(0);
+      }
+
+      const enrichedConversations = conversations;
+
+      if (conversations.length === 1 && !options.dryRun) {
+        const conv = conversations[0];
+        const sessionId = conv.session_id;
+        if (!sessionId) {
+          console.error("Session ID not found for this conversation");
+          process.exit(1);
+        }
+        console.log(`Opening: ${conv.title}`);
+        const claudeArgs = options.claudeArgs || config.claude_args;
+        launchClaude(sessionId, claudeArgs, !claudeArgs);
+        return;
+      }
+
+      if (options.dryRun) {
+        const { formatResumeResults } = await import("./formatter.js");
+        console.log(formatResumeResults({ conversations: enrichedConversations, query }));
+        process.exit(0);
+      }
+
+      const { select } = await import("@inquirer/prompts");
+
+      const truncateTitle = (title: string, maxLen: number = 60) => {
+        if (title.length <= maxLen) return title;
+        return title.slice(0, maxLen) + "...";
+      };
+
+      const formatRelTime = (isoDate: string): string => {
+        const date = new Date(isoDate);
+        const diffMs = Date.now() - date.getTime();
+        const diffMin = Math.floor(diffMs / (1000 * 60));
+        const diffHour = Math.floor(diffMin / 60);
+        const diffDay = Math.floor(diffHour / 24);
+        if (diffMin < 1) return "now";
+        if (diffMin < 60) return `${diffMin}m`;
+        if (diffHour < 24) return `${diffHour}h`;
+        if (diffDay === 1) return "1d";
+        return `${diffDay}d`;
+      };
+
+      const choices = enrichedConversations.map((conv: { session_id?: string; title: string; subtitle?: string | null; goal?: string; updated_at: string; message_count: number }) => {
+        const time = formatRelTime(conv.updated_at);
+        const title = truncateTitle(conv.title);
+        const subtitle = conv.subtitle?.split("\n")[0]?.slice(0, 50) || conv.goal?.split("\n")[0]?.slice(0, 50) || "";
+        return {
+          name: `${title}  \x1b[2m${time} · ${conv.message_count} msgs\x1b[0m\n     \x1b[2m${subtitle}\x1b[0m`,
+          value: conv.session_id,
+          description: conv.goal?.split("\n")[0],
+        };
+      });
+
+      try {
+        const sessionId = await select<string>({
+          message: `Found ${conversations.length} sessions matching "${query}"`,
+          choices,
+          pageSize: 10,
+        });
+
+        if (!sessionId) {
+          process.exit(0);
+        }
+
+        const conv = conversations.find((c: { session_id?: string }) => c.session_id === sessionId);
+        console.log(`\nOpening: ${conv?.title || "session"}`);
+        const claudeArgs = options.claudeArgs || config.claude_args;
+        launchClaude(sessionId, claudeArgs, !claudeArgs);
+      } catch {
+        process.exit(0);
+      }
+    } catch (error) {
+      console.error("Resume failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean): void {
+  const args = ["--resume", sessionId];
+
+  if (extraArgs) {
+    const parsedArgs = extraArgs.split(/\s+/).filter((a) => a.length > 0);
+    args.push(...parsedArgs);
+    console.log(`Using: claude ${args.join(" ")}`);
+  } else if (showArgsHint) {
+    console.log(`\nTip: Set default claude args with: codecast config claude_args -- "--dangerously-skip-permissions"`);
+  }
+
+  console.log("");
+
+  const claude = spawn("claude", args, {
+    stdio: "inherit",
+    shell: true,
+  });
+
+  claude.on("error", (err) => {
+    console.error("Failed to launch Claude:", err.message);
+    console.log("\nMake sure Claude Code is installed:");
+    console.log("  npm install -g @anthropic-ai/claude-code");
+    process.exit(1);
+  });
+
+  claude.on("close", (code) => {
+    process.exit(code ?? 0);
+  });
+}
 
 program
   .command("read")
