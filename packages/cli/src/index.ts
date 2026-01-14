@@ -480,6 +480,7 @@ const MEMORY_SNIPPET = `
 You are one session among many. Past conversations contain valuable context about decisions, patterns, and prior work. Search proactively and liberally - when starting tasks, debugging issues, or when the user references previous work. Parallelize searches when exploring multiple topics.
 
 \`\`\`bash
+codecast ask "when did we refactor X?"  # natural language query
 codecast search "auth"                # search current project
 codecast search "bug" -g -s 7d        # global, last 7 days
 codecast feed                         # browse recent conversations
@@ -686,7 +687,7 @@ async function runSync(): Promise<void> {
           await syncService.addMessage({
             conversationId,
             messageUuid: msg.uuid,
-            role: msg.role,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
             content: msg.content,
             timestamp: msg.timestamp,
             thinking: msg.thinking,
@@ -1248,7 +1249,7 @@ function setupMacOS(disable: boolean): void {
       console.log("Auto-start is not enabled");
       return;
     }
-    spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, plistPath], { stdio: "inherit" });
+    spawnSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plistPath], { stdio: "inherit" });
     fs.unlinkSync(plistPath);
     console.log("Auto-start disabled");
     console.log(`Removed: ${plistPath}`);
@@ -1288,14 +1289,14 @@ ${programArgs}
 </plist>
 `;
 
-  spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, plistPath], { stdio: "ignore" });
+  spawnSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plistPath], { stdio: "ignore" });
 
   fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
   console.log("Auto-start enabled");
   console.log(`LaunchAgent created: ${plistPath}`);
   console.log(`Command: ${executablePath} ${args.join(" ")}`);
 
-  const result = spawnSync("launchctl", ["bootstrap", `gui/${process.getuid()}`, plistPath], { stdio: "inherit" });
+  const result = spawnSync("launchctl", ["bootstrap", `gui/${process.getuid!()}`, plistPath], { stdio: "inherit" });
   if (result.status === 0) {
     console.log("\nLaunchAgent loaded successfully");
   } else {
@@ -1551,6 +1552,340 @@ program
   });
 
 program
+  .command("diff")
+  .description(
+    "Show the impact of a session - files changed, commits made, tools used\n\n" +
+    "Examples:\n" +
+    "  codecast diff <session-id>     # show changes from session\n" +
+    "  codecast diff --today          # aggregate today's sessions\n" +
+    "  codecast diff --week           # this week's changes"
+  )
+  .argument("[session-id]", "Session ID to analyze")
+  .option("--today", "Aggregate changes from today's sessions")
+  .option("--week", "Aggregate changes from this week's sessions")
+  .action(async (sessionId, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const projectPath = process.cwd();
+
+    if (options.today || options.week) {
+      const now = Date.now();
+      const startTime = options.today
+        ? new Date().setHours(0, 0, 0, 0)
+        : now - 7 * 24 * 60 * 60 * 1000;
+
+      const feedResponse = await fetch(`${siteUrl}/cli/feed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          limit: 50,
+          offset: 0,
+          start_time: startTime,
+          project_path: projectPath,
+        }),
+      });
+
+      const feedResult = await feedResponse.json();
+      if (feedResult.error) {
+        console.error(`Error: ${feedResult.error}`);
+        process.exit(1);
+      }
+
+      if (!feedResult.conversations || feedResult.conversations.length === 0) {
+        console.log(`No sessions found for ${options.today ? "today" : "this week"}`);
+        process.exit(0);
+      }
+
+      const allSessions: Array<{
+        id: string;
+        title: string;
+        messages: Array<{ tool_calls?: unknown[]; timestamp?: string }>;
+      }> = [];
+
+      for (const conv of feedResult.conversations) {
+        const readResponse = await fetch(`${siteUrl}/cli/read`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            conversation_id: conv.id,
+          }),
+        });
+
+        const readResult = await readResponse.json();
+        if (!readResult.error && readResult.messages) {
+          allSessions.push({
+            id: conv.id,
+            title: conv.title,
+            messages: readResult.messages,
+          });
+        }
+      }
+
+      const { formatDiffResults } = await import("./formatter.js");
+      console.log(formatDiffResults({
+        sessions: allSessions,
+        aggregated: true,
+        period: options.today ? "today" : "week",
+      }));
+    } else {
+      if (!sessionId) {
+        let projectRoot = process.cwd();
+        try {
+          projectRoot = execSync("git rev-parse --show-toplevel", {
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "ignore"],
+          }).trim();
+        } catch {
+          // Not a git repo
+        }
+
+        const historyPath = path.join(process.env.HOME || "", ".claude", "history.jsonl");
+        if (fs.existsSync(historyPath)) {
+          const historyContent = fs.readFileSync(historyPath, "utf-8");
+          const lines = historyContent.trim().split("\n").reverse();
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line);
+              if (entry.project === projectRoot && entry.sessionId) {
+                sessionId = entry.sessionId;
+                break;
+              }
+            } catch {
+              // Skip malformed
+            }
+          }
+        }
+
+        if (!sessionId) {
+          console.error("No session ID provided and could not detect current session");
+          console.error("Usage: codecast diff <session-id>");
+          process.exit(1);
+        }
+      }
+
+      const response = await fetch(`${siteUrl}/cli/read`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          conversation_id: sessionId,
+        }),
+      });
+
+      const result = await response.json();
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatDiffResults } = await import("./formatter.js");
+      console.log(formatDiffResults({
+        sessions: [{
+          id: result.conversation.id,
+          title: result.conversation.title,
+          messages: result.messages,
+        }],
+        aggregated: false,
+      }));
+    }
+  });
+
+program
+  .command("handoff")
+  .description(
+    "Generate a context transfer document for the next session/agent\n\n" +
+    "Examples:\n" +
+    "  codecast handoff                        # from current/recent session\n" +
+    "  codecast handoff --session abc123       # from specific session\n" +
+    "  codecast handoff --to-file /tmp/h.md    # save to file"
+  )
+  .option("-s, --session <id>", "Specific session ID (default: most recent)")
+  .option("-o, --to-file <path>", "Save output to file instead of stdout")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    let sessionId = options.session;
+
+    if (!sessionId) {
+      let projectRoot = process.cwd();
+      try {
+        projectRoot = execSync("git rev-parse --show-toplevel", {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "ignore"],
+        }).trim();
+      } catch {
+      }
+
+      const historyPath = path.join(process.env.HOME || "", ".claude", "history.jsonl");
+      if (fs.existsSync(historyPath)) {
+        try {
+          const historyContent = fs.readFileSync(historyPath, "utf-8");
+          const lines = historyContent.trim().split("\n").reverse();
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line);
+              if (entry.project === projectRoot && entry.sessionId) {
+                sessionId = entry.sessionId;
+                break;
+              }
+            } catch {
+            }
+          }
+        } catch {
+        }
+      }
+
+      if (!sessionId) {
+        const projectDir = projectRoot.replace(/\//g, "-");
+        const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
+
+        if (!fs.existsSync(sessionsDir)) {
+          console.error("No Claude Code sessions found for current project");
+          process.exit(1);
+        }
+
+        const files = fs.readdirSync(sessionsDir)
+          .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
+          .map(f => ({
+            name: f,
+            path: path.join(sessionsDir, f),
+            mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
+          }))
+          .sort((a, b) => b.mtime - a.mtime);
+
+        if (files.length === 0) {
+          console.error("No session files found for current project");
+          process.exit(1);
+        }
+
+        sessionId = path.basename(files[0].name, ".jsonl");
+      }
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/read`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          conversation_id: sessionId,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatHandoff } = await import("./formatter.js");
+      const output = formatHandoff(result);
+
+      if (options.toFile) {
+        fs.writeFileSync(options.toFile, output);
+        console.log(`Handoff saved to: ${options.toFile}`);
+      } else {
+        console.log(output);
+      }
+    } catch (error) {
+      console.error("Handoff failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("summary")
+  .description(
+    "Generate a concise summary of a session\n\n" +
+    "Examples:\n" +
+    "  codecast summary <session-id>    # Summarize specific session\n" +
+    "  codecast summary --today         # Summarize today's work"
+  )
+  .argument("[session-id]", "Session ID to summarize")
+  .option("--today", "Summarize today's most recent session")
+  .action(async (sessionId, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    if (!sessionId && !options.today) {
+      console.error("Provide a session-id or use --today");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    if (options.today) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const feedResponse = await fetch(`${siteUrl}/cli/feed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          limit: 1,
+          offset: 0,
+          start_time: todayStart.getTime(),
+        }),
+      });
+
+      const feedResult = await feedResponse.json();
+      if (feedResult.error) {
+        console.error(`Error: ${feedResult.error}`);
+        process.exit(1);
+      }
+
+      if (!feedResult.conversations || feedResult.conversations.length === 0) {
+        console.error("No sessions found today");
+        process.exit(1);
+      }
+
+      sessionId = feedResult.conversations[0].id;
+    }
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/read`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          conversation_id: sessionId,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatSummary } = await import("./formatter.js");
+      console.log(formatSummary(result));
+    } catch (error) {
+      console.error("Summary failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
   .command("memory")
   .description("Install or update the agent memory component")
   .option("--disable", "Disable memory (remove snippet and save preference)")
@@ -1576,6 +1911,602 @@ program
       console.log("Memory snippet installed in ~/.claude/CLAUDE.md");
     } else {
       console.log("Memory snippet is up to date.");
+    }
+  });
+
+program
+  .command("bookmark")
+  .description(
+    "Bookmark a specific message in a conversation\n\n" +
+    "Examples:\n" +
+    "  codecast bookmark abc123 42                     # bookmark message 42\n" +
+    "  codecast bookmark abc123 42 --name auth-fix    # with a name\n" +
+    "  codecast bookmark abc123 42 --note \"key insight\"  # with a note\n" +
+    "  codecast bookmark --list                        # list all bookmarks\n" +
+    "  codecast bookmark --delete auth-fix             # delete by name"
+  )
+  .argument("[session-id]", "Session ID of the conversation")
+  .argument("[message-index]", "Message number to bookmark (1-indexed)")
+  .option("--name <name>", "Name for the bookmark (must be unique)")
+  .option("--note <note>", "Optional note for the bookmark")
+  .option("--list", "List all bookmarks")
+  .option("--delete <name>", "Delete bookmark by name")
+  .option("-n, --limit <n>", "Number of bookmarks to list", "20")
+  .action(async (sessionId, messageIndex, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    if (options.list) {
+      try {
+        const response = await fetch(`${siteUrl}/cli/bookmark/list`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            limit: parseInt(options.limit),
+          }),
+        });
+
+        const result = await response.json();
+
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+
+        if (!result.bookmarks || result.bookmarks.length === 0) {
+          console.log("\nNo bookmarks found.");
+          console.log("Create one with: codecast bookmark <session-id> <message-index>");
+          return;
+        }
+
+        console.log(`\nBookmarks (${result.count}):\n`);
+        for (const bm of result.bookmarks) {
+          const name = bm.name ? `[${bm.name}]` : "[unnamed]";
+          console.log(`  ${name}`);
+          console.log(`    Session: ${bm.session_id} message ${bm.message_index}`);
+          console.log(`    ${bm.message_role}: ${bm.message_preview}...`);
+          if (bm.note) {
+            console.log(`    Note: ${bm.note}`);
+          }
+          console.log(`    URL: ${bm.url}`);
+          console.log(`    Created: ${new Date(bm.created_at).toLocaleDateString()}`);
+          console.log();
+        }
+      } catch (error) {
+        console.error("List failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (options.delete) {
+      try {
+        const response = await fetch(`${siteUrl}/cli/bookmark/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            name: options.delete,
+          }),
+        });
+
+        const result = await response.json();
+
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+
+        console.log(`Deleted bookmark: ${options.delete}`);
+      } catch (error) {
+        console.error("Delete failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (!sessionId || !messageIndex) {
+      console.error("Usage: codecast bookmark <session-id> <message-index>");
+      console.error("Or use --list to view bookmarks, --delete <name> to remove one");
+      process.exit(1);
+    }
+
+    const msgIdx = parseInt(messageIndex);
+    if (isNaN(msgIdx) || msgIdx < 1) {
+      console.error("message-index must be a positive integer");
+      process.exit(1);
+    }
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/bookmark`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          session_id: sessionId,
+          message_index: msgIdx,
+          name: options.name,
+          note: options.note,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const displayName = result.name || "unnamed";
+      console.log(`\nBookmark created: ${displayName}`);
+      console.log(`Session: ${result.session_id} message ${result.message_index}`);
+      console.log(`URL: ${result.url}\n`);
+    } catch (error) {
+      console.error("Bookmark failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("decisions")
+  .description(
+    "Track and retrieve architectural decisions\n\n" +
+    "Examples:\n" +
+    "  codecast decisions                            # list recent decisions\n" +
+    "  codecast decisions --project .                # current project only\n" +
+    "  codecast decisions --search \"database\"        # search decisions\n" +
+    "  codecast decisions --tags db,arch             # filter by tags\n" +
+    "  codecast decisions add \"Use Convex\" --reason \"Better TypeScript\"  # add decision\n" +
+    "  codecast decisions add \"Cursor pagination\" --reason \"Better for realtime\" --tags api,perf\n" +
+    "  codecast decisions delete <id>                # delete a decision"
+  )
+  .argument("[action]", "Action: add, delete, or omit to list")
+  .argument("[title-or-id]", "Title for add, ID for delete")
+  .option("--project <path>", "Filter by project path (use . for current)")
+  .option("--search <query>", "Search decisions by title")
+  .option("--tags <tags>", "Filter by tags (comma-separated)")
+  .option("--reason <text>", "Rationale for the decision (required for add)")
+  .option("-n, --limit <n>", "Number of results", "20")
+  .option("-p, --page <n>", "Page number", "1")
+  .action(async (action, titleOrId, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    if (action === "add") {
+      if (!titleOrId) {
+        console.error("Usage: codecast decisions add \"Title\" --reason \"Why\"");
+        process.exit(1);
+      }
+      if (!options.reason) {
+        console.error("--reason is required when adding a decision");
+        process.exit(1);
+      }
+
+      const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
+
+      try {
+        const response = await fetch(`${siteUrl}/cli/decisions/add`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            title: titleOrId,
+            rationale: options.reason,
+            tags,
+            project_path: options.project === "." ? process.cwd() : options.project,
+          }),
+        });
+
+        const result = await response.json();
+
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+
+        console.log(`Decision recorded: ${titleOrId}`);
+        if (tags) {
+          console.log(`Tags: ${tags.join(", ")}`);
+        }
+      } catch (error) {
+        console.error("Add failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (action === "delete") {
+      if (!titleOrId) {
+        console.error("Usage: codecast decisions delete <decision-id>");
+        process.exit(1);
+      }
+
+      try {
+        const response = await fetch(`${siteUrl}/cli/decisions/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            decision_id: titleOrId,
+          }),
+        });
+
+        const result = await response.json();
+
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+
+        console.log(`Decision deleted: ${titleOrId}`);
+      } catch (error) {
+        console.error("Delete failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    const limit = parseInt(options.limit);
+    const page = parseInt(options.page);
+    const offset = (page - 1) * limit;
+    const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
+    const projectPath = options.project === "." ? process.cwd() : options.project;
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/decisions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          project_path: projectPath,
+          tags,
+          search: options.search,
+          limit,
+          offset,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatDecisionsResults } = await import("./formatter.js");
+      console.log(formatDecisionsResults(result));
+    } catch (error) {
+      console.error("Decisions failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("learn")
+  .description(
+    "Save and retrieve code patterns for reuse\n\n" +
+    "Examples:\n" +
+    "  codecast learn                              # list saved patterns\n" +
+    "  codecast learn add \"convex-http\" --description \"HTTP action pattern\" --content \"...\"\n" +
+    "  codecast learn show \"convex-http\"           # show pattern content\n" +
+    "  codecast learn search \"webhook\"             # search patterns\n" +
+    "  codecast learn delete \"convex-http\"         # delete pattern"
+  )
+  .argument("[action]", "Action: add, show, search, delete, or omit to list")
+  .argument("[name-or-query]", "Pattern name for add/show/delete, or search query")
+  .option("--description <text>", "Description for the pattern (required for add)")
+  .option("--content <text>", "Content/code for the pattern (required for add)")
+  .option("--tags <tags>", "Tags (comma-separated)")
+  .option("--session <id>", "Source session ID")
+  .option("--range <range>", "Source message range (e.g., 15:25)")
+  .option("-n, --limit <n>", "Number of results", "20")
+  .action(async (action, nameOrQuery, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    if (action === "add") {
+      if (!nameOrQuery) {
+        console.error("Usage: codecast learn add \"name\" --description \"...\" --content \"...\"");
+        process.exit(1);
+      }
+      if (!options.description) {
+        console.error("--description is required when adding a pattern");
+        process.exit(1);
+      }
+      if (!options.content) {
+        console.error("--content is required when adding a pattern");
+        process.exit(1);
+      }
+
+      const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
+
+      try {
+        const response = await fetch(`${siteUrl}/cli/patterns/add`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            name: nameOrQuery,
+            description: options.description,
+            content: options.content,
+            tags,
+            source_session_id: options.session,
+            source_range: options.range,
+          }),
+        });
+
+        const result = await response.json();
+
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+
+        console.log(`Pattern saved: ${nameOrQuery}`);
+        if (tags) {
+          console.log(`Tags: ${tags.join(", ")}`);
+        }
+      } catch (error) {
+        console.error("Add failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (action === "show") {
+      if (!nameOrQuery) {
+        console.error("Usage: codecast learn show \"pattern-name\"");
+        process.exit(1);
+      }
+
+      try {
+        const response = await fetch(`${siteUrl}/cli/patterns/show`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            name: nameOrQuery,
+          }),
+        });
+
+        const result = await response.json();
+
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+
+        const { formatPatternShow } = await import("./formatter.js");
+        console.log(formatPatternShow(result));
+      } catch (error) {
+        console.error("Show failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (action === "search") {
+      const limit = parseInt(options.limit);
+
+      try {
+        const response = await fetch(`${siteUrl}/cli/patterns`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            search: nameOrQuery,
+            limit,
+          }),
+        });
+
+        const result = await response.json();
+
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+
+        const { formatPatternsResults } = await import("./formatter.js");
+        console.log(formatPatternsResults(result));
+      } catch (error) {
+        console.error("Search failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (action === "delete") {
+      if (!nameOrQuery) {
+        console.error("Usage: codecast learn delete \"pattern-name\"");
+        process.exit(1);
+      }
+
+      try {
+        const response = await fetch(`${siteUrl}/cli/patterns/delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            name: nameOrQuery,
+          }),
+        });
+
+        const result = await response.json();
+
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+
+        console.log(`Pattern deleted: ${nameOrQuery}`);
+      } catch (error) {
+        console.error("Delete failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    const limit = parseInt(options.limit);
+    const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined;
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/patterns`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          tags,
+          limit,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatPatternsResults } = await import("./formatter.js");
+      console.log(formatPatternsResults(result));
+    } catch (error) {
+      console.error("Learn failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("similar")
+  .description(
+    "Find sessions that touched the same file or are similar to a session\n\n" +
+    "Examples:\n" +
+    "  codecast similar --file src/auth.ts     # sessions that touched this file\n" +
+    "  codecast similar --session abc123       # sessions similar to this one\n\n" +
+    "Note: File touch data may be sparse for older sessions."
+  )
+  .option("-f, --file <path>", "Find sessions that touched this file")
+  .option("-s, --session <id>", "Find sessions similar to this one")
+  .option("-n, --limit <n>", "Number of results", "10")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    if (!options.file && !options.session) {
+      console.error("Must specify --file or --session");
+      console.error("Usage: codecast similar --file <path>");
+      console.error("       codecast similar --session <id>");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const limit = parseInt(options.limit);
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/similar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          file_path: options.file,
+          session_id: options.session,
+          limit,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatSimilarResults } = await import("./formatter.js");
+      console.log(formatSimilarResults(result, { file: options.file, session: options.session }));
+    } catch (error) {
+      console.error("Similar search failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("blame")
+  .description(
+    "Find sessions that touched a specific file\n\n" +
+    "Examples:\n" +
+    "  codecast blame src/auth.ts             # sessions that touched this file\n" +
+    "  codecast blame src/auth.ts:42          # sessions that touched line 42"
+  )
+  .argument("<file>", "File path, optionally with line number (e.g., src/auth.ts:42)")
+  .option("-n, --limit <n>", "Number of results", "20")
+  .action(async (file, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    let filePath = file;
+    let lineNumber: number | undefined;
+
+    const lineMatch = file.match(/^(.+):(\d+)$/);
+    if (lineMatch) {
+      filePath = lineMatch[1];
+      lineNumber = parseInt(lineMatch[2]);
+    }
+
+    if (!path.isAbsolute(filePath)) {
+      filePath = path.resolve(process.cwd(), filePath);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const limit = parseInt(options.limit);
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/blame`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          file_path: filePath,
+          limit,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatBlameResults } = await import("./formatter.js");
+      console.log(formatBlameResults({
+        ...result,
+        file_path: filePath,
+        line: lineNumber,
+      }));
+    } catch (error) {
+      console.error("Blame failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
     }
   });
 
@@ -1613,6 +2544,333 @@ program
       }
       console.log("\nRestart codecast to use the new version");
     } else {
+      process.exit(1);
+    }
+  });
+
+program
+  .command("ask")
+  .description(
+    "Natural language query over conversation history\n\n" +
+    "Examples:\n" +
+    "  codecast ask \"when did we last refactor the feed?\"\n" +
+    "  codecast ask \"what's the pattern for adding CLI commands?\"\n" +
+    "  codecast ask \"why did we switch to Convex?\"\n" +
+    "  codecast ask \"auth bug\" -g         # search globally"
+  )
+  .argument("<query>", "Natural language question")
+  .option("-g, --global", "Search all sessions (not just current project)")
+  .option("-n, --limit <n>", "Number of sessions to analyze", "3")
+  .action(async (query, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const projectPath = options.global ? undefined : process.cwd();
+    const limit = parseInt(options.limit);
+
+    const searchTerms = query
+      .toLowerCase()
+      .replace(/[?'"]/g, "")
+      .split(/\s+/)
+      .filter((w: string) => w.length > 2 && !["the", "did", "was", "what", "when", "why", "how", "for", "with"].includes(w));
+
+    const searchQuery = searchTerms.slice(0, 5).join(" ");
+
+    if (!searchQuery) {
+      console.error("Query too vague. Include more specific terms.");
+      process.exit(1);
+    }
+
+    try {
+      const searchResponse = await fetch(`${siteUrl}/cli/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          query: searchQuery,
+          limit: limit * 3,
+          offset: 0,
+          context_before: 1,
+          context_after: 1,
+          project_path: projectPath,
+        }),
+      });
+
+      const searchResult = await searchResponse.json();
+
+      if (searchResult.error) {
+        console.error(`Error: ${searchResult.error}`);
+        process.exit(1);
+      }
+
+      if (!searchResult.conversations || searchResult.conversations.length === 0) {
+        console.log(`<ANSWER query="${query}">`);
+        console.log("No matching conversations found.");
+        if (projectPath) {
+          console.log("\nTry: codecast ask \"" + query + "\" -g   # search globally");
+        }
+        console.log("</ANSWER>");
+        process.exit(0);
+      }
+
+      const topSessions = searchResult.conversations.slice(0, limit);
+      const sessionDetails: Array<{
+        id: string;
+        title: string;
+        messages: Array<{ line: number; role: string; content: string }>;
+        matchLines: number[];
+      }> = [];
+
+      for (const conv of topSessions) {
+        const matchLines = conv.matches.map((m: { line: number }) => m.line);
+        const minLine = Math.max(1, Math.min(...matchLines) - 2);
+        const maxLine = Math.max(...matchLines) + 2;
+
+        const readResponse = await fetch(`${siteUrl}/cli/read`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            conversation_id: conv.id,
+            start_line: minLine,
+            end_line: maxLine,
+          }),
+        });
+
+        const readResult = await readResponse.json();
+
+        if (!readResult.error && readResult.messages) {
+          sessionDetails.push({
+            id: conv.id,
+            title: conv.title,
+            messages: readResult.messages,
+            matchLines,
+          });
+        }
+      }
+
+      const { formatAskResults } = await import("./formatter.js");
+      console.log(formatAskResults({ query, sessions: sessionDetails, searchTerms }));
+    } catch (error) {
+      console.error("Ask failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("context")
+  .description(
+    "Pre-work intelligence: find relevant past sessions before starting work\n\n" +
+    "Searches for conversations related to your task, combining text search\n" +
+    "and file-based similarity to surface relevant context.\n\n" +
+    "Examples:\n" +
+    "  codecast context \"add stripe integration\"   # search by description\n" +
+    "  codecast context --file src/auth.ts         # sessions that touched file\n" +
+    "  codecast context --auto                     # infer from git diff/status"
+  )
+  .argument("[query]", "Search query describing the work")
+  .option("-f, --file <path>", "Find sessions that touched this file")
+  .option("-a, --auto", "Infer context from git diff and status")
+  .option("-g, --global", "Search all sessions (not just current project)")
+  .option("-n, --limit <n>", "Maximum results", "10")
+  .action(async (query, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const projectPath = options.global ? undefined : process.cwd();
+    const limit = parseInt(options.limit);
+
+    let searchQuery = query;
+    let filePaths: string[] = [];
+
+    if (options.file) {
+      const absPath = path.isAbsolute(options.file)
+        ? options.file
+        : path.resolve(process.cwd(), options.file);
+      filePaths.push(absPath);
+    }
+
+    if (options.auto) {
+      try {
+        const statusOutput = execSync("git status --porcelain", {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "ignore"],
+        }).trim();
+
+        if (statusOutput) {
+          const changedFiles = statusOutput
+            .split("\n")
+            .map((line) => line.slice(3).trim())
+            .filter((f) => f && !f.includes(" -> "))
+            .slice(0, 5);
+
+          for (const f of changedFiles) {
+            const absPath = path.resolve(process.cwd(), f);
+            if (!filePaths.includes(absPath)) {
+              filePaths.push(absPath);
+            }
+          }
+        }
+
+        if (!searchQuery) {
+          const branchName = execSync("git rev-parse --abbrev-ref HEAD", {
+            encoding: "utf-8",
+            stdio: ["pipe", "pipe", "ignore"],
+          }).trim();
+
+          if (branchName && branchName !== "main" && branchName !== "master") {
+            searchQuery = branchName.replace(/[-_/]/g, " ");
+          }
+        }
+      } catch {
+        // Not a git repo or git not available
+      }
+    }
+
+    if (!searchQuery && filePaths.length === 0) {
+      console.error("Provide a query, --file, or use --auto in a git repo");
+      console.error("\nUsage:");
+      console.error("  codecast context \"add stripe integration\"");
+      console.error("  codecast context --file src/auth.ts");
+      console.error("  codecast context --auto");
+      process.exit(1);
+    }
+
+    try {
+      const sessions: Map<string, {
+        id: string;
+        title: string;
+        project_path: string | null;
+        updated_at: string;
+        message_count: number;
+        preview?: string;
+        match_type: string;
+        match_detail?: string;
+        files?: string[];
+      }> = new Map();
+
+      const relatedFiles: Map<string, number> = new Map();
+
+      if (searchQuery) {
+        const searchResponse = await fetch(`${siteUrl}/cli/search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            query: searchQuery,
+            limit: limit,
+            offset: 0,
+            project_path: projectPath,
+          }),
+        });
+
+        const searchResult = await searchResponse.json();
+
+        if (!searchResult.error && searchResult.conversations) {
+          for (const conv of searchResult.conversations) {
+            const preview = conv.matches?.[0]?.content?.slice(0, 100) + "..." || "";
+            sessions.set(conv.id, {
+              id: conv.id,
+              title: conv.title,
+              project_path: conv.project_path,
+              updated_at: conv.updated_at,
+              message_count: conv.message_count,
+              preview,
+              match_type: "text",
+              match_detail: searchQuery,
+            });
+          }
+        }
+      }
+
+      for (const filePath of filePaths) {
+        const similarResponse = await fetch(`${siteUrl}/cli/similar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            file_path: filePath,
+            limit: limit,
+          }),
+        });
+
+        const similarResult = await similarResponse.json();
+
+        if (!similarResult.error && similarResult.sessions) {
+          for (const sess of similarResult.sessions) {
+            if (!sessions.has(sess.conversation_id)) {
+              sessions.set(sess.conversation_id, {
+                id: sess.conversation_id,
+                title: sess.title,
+                project_path: sess.project_path,
+                updated_at: sess.updated_at,
+                message_count: sess.message_count,
+                match_type: "file",
+                match_detail: filePath,
+              });
+            }
+
+            const shortPath = filePath.replace(process.env.HOME || "", "~");
+            relatedFiles.set(shortPath, (relatedFiles.get(shortPath) || 0) + 1);
+          }
+        }
+      }
+
+      if (sessions.size > 0) {
+        for (const [sessId] of Array.from(sessions).slice(0, 5)) {
+          try {
+            const touchesResponse = await fetch(`${siteUrl}/cli/blame`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                api_token: config.auth_token,
+                conversation_id: sessId,
+                limit: 20,
+              }),
+            });
+
+            const touchesResult = await touchesResponse.json();
+
+            if (!touchesResult.error && touchesResult.files) {
+              const sess = sessions.get(sessId);
+              if (sess) {
+                sess.files = touchesResult.files
+                  .slice(0, 5)
+                  .map((f: { file_path: string }) =>
+                    f.file_path.replace(process.env.HOME || "", "~")
+                  );
+              }
+
+              for (const f of touchesResult.files) {
+                const shortPath = f.file_path.replace(process.env.HOME || "", "~");
+                relatedFiles.set(shortPath, (relatedFiles.get(shortPath) || 0) + 1);
+              }
+            }
+          } catch {
+            // Continue even if individual request fails
+          }
+        }
+      }
+
+      const { formatContextResults } = await import("./formatter.js");
+      console.log(formatContextResults({
+        query: searchQuery,
+        sessions: Array.from(sessions.values()).slice(0, limit),
+        related_files: Array.from(relatedFiles.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+          .map(([filePath, count]) => ({ path: filePath, session_count: count })),
+      }));
+    } catch (error) {
+      console.error("Context failed:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
   });

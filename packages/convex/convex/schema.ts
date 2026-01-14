@@ -154,11 +154,79 @@ export default defineSchema({
     user_id: v.id("users"),
     conversation_id: v.id("conversations"),
     message_id: v.id("messages"),
+    name: v.optional(v.string()),
+    note: v.optional(v.string()),
     created_at: v.number(),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_conversation", ["user_id", "conversation_id"])
-    .index("by_message_id", ["message_id"]),
+    .index("by_message_id", ["message_id"])
+    .index("by_user_name", ["user_id", "name"]),
+
+  decisions: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    project_path: v.optional(v.string()),
+    title: v.string(),
+    rationale: v.string(),
+    alternatives: v.optional(v.array(v.string())),
+    session_id: v.optional(v.string()),
+    conversation_id: v.optional(v.id("conversations")),
+    message_index: v.optional(v.number()),
+    tags: v.optional(v.array(v.string())),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_project", ["user_id", "project_path"])
+    .index("by_team_id", ["team_id"])
+    .searchIndex("search_decisions", {
+      searchField: "title",
+      filterFields: ["user_id", "project_path"],
+    }),
+
+  patterns: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    name: v.string(),
+    description: v.string(),
+    content: v.string(),
+    source_session_id: v.optional(v.string()),
+    source_conversation_id: v.optional(v.id("conversations")),
+    source_range: v.optional(v.string()),
+    tags: v.optional(v.array(v.string())),
+    usage_count: v.number(),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_name", ["user_id", "name"])
+    .index("by_team_id", ["team_id"])
+    .searchIndex("search_patterns", {
+      searchField: "name",
+      filterFields: ["user_id"],
+    }),
+
+  file_touches: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    file_path: v.string(),
+    operation: v.union(
+      v.literal("read"),
+      v.literal("edit"),
+      v.literal("write"),
+      v.literal("delete"),
+      v.literal("glob"),
+      v.literal("grep")
+    ),
+    line_range: v.optional(v.string()),
+    message_index: v.number(),
+    timestamp: v.number(),
+  })
+    .index("by_conversation", ["conversation_id"])
+    .index("by_user_file", ["user_id", "file_path"])
+    .index("by_file_path", ["file_path"])
+    .index("by_timestamp", ["timestamp"]),
 
   comments: defineTable({
     conversation_id: v.id("conversations"),
