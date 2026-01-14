@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
@@ -186,6 +186,12 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <Logo size="md" className="text-stone-900" />
           <div className="flex items-center gap-3">
+            <Link href="/features" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
+              CLI
+            </Link>
+            <Link href="/security" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
+              Security
+            </Link>
             <Link href="/login">
               <Button variant="ghost" className="text-stone-600 hover:text-stone-900 hover:bg-stone-100 font-medium">
                 Sign in
@@ -399,9 +405,106 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Privacy */}
-      <section className="max-w-4xl mx-auto px-6 py-20">
-        <div className="bg-gradient-to-br from-stone-100 to-stone-50 rounded-2xl border border-stone-200 p-12 text-center">
+      {/* CLI Features */}
+      <section id="cli" className="max-w-6xl mx-auto px-6 py-20">
+        <div className="grid md:grid-cols-2 gap-12 items-center">
+          <div>
+            <Link href="/features" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium mb-4 hover:bg-purple-100 transition-colors">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              Powerful CLI
+            </Link>
+            <h2 className="text-3xl font-bold text-stone-900 mb-4">
+              Your AI agent, with a memory
+            </h2>
+            <p className="text-lg text-stone-600 leading-relaxed mb-6">
+              The codecast CLI gives your AI agent persistent memory across sessions.
+              Search past conversations, resume work, track architectural decisions,
+              and let your agent learn from its own history.
+            </p>
+            <div className="space-y-3 mb-6">
+              <div className="flex items-center gap-3 text-stone-600">
+                <svg className="w-5 h-5 text-purple-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <span>Search history like ripgrep: <code className="text-sm bg-stone-100 px-1.5 py-0.5 rounded">codecast search &quot;auth&quot;</code></span>
+              </div>
+              <div className="flex items-center gap-3 text-stone-600">
+                <svg className="w-5 h-5 text-purple-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <span>Resume sessions: <code className="text-sm bg-stone-100 px-1.5 py-0.5 rounded">codecast resume &quot;logo&quot;</code></span>
+              </div>
+              <div className="flex items-center gap-3 text-stone-600">
+                <svg className="w-5 h-5 text-purple-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <span>Track decisions: <code className="text-sm bg-stone-100 px-1.5 py-0.5 rounded">codecast decisions add &quot;Use Convex&quot;</code></span>
+              </div>
+              <div className="flex items-center gap-3 text-stone-600">
+                <svg className="w-5 h-5 text-purple-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <span>File blame: <code className="text-sm bg-stone-100 px-1.5 py-0.5 rounded">codecast blame src/auth.ts</code></span>
+              </div>
+            </div>
+            <Link href="/features" className="text-amber-600 hover:text-amber-700 font-medium flex items-center gap-1">
+              Explore all CLI features
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+              </svg>
+            </Link>
+          </div>
+
+          <div className="bg-[#002b36] rounded-xl border border-[#094959] shadow-xl overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-2.5 bg-[#073642] border-b border-[#094959]">
+              <div className="flex gap-1.5">
+                <div className="w-3 h-3 rounded-full bg-[#dc322f]"></div>
+                <div className="w-3 h-3 rounded-full bg-[#b58900]"></div>
+                <div className="w-3 h-3 rounded-full bg-[#859900]"></div>
+              </div>
+              <span className="text-xs font-mono text-[#586e75] ml-2">Terminal</span>
+            </div>
+            <div className="p-4 font-mono text-sm space-y-3">
+              <div>
+                <span className="text-[#859900]">$</span>
+                <span className="text-[#93a1a1]"> codecast ask &quot;how did we implement auth?&quot;</span>
+              </div>
+              <div className="text-[#586e75] text-xs">
+                Searching 3 relevant sessions...
+              </div>
+              <div className="border-l-2 border-[#6c71c4] pl-3 py-1">
+                <div className="text-[#93a1a1] text-xs">
+                  Found in <span className="text-[#b58900]">OAuth implementation</span> (3 days ago):
+                </div>
+                <div className="text-[#657b83] text-xs mt-1">
+                  We use NextAuth with GitHub provider, storing sessions in Convex...
+                </div>
+              </div>
+              <div className="mt-3">
+                <span className="text-[#859900]">$</span>
+                <span className="text-[#93a1a1]"> codecast blame src/auth/callback.ts</span>
+              </div>
+              <div className="text-[#586e75] text-xs">
+                5 sessions touched this file
+              </div>
+              <div className="space-y-1 text-xs">
+                <div className="text-[#93a1a1]">
+                  <span className="text-[#b58900]">abc123</span> Fixed OAuth callback &bull; <span className="text-[#586e75]">2d ago</span>
+                </div>
+                <div className="text-[#93a1a1]">
+                  <span className="text-[#b58900]">def456</span> Add refresh token logic &bull; <span className="text-[#586e75]">5d ago</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Security & Privacy */}
+      <section className="max-w-6xl mx-auto px-6 py-20">
+        <div className="text-center mb-12">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-50 border border-green-200 text-green-700 text-sm font-medium mb-6">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
@@ -411,30 +514,136 @@ export default function LandingPage() {
           <h2 className="text-3xl font-bold text-stone-900 mb-4">
             Your code stays yours
           </h2>
-          <p className="text-lg text-stone-600 leading-relaxed mb-8 max-w-2xl mx-auto">
-            The CLI daemon runs locally and syncs only conversation metadata by default.
-            You control exactly what gets shared. Self-host if you want complete control.
+          <p className="text-lg text-stone-600 leading-relaxed max-w-2xl mx-auto">
+            The CLI daemon runs locally. Code stays on your machine unless you explicitly share it.
+            We never train AI on your data, and you can self-host for complete control.
           </p>
-          <div className="flex flex-wrap gap-4 justify-center text-sm">
-            <span className="flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-stone-200 text-stone-600">
+        </div>
+
+        {/* Data Flow Visual */}
+        <div className="bg-stone-50 rounded-xl border border-stone-200 p-6 mb-8">
+          <div className="flex flex-col md:flex-row items-center justify-center gap-4 md:gap-2 text-sm">
+            <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-stone-200">
+              <svg className="w-5 h-5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+              <span className="text-stone-700 font-medium">Your Machine</span>
+            </div>
+            <svg className="w-6 h-6 text-stone-300 rotate-90 md:rotate-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+            </svg>
+            <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-stone-200">
+              <svg className="w-5 h-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <span className="text-stone-700 font-medium">Encrypted Sync</span>
+            </div>
+            <svg className="w-6 h-6 text-stone-300 rotate-90 md:rotate-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+            </svg>
+            <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg border border-stone-200">
+              <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-stone-700 font-medium">Dashboard</span>
+            </div>
+          </div>
+          <p className="text-xs text-stone-400 text-center mt-4">
+            Code content synced only if you enable it. Default: metadata only.
+          </p>
+        </div>
+
+        {/* Security Features Grid */}
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+          <div className="bg-white rounded-xl border border-stone-200 p-5">
+            <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center mb-3">
+              <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-stone-900 text-sm mb-1">Private by default</h3>
+            <p className="text-xs text-stone-500">Conversations start private. You choose what to share.</p>
+          </div>
+
+          <div className="bg-white rounded-xl border border-stone-200 p-5">
+            <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center mb-3">
+              <svg className="w-4 h-4 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-stone-900 text-sm mb-1">Secret redaction</h3>
+            <p className="text-xs text-stone-500">API keys and tokens stripped before sync.</p>
+          </div>
+
+          <div className="bg-white rounded-xl border border-stone-200 p-5">
+            <div className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center mb-3">
+              <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-stone-900 text-sm mb-1">E2E encryption</h3>
+            <p className="text-xs text-stone-500">AES-256-GCM client-side encryption option.</p>
+          </div>
+
+          <div className="bg-white rounded-xl border border-stone-200 p-5">
+            <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center mb-3">
+              <svg className="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-stone-900 text-sm mb-1">Path hashing</h3>
+            <p className="text-xs text-stone-500">Project paths hashed to prevent leakage.</p>
+          </div>
+
+          <div className="bg-white rounded-xl border border-stone-200 p-5">
+            <div className="w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center mb-3">
+              <svg className="w-4 h-4 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-stone-900 text-sm mb-1">Self-hostable</h3>
+            <p className="text-xs text-stone-500">Deploy on your own infrastructure.</p>
+          </div>
+
+          <div className="bg-white rounded-xl border border-stone-200 p-5">
+            <div className="w-8 h-8 rounded-lg bg-stone-100 flex items-center justify-center mb-3">
+              <svg className="w-4 h-4 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-stone-900 text-sm mb-1">Open source</h3>
+            <p className="text-xs text-stone-500">Audit the code yourself. MIT license.</p>
+          </div>
+        </div>
+
+        {/* Trust badges + Learn more */}
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
+          <div className="flex flex-wrap gap-3 justify-center">
+            <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white border border-stone-200 text-stone-600 text-sm">
               <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
-              Opt-in code sharing
+              No AI training
             </span>
-            <span className="flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-stone-200 text-stone-600">
+            <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white border border-stone-200 text-stone-600 text-sm">
               <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
-              Self-hostable
+              SOC 2 compliant backend
             </span>
-            <span className="flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-stone-200 text-stone-600">
+            <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white border border-stone-200 text-stone-600 text-sm">
               <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
-              Open source
+              TLS 1.3
             </span>
           </div>
+          <Link href="/security" className="text-amber-600 hover:text-amber-700 font-medium text-sm flex items-center gap-1">
+            Learn more about security
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+            </svg>
+          </Link>
         </div>
       </section>
 
@@ -568,8 +777,9 @@ export default function LandingPage() {
               <h4 className="font-semibold text-stone-900 mb-3 text-sm">Product</h4>
               <ul className="space-y-2 text-sm text-stone-500">
                 <li><Link href="#how-it-works" className="hover:text-stone-900">How it works</Link></li>
+                <li><Link href="/features" className="hover:text-stone-900">CLI</Link></li>
+                <li><Link href="/security" className="hover:text-stone-900">Security</Link></li>
                 <li><Link href="/pricing" className="hover:text-stone-900">Pricing</Link></li>
-                <li><Link href="/docs" className="hover:text-stone-900">Documentation</Link></li>
               </ul>
             </div>
             <div>
