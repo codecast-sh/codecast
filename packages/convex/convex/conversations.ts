@@ -2295,7 +2295,9 @@ export const feedForCLI = query({
 
     const results: Array<{
       id: string;
+      session_id: string;
       title: string;
+      subtitle: string | null;
       project_path: string | null;
       updated_at: string;
       message_count: number;
@@ -2371,7 +2373,9 @@ export const feedForCLI = query({
 
       results.push({
         id: conv._id,
+        session_id: conv.session_id,
         title,
+        subtitle: conv.subtitle || null,
         project_path: conv.project_path || null,
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
