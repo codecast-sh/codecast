@@ -232,16 +232,24 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
   lines.push(`   ${meta}\n`);
 
   for (const msg of result.messages) {
+    // Skip empty messages (streaming artifacts)
+    const hasContent = msg.content && msg.content.trim();
+    const hasToolCalls = msg.tool_calls && msg.tool_calls.length > 0;
+    const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+    if (!hasContent && !hasToolCalls && !hasToolResults) {
+      continue;
+    }
+
     const lineNum = String(msg.line).padStart(4);
     const role = formatRole(msg.role);
     lines.push(`${lineNum}: ${role}`);
 
-    if (msg.content) {
+    if (hasContent) {
       const indentedContent = msg.content.split("\n").map((l) => "       " + l).join("\n");
       lines.push(indentedContent);
     }
 
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
+    if (hasToolCalls && msg.tool_calls) {
       if (options.full) {
         lines.push(`       <TOOL_CALLS>`);
         for (const tc of msg.tool_calls as Array<{ name?: string; input?: unknown }>) {
@@ -258,7 +266,7 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
       }
     }
 
-    if (msg.tool_results && msg.tool_results.length > 0) {
+    if (hasToolResults && msg.tool_results) {
       if (options.full) {
         lines.push(`       <TOOL_RESULTS>`);
         for (const tr of msg.tool_results as Array<{ content?: string; isError?: boolean }>) {
