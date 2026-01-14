@@ -476,7 +476,7 @@ async function promptMemoryEnablement(): Promise<void> {
   const memorySnippet = `
 ## Memory
 
-Search past conversations when the user references prior work, asks about decisions, or when debugging regressions.
+You are one session among many. Past conversations contain valuable context about decisions, patterns, and prior work. Search proactively and liberally - when starting tasks, debugging issues, or when the user references previous work. Parallelize searches when exploring multiple topics.
 
 \`\`\`bash
 codecast search "auth middleware"     # search current project
@@ -926,16 +926,18 @@ program
   .description(
     "Browse recent conversations like a feed\n\n" +
     "By default, shows sessions from the current project.\n" +
-    "Use -g to view all sessions globally.\n\n" +
+    "Use -g to view all sessions globally.\n" +
+    "Use -q to filter by keyword while keeping recency order.\n\n" +
     "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
     "  codecast feed                    # recent sessions\n" +
     "  codecast feed -g                 # all projects globally\n" +
     "  codecast feed -s 7d              # last 7 days\n" +
-    "  codecast feed -s 2w -e 1w        # between 2 weeks and 1 week ago\n" +
+    "  codecast feed -q auth            # recent sessions mentioning 'auth'\n" +
     "  codecast feed -p 2               # page 2 (skip first 10)"
   )
   .option("-g, --global", "Show all sessions (not just current project)")
+  .option("-q, --query <text>", "Filter by keyword (keeps recency order)")
   .option("-n, --limit <n>", "Number of conversations per page", "10")
   .option("-p, --page <n>", "Page number (1-indexed)", "1")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday, 2024-01-15)")
@@ -981,6 +983,7 @@ program
           offset,
           start_time: startTime,
           end_time: endTime,
+          query: options.query,
           project_path: projectPath,
         }),
       });

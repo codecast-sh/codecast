@@ -2093,6 +2093,7 @@ export const feedForCLI = mutation({
     offset: v.optional(v.number()),
     start_time: v.optional(v.number()),
     end_time: v.optional(v.number()),
+    query: v.optional(v.string()),
     project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -2110,6 +2111,16 @@ export const feedForCLI = mutation({
     const projectPath = args.project_path;
     const startTime = args.start_time;
     const endTime = args.end_time ?? Date.now();
+    const query = args.query?.trim();
+
+    let matchingConvIds: Set<string> | null = null;
+    if (query && query.length >= 2) {
+      const searchResults = await ctx.db
+        .query("messages")
+        .withSearchIndex("search_content", (q) => q.search("content", query))
+        .take(100);
+      matchingConvIds = new Set(searchResults.map((m) => m.conversation_id.toString()));
+    }
 
     const ownConversations = await ctx.db
       .query("conversations")
@@ -2137,6 +2148,7 @@ export const feedForCLI = mutation({
         if (projectPath && c.project_path !== projectPath) return false;
         if (startTime && c.updated_at < startTime) return false;
         if (endTime && c.updated_at > endTime) return false;
+        if (matchingConvIds && !matchingConvIds.has(c._id.toString())) return false;
         return true;
       })
       .sort((a, b) => b.updated_at - a.updated_at)
