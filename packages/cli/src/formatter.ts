@@ -195,7 +195,10 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
   }
 
   if (result.conversations.length > 0) {
-    lines.push("To explore: codecast read <id> [line:range]");
+    lines.push("To explore:");
+    lines.push("  codecast read <id> <line>:<line>   # read message range");
+    lines.push("  codecast read <id>                 # read all messages");
+    lines.push("  codecast summary <id>              # get session summary");
   }
 
   if (options.projectPath) {
