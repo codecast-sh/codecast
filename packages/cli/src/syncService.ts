@@ -342,6 +342,18 @@ export class SyncService {
     }
   }
 
+  async checkManagedSession(conversationId: string): Promise<{ managed: boolean; session_id?: string; pid?: number } | null> {
+    try {
+      const result = await this.client.query("managedSessions:isSessionManaged" as any, {
+        conversation_id: conversationId,
+        api_token: this.apiToken,
+      });
+      return result;
+    } catch {
+      return null;
+    }
+  }
+
   async createPermissionRequest(params: {
     conversation_id: string;
     session_id: string;

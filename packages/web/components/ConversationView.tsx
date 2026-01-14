@@ -1400,7 +1400,13 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
+  const [showUnmanagedWarning, setShowUnmanagedWarning] = useState(false);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const managedStatus = useQuery(api.managedSessions.isSessionManaged, {
+    conversation_id: conversationId as Id<"conversations">,
+  });
+
+  const isManaged = managedStatus?.managed ?? false;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1417,6 +1423,11 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
       setLastStatus("delivered");
       setMessage("");
       toast.success("Message sent");
+
+      if (!isManaged) {
+        setShowUnmanagedWarning(true);
+      }
+
       setTimeout(() => setLastStatus(null), 2000);
     } catch (error) {
       setLastStatus("failed");
@@ -1430,6 +1441,30 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
     <div className="sticky bottom-0 z-30 pointer-events-none">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
+        {showUnmanagedWarning && (
+          <div className="max-w-2xl mx-auto px-4 mb-2">
+            <div className="bg-sol-orange/10 border border-sol-orange/30 rounded-lg px-3 py-2 flex items-start gap-2">
+              <svg className="w-4 h-4 text-sol-orange mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <div className="flex-1 text-xs">
+                <span className="text-sol-orange font-medium">Unreliable delivery:</span>
+                <span className="text-sol-text-secondary ml-1">
+                  This session wasn&apos;t started with <code className="bg-sol-bg-alt px-1 rounded">codecast claude</code>.
+                  Message delivery may fail. Use <code className="bg-sol-bg-alt px-1 rounded">codecast claude</code> for reliable messaging.
+                </span>
+              </div>
+              <button
+                onClick={() => setShowUnmanagedWarning(false)}
+                className="text-sol-text-dim hover:text-sol-text p-0.5"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="max-w-2xl mx-auto px-4">
           <div className="flex items-center gap-2 bg-sol-bg-alt border border-sol-border rounded-full px-4 py-2 shadow-lg">
             <input
@@ -2099,8 +2134,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   return (
-    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
-      <header className={`border-b border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "sticky top-0 z-20 -mx-[9999px] px-[9999px]" : ""}`}>
+    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "" : "h-screen"}`}>
+      <header className={`border-b border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""}`}>
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1">
           <div className="flex items-center gap-2 min-w-0">
             <Link

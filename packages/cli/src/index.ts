@@ -988,18 +988,22 @@ program
   .command("search")
   .description(
     "Search conversation history for context\n\n" +
-    "By default, searches only sessions from the current project.\n" +
+    "By default uses hybrid search (keyword + semantic).\n" +
     "Use -g to search all sessions globally.\n" +
-    "Use -u to search only user messages.\n\n" +
+    "Use -u to search only user messages.\n" +
+    "Use --keyword for keyword-only, --semantic for semantic-only.\n\n" +
     "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
-    "  codecast search \"auth\"              # search current project\n" +
-    "  codecast search \"auth\" -g -s 7d     # global, last 7 days\n" +
-    "  codecast search \"bug\" -u -C 2       # user messages with context"
+    "  codecast search \"auth\"              # hybrid search (default)\n" +
+    "  codecast search \"auth\" --keyword    # keyword only\n" +
+    "  codecast search \"error handling\" --semantic  # semantic only\n" +
+    "  codecast search \"auth\" -g -s 7d     # global, last 7 days"
   )
   .argument("<query>", "Search query (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
   .option("-g, --global", "Search all sessions (not just current project)")
+  .option("--keyword", "Use keyword-only search (no semantic matching)")
+  .option("--semantic", "Use semantic-only search (no keyword matching)")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
   .option("-e, --end <date>", "End date/time")
   .option("-n, --limit <n>", "Results per page", "10")
@@ -1042,6 +1046,17 @@ program
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
+    // Determine search mode: hybrid (default), keyword, or semantic
+    let mode: "hybrid" | "keyword" | "semantic" = "hybrid";
+    if (options.keyword && options.semantic) {
+      console.error("Cannot use both --keyword and --semantic flags");
+      process.exit(1);
+    } else if (options.keyword) {
+      mode = "keyword";
+    } else if (options.semantic) {
+      mode = "semantic";
+    }
+
     try {
       const response = await fetch(`${siteUrl}/cli/search`, {
         method: "POST",
@@ -1057,6 +1072,7 @@ program
           context_after: contextAfter,
           project_path: projectPath,
           user_only: userOnly,
+          mode,
         }),
       });
 
@@ -1067,8 +1083,12 @@ program
         process.exit(1);
       }
 
-      const { formatSearchResults } = await import("./formatter.js");
-      console.log(formatSearchResults(result, { projectPath }));
+      const { formatSearchResults, formatSemanticSearchResults } = await import("./formatter.js");
+      if (mode === "keyword") {
+        console.log(formatSearchResults(result, { projectPath }));
+      } else {
+        console.log(formatSemanticSearchResults(result, { projectPath }));
+      }
     } catch (error) {
       console.error("Search failed:", error instanceof Error ? error.message : error);
       process.exit(1);
@@ -1163,67 +1183,62 @@ program
     "Resume a Claude Code session by searching with natural language\n\n" +
     "Searches your session history and opens the matching session in Claude.\n" +
     "If multiple matches are found, shows a selection to choose from.\n\n" +
+    "Multiple words are AND-ed (all must match).\n" +
+    "Use \"quotes\" for exact phrase matching.\n\n" +
     "Configure default Claude args:\n" +
     "  codecast config claude_args \"--dangerously-skip-permissions\"\n\n" +
     "Examples:\n" +
-    "  codecast resume \"logo design\"          # search and open\n" +
-    "  codecast resume auth -g                 # search globally\n" +
-    "  codecast resume refactor -n 5           # show up to 5 results"
+    "  codecast resume logo design             # matches both 'logo' AND 'design'\n" +
+    "  codecast resume \"logo design\"           # matches exact phrase\n" +
+    "  codecast resume auth token -g           # search globally\n" +
+    "  codecast resume refactor -n 10          # show up to 10 results"
   )
-  .argument("<query>", "Natural language search query")
+  .argument("<query...>", "Search terms (AND-ed, use quotes for exact phrase)")
   .option("-g, --global", "Search all sessions (not just current project)")
-  .option("-n, --limit <n>", "Max results to show", "10")
+  .option("-n, --limit <n>", "Max results to show (use -n 10 for more)", "4")
   .option("--dry-run", "Show matches without opening Claude")
   .option("--claude-args <args>", "Additional args to pass to claude (overrides config)")
-  .action(async (query, options) => {
+  .action(async (queryWords: string[], options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: codecast auth");
       process.exit(1);
     }
 
+    const query = queryWords.join(" ");
     const limit = parseInt(options.limit);
     const projectPath = options.global ? undefined : process.cwd();
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
-      const response = await fetch(`${siteUrl}/cli/feed`, {
+      let conversations: Array<{
+        id: string;
+        session_id?: string;
+        title: string;
+        subtitle?: string | null;
+        project_path: string | null;
+        updated_at: string;
+        message_count: number;
+        goal?: string;
+        matches?: Array<{ content: string; role: string }>;
+      }> = [];
+
+      const searchResponse = await fetch(`${siteUrl}/cli/resume-search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
-          limit,
-          offset: 0,
           query,
+          limit,
           project_path: projectPath,
         }),
       });
 
-      const result = await response.json();
+      const searchResult = await searchResponse.json();
 
-      if (result.error) {
-        console.error(`Error: ${result.error}`);
-        process.exit(1);
+      if (!searchResult.error && searchResult.conversations && searchResult.conversations.length > 0) {
+        conversations = searchResult.conversations;
       }
-
-      const extractGoalFromPreview = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
-        if (!preview) return undefined;
-        const firstUser = preview.find((m) => m.role === "user");
-        return firstUser?.content;
-      };
-
-      const queryWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length > 1);
-
-      const rawConversations = (result.conversations || []).map((conv: { id: string; title: string; subtitle?: string | null; project_path: string | null; updated_at: string; message_count: number; session_id?: string; preview?: Array<{ role: string; content: string }> }) => ({
-        ...conv,
-        goal: extractGoalFromPreview(conv.preview),
-      }));
-
-      const conversations = rawConversations.filter((conv: { title: string; subtitle?: string | null; goal?: string }) => {
-        if (queryWords.length <= 1) return true;
-        const searchText = [conv.title, conv.subtitle, conv.goal].filter(Boolean).join(" ").toLowerCase();
-        return queryWords.every((word: string) => searchText.includes(word));
-      });
 
       if (conversations.length === 0) {
         console.log(`No sessions found matching "${query}"`);
@@ -1249,61 +1264,49 @@ program
         return;
       }
 
+      const { formatResumeResults } = await import("./formatter.js");
+      console.log(formatResumeResults({ conversations: enrichedConversations, query }));
+
       if (options.dryRun) {
-        const { formatResumeResults } = await import("./formatter.js");
-        console.log(formatResumeResults({ conversations: enrichedConversations, query }));
         process.exit(0);
       }
 
-      const { select } = await import("@inquirer/prompts");
-
-      const truncateTitle = (title: string, maxLen: number = 60) => {
-        if (title.length <= maxLen) return title;
-        return title.slice(0, maxLen) + "...";
-      };
-
-      const formatRelTime = (isoDate: string): string => {
-        const date = new Date(isoDate);
-        const diffMs = Date.now() - date.getTime();
-        const diffMin = Math.floor(diffMs / (1000 * 60));
-        const diffHour = Math.floor(diffMin / 60);
-        const diffDay = Math.floor(diffHour / 24);
-        if (diffMin < 1) return "now";
-        if (diffMin < 60) return `${diffMin}m`;
-        if (diffHour < 24) return `${diffHour}h`;
-        if (diffDay === 1) return "1d";
-        return `${diffDay}d`;
-      };
-
-      const choices = enrichedConversations.map((conv: { session_id?: string; title: string; subtitle?: string | null; goal?: string; updated_at: string; message_count: number }) => {
-        const time = formatRelTime(conv.updated_at);
-        const title = truncateTitle(conv.title);
-        const subtitle = conv.subtitle?.split("\n")[0]?.slice(0, 50) || conv.goal?.split("\n")[0]?.slice(0, 50) || "";
-        return {
-          name: `${title}  \x1b[2m${time} · ${conv.message_count} msgs\x1b[0m\n     \x1b[2m${subtitle}\x1b[0m`,
-          value: conv.session_id,
-          description: conv.goal?.split("\n")[0],
-        };
+      const readline = await import("readline");
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
       });
 
-      try {
-        const sessionId = await select<string>({
-          message: `Found ${conversations.length} sessions matching "${query}"`,
-          choices,
-          pageSize: 10,
+      const promptForSelection = (): void => {
+        rl.question("> ", (answer) => {
+          const trimmed = answer.trim().toLowerCase();
+
+          if (trimmed === "q" || trimmed === "quit" || trimmed === "exit" || trimmed === "") {
+            rl.close();
+            process.exit(0);
+          }
+
+          const num = parseInt(trimmed);
+          if (isNaN(num) || num < 1 || num > conversations.length) {
+            console.log(`Enter 1-${conversations.length}, or q to quit`);
+            promptForSelection();
+            return;
+          }
+
+          rl.close();
+          const conv = conversations[num - 1];
+          const sessionId = conv.session_id;
+          if (!sessionId) {
+            console.error("Session ID not found");
+            process.exit(1);
+          }
+          console.log(`\nOpening: ${conv.title}`);
+          const claudeArgs = options.claudeArgs || config.claude_args;
+          launchClaude(sessionId, claudeArgs, !claudeArgs);
         });
+      };
 
-        if (!sessionId) {
-          process.exit(0);
-        }
-
-        const conv = conversations.find((c: { session_id?: string }) => c.session_id === sessionId);
-        console.log(`\nOpening: ${conv?.title || "session"}`);
-        const claudeArgs = options.claudeArgs || config.claude_args;
-        launchClaude(sessionId, claudeArgs, !claudeArgs);
-      } catch {
-        process.exit(0);
-      }
+      promptForSelection();
     } catch (error) {
       console.error("Resume failed:", error instanceof Error ? error.message : error);
       process.exit(1);
@@ -3080,6 +3083,17 @@ program
       console.error("Context failed:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
+  });
+
+program
+  .command("claude")
+  .description("Launch Claude Code with managed session (enables reliable message delivery)")
+  .allowUnknownOption()
+  .allowExcessArguments()
+  .action(async (_options, command) => {
+    const { runClaudeWrapper } = await import("./claudeWrapper.js");
+    const args = command.args;
+    await runClaudeWrapper(args);
   });
 
 program

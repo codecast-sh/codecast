@@ -1582,6 +1582,15 @@ async function main(): Promise<void> {
               log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}"`);
 
               try {
+                // Check if this session is managed (wrapper will handle delivery)
+                const managedStatus = await syncService.checkManagedSession(msg.conversation_id);
+                if (managedStatus?.managed) {
+                  log(`Session is managed, skipping TTY injection (wrapper will deliver)`);
+                  continue;
+                }
+
+                // Unmanaged session - try TTY injection
+                log(`Unmanaged session, attempting TTY injection`);
                 const processes = await findClaudeCodeProcesses();
                 log(`Found ${processes.length} Claude Code process(es)`);
 
