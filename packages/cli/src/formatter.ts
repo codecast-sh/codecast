@@ -201,8 +201,11 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 
   if (result.conversations.length > 0) {
     const firstId = truncateId(result.conversations[0].id);
-    lines.push(`Use: codecast read ${firstId} <range>        # read messages by line range`);
-    lines.push(`     codecast read ${firstId} <range> --full  # include full tool call/result content`);
+    lines.push("To explore these results:");
+    lines.push(`  codecast read ${firstId}              # read first 20 messages`);
+    lines.push(`  codecast read ${firstId} 10:30        # read messages 10-30`);
+    lines.push(`  codecast read ${firstId} 1:50 --full  # include tool call/result content`);
+    lines.push(`  codecast summary ${firstId}           # get session summary`);
   }
 
   if (options.projectPath) {

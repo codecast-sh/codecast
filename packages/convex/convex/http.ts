@@ -229,7 +229,7 @@ http.route({
         });
       }
 
-      const result = await ctx.runMutation(api.conversations.searchForCLI, {
+      const result = await ctx.runQuery(api.conversations.searchForCLI, {
         api_token,
         query,
         limit,

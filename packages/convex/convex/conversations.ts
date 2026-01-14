@@ -1237,7 +1237,7 @@ export const getSessionLinks = mutation({
   },
 });
 
-export const searchForCLI = mutation({
+export const searchForCLI = query({
   args: {
     api_token: v.string(),
     query: v.string(),
@@ -1284,7 +1284,8 @@ export const searchForCLI = mutation({
     const conversationMatches = new Map<string, typeof searchResults>();
     for (const msg of searchResults) {
       if (userOnly && msg.role !== "user") continue;
-      if (terms.phrases.length > 0 && !contentMatchesSearch(msg.content || "", terms)) {
+      // Always filter for all terms (same as web search)
+      if (!contentMatchesSearch(msg.content || "", terms)) {
         continue;
       }
       const convId = msg.conversation_id.toString();
@@ -1330,8 +1331,20 @@ export const searchForCLI = mutation({
         }
       }
 
-      if (projectPath && conv.project_path !== projectPath) {
-        continue;
+      // Match on project_path using prefix matching or git_root for better local search
+      if (projectPath) {
+        const convPath = conv.project_path || "";
+        const convGitRoot = conv.git_root || "";
+        // Match if: exact path, path starts with search path, search path starts with path, or git_root matches
+        const isPathMatch = convPath === projectPath ||
+          convPath.startsWith(projectPath + "/") ||
+          projectPath.startsWith(convPath + "/") ||
+          convGitRoot === projectPath ||
+          convGitRoot.startsWith(projectPath + "/") ||
+          projectPath.startsWith(convGitRoot + "/");
+        if (!isPathMatch) {
+          continue;
+        }
       }
 
       if (startTime && conv.updated_at < startTime) continue;
@@ -1369,14 +1382,36 @@ export const searchForCLI = mutation({
       const matchedMessages = messages.slice(0, 5);
       totalMatches += matchedMessages.length;
 
-      const formattedMatches = matchedMessages.map((m) => ({
-        line: 0,
-        role: m.role,
-        content: m.content || "",
-        timestamp: new Date(m.timestamp).toISOString(),
-        tool_calls_count: m.tool_calls?.length,
-        tool_results_count: m.tool_results?.length,
-      }));
+      // Extract snippets around matches (same logic as web search)
+      const formattedMatches = matchedMessages.map((m) => {
+        const content = m.content || "";
+        const lowerContent = content.toLowerCase();
+
+        // Find best position to show snippet around
+        let bestIdx = -1;
+        for (const term of terms.all) {
+          const idx = lowerContent.indexOf(term);
+          if (idx !== -1 && (bestIdx === -1 || idx < bestIdx)) {
+            bestIdx = idx;
+          }
+        }
+
+        // Extract ~300 char snippet around match
+        const start = Math.max(0, bestIdx > -1 ? bestIdx - 80 : 0);
+        const end = Math.min(content.length, bestIdx > -1 ? bestIdx + 220 : 300);
+        let snippet = content.slice(start, end);
+        if (start > 0) snippet = "..." + snippet;
+        if (end < content.length) snippet = snippet + "...";
+
+        return {
+          line: 0,
+          role: m.role,
+          content: snippet,
+          timestamp: new Date(m.timestamp).toISOString(),
+          tool_calls_count: m.tool_calls?.length,
+          tool_results_count: m.tool_results?.length,
+        };
+      });
 
       results.push({
         id: conv._id,
