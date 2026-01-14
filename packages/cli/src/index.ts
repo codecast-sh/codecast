@@ -550,12 +550,24 @@ const MEMORY_SNIPPET = `
 You are one session among many. Past conversations contain valuable context about decisions, patterns, and prior work. Search proactively and liberally - when starting tasks, debugging issues, or when the user references previous work. Parallelize searches when exploring multiple topics.
 
 \`\`\`bash
-codecast ask "when did we refactor X?"  # natural language query
+# Search & Browse
 codecast search "auth"                # search current project
 codecast search "bug" -g -s 7d        # global, last 7 days
 codecast feed                         # browse recent conversations
-codecast feed -s 2w -q "refactor"     # last 2 weeks mentioning refactor
 codecast read <id> 15:25              # read messages 15-25
+
+# Analysis
+codecast diff <id>                    # files changed, commits, tools used
+codecast diff --today                 # aggregate today's work
+codecast summary <id>                 # goal, approach, outcome, files
+codecast context "implement auth"     # find relevant prior sessions
+codecast ask "how does X work"        # query across sessions
+
+# Handoff & Tracking
+codecast handoff                      # generate context transfer doc
+codecast bookmark <id> <msg> --name x # save shareable link
+codecast decisions list               # view architectural decisions
+codecast decisions add "title" --reason "why"
 \`\`\`
 
 Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n (limit)
