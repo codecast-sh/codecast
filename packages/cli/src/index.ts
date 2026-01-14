@@ -117,6 +117,76 @@ function writeConfig(config: Config): void {
   fs.chmodSync(CONFIG_FILE, 0o600);
 }
 
+interface FullReadResult {
+  conversation: {
+    id: string;
+    title: string;
+    project_path: string | null;
+    message_count: number;
+    updated_at: string;
+  };
+  messages: Array<{
+    line: number;
+    role: string;
+    content: string;
+    timestamp: string;
+    tool_calls?: Array<{ name?: string; input?: unknown }>;
+    tool_results?: Array<{ content?: string; isError?: boolean }>;
+  }>;
+}
+
+async function fetchAllMessages(
+  siteUrl: string,
+  apiToken: string,
+  conversationId: string,
+  maxMessages: number = 500
+): Promise<FullReadResult | null> {
+  const firstResponse = await fetch(`${siteUrl}/cli/read`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_token: apiToken,
+      conversation_id: conversationId,
+      start_line: 1,
+      end_line: 25,
+    }),
+  });
+
+  const firstResult = await firstResponse.json();
+  if (firstResult.error) {
+    return null;
+  }
+
+  const totalMessages = firstResult.conversation?.message_count || 0;
+  const allMessages = [...(firstResult.messages || [])];
+
+  let currentLine = 26;
+  while (currentLine <= totalMessages && currentLine <= maxMessages) {
+    const endLine = Math.min(currentLine + 24, totalMessages, maxMessages);
+    const response = await fetch(`${siteUrl}/cli/read`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: apiToken,
+        conversation_id: conversationId,
+        start_line: currentLine,
+        end_line: endLine,
+      }),
+    });
+
+    const result = await response.json();
+    if (result.error || !result.messages) break;
+
+    allMessages.push(...result.messages);
+    currentLine = endLine + 1;
+  }
+
+  return {
+    conversation: firstResult.conversation,
+    messages: allMessages,
+  };
+}
+
 const CODECAST_SLASH_COMMAND = `---
 description: Get codecast dashboard and share links for current session (user)
 allowed-tools: ["Bash"]
@@ -1605,25 +1675,16 @@ program
       const allSessions: Array<{
         id: string;
         title: string;
-        messages: Array<{ tool_calls?: unknown[]; timestamp?: string }>;
+        messages: Array<{ tool_calls?: Array<{ name?: string; input?: unknown }>; timestamp?: string }>;
       }> = [];
 
       for (const conv of feedResult.conversations) {
-        const readResponse = await fetch(`${siteUrl}/cli/read`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_token: config.auth_token,
-            conversation_id: conv.id,
-          }),
-        });
-
-        const readResult = await readResponse.json();
-        if (!readResult.error && readResult.messages) {
+        const result = await fetchAllMessages(siteUrl, config.auth_token, conv.id, 200);
+        if (result && result.messages) {
           allSessions.push({
             id: conv.id,
             title: conv.title,
-            messages: readResult.messages,
+            messages: result.messages,
           });
         }
       }
@@ -1670,18 +1731,9 @@ program
         }
       }
 
-      const response = await fetch(`${siteUrl}/cli/read`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_token: config.auth_token,
-          conversation_id: sessionId,
-        }),
-      });
-
-      const result = await response.json();
-      if (result.error) {
-        console.error(`Error: ${result.error}`);
+      const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId);
+      if (!result) {
+        console.error("Error: Could not read session");
         process.exit(1);
       }
 
@@ -1776,19 +1828,10 @@ program
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
-      const response = await fetch(`${siteUrl}/cli/read`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_token: config.auth_token,
-          conversation_id: sessionId,
-        }),
-      });
+      const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId);
 
-      const result = await response.json();
-
-      if (result.error) {
-        console.error(`Error: ${result.error}`);
+      if (!result) {
+        console.error("Error: Could not read session");
         process.exit(1);
       }
 
@@ -1861,19 +1904,10 @@ program
     }
 
     try {
-      const response = await fetch(`${siteUrl}/cli/read`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_token: config.auth_token,
-          conversation_id: sessionId,
-        }),
-      });
+      const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId);
 
-      const result = await response.json();
-
-      if (result.error) {
-        console.error(`Error: ${result.error}`);
+      if (!result) {
+        console.error("Error: Could not read session");
         process.exit(1);
       }
 
