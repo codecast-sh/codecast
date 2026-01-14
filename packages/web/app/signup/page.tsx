@@ -57,7 +57,7 @@ function SignUpForm() {
 
     try {
       await signIn("password", { email, password, flow: "signUp" });
-      router.replace(redirectTo);
+      window.location.href = redirectTo;
     } catch (err) {
       if (err instanceof Error) {
         if (
