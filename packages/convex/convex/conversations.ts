@@ -369,6 +369,26 @@ export const getAllMessages = query({
       }
     }
 
+    const compactionCount = messages.filter(m => m.subtype === "compact_boundary").length;
+
+    const forkChildren = await ctx.db
+      .query("conversations")
+      .withIndex("by_forked_from", (q) => q.eq("forked_from", args.conversation_id))
+      .collect();
+
+    const forkChildrenDetails = await Promise.all(
+      forkChildren.map(async (fork) => {
+        const forkUser = await ctx.db.get(fork.user_id);
+        return {
+          _id: fork._id,
+          title: fork.title || `Session ${fork.session_id.slice(0, 8)}`,
+          short_id: fork.short_id,
+          started_at: fork.started_at,
+          username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
+        };
+      })
+    );
+
     return {
       ...conversation,
       title,
@@ -380,6 +400,8 @@ export const getAllMessages = query({
       fork_count: conversation.fork_count,
       forked_from: conversation.forked_from,
       forked_from_details: forkedFromDetails,
+      compaction_count: compactionCount,
+      fork_children: forkChildrenDetails,
     };
   },
 });
@@ -838,6 +860,8 @@ export const listConversations = query({
           git_branch: c.git_branch || null,
           git_remote_url: c.git_remote_url || null,
           is_favorite: c.is_favorite || false,
+          fork_count: c.fork_count || 0,
+          forked_from: c.forked_from || null,
         };
       })
     );
