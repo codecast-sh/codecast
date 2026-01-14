@@ -332,6 +332,19 @@ interface FileChange {
   deletions: number;
 }
 
+function parseToolInput(input: unknown): Record<string, unknown> | null {
+  if (!input) return null;
+  if (typeof input === "object") return input as Record<string, unknown>;
+  if (typeof input === "string") {
+    try {
+      return JSON.parse(input);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function extractFileChanges(messages: SummaryMessage[]): FileChange[] {
   const fileChanges = new Map<string, { additions: number; deletions: number }>();
 
@@ -339,8 +352,8 @@ function extractFileChanges(messages: SummaryMessage[]): FileChange[] {
     if (!msg.tool_calls) continue;
 
     for (const tc of msg.tool_calls) {
-      if (!tc.input || typeof tc.input !== "object") continue;
-      const input = tc.input as Record<string, unknown>;
+      const input = parseToolInput(tc.input);
+      if (!input) continue;
 
       if (tc.name === "Edit" || tc.name === "Write") {
         const filePath = input.file_path as string;
@@ -631,7 +644,7 @@ export function formatHandoff(result: HandoffResult): string {
 
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls) {
-        const input = tc.input as Record<string, unknown> | undefined;
+        const input = parseToolInput(tc.input);
         if (tc.name === "Edit" || tc.name === "Write") {
           const filePath = input?.file_path as string | undefined;
           if (filePath) {
@@ -787,7 +800,7 @@ function extractDiffData(sessions: DiffSession[]): {
 
           toolCounts.set(tc.name, (toolCounts.get(tc.name) || 0) + 1);
 
-          const tcInput = tc.input as Record<string, unknown> | undefined;
+          const tcInput = parseToolInput(tc.input);
           if (!tcInput) continue;
 
           if (tc.name === "Edit") {
@@ -871,7 +884,7 @@ export function formatDiffResults(input: DiffInput): string {
   if (duration > 0) {
     const hours = Math.floor(duration / 60);
     const mins = duration % 60;
-    const durationStr = hours > 0 ? `${hours}h ${mins}m` : `${mins} minutes`;
+    const durationStr = hours > 0 ? `${hours}h ${mins}m` : `${mins} minute${mins !== 1 ? "s" : ""}`;
     lines.push(`Duration: ${durationStr}`);
   }
   lines.push(`Messages: ${messageCount}`);
