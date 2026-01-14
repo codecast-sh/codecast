@@ -306,6 +306,216 @@ interface FeedOptions {
   page?: number;
 }
 
+interface SummaryMessage {
+  line: number;
+  role: string;
+  content: string;
+  timestamp: string;
+  tool_calls?: Array<{ name?: string; input?: unknown }>;
+  tool_results?: Array<{ content?: string; isError?: boolean }>;
+}
+
+interface SummaryResult {
+  conversation: {
+    id: string;
+    title: string;
+    project_path: string | null;
+    message_count: number;
+    updated_at: string;
+  };
+  messages: SummaryMessage[];
+}
+
+interface FileChange {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
+function extractFileChanges(messages: SummaryMessage[]): FileChange[] {
+  const fileChanges = new Map<string, { additions: number; deletions: number }>();
+
+  for (const msg of messages) {
+    if (!msg.tool_calls) continue;
+
+    for (const tc of msg.tool_calls) {
+      if (!tc.input || typeof tc.input !== "object") continue;
+      const input = tc.input as Record<string, unknown>;
+
+      if (tc.name === "Edit" || tc.name === "Write") {
+        const filePath = input.file_path as string;
+        if (!filePath) continue;
+
+        const existing = fileChanges.get(filePath) || { additions: 0, deletions: 0 };
+
+        if (tc.name === "Edit") {
+          const oldStr = (input.old_string as string) || "";
+          const newStr = (input.new_string as string) || "";
+          existing.additions += newStr.split("\n").length;
+          existing.deletions += oldStr.split("\n").length;
+        } else {
+          const content = (input.content as string) || "";
+          existing.additions += content.split("\n").length;
+        }
+
+        fileChanges.set(filePath, existing);
+      }
+    }
+  }
+
+  return Array.from(fileChanges.entries())
+    .map(([path, stats]) => ({ path, ...stats }))
+    .sort((a, b) => (b.additions + b.deletions) - (a.additions + a.deletions));
+}
+
+function extractGoal(messages: SummaryMessage[]): string {
+  const firstUser = messages.find((m) => m.role === "user" && m.content);
+  if (!firstUser) return "No user message found";
+
+  const content = firstUser.content.trim();
+  const lines = content.split("\n");
+  if (lines.length <= 3) return content;
+
+  return lines.slice(0, 3).join("\n") + "...";
+}
+
+function extractApproach(messages: SummaryMessage[]): string[] {
+  const approaches: string[] = [];
+  const seen = new Set<string>();
+
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !msg.content) continue;
+
+    const content = msg.content.trim();
+    if (content.length < 20) continue;
+
+    const firstLine = content.split("\n")[0].slice(0, 100);
+    if (seen.has(firstLine)) continue;
+    seen.add(firstLine);
+
+    if (content.includes("I'll ") || content.includes("I will ") ||
+        content.includes("Let me ") || content.includes("I'm going to ")) {
+      const sentences = content.match(/[^.!?]+[.!?]+/g) || [];
+      for (const sentence of sentences.slice(0, 2)) {
+        const trimmed = sentence.trim();
+        if (trimmed.length > 20 && trimmed.length < 150) {
+          approaches.push("- " + trimmed);
+          break;
+        }
+      }
+    }
+
+    if (approaches.length >= 5) break;
+  }
+
+  return approaches.slice(0, 5);
+}
+
+function extractKeyDecisions(messages: SummaryMessage[]): string[] {
+  const decisions: string[] = [];
+
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !msg.content) continue;
+
+    const content = msg.content.toLowerCase();
+    if (content.includes("chose ") || content.includes("decided ") ||
+        content.includes("instead of ") || content.includes("rather than ") ||
+        content.includes("better to ") || content.includes("approach is ")) {
+      const sentences = msg.content.match(/[^.!?]+[.!?]+/g) || [];
+      for (const sentence of sentences) {
+        const lower = sentence.toLowerCase();
+        if (lower.includes("chose") || lower.includes("decided") ||
+            lower.includes("instead") || lower.includes("rather than") ||
+            lower.includes("better to") || lower.includes("approach")) {
+          const trimmed = sentence.trim();
+          if (trimmed.length > 20 && trimmed.length < 200) {
+            decisions.push("- " + trimmed);
+            break;
+          }
+        }
+      }
+    }
+
+    if (decisions.length >= 3) break;
+  }
+
+  return decisions;
+}
+
+function summarizeOutcome(messages: SummaryMessage[]): string {
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
+  if (!lastAssistant) return "Session ended";
+
+  const content = lastAssistant.content.trim();
+
+  if (content.toLowerCase().includes("successfully") ||
+      content.toLowerCase().includes("complete") ||
+      content.toLowerCase().includes("done") ||
+      content.toLowerCase().includes("finished")) {
+    const sentences = content.match(/[^.!?]+[.!?]+/g) || [];
+    for (const sentence of sentences) {
+      if (sentence.toLowerCase().includes("success") ||
+          sentence.toLowerCase().includes("complete") ||
+          sentence.toLowerCase().includes("done") ||
+          sentence.toLowerCase().includes("finished")) {
+        return sentence.trim().slice(0, 150);
+      }
+    }
+  }
+
+  const firstSentence = content.match(/^[^.!?]+[.!?]+/);
+  return firstSentence ? firstSentence[0].trim().slice(0, 150) : "Session ended";
+}
+
+export function formatSummary(result: SummaryResult): string {
+  const lines: string[] = [];
+  const conv = result.conversation;
+  const sessionId = truncateId(conv.id);
+
+  lines.push(`<SUMMARY session="${sessionId}">`);
+  lines.push(`# ${conv.title}`);
+  lines.push("");
+
+  lines.push("## Goal");
+  lines.push(extractGoal(result.messages));
+  lines.push("");
+
+  const approaches = extractApproach(result.messages);
+  if (approaches.length > 0) {
+    lines.push("## Approach");
+    lines.push(approaches.join("\n"));
+    lines.push("");
+  }
+
+  lines.push("## Outcome");
+  lines.push(summarizeOutcome(result.messages));
+  lines.push("");
+
+  const fileChanges = extractFileChanges(result.messages);
+  if (fileChanges.length > 0) {
+    lines.push("## Files Changed");
+    for (const fc of fileChanges.slice(0, 10)) {
+      const shortPath = truncatePath(fc.path);
+      lines.push(`- ${shortPath} (+${fc.additions} -${fc.deletions})`);
+    }
+    if (fileChanges.length > 10) {
+      lines.push(`  ... and ${fileChanges.length - 10} more files`);
+    }
+    lines.push("");
+  }
+
+  const decisions = extractKeyDecisions(result.messages);
+  if (decisions.length > 0) {
+    lines.push("## Key Decisions");
+    lines.push(decisions.join("\n"));
+    lines.push("");
+  }
+
+  lines.push("</SUMMARY>");
+
+  return lines.join("\n");
+}
+
 export function formatFeedResults(result: FeedResult, options: FeedOptions = {}): string {
   const lines: string[] = [];
 
@@ -368,6 +578,905 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
   }
 
   lines.push("</FEED>");
+
+  return lines.join("\n");
+}
+
+interface HandoffMessage {
+  line: number;
+  role: string;
+  content: string;
+  timestamp: string;
+  tool_calls?: Array<{ name?: string; input?: unknown }>;
+  tool_results?: Array<{ content?: string; isError?: boolean }>;
+}
+
+interface HandoffResult {
+  conversation: {
+    id: string;
+    title: string;
+    project_path: string | null;
+    message_count: number;
+    updated_at: string;
+  };
+  messages: HandoffMessage[];
+}
+
+export function formatHandoff(result: HandoffResult): string {
+  const lines: string[] = [];
+  const conv = result.conversation;
+  const now = new Date().toISOString();
+
+  lines.push(`<HANDOFF generated="${now}">`);
+  lines.push(`# Session Handoff: ${conv.title}`);
+  lines.push("");
+
+  const userRequests: Array<{ line: number; content: string; completed: boolean }> = [];
+  const filesModified = new Set<string>();
+  const filesRead = new Set<string>();
+  let currentFile: string | null = null;
+
+  for (let i = 0; i < result.messages.length; i++) {
+    const msg = result.messages[i];
+
+    if (msg.role === "user" && msg.content) {
+      const nextMsgs = result.messages.slice(i + 1);
+      const hasResponse = nextMsgs.some(m => m.role === "assistant" && (m.content || m.tool_calls?.length));
+      userRequests.push({
+        line: msg.line,
+        content: msg.content.slice(0, 200) + (msg.content.length > 200 ? "..." : ""),
+        completed: hasResponse,
+      });
+    }
+
+    if (msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        const input = tc.input as Record<string, unknown> | undefined;
+        if (tc.name === "Edit" || tc.name === "Write") {
+          const filePath = input?.file_path as string | undefined;
+          if (filePath) {
+            filesModified.add(filePath);
+            currentFile = filePath;
+          }
+        } else if (tc.name === "Read") {
+          const filePath = input?.file_path as string | undefined;
+          if (filePath) {
+            filesRead.add(filePath);
+            currentFile = filePath;
+          }
+        }
+      }
+    }
+  }
+
+  lines.push("## Current State");
+  const completed = userRequests.filter(r => r.completed);
+  const pending = userRequests.filter(r => !r.completed);
+
+  if (completed.length > 0) {
+    const recentCompleted = completed.slice(-3);
+    for (const req of recentCompleted) {
+      const shortContent = req.content.split("\n")[0].slice(0, 80);
+      lines.push(`- COMPLETE: ${shortContent}`);
+    }
+  }
+
+  if (pending.length > 0) {
+    for (const req of pending) {
+      const shortContent = req.content.split("\n")[0].slice(0, 80);
+      lines.push(`- PENDING: ${shortContent}`);
+    }
+  }
+
+  if (completed.length === 0 && pending.length === 0) {
+    lines.push("- No tracked requests");
+  }
+
+  lines.push("");
+
+  if (currentFile || filesModified.size > 0) {
+    lines.push("## Active Work");
+    if (currentFile) {
+      const shortPath = truncatePath(currentFile);
+      lines.push(`Current file: ${shortPath}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## Key Context");
+  if (conv.project_path) {
+    lines.push(`- Project: ${truncatePath(conv.project_path)}`);
+  }
+  lines.push(`- Session: ${truncateId(conv.id)} (${conv.message_count} messages)`);
+  lines.push(`- Last activity: ${formatDate(conv.updated_at)}`);
+  lines.push("");
+
+  if (filesModified.size > 0) {
+    lines.push("## Files Modified");
+    const modifiedList = Array.from(filesModified).slice(-10);
+    for (const f of modifiedList) {
+      lines.push(`- ${truncatePath(f)}`);
+    }
+    lines.push("");
+  }
+
+  if (pending.length > 0) {
+    lines.push("## Next Steps");
+    for (let i = 0; i < Math.min(pending.length, 5); i++) {
+      const req = pending[i];
+      const shortContent = req.content.split("\n")[0].slice(0, 60);
+      lines.push(`${i + 1}. ${shortContent}`);
+    }
+    lines.push("");
+  }
+
+  const recentFiles = Array.from(filesRead).slice(-5).concat(Array.from(filesModified).slice(-5));
+  const uniqueFiles = [...new Set(recentFiles)].slice(-5);
+  if (uniqueFiles.length > 0) {
+    lines.push("## Files to Review");
+    for (const f of uniqueFiles) {
+      lines.push(`- ${truncatePath(f)}`);
+    }
+  }
+
+  lines.push("</HANDOFF>");
+
+  return lines.join("\n");
+}
+
+interface DiffMessage {
+  line?: number;
+  role?: string;
+  content?: string;
+  timestamp?: string;
+  tool_calls?: unknown[];
+  tool_results?: unknown[];
+}
+
+interface DiffSession {
+  id: string;
+  title: string;
+  messages: DiffMessage[];
+}
+
+interface DiffInput {
+  sessions: DiffSession[];
+  aggregated: boolean;
+  period?: "today" | "week";
+}
+
+interface FileStats {
+  status: "M" | "A";
+  additions: number;
+  deletions: number;
+}
+
+interface CommitInfo {
+  hash: string;
+  message: string;
+}
+
+function extractDiffData(sessions: DiffSession[]): {
+  files: Map<string, FileStats>;
+  commits: CommitInfo[];
+  toolCounts: Map<string, number>;
+  duration: number;
+  messageCount: number;
+} {
+  const files = new Map<string, FileStats>();
+  const commits: CommitInfo[] = [];
+  const toolCounts = new Map<string, number>();
+  let firstTimestamp: number | null = null;
+  let lastTimestamp: number | null = null;
+  let messageCount = 0;
+
+  for (const session of sessions) {
+    for (const msg of session.messages) {
+      messageCount++;
+
+      if (msg.timestamp) {
+        const ts = new Date(msg.timestamp).getTime();
+        if (!firstTimestamp || ts < firstTimestamp) firstTimestamp = ts;
+        if (!lastTimestamp || ts > lastTimestamp) lastTimestamp = ts;
+      }
+
+      if (msg.tool_calls) {
+        for (const tcRaw of msg.tool_calls) {
+          const tc = tcRaw as { name?: string; input?: unknown } | null;
+          if (!tc || !tc.name) continue;
+
+          toolCounts.set(tc.name, (toolCounts.get(tc.name) || 0) + 1);
+
+          const tcInput = tc.input as Record<string, unknown> | undefined;
+          if (!tcInput) continue;
+
+          if (tc.name === "Edit") {
+            const filePath = tcInput.file_path as string;
+            if (!filePath) continue;
+
+            const existing = files.get(filePath) || { status: "M" as const, additions: 0, deletions: 0 };
+            const oldStr = (tcInput.old_string as string) || "";
+            const newStr = (tcInput.new_string as string) || "";
+            existing.additions += newStr.split("\n").length;
+            existing.deletions += oldStr.split("\n").length;
+            files.set(filePath, existing);
+          } else if (tc.name === "Write") {
+            const filePath = tcInput.file_path as string;
+            if (!filePath) continue;
+
+            const existing = files.get(filePath);
+            const content = (tcInput.content as string) || "";
+            const lineCount = content.split("\n").length;
+
+            if (!existing) {
+              files.set(filePath, { status: "A", additions: lineCount, deletions: 0 });
+            } else {
+              existing.additions += lineCount;
+              files.set(filePath, existing);
+            }
+          } else if (tc.name === "Bash") {
+            const command = (tcInput.command as string) || "";
+            const commitMatch = command.match(/git commit\s+(?:-m\s+)?["']([^"']+)["']/);
+            if (commitMatch) {
+              commits.push({ hash: "pending", message: commitMatch[1].slice(0, 60) });
+            }
+          }
+        }
+      }
+
+      if (msg.tool_results) {
+        for (const trRaw of msg.tool_results) {
+          const tr = trRaw as { content?: string; isError?: boolean } | null;
+          if (!tr || !tr.content) continue;
+
+          const contentLines = tr.content.split("\n");
+          for (const line of contentLines) {
+            const gitCommitMatch = line.match(/\[[\w-]+\s+([a-f0-9]{7,8})\]\s+(.+)/);
+            if (gitCommitMatch && !commits.find(c => c.hash === gitCommitMatch[1])) {
+              commits.push({ hash: gitCommitMatch[1], message: gitCommitMatch[2].slice(0, 60) });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const duration = firstTimestamp && lastTimestamp
+    ? Math.round((lastTimestamp - firstTimestamp) / 60000)
+    : 0;
+
+  return { files, commits, toolCounts, duration, messageCount };
+}
+
+export function formatDiffResults(input: DiffInput): string {
+  const lines: string[] = [];
+  const { sessions, aggregated, period } = input;
+
+  if (sessions.length === 0) {
+    return "No sessions to analyze";
+  }
+
+  const { files, commits, toolCounts, duration, messageCount } = extractDiffData(sessions);
+
+  if (aggregated) {
+    const periodLabel = period === "today" ? "Today" : "This Week";
+    lines.push(`<DIFF period="${periodLabel}" sessions="${sessions.length}">`);
+    lines.push(`Sessions: ${sessions.length}`);
+  } else {
+    const session = sessions[0];
+    const sessionId = truncateId(session.id);
+    lines.push(`<DIFF session="${sessionId}" title="${session.title}">`);
+  }
+
+  if (duration > 0) {
+    const hours = Math.floor(duration / 60);
+    const mins = duration % 60;
+    const durationStr = hours > 0 ? `${hours}h ${mins}m` : `${mins} minutes`;
+    lines.push(`Duration: ${durationStr}`);
+  }
+  lines.push(`Messages: ${messageCount}`);
+  lines.push("");
+
+  if (files.size > 0) {
+    lines.push(`## Files Changed (${files.size})`);
+
+    const sortedFiles = Array.from(files.entries())
+      .sort((a, b) => (b[1].additions + b[1].deletions) - (a[1].additions + a[1].deletions));
+
+    for (const [filePath, stats] of sortedFiles.slice(0, 15)) {
+      const shortPath = truncatePath(filePath);
+      const paddedPath = shortPath.padEnd(40);
+      const statusIcon = stats.status === "A" ? "A" : "M";
+
+      if (stats.status === "A") {
+        lines.push(` ${statusIcon} ${paddedPath} +${stats.additions} (new)`);
+      } else if (stats.deletions > 0) {
+        lines.push(` ${statusIcon} ${paddedPath} +${stats.additions} -${stats.deletions}`);
+      } else {
+        lines.push(` ${statusIcon} ${paddedPath} +${stats.additions}`);
+      }
+    }
+
+    if (files.size > 15) {
+      lines.push(`   ... and ${files.size - 15} more files`);
+    }
+    lines.push("");
+  }
+
+  const validCommits = commits.filter(c => c.hash !== "pending");
+  if (validCommits.length > 0) {
+    lines.push(`## Commits (${validCommits.length})`);
+    for (const commit of validCommits.slice(0, 10)) {
+      lines.push(`[${commit.hash}] ${commit.message}`);
+    }
+    if (validCommits.length > 10) {
+      lines.push(`   ... and ${validCommits.length - 10} more commits`);
+    }
+    lines.push("");
+  }
+
+  if (toolCounts.size > 0) {
+    lines.push("## Tools Used");
+    const sortedTools = Array.from(toolCounts.entries())
+      .sort((a, b) => b[1] - a[1]);
+
+    for (const [tool, count] of sortedTools) {
+      lines.push(`- ${tool}: ${count} call${count === 1 ? "" : "s"}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("</DIFF>");
+
+  return lines.join("\n");
+}
+
+interface Decision {
+  id: string;
+  title: string;
+  rationale: string;
+  alternatives?: string[];
+  tags?: string[];
+  session_id?: string;
+  message_index?: number;
+  project_path?: string;
+  created_at: string;
+}
+
+interface DecisionsResult {
+  decisions: Decision[];
+  count: number;
+}
+
+export function formatDecisionsResults(result: DecisionsResult): string {
+  const lines: string[] = [];
+
+  lines.push(`<DECISIONS count=${result.count}>`);
+
+  if (result.decisions.length === 0) {
+    lines.push("No decisions found.");
+    lines.push("</DECISIONS>");
+    return lines.join("\n");
+  }
+
+  for (const decision of result.decisions) {
+    const shortId = truncateId(decision.id);
+    const date = new Date(decision.created_at).toISOString().split("T")[0];
+
+    lines.push(`[${shortId}] ${date} - ${decision.title}`);
+    lines.push(`  Why: ${decision.rationale}`);
+
+    if (decision.tags && decision.tags.length > 0) {
+      lines.push(`  Tags: ${decision.tags.join(", ")}`);
+    }
+
+    if (decision.session_id) {
+      const sessionShort = truncateId(decision.session_id);
+      const msgPart = decision.message_index !== undefined ? ` msg ${decision.message_index}` : "";
+      lines.push(`  Session: [${sessionShort}]${msgPart}`);
+    }
+
+    lines.push(`  ID: ${decision.id}`);
+    lines.push("");
+  }
+
+  lines.push("</DECISIONS>");
+
+  return lines.join("\n");
+}
+
+interface Pattern {
+  id: string;
+  name: string;
+  description: string;
+  content?: string;
+  tags?: string[];
+  source_session_id?: string;
+  source_range?: string;
+  usage_count: number;
+  created_at: string;
+}
+
+interface PatternsListResult {
+  patterns: Pattern[];
+  count: number;
+}
+
+export function formatPatternsResults(result: PatternsListResult): string {
+  const lines: string[] = [];
+
+  lines.push(`<PATTERNS count=${result.count}>`);
+
+  if (result.patterns.length === 0) {
+    lines.push("No patterns found.");
+    lines.push("</PATTERNS>");
+    return lines.join("\n");
+  }
+
+  for (let i = 0; i < result.patterns.length; i++) {
+    const pattern = result.patterns[i];
+    const num = String(i + 1).padStart(3, "0");
+
+    lines.push(`[P${num}] ${pattern.name}`);
+    lines.push(`  Description: ${pattern.description}`);
+
+    if (pattern.tags && pattern.tags.length > 0) {
+      lines.push(`  Tags: ${pattern.tags.join(", ")}`);
+    }
+
+    lines.push(`  Used: ${pattern.usage_count} time${pattern.usage_count === 1 ? "" : "s"}`);
+    lines.push("");
+  }
+
+  lines.push("</PATTERNS>");
+
+  return lines.join("\n");
+}
+
+interface PatternShowResult {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  tags?: string[];
+  source_session_id?: string;
+  source_range?: string;
+  usage_count: number;
+  created_at: string;
+}
+
+export function formatPatternShow(result: PatternShowResult): string {
+  const lines: string[] = [];
+
+  lines.push(`<PATTERN name="${result.name}">`);
+  lines.push(`# ${result.name}`);
+  lines.push("");
+  lines.push("## Description");
+  lines.push(result.description);
+  lines.push("");
+
+  if (result.tags && result.tags.length > 0) {
+    lines.push("## Tags");
+    lines.push(result.tags.join(", "));
+    lines.push("");
+  }
+
+  lines.push("## Content");
+  lines.push(result.content);
+  lines.push("");
+
+  if (result.source_session_id) {
+    lines.push("## Source");
+    const sessionShort = truncateId(result.source_session_id);
+    const rangePart = result.source_range ? ` lines ${result.source_range}` : "";
+    lines.push(`Session [${sessionShort}]${rangePart}`);
+    lines.push("");
+  }
+
+  lines.push(`Used: ${result.usage_count} time${result.usage_count === 1 ? "" : "s"}`);
+  lines.push("</PATTERN>");
+
+  return lines.join("\n");
+}
+
+interface SimilarSession {
+  conversation_id: string;
+  session_id?: string;
+  title: string;
+  project_path?: string;
+  updated_at: string;
+  message_count: number;
+  match_type: string;
+  match_detail?: string;
+}
+
+interface SimilarResult {
+  sessions: SimilarSession[];
+  count: number;
+  query_type?: string;
+  query_value?: string;
+}
+
+export function formatSimilarResults(result: SimilarResult, query: { file?: string; session?: string }): string {
+  const lines: string[] = [];
+
+  const queryStr = query.file ? `--file ${query.file}` : `--session ${query.session}`;
+  lines.push(`<SIMILAR query="${queryStr}">`);
+
+  if (result.count === 0) {
+    if (query.file) {
+      lines.push(`No sessions found that touched ${query.file}`);
+      lines.push("");
+      lines.push("Note: File touch data may be sparse for older sessions.");
+    } else {
+      lines.push(`No similar sessions found for ${query.session}`);
+    }
+    lines.push("</SIMILAR>");
+    return lines.join("\n");
+  }
+
+  const queryLabel = query.file || query.session || "query";
+  lines.push(`Found ${result.count} session${result.count === 1 ? "" : "s"} that touched ${queryLabel}\n`);
+
+  for (const session of result.sessions) {
+    const sessionId = session.session_id ? truncateId(session.session_id) : truncateId(session.conversation_id);
+    const date = formatDate(session.updated_at);
+    const title = session.title || "Untitled";
+
+    lines.push(`[${sessionId}] ${date} - "${title}"`);
+
+    if (session.match_detail) {
+      const matchType = session.match_type === "file" ? "Modified" : "Related";
+      lines.push(`  Match: ${matchType} ${session.match_detail}`);
+    }
+
+    lines.push(`  Messages: ${session.message_count}`);
+
+    if (session.project_path) {
+      lines.push(`  Project: ${truncatePath(session.project_path)}`);
+    }
+
+    lines.push("");
+  }
+
+  if (result.sessions.length > 0) {
+    const firstId = result.sessions[0].session_id
+      ? truncateId(result.sessions[0].session_id)
+      : truncateId(result.sessions[0].conversation_id);
+    lines.push(`Use: codecast read ${firstId} <range>  # read messages from a session`);
+  }
+
+  lines.push("</SIMILAR>");
+
+  return lines.join("\n");
+}
+
+interface AskSessionDetail {
+  id: string;
+  title: string;
+  messages: Array<{ line: number; role: string; content: string }>;
+  matchLines: number[];
+}
+
+interface AskInput {
+  query: string;
+  sessions: AskSessionDetail[];
+  searchTerms: string[];
+}
+
+function highlightTerms(text: string, terms: string[]): string {
+  let result = text;
+  for (const term of terms) {
+    const regex = new RegExp(`\\b(${term})\\b`, "gi");
+    result = result.replace(regex, "**$1**");
+  }
+  return result;
+}
+
+function extractRelevantSnippet(content: string, terms: string[], maxLength: number = 200): string {
+  if (!content) return "";
+
+  const lower = content.toLowerCase();
+  let bestStart = 0;
+  let bestScore = 0;
+
+  for (let i = 0; i < content.length; i += 50) {
+    const window = lower.slice(i, i + maxLength);
+    let score = 0;
+    for (const term of terms) {
+      if (window.includes(term.toLowerCase())) {
+        score += 1;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = i;
+    }
+  }
+
+  let snippet = content.slice(bestStart, bestStart + maxLength);
+  if (bestStart > 0) snippet = "..." + snippet;
+  if (bestStart + maxLength < content.length) snippet = snippet + "...";
+
+  return snippet.replace(/\n+/g, " ").trim();
+}
+
+export function formatAskResults(input: AskInput): string {
+  const lines: string[] = [];
+  const { query, sessions, searchTerms } = input;
+
+  lines.push(`<ANSWER query="${query}">`);
+
+  if (sessions.length === 0) {
+    lines.push("No relevant information found.");
+    lines.push("</ANSWER>");
+    return lines.join("\n");
+  }
+
+  const snippets: Array<{
+    sessionId: string;
+    title: string;
+    line: number;
+    endLine: number;
+    role: string;
+    content: string;
+    relevance: number;
+  }> = [];
+
+  for (const session of sessions) {
+    for (const msg of session.messages) {
+      if (!msg.content) continue;
+
+      const isMatch = session.matchLines.includes(msg.line);
+      const termMatches = searchTerms.filter(t =>
+        msg.content.toLowerCase().includes(t.toLowerCase())
+      ).length;
+
+      if (isMatch || termMatches > 0) {
+        snippets.push({
+          sessionId: session.id,
+          title: session.title,
+          line: msg.line,
+          endLine: msg.line,
+          role: msg.role,
+          content: msg.content,
+          relevance: (isMatch ? 2 : 0) + termMatches,
+        });
+      }
+    }
+  }
+
+  snippets.sort((a, b) => b.relevance - a.relevance);
+  const topSnippets = snippets.slice(0, 5);
+
+  if (topSnippets.length === 0) {
+    lines.push("Found sessions but no specific matches for the query terms.");
+    lines.push("");
+    lines.push("Related sessions:");
+    for (const session of sessions.slice(0, 3)) {
+      lines.push(`- [${truncateId(session.id)}] ${session.title}`);
+    }
+    lines.push("</ANSWER>");
+    return lines.join("\n");
+  }
+
+  const grouped = new Map<string, typeof topSnippets>();
+  for (const snippet of topSnippets) {
+    const key = snippet.sessionId;
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+    grouped.get(key)!.push(snippet);
+  }
+
+  let firstSession = true;
+  for (const [sessionId, sessionSnippets] of grouped) {
+    const sessionTitle = sessionSnippets[0].title;
+    const shortId = truncateId(sessionId);
+
+    if (firstSession) {
+      const mainSnippet = sessionSnippets[0];
+      const excerpt = extractRelevantSnippet(mainSnippet.content, searchTerms, 300);
+      const highlighted = highlightTerms(excerpt, searchTerms);
+      lines.push(highlighted);
+      lines.push("");
+      firstSession = false;
+    }
+
+    const minLine = Math.min(...sessionSnippets.map(s => s.line));
+    const maxLine = Math.max(...sessionSnippets.map(s => s.endLine));
+
+    if (sessionSnippets.length > 1 || !firstSession) {
+      const preview = extractRelevantSnippet(sessionSnippets[0].content, searchTerms, 100);
+      lines.push(`- [${shortId}] ${sessionTitle}`);
+      lines.push(`  msg ${minLine}${maxLine !== minLine ? `-${maxLine}` : ""}: ${preview}`);
+    }
+  }
+
+  lines.push("");
+  lines.push("Sources:");
+  for (const [sessionId, sessionSnippets] of grouped) {
+    const shortId = truncateId(sessionId);
+    const minLine = Math.min(...sessionSnippets.map(s => s.line));
+    const maxLine = Math.max(...sessionSnippets.map(s => s.endLine));
+    const title = sessionSnippets[0].title;
+    lines.push(`- [${shortId}] msg ${minLine}${maxLine !== minLine ? `-${maxLine}` : ""}: ${title}`);
+  }
+
+  lines.push("</ANSWER>");
+
+  return lines.join("\n");
+}
+
+interface BlameTouch {
+  conversation_id: string;
+  session_id?: string;
+  title: string;
+  operation: string;
+  line_range?: string;
+  message_index: number;
+  timestamp: string;
+}
+
+interface BlameResult {
+  touches: BlameTouch[];
+  count: number;
+  file_path: string;
+  line?: number;
+}
+
+export function formatBlameResults(result: BlameResult): string {
+  const lines: string[] = [];
+
+  const shortPath = truncatePath(result.file_path);
+  const target = result.line ? `${shortPath}:${result.line}` : shortPath;
+
+  lines.push(`<BLAME target="${target}">`);
+
+  if (result.touches.length === 0) {
+    lines.push("No sessions found that touched this file.");
+    lines.push("</BLAME>");
+    return lines.join("\n");
+  }
+
+  lines.push(`File touched by ${result.count} session${result.count === 1 ? "" : "s"}\n`);
+
+  const groupedBySession = new Map<string, BlameTouch[]>();
+  for (const touch of result.touches) {
+    const key = touch.session_id || touch.conversation_id;
+    const existing = groupedBySession.get(key) || [];
+    existing.push(touch);
+    groupedBySession.set(key, existing);
+  }
+
+  for (const [sessionKey, touches] of groupedBySession) {
+    const first = touches[0];
+    const sessionId = first.session_id || truncateId(first.conversation_id);
+    const date = new Date(first.timestamp).toISOString().split("T")[0];
+
+    lines.push(`[${truncateId(sessionId)}] ${date} - "${first.title}"`);
+
+    const opCounts = new Map<string, number>();
+    for (const t of touches) {
+      opCounts.set(t.operation, (opCounts.get(t.operation) || 0) + 1);
+    }
+
+    const opSummary: string[] = [];
+    for (const [op, count] of opCounts) {
+      const opLabel = op === "write" ? "write (created)" : op;
+      opSummary.push(count > 1 ? `${count}x ${opLabel}` : opLabel);
+    }
+    lines.push(`  Operations: ${opSummary.join(", ")}`);
+
+    const lineRanges = touches.filter(t => t.line_range).map(t => t.line_range);
+    if (result.line && lineRanges.length > 0) {
+      const matching = lineRanges.filter(r => {
+        if (!r) return false;
+        const [start, end] = r.split("-").map(Number);
+        return result.line! >= start && result.line! <= (end || start);
+      });
+      if (matching.length > 0) {
+        lines.push(`  Line ranges: ${matching.slice(0, 3).join(", ")}`);
+      }
+    }
+
+    lines.push("");
+  }
+
+  if (groupedBySession.size > 0) {
+    const firstSession = result.touches[0];
+    const firstId = truncateId(firstSession.session_id || firstSession.conversation_id);
+    lines.push(`Use: codecast read ${firstId}                # read full session`);
+  }
+
+  lines.push("</BLAME>");
+
+  return lines.join("\n");
+}
+
+interface ContextSession {
+  id: string;
+  title: string;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+  preview?: string;
+  match_type: string;
+  match_detail?: string;
+  files?: string[];
+}
+
+interface ContextRelatedFile {
+  path: string;
+  session_count: number;
+}
+
+interface ContextInput {
+  query?: string;
+  sessions: ContextSession[];
+  related_files: ContextRelatedFile[];
+}
+
+export function formatContextResults(input: ContextInput): string {
+  const lines: string[] = [];
+  const { query, sessions, related_files } = input;
+
+  const queryDisplay = query || "(file-based search)";
+  lines.push(`<CONTEXT query="${queryDisplay}">`);
+
+  if (sessions.length === 0) {
+    lines.push("No relevant sessions found.");
+    lines.push("");
+    lines.push("Try:");
+    lines.push("  codecast context \"your task description\"");
+    lines.push("  codecast context --file path/to/file.ts");
+    lines.push("</CONTEXT>");
+    return lines.join("\n");
+  }
+
+  lines.push(`Found ${sessions.length} relevant session${sessions.length === 1 ? "" : "s"}\n`);
+
+  lines.push("## Most Relevant");
+  for (const session of sessions.slice(0, 5)) {
+    const shortId = truncateId(session.id);
+    const date = formatDate(session.updated_at);
+    const title = session.title || "Untitled";
+
+    lines.push(`[${shortId}] ${date} - "${title}"`);
+
+    if (session.preview) {
+      const previewClean = session.preview.replace(/\n+/g, " ").trim();
+      lines.push(`  Preview: ${previewClean}`);
+    }
+
+    if (session.files && session.files.length > 0) {
+      lines.push(`  Files: ${session.files.join(", ")}`);
+    }
+
+    lines.push("");
+  }
+
+  if (sessions.length > 5) {
+    lines.push(`... and ${sessions.length - 5} more sessions`);
+    lines.push("");
+  }
+
+  if (related_files.length > 0) {
+    lines.push("## Related Files");
+    for (const file of related_files.slice(0, 10)) {
+      const count = file.session_count;
+      lines.push(`- ${file.path} (${count} session${count === 1 ? "" : "s"})`);
+    }
+    lines.push("");
+  }
+
+  if (sessions.length > 0) {
+    const firstId = truncateId(sessions[0].id);
+    lines.push(`Use: codecast read ${firstId} <range>  # read session messages`);
+    lines.push(`     codecast summary ${firstId}        # get session summary`);
+  }
+
+  lines.push("</CONTEXT>");
 
   return lines.join("\n");
 }

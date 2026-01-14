@@ -11,9 +11,10 @@ describe("Parser malformed JSON handling", () => {
 
     expect(result).toBeNull();
     expect(consoleWarnSpy).toHaveBeenCalled();
-    expect(consoleWarnSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(consoleWarnSpy.mock.calls[0][0]).toContain('[parser] Failed to parse session line');
-    expect(consoleWarnSpy.mock.calls[1][0]).toContain('[parser] Line content:');
+    const calls = consoleWarnSpy.mock.calls as unknown[][];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls[0][0]).toContain('[parser] Failed to parse session line');
+    expect(calls[1][0]).toContain('[parser] Line content:');
 
     console.warn = originalWarn;
   });
@@ -74,7 +75,8 @@ describe("Parser malformed JSON handling", () => {
     parseSessionLine(longLine);
 
     expect(consoleWarnSpy).toHaveBeenCalled();
-    const contentWarning = consoleWarnSpy.mock.calls[1][0];
+    const calls = consoleWarnSpy.mock.calls as unknown[][];
+    const contentWarning = calls[1][0] as string;
     expect(contentWarning.length).toBeLessThan(longLine.length + 50);
     expect(contentWarning).toContain('...');
 
