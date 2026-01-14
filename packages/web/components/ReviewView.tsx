@@ -98,7 +98,7 @@ export function ReviewView({ prId }: { prId: string }) {
       } else if (e.key === "k") {
         e.preventDefault();
         setCurrentFileIndex((prev) => Math.max(prev - 1, 0));
-      } else if (e.key === "c") {
+      } else if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         const firstLine = currentFile.changes.find((c) => c.newLine);
         if (firstLine?.newLine) {
