@@ -17,22 +17,6 @@ interface SidebarProps {
   isNarrow?: boolean;
 }
 
-function formatRelativeDate(timestamp: number): string {
-  const now = Date.now();
-  const diff = now - timestamp;
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  if (hours < 24) return `${hours}h`;
-  if (days < 7) return `${days}d`;
-
-  const date = new Date(timestamp);
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
 function getDateGroup(timestamp: number, now: number): string {
   const diffMs = now - timestamp;
   const diffHours = diffMs / 3600000;
@@ -328,23 +312,13 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   );
 
   return (
-    <>
-      {isMobileOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-30 md:hidden"
-          onClick={onMobileClose}
-          aria-hidden="true"
-        />
-      )}
-      <nav
-        className={`
-          h-full w-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt/80 shadow-[6px_0_20px_rgba(0,0,0,0.12)] overflow-y-auto
-          md:flex
-          ${isMobileOpen ? 'fixed top-0 left-0 z-40 w-[85vw] max-w-xs h-screen bg-sol-bg-alt' : 'hidden'}
-        `}
-      >
-        {sidebarContent}
-      </nav>
-    </>
+    <nav
+      className={`
+        h-full w-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt overflow-y-auto
+        ${isMobileOpen ? 'shadow-xl' : 'hidden md:flex'}
+      `}
+    >
+      {sidebarContent}
+    </nav>
   );
 }

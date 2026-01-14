@@ -51,6 +51,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
   const [layout, setLayout] = useState(getInitialLayout);
   const [mounted, setMounted] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const pathname = usePathname();
   const diffPanelOpen = useDiffViewerStore((state) => state.diffPanelOpen);
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
@@ -62,6 +63,10 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
   useEffect(() => {
     setMounted(true);
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
@@ -93,11 +98,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   }, [hideSidebar, isSidebarCollapsed]);
 
   const user = useQuery(api.users.getCurrentUser);
-  const team = useQuery(
-    api.teams.getTeam,
-    user?.team_id ? { team_id: user.team_id } : "skip"
-  );
-
   const isAdmin = user?.role === "admin";
 
   return (
@@ -180,13 +180,13 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
-        {hideSidebar || isSidebarCollapsed ? (
+        {hideSidebar || isSidebarCollapsed || isMobile ? (
           isFullWidthPage ? (
             <div className="h-full">
               {children}
             </div>
           ) : (
-            <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
               <div className="max-w-6xl mx-auto">
                 {children}
               </div>
@@ -231,16 +231,22 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
       {/* Mobile sidebar overlay */}
       {isMobileSidebarOpen && (
-        <div className="md:hidden fixed inset-0 z-40">
-          <Sidebar
-            filter={filter}
-            onFilterChange={onFilterChange}
-            directoryFilter={directoryFilter}
-            onDirectoryFilterChange={onDirectoryFilterChange}
-            isMobileOpen={isMobileSidebarOpen}
-            onMobileClose={() => setIsMobileSidebarOpen(false)}
+        <>
+          <div
+            className="md:hidden fixed inset-0 z-40 bg-black/50"
+            onClick={() => setIsMobileSidebarOpen(false)}
           />
-        </div>
+          <div className="md:hidden fixed inset-y-0 left-0 z-50 w-[85vw] max-w-xs">
+            <Sidebar
+              filter={filter}
+              onFilterChange={onFilterChange}
+              directoryFilter={directoryFilter}
+              onDirectoryFilterChange={onDirectoryFilterChange}
+              isMobileOpen={isMobileSidebarOpen}
+              onMobileClose={() => setIsMobileSidebarOpen(false)}
+            />
+          </div>
+        </>
       )}
     </div>
   );
