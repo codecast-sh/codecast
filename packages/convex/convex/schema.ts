@@ -58,6 +58,7 @@ export default defineSchema({
     slug: v.optional(v.string()),
     title: v.optional(v.string()),
     subtitle: v.optional(v.string()),
+    title_embedding: v.optional(v.array(v.float64())),
     project_hash: v.optional(v.string()),
     project_path: v.optional(v.string()),
     model: v.optional(v.string()),
@@ -85,6 +86,11 @@ export default defineSchema({
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
     .index("by_agent_type", ["agent_type"])
+    .vectorIndex("by_title_embedding", {
+      vectorField: "title_embedding",
+      dimensions: 1024,
+      filterFields: ["user_id"],
+    })
     .index("by_share_token", ["share_token"])
     .index("by_session_id", ["session_id"])
     .index("by_short_id", ["short_id"])
@@ -142,6 +148,7 @@ export default defineSchema({
       cache_creation_input_tokens: v.optional(v.number()),
       cache_read_input_tokens: v.optional(v.number()),
     })),
+    embedding: v.optional(v.array(v.float64())),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
@@ -150,6 +157,11 @@ export default defineSchema({
     .index("by_timestamp", ["timestamp"])
     .searchIndex("search_content", {
       searchField: "content",
+      filterFields: ["conversation_id"],
+    })
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 1024,
       filterFields: ["conversation_id"],
     }),
 
@@ -294,7 +306,8 @@ export default defineSchema({
     status: v.union(
       v.literal("pending"),
       v.literal("delivered"),
-      v.literal("failed")
+      v.literal("failed"),
+      v.literal("undeliverable")
     ),
     created_at: v.number(),
     delivered_at: v.optional(v.number()),
@@ -302,6 +315,18 @@ export default defineSchema({
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_status", ["from_user_id", "status"]),
+
+  managed_sessions: defineTable({
+    session_id: v.string(),
+    conversation_id: v.optional(v.id("conversations")),
+    user_id: v.id("users"),
+    pid: v.number(),
+    started_at: v.number(),
+    last_heartbeat: v.number(),
+  })
+    .index("by_session_id", ["session_id"])
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_user_id", ["user_id"]),
 
   commits: defineTable({
     conversation_id: v.optional(v.id("conversations")),
