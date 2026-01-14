@@ -183,11 +183,12 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
     lines.push("");
 
     for (const msg of conv.matches) {
+      const lineNum = `${c.dim}${String(msg.line).padStart(3)}:${c.reset}`;
       const role = msg.role === "user"
         ? `${c.blue}[user]${c.reset}`
         : `${c.green}[assistant]${c.reset}`;
       if (msg.content) {
-        lines.push(`${role} ${msg.content}`);
+        lines.push(`${lineNum} ${role} ${msg.content}`);
       }
       lines.push("");
     }
