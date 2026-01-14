@@ -481,6 +481,8 @@ Search past conversations when the user references prior work, asks about decisi
 \`\`\`bash
 codecast search "auth middleware"     # search current project
 codecast search "bug fix" -u -C 2     # user messages only, with context
+codecast feed                         # browse recent conversations
+codecast feed -g -s 7d                # last 7 days, all projects
 codecast read <id> 15:25              # read messages 15-25
 codecast read <id> 15:25 --full       # include tool call content
 \`\`\`
@@ -898,19 +900,46 @@ program
     }
   });
 
+function parseRelativeDate(input: string): number | null {
+  const now = Date.now();
+  const lowered = input.toLowerCase().trim();
+
+  if (lowered === "today") return new Date().setHours(0, 0, 0, 0);
+  if (lowered === "yesterday") return now - 24 * 60 * 60 * 1000;
+
+  const relMatch = lowered.match(/^(\d+)\s*(d|day|days|h|hour|hours|w|week|weeks)(\s*ago)?$/);
+  if (relMatch) {
+    const num = parseInt(relMatch[1]);
+    const unit = relMatch[2][0];
+    const ms = unit === "d" ? num * 24 * 60 * 60 * 1000
+             : unit === "h" ? num * 60 * 60 * 1000
+             : unit === "w" ? num * 7 * 24 * 60 * 60 * 1000 : 0;
+    return now - ms;
+  }
+
+  const parsed = Date.parse(input);
+  return isNaN(parsed) ? null : parsed;
+}
+
 program
   .command("feed")
   .description(
     "Browse recent conversations like a feed\n\n" +
     "By default, shows sessions from the current project.\n" +
     "Use -g to view all sessions globally.\n\n" +
+    "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
-    "  codecast feed                  # recent sessions in current project\n" +
-    "  codecast feed -g               # recent sessions globally\n" +
-    "  codecast feed --limit 20       # show more sessions"
+    "  codecast feed                    # recent sessions\n" +
+    "  codecast feed -g                 # all projects globally\n" +
+    "  codecast feed -s 7d              # last 7 days\n" +
+    "  codecast feed -s 2w -e 1w        # between 2 weeks and 1 week ago\n" +
+    "  codecast feed -p 2               # page 2 (skip first 10)"
   )
   .option("-g, --global", "Show all sessions (not just current project)")
-  .option("-l, --limit <n>", "Maximum number of conversations to return", "10")
+  .option("-n, --limit <n>", "Number of conversations per page", "10")
+  .option("-p, --page <n>", "Page number (1-indexed)", "1")
+  .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday, 2024-01-15)")
+  .option("-e, --end <date>", "End date/time")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -919,8 +948,28 @@ program
     }
 
     const limit = parseInt(options.limit);
+    const page = parseInt(options.page);
+    const offset = (page - 1) * limit;
     const projectPath = options.global ? undefined : process.cwd();
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    let startTime: number | undefined;
+    let endTime: number | undefined;
+
+    if (options.start) {
+      startTime = parseRelativeDate(options.start) ?? undefined;
+      if (!startTime) {
+        console.error(`Invalid start date: ${options.start}`);
+        process.exit(1);
+      }
+    }
+    if (options.end) {
+      endTime = parseRelativeDate(options.end) ?? undefined;
+      if (!endTime) {
+        console.error(`Invalid end date: ${options.end}`);
+        process.exit(1);
+      }
+    }
 
     try {
       const response = await fetch(`${siteUrl}/cli/feed`, {
@@ -929,6 +978,9 @@ program
         body: JSON.stringify({
           api_token: config.auth_token,
           limit,
+          offset,
+          start_time: startTime,
+          end_time: endTime,
           project_path: projectPath,
         }),
       });
@@ -941,7 +993,7 @@ program
       }
 
       const { formatFeedResults } = await import("./formatter.js");
-      console.log(formatFeedResults(result, { projectPath }));
+      console.log(formatFeedResults(result, { projectPath, page }));
     } catch (error) {
       console.error("Feed failed:", error instanceof Error ? error.message : error);
       process.exit(1);

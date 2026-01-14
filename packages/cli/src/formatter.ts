@@ -303,6 +303,7 @@ interface FeedResult {
 
 interface FeedOptions {
   projectPath?: string;
+  page?: number;
 }
 
 export function formatFeedResults(result: FeedResult, options: FeedOptions = {}): string {
@@ -320,7 +321,8 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     return lines.join("\n");
   }
 
-  lines.push(`Recent conversations (${result.conversations.length})\n`);
+  const pageInfo = options.page && options.page > 1 ? ` (page ${options.page})` : "";
+  lines.push(`Recent conversations (${result.conversations.length})${pageInfo}\n`);
 
   for (const conv of result.conversations) {
     const header = `── ${conv.title} `;
@@ -356,13 +358,13 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
 
   if (result.conversations.length > 0) {
     const firstId = truncateId(result.conversations[0].id);
+    const page = options.page ?? 1;
     lines.push(`Use: codecast read ${firstId} <range>        # read messages by line range`);
-    lines.push(`     codecast read ${firstId} <range> --full  # include full tool call/result content`);
+    lines.push(`     codecast feed -p ${page + 1}                  # next page`);
   }
 
   if (options.projectPath) {
     lines.push(`\nScope: ${truncatePath(options.projectPath)}`);
-    lines.push("Use -g to view all sessions globally.");
   }
 
   lines.push("</FEED>");
