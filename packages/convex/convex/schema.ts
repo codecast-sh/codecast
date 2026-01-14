@@ -87,7 +87,8 @@ export default defineSchema({
     .index("by_agent_type", ["agent_type"])
     .index("by_share_token", ["share_token"])
     .index("by_session_id", ["session_id"])
-    .index("by_short_id", ["short_id"]),
+    .index("by_short_id", ["short_id"])
+    .index("by_forked_from", ["forked_from"]),
 
   public_conversations: defineTable({
     conversation_id: v.id("conversations"),

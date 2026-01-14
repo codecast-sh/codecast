@@ -99,6 +99,14 @@ export type ConversationData = {
     share_token?: string;
     username: string;
   } | null;
+  compaction_count?: number;
+  fork_children?: Array<{
+    _id: string;
+    title: string;
+    short_id?: string;
+    started_at: number;
+    username: string;
+  }>;
 };
 
 type CommitFile = {
@@ -1244,8 +1252,23 @@ function SystemBlock({ content, subtype }: { content: string; subtype?: string }
   const subtypeLabels: Record<string, string> = {
     local_command: "command",
     stop_hook_summary: "hook",
-    compact_boundary: "compact",
+    compact_boundary: "compacted",
   };
+
+  if (subtype === "compact_boundary") {
+    return (
+      <div className="my-6 flex items-center gap-3">
+        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30">
+          <svg className="w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+          </svg>
+          <span className="text-xs text-amber-500 font-medium">Context compacted</span>
+        </div>
+        <div className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div className="mb-4 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-sol-border text-xs">
@@ -2097,6 +2120,32 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   messageCount={conversation.message_count}
                 />
 
+                {(conversation.compaction_count ?? 0) > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-500 border border-amber-500/30"
+                    title={`Context was compacted ${conversation.compaction_count} time${conversation.compaction_count === 1 ? '' : 's'}`}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                    {conversation.compaction_count}
+                  </span>
+                )}
+
+                {((conversation.fork_count ?? 0) > 0 || conversation.forked_from_details || (conversation.fork_children?.length ?? 0) > 0) && (
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/30"
+                    title={conversation.forked_from_details
+                      ? `Forked from @${conversation.forked_from_details.username}`
+                      : `${conversation.fork_count || conversation.fork_children?.length || 0} fork${(conversation.fork_count || conversation.fork_children?.length || 0) === 1 ? '' : 's'}`}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                    </svg>
+                    {conversation.forked_from_details ? "fork" : (conversation.fork_count || conversation.fork_children?.length || 0)}
+                  </span>
+                )}
+
                 {headerExtra}
 
                 {highlightQuery && (
@@ -2169,9 +2218,36 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     {conversation.forked_from_details && (
                       <DropdownMenuItem asChild>
                         <Link href={conversation.forked_from_details.share_token ? `/share/${conversation.forked_from_details.share_token}` : `/conversation/${conversation.forked_from_details.conversation_id}`}>
+                          <svg className="w-3 h-3 mr-1.5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                          </svg>
                           Forked from @{conversation.forked_from_details.username}
                         </Link>
                       </DropdownMenuItem>
+                    )}
+                    {conversation.fork_children && conversation.fork_children.length > 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <div className="px-2 py-1 text-[10px] text-sol-text-dim font-medium">
+                          Forks ({conversation.fork_children.length})
+                        </div>
+                        {conversation.fork_children.slice(0, 5).map((fork) => (
+                          <DropdownMenuItem key={fork._id} asChild>
+                            <Link href={`/conversation/${fork._id}`} className="flex items-center gap-2">
+                              <svg className="w-3 h-3 text-purple-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                              </svg>
+                              <span className="truncate flex-1">{fork.title}</span>
+                              <span className="text-[10px] text-sol-text-dim">@{fork.username}</span>
+                            </Link>
+                          </DropdownMenuItem>
+                        ))}
+                        {conversation.fork_children.length > 5 && (
+                          <div className="px-2 py-1 text-[10px] text-sol-text-dim">
+                            +{conversation.fork_children.length - 5} more
+                          </div>
+                        )}
+                      </>
                     )}
                     {conversation.child_conversations && conversation.child_conversations.length > 0 && (
                       <DropdownMenuItem disabled>

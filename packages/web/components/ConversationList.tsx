@@ -47,6 +47,8 @@ type Conversation = {
   project_path?: string | null;
   git_root?: string | null;
   is_favorite?: boolean;
+  fork_count?: number;
+  forked_from?: string | null;
 };
 
 function formatDuration(ms: number): string {
@@ -705,6 +707,17 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         )}
                         {conv.latest_todos && conv.latest_todos.todos.length > 0 && (
                           <TodoBadge todos={conv.latest_todos.todos} />
+                        )}
+                        {((conv.fork_count ?? 0) > 0 || conv.forked_from) && (
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/30"
+                            title={conv.forked_from ? "This is a fork" : `${conv.fork_count} fork${conv.fork_count === 1 ? '' : 's'}`}
+                          >
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                            </svg>
+                            {conv.forked_from ? "fork" : conv.fork_count}
+                          </span>
                         )}
                         {conv.subagent_types && conv.subagent_types.length > 0 && conv.subagent_types.map((type) => (
                           <span
