@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@inquirer/prompts": "^8.2.0",
     "chokidar": "^4.0.3",
     "commander": "^12.1.0",
     "convex": "1.31.2",
