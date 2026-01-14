@@ -1242,6 +1242,9 @@ export const searchForCLI = mutation({
     api_token: v.string(),
     query: v.string(),
     limit: v.optional(v.number()),
+    offset: v.optional(v.number()),
+    start_time: v.optional(v.number()),
+    end_time: v.optional(v.number()),
     context_before: v.optional(v.number()),
     context_after: v.optional(v.number()),
     project_path: v.optional(v.string()),
@@ -1263,6 +1266,9 @@ export const searchForCLI = mutation({
     }
 
     const limit = args.limit ?? 10;
+    const offset = args.offset ?? 0;
+    const startTime = args.start_time;
+    const endTime = args.end_time ?? Date.now();
     const contextBefore = args.context_before ?? 0;
     const contextAfter = args.context_after ?? 0;
     const projectPath = args.project_path;
@@ -1308,9 +1314,9 @@ export const searchForCLI = mutation({
     }> = [];
 
     let totalMatches = 0;
-    let conversationsProcessed = 0;
+    let conversationsSkipped = 0;
 
-    for (const [convId, messages] of conversationMatches) {
+    for (const [, messages] of conversationMatches) {
       if (results.length >= limit) break;
 
       const conv = await ctx.db.get(messages[0].conversation_id);
@@ -1328,7 +1334,13 @@ export const searchForCLI = mutation({
         continue;
       }
 
-      conversationsProcessed++;
+      if (startTime && conv.updated_at < startTime) continue;
+      if (endTime && conv.updated_at > endTime) continue;
+
+      if (conversationsSkipped < offset) {
+        conversationsSkipped++;
+        continue;
+      }
 
       const firstMessages = await ctx.db
         .query("messages")

@@ -479,13 +479,14 @@ async function promptMemoryEnablement(): Promise<void> {
 You are one session among many. Past conversations contain valuable context about decisions, patterns, and prior work. Search proactively and liberally - when starting tasks, debugging issues, or when the user references previous work. Parallelize searches when exploring multiple topics.
 
 \`\`\`bash
-codecast search "auth middleware"     # search current project
-codecast search "bug fix" -u -C 2     # user messages only, with context
+codecast search "auth"                # search current project
+codecast search "bug" -g -s 7d        # global, last 7 days
 codecast feed                         # browse recent conversations
-codecast feed -g -s 7d                # last 7 days, all projects
+codecast feed -s 2w -q "refactor"     # last 2 weeks mentioning refactor
 codecast read <id> 15:25              # read messages 15-25
-codecast read <id> 15:25 --full       # include tool call content
 \`\`\`
+
+Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n (limit)
 `;
 
   if (fs.existsSync(claudeMdPath)) {
@@ -834,6 +835,27 @@ program
     }
   });
 
+function parseRelativeDate(input: string): number | null {
+  const now = Date.now();
+  const lowered = input.toLowerCase().trim();
+
+  if (lowered === "today") return new Date().setHours(0, 0, 0, 0);
+  if (lowered === "yesterday") return now - 24 * 60 * 60 * 1000;
+
+  const relMatch = lowered.match(/^(\d+)\s*(d|day|days|h|hour|hours|w|week|weeks)(\s*ago)?$/);
+  if (relMatch) {
+    const num = parseInt(relMatch[1]);
+    const unit = relMatch[2][0];
+    const ms = unit === "d" ? num * 24 * 60 * 60 * 1000
+             : unit === "h" ? num * 60 * 60 * 1000
+             : unit === "w" ? num * 7 * 24 * 60 * 60 * 1000 : 0;
+    return now - ms;
+  }
+
+  const parsed = Date.parse(input);
+  return isNaN(parsed) ? null : parsed;
+}
+
 program
   .command("search")
   .description(
@@ -841,20 +863,22 @@ program
     "By default, searches only sessions from the current project.\n" +
     "Use -g to search all sessions globally.\n" +
     "Use -u to search only user messages.\n\n" +
+    "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
-    "  codecast search \"auth implementation\"     # search current project\n" +
-    "  codecast search \"auth\" -u                 # search user messages only\n" +
-    "  codecast search \"oauth\" -g                # search all sessions\n" +
-    "  codecast search \"middleware\" -C 3         # with context lines\n" +
-    "  codecast search \"auth\" --limit 5          # limit results"
+    "  codecast search \"auth\"              # search current project\n" +
+    "  codecast search \"auth\" -g -s 7d     # global, last 7 days\n" +
+    "  codecast search \"bug\" -u -C 2       # user messages with context"
   )
   .argument("<query>", "Search query (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
   .option("-g, --global", "Search all sessions (not just current project)")
+  .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
+  .option("-e, --end <date>", "End date/time")
+  .option("-n, --limit <n>", "Results per page", "10")
+  .option("-p, --page <n>", "Page number", "1")
   .option("-A, --after <n>", "Show N messages after each match", "0")
   .option("-B, --before <n>", "Show N messages before each match", "0")
   .option("-C, --context <n>", "Show N messages before and after each match")
-  .option("-l, --limit <n>", "Maximum number of conversations to return", "10")
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -865,8 +889,28 @@ program
     const contextBefore = options.context ? parseInt(options.context) : parseInt(options.before);
     const contextAfter = options.context ? parseInt(options.context) : parseInt(options.after);
     const limit = parseInt(options.limit);
+    const page = parseInt(options.page);
+    const offset = (page - 1) * limit;
     const projectPath = options.global ? undefined : process.cwd();
     const userOnly = options.userOnly ?? false;
+
+    let startTime: number | undefined;
+    let endTime: number | undefined;
+
+    if (options.start) {
+      startTime = parseRelativeDate(options.start) ?? undefined;
+      if (!startTime) {
+        console.error(`Invalid start date: ${options.start}`);
+        process.exit(1);
+      }
+    }
+    if (options.end) {
+      endTime = parseRelativeDate(options.end) ?? undefined;
+      if (!endTime) {
+        console.error(`Invalid end date: ${options.end}`);
+        process.exit(1);
+      }
+    }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
@@ -878,6 +922,9 @@ program
           api_token: config.auth_token,
           query,
           limit,
+          offset,
+          start_time: startTime,
+          end_time: endTime,
           context_before: contextBefore,
           context_after: contextAfter,
           project_path: projectPath,
@@ -899,27 +946,6 @@ program
       process.exit(1);
     }
   });
-
-function parseRelativeDate(input: string): number | null {
-  const now = Date.now();
-  const lowered = input.toLowerCase().trim();
-
-  if (lowered === "today") return new Date().setHours(0, 0, 0, 0);
-  if (lowered === "yesterday") return now - 24 * 60 * 60 * 1000;
-
-  const relMatch = lowered.match(/^(\d+)\s*(d|day|days|h|hour|hours|w|week|weeks)(\s*ago)?$/);
-  if (relMatch) {
-    const num = parseInt(relMatch[1]);
-    const unit = relMatch[2][0];
-    const ms = unit === "d" ? num * 24 * 60 * 60 * 1000
-             : unit === "h" ? num * 60 * 60 * 1000
-             : unit === "w" ? num * 7 * 24 * 60 * 60 * 1000 : 0;
-    return now - ms;
-  }
-
-  const parsed = Date.parse(input);
-  return isNaN(parsed) ? null : parsed;
-}
 
 program
   .command("feed")
