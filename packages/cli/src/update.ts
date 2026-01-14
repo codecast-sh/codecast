@@ -4,6 +4,7 @@ import * as os from "os";
 import { execSync, spawn } from "child_process";
 
 const VERSION = "0.1.0";
+const MEMORY_VERSION = "2";
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -82,6 +83,10 @@ function compareVersions(a: string, b: string): number {
 
 export function getVersion(): string {
   return VERSION;
+}
+
+export function getMemoryVersion(): string {
+  return MEMORY_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {

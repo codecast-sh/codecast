@@ -8,7 +8,7 @@ import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
@@ -35,6 +35,9 @@ interface Config {
   web_url?: string;
   team_id?: string;
   excluded_paths?: string;
+  auto_update?: boolean;
+  memory_enabled?: boolean;
+  memory_version?: string;
   created_at?: string;
   updated_at?: string;
 }
@@ -471,9 +474,7 @@ async function runAuth(): Promise<void> {
   showStatus();
 }
 
-async function promptMemoryEnablement(): Promise<void> {
-  const claudeMdPath = path.join(os.homedir(), ".claude", "CLAUDE.md");
-  const memorySnippet = `
+const MEMORY_SNIPPET = `
 ## Memory
 
 You are one session among many. Past conversations contain valuable context about decisions, patterns, and prior work. Search proactively and liberally - when starting tasks, debugging issues, or when the user references previous work. Parallelize searches when exploring multiple topics.
@@ -489,9 +490,59 @@ codecast read <id> 15:25              # read messages 15-25
 Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n (limit)
 `;
 
+function installMemorySnippet(update = false): { installed: boolean; updated: boolean } {
+  const claudeMdPath = path.join(os.homedir(), ".claude", "CLAUDE.md");
+  const claudeDir = path.join(os.homedir(), ".claude");
+
+  if (!fs.existsSync(claudeDir)) {
+    fs.mkdirSync(claudeDir, { recursive: true });
+  }
+
+  let existing = "";
+  if (fs.existsSync(claudeMdPath)) {
+    existing = fs.readFileSync(claudeMdPath, "utf-8");
+  }
+
+  const hasMemory = existing.includes("## Memory") && existing.includes("codecast search");
+  if (hasMemory && !update) {
+    return { installed: false, updated: false };
+  }
+
+  if (hasMemory && update) {
+    const memoryStart = existing.indexOf("## Memory");
+    let memoryEnd = existing.length;
+    const nextSection = existing.slice(memoryStart + 10).match(/\n## [A-Z]/);
+    if (nextSection && nextSection.index !== undefined) {
+      memoryEnd = memoryStart + 10 + nextSection.index;
+    }
+    const before = existing.slice(0, memoryStart);
+    const after = existing.slice(memoryEnd);
+    existing = before + after;
+    fs.writeFileSync(claudeMdPath, existing.trimEnd() + "\n" + MEMORY_SNIPPET, { mode: 0o600 });
+    return { installed: true, updated: true };
+  }
+
+  fs.writeFileSync(claudeMdPath, existing + MEMORY_SNIPPET, { mode: 0o600 });
+  return { installed: true, updated: false };
+}
+
+async function promptMemoryEnablement(): Promise<void> {
+  const config = readConfig() || {};
+
+  if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
+    if (config.memory_enabled) {
+      installMemorySnippet(false);
+    }
+    return;
+  }
+
+  const claudeMdPath = path.join(os.homedir(), ".claude", "CLAUDE.md");
   if (fs.existsSync(claudeMdPath)) {
     const content = fs.readFileSync(claudeMdPath, "utf-8");
-    if (content.includes("codecast search")) {
+    if (content.includes("codecast search") && config.memory_enabled === undefined) {
+      config.memory_enabled = true;
+      config.memory_version = getMemoryVersion();
+      writeConfig(config);
       return;
     }
   }
@@ -513,26 +564,18 @@ Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n
   });
 
   if (answer === "" || answer === "y" || answer === "yes") {
-    try {
-      const claudeDir = path.join(os.homedir(), ".claude");
-      if (!fs.existsSync(claudeDir)) {
-        fs.mkdirSync(claudeDir, { recursive: true });
-      }
-
-      let existing = "";
-      if (fs.existsSync(claudeMdPath)) {
-        existing = fs.readFileSync(claudeMdPath, "utf-8");
-      }
-
-      fs.writeFileSync(claudeMdPath, existing + memorySnippet, { mode: 0o600 });
-      console.log(`\nMemory enabled. Added to ${claudeMdPath}`);
+    const result = installMemorySnippet(false);
+    if (result.installed) {
+      console.log(`\nMemory enabled. Added to ~/.claude/CLAUDE.md`);
       console.log("Your agent can now use: codecast search \"query\"");
-    } catch (err) {
-      console.error("Could not update CLAUDE.md:", err instanceof Error ? err.message : err);
     }
+    config.memory_enabled = true;
+    config.memory_version = getMemoryVersion();
+    writeConfig(config);
   } else {
-    console.log("\nSkipped. You can enable later by adding to ~/.claude/CLAUDE.md:");
-    console.log('  Use `codecast search "query"` to search conversation history.');
+    console.log("\nSkipped. Run 'codecast memory' later to enable.");
+    config.memory_enabled = false;
+    writeConfig(config);
   }
 }
 
@@ -1508,9 +1551,55 @@ program
   });
 
 program
+  .command("memory")
+  .description("Install or update the agent memory component")
+  .option("--disable", "Disable memory (remove snippet and save preference)")
+  .action(async (options) => {
+    const config = readConfig() || {};
+
+    if (options.disable) {
+      config.memory_enabled = false;
+      writeConfig(config);
+      console.log("Memory disabled. Snippet will not be added/updated.");
+      console.log("Run 'codecast memory' to re-enable.");
+      return;
+    }
+
+    const result = installMemorySnippet(true);
+    config.memory_enabled = true;
+    config.memory_version = getMemoryVersion();
+    writeConfig(config);
+
+    if (result.updated) {
+      console.log("Memory snippet updated in ~/.claude/CLAUDE.md");
+    } else if (result.installed) {
+      console.log("Memory snippet installed in ~/.claude/CLAUDE.md");
+    } else {
+      console.log("Memory snippet is up to date.");
+    }
+  });
+
+program
   .command("update")
   .description("Update codecast to the latest version")
-  .action(async () => {
+  .option("--no-auto", "Disable auto-updates")
+  .option("--auto", "Enable auto-updates (default)")
+  .action(async (options) => {
+    const config = readConfig() || {};
+
+    if (options.auto === false) {
+      config.auto_update = false;
+      writeConfig(config);
+      console.log("Auto-updates disabled. Run 'codecast update' manually to update.");
+      return;
+    }
+
+    if (options.auto === true) {
+      config.auto_update = true;
+      writeConfig(config);
+      console.log("Auto-updates enabled.");
+    }
+
     const available = await checkForUpdates(true);
     if (!available) {
       console.log(`codecast v${getVersion()} is already the latest version`);
@@ -1519,6 +1608,9 @@ program
     console.log(`Updating from v${getVersion()} to v${available}...`);
     const success = await performUpdate();
     if (success) {
+      if (config.memory_enabled) {
+        installMemorySnippet(true);
+      }
       console.log("\nRestart codecast to use the new version");
     } else {
       process.exit(1);
@@ -1534,8 +1626,23 @@ program
   });
 
 // Check for updates in background (non-blocking)
-checkForUpdates().then((available) => {
-  if (available) {
+checkForUpdates().then(async (available) => {
+  if (!available) return;
+
+  const config = readConfig();
+  if (config?.auto_update === false) {
+    showUpdateNotice(available);
+    return;
+  }
+
+  console.log(`\nAuto-updating to v${available}...`);
+  const success = await performUpdate();
+  if (success) {
+    if (config?.memory_enabled) {
+      installMemorySnippet(true);
+    }
+    console.log("Update complete. Restart codecast to use the new version.\n");
+  } else {
     showUpdateNotice(available);
   }
 });
