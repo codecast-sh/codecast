@@ -1767,6 +1767,7 @@ program
       process.exit(1);
     }
 
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
     let sessionId = options.session;
 
     if (!sessionId) {
@@ -1779,53 +1780,28 @@ program
       } catch {
       }
 
-      const historyPath = path.join(process.env.HOME || "", ".claude", "history.jsonl");
-      if (fs.existsSync(historyPath)) {
-        try {
-          const historyContent = fs.readFileSync(historyPath, "utf-8");
-          const lines = historyContent.trim().split("\n").reverse();
-          for (const line of lines) {
-            try {
-              const entry = JSON.parse(line);
-              if (entry.project === projectRoot && entry.sessionId) {
-                sessionId = entry.sessionId;
-                break;
-              }
-            } catch {
-            }
-          }
-        } catch {
+      try {
+        const feedResponse = await fetch(`${siteUrl}/cli/feed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            project_path: projectRoot,
+            limit: 1,
+          }),
+        });
+        const feedResult = await feedResponse.json();
+        if (feedResult.conversations && feedResult.conversations.length > 0) {
+          sessionId = feedResult.conversations[0].id;
         }
+      } catch {
       }
 
       if (!sessionId) {
-        const projectDir = projectRoot.replace(/\//g, "-");
-        const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
-
-        if (!fs.existsSync(sessionsDir)) {
-          console.error("No Claude Code sessions found for current project");
-          process.exit(1);
-        }
-
-        const files = fs.readdirSync(sessionsDir)
-          .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
-          .map(f => ({
-            name: f,
-            path: path.join(sessionsDir, f),
-            mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
-          }))
-          .sort((a, b) => b.mtime - a.mtime);
-
-        if (files.length === 0) {
-          console.error("No session files found for current project");
-          process.exit(1);
-        }
-
-        sessionId = path.basename(files[0].name, ".jsonl");
+        console.error("No synced sessions found for current project. Use -s to specify a session ID.");
+        process.exit(1);
       }
     }
-
-    const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
       const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId);
