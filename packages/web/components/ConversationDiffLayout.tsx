@@ -105,6 +105,7 @@ export function ConversationDiffLayout({
           nextChange();
           break;
         case "c":
+          if (e.metaKey || e.ctrlKey) return;
           e.preventDefault();
           toggleDiffMode();
           break;
