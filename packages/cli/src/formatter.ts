@@ -195,12 +195,15 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
   }
 
   if (result.conversations.length > 0) {
-    const firstId = truncateId(result.conversations[0].id);
-    lines.push("To explore these results:");
-    lines.push(`  codecast read ${firstId}              # read first 20 messages`);
-    lines.push(`  codecast read ${firstId} 10:30        # read messages 10-30`);
-    lines.push(`  codecast read ${firstId} 1:50 --full  # include tool call/result content`);
-    lines.push(`  codecast summary ${firstId}           # get session summary`);
+    const firstConv = result.conversations[0];
+    const firstId = truncateId(firstConv.id);
+    const sampleLine = firstConv.matches[0]?.line || 1;
+    const rangeStart = Math.max(1, sampleLine - 5);
+    const rangeEnd = sampleLine + 10;
+    lines.push("To explore:");
+    lines.push(`  codecast read ${firstId} ${rangeStart}:${rangeEnd}       # read around match`);
+    lines.push(`  codecast read ${firstId}                # read all messages`);
+    lines.push(`  codecast summary ${firstId}             # get session summary`);
   }
 
   if (options.projectPath) {
