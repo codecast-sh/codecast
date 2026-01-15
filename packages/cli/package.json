@@ -18,6 +18,7 @@
     "commander": "^12.1.0",
     "convex": "1.31.2",
     "glob": "^13.0.0",
+    "node-pty": "^1.1.0",
     "open": "^11.0.0"
   },
   "devDependencies": {
