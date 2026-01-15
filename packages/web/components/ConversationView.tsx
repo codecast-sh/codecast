@@ -1283,6 +1283,36 @@ function SystemBlock({ content, subtype }: { content: string; subtype?: string }
   );
 }
 
+function CompactionSummaryBlock({ content }: { content: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  return (
+    <div className="mb-4">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center gap-2 text-xs text-sol-text-dim hover:text-sol-text-muted transition-colors"
+      >
+        <svg
+          className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+        <span className="text-amber-500/70">Previous context summary</span>
+      </button>
+      {isExpanded && (
+        <div className="mt-2 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-amber-500/30 text-xs prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {content}
+          </ReactMarkdown>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GitBranchBadge({
   gitBranch,
   gitStatus,
@@ -1406,7 +1436,9 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
     conversation_id: conversationId as Id<"conversations">,
   });
 
-  const isManaged = managedStatus?.managed ?? false;
+  // Only show warning if query completed and explicitly returned managed: false
+  const isManaged = managedStatus?.managed === true;
+  const queryComplete = managedStatus !== undefined;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1424,7 +1456,8 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
       setMessage("");
       toast.success("Message sent");
 
-      if (!isManaged) {
+      // Only show warning if query completed and session is NOT managed
+      if (queryComplete && !isManaged) {
         setShowUnmanagedWarning(true);
       }
 
@@ -2017,6 +2050,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (isCommandMessage(msg.content)) {
           if (collapsed) return null;
           return <CommandStatusLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
+        }
+        // Check if previous message was a compact_boundary - if so, render as compaction summary
+        const prevItem = index > 0 ? timeline[index - 1] : null;
+        const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
+        if (prevMsg?.role === 'system' && prevMsg?.subtype === 'compact_boundary') {
+          return <CompactionSummaryBlock key={msg._id} content={msg.content} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
         return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} />;
