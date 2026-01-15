@@ -1,4 +1,4 @@
-import * as pty from "node-pty";
+import { spawn, execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -6,6 +6,7 @@ import { ConvexHttpClient } from "convex/browser";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
+const INBOX_DIR = path.join(CONFIG_DIR, "inbox");
 const CONVEX_URL = process.env.CONVEX_URL || "https://marvelous-meerkat-539.convex.cloud";
 
 interface Config {
@@ -25,6 +26,12 @@ function readConfig(): Config | null {
   return null;
 }
 
+function ensureInboxDir(): void {
+  if (!fs.existsSync(INBOX_DIR)) {
+    fs.mkdirSync(INBOX_DIR, { recursive: true, mode: 0o700 });
+  }
+}
+
 const LOG_FILE = "/tmp/codecast-claude.log";
 
 function log(message: string): void {
@@ -33,12 +40,41 @@ function log(message: string): void {
   fs.appendFileSync(LOG_FILE, line);
 }
 
+function getTtyPath(): string | null {
+  try {
+    const tty = execSync("tty", { encoding: "utf-8", stdio: ["inherit", "pipe", "pipe"] }).trim();
+    if (tty && tty !== "not a tty" && fs.existsSync(tty)) {
+      return tty;
+    }
+  } catch {
+    // Fall through to alternative methods
+  }
+
+  if (process.stdin.isTTY) {
+    try {
+      const psOutput = execSync(`ps -p ${process.pid} -o tty=`, { encoding: "utf-8" }).trim();
+      if (psOutput && psOutput !== "?" && psOutput !== "??") {
+        const ttyPath = psOutput.startsWith("/dev/") ? psOutput : `/dev/${psOutput}`;
+        if (fs.existsSync(ttyPath)) {
+          return ttyPath;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  return null;
+}
+
 export async function runClaudeWrapper(args: string[]): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token) {
     console.error("Error: Not authenticated. Run 'codecast auth' first.");
     process.exit(1);
   }
+
+  ensureInboxDir();
 
   const claudePath = findClaudeBinary();
   if (!claudePath) {
@@ -66,53 +102,32 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
     log(`Warning: Failed to register managed session: ${err}`);
   }
 
-  // Get terminal size
-  const cols = process.stdout.columns || 80;
-  const rows = process.stdout.rows || 24;
+  const ttyPath = getTtyPath();
+  log(`TTY path: ${ttyPath || "none"}`);
 
-  // Spawn Claude in a pseudo-terminal
-  const ptyProcess = pty.spawn(claudePath, args, {
-    name: "xterm-256color",
-    cols,
-    rows,
-    cwd: process.cwd(),
+  const claude = spawn(claudePath, args, {
+    stdio: "inherit",
     env: {
       ...process.env,
       CODECAST_MANAGED_SESSION: sessionId,
       CODECAST_SESSION_ID: sessionId,
-    } as { [key: string]: string },
-  });
-
-  log(`PTY spawned with pid ${ptyProcess.pid}`);
-
-  // Forward pty output to stdout
-  ptyProcess.onData((data) => {
-    process.stdout.write(data);
-  });
-
-  // Forward stdin to pty
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-  }
-  process.stdin.resume();
-  process.stdin.on("data", (data) => {
-    ptyProcess.write(data.toString());
-  });
-
-  // Handle terminal resize
-  process.stdout.on("resize", () => {
-    ptyProcess.resize(process.stdout.columns || 80, process.stdout.rows || 24);
+    },
   });
 
   let conversationId: string | null = null;
   let pollInterval: NodeJS.Timeout | null = null;
   let heartbeatInterval: NodeJS.Timeout | null = null;
 
-  // Message injection - write directly to pty (reliable!)
   const injectMessage = (content: string): boolean => {
+    if (!ttyPath) {
+      log("No TTY path available for injection");
+      return false;
+    }
+
     try {
-      ptyProcess.write(content + "\n");
-      log(`Injected message via PTY`);
+      const fd = fs.openSync(ttyPath, "w");
+      fs.writeSync(fd, content + "\n");
+      fs.closeSync(fd);
       return true;
     } catch (err) {
       log(`Failed to inject message: ${err}`);
@@ -198,32 +213,26 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
       }
     });
 
-    ptyProcess.onExit(() => watcher.close());
+    claude.on("exit", () => watcher.close());
   };
 
   watchForConversationId();
 
-  // Handle signals
   process.on("SIGINT", () => {
     log("Received SIGINT, forwarding to Claude");
-    ptyProcess.write("\x03"); // Ctrl+C
+    claude.kill("SIGINT");
   });
 
   process.on("SIGTERM", () => {
-    log("Received SIGTERM, killing pty");
-    ptyProcess.kill();
+    log("Received SIGTERM, forwarding to Claude");
+    claude.kill("SIGTERM");
   });
 
-  ptyProcess.onExit(async ({ exitCode }) => {
-    log(`Claude exited with code ${exitCode}`);
+  claude.on("exit", async (code, signal) => {
+    log(`Claude exited with code ${code}, signal ${signal}`);
 
     if (pollInterval) clearInterval(pollInterval);
     if (heartbeatInterval) clearInterval(heartbeatInterval);
-
-    // Restore terminal
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(false);
-    }
 
     try {
       await client.mutation("managedSessions:unregisterManagedSession" as any, {
@@ -235,7 +244,12 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
       log(`Warning: Failed to unregister session: ${err}`);
     }
 
-    process.exit(exitCode);
+    process.exit(code ?? 0);
+  });
+
+  claude.on("error", (err) => {
+    console.error(`Failed to start Claude: ${err.message}`);
+    process.exit(1);
   });
 }
 
