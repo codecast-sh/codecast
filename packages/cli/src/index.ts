@@ -3092,7 +3092,9 @@ program
   .allowExcessArguments()
   .action(async (_options, command) => {
     const { runClaudeWrapper } = await import("./claudeWrapper.js");
-    const args = command.args;
+    const config = readConfig();
+    const defaultArgs = config?.claude_args ? config.claude_args.split(/\s+/).filter(Boolean) : [];
+    const args = [...defaultArgs, ...command.args];
     await runClaudeWrapper(args);
   });
 
