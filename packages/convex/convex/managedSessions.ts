@@ -87,6 +87,18 @@ export const updateSessionConversation = mutation({
       throw new Error("Unauthorized");
     }
 
+    // Remove old sessions linked to this conversation to prevent duplicates
+    const oldSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .collect();
+
+    for (const oldSession of oldSessions) {
+      if (oldSession._id !== session._id) {
+        await ctx.db.delete(oldSession._id);
+      }
+    }
+
     await ctx.db.patch(session._id, {
       conversation_id: args.conversation_id,
     });

@@ -67,6 +67,18 @@ function getTtyPath(): string | null {
   return null;
 }
 
+function getTmuxPane(): string | null {
+  const tmuxPane = process.env.TMUX_PANE;
+  if (tmuxPane) {
+    return tmuxPane;
+  }
+  return null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function runClaudeWrapper(args: string[]): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token) {
@@ -105,6 +117,122 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
   const ttyPath = getTtyPath();
   log(`TTY path: ${ttyPath || "none"}`);
 
+  // Check if we're already in tmux
+  const existingTmuxPane = getTmuxPane();
+  let tmuxSessionName: string | null = null;
+
+  // If not in tmux, create a tmux session for reliable message injection
+  if (!existingTmuxPane && process.stdin.isTTY) {
+    tmuxSessionName = `codecast-${sessionId.slice(0, 8)}`;
+    log(`Not in tmux, creating session: ${tmuxSessionName}`);
+
+    // Create tmux session and run claude inside it
+    const tmuxCmd = [
+      "tmux", "new-session", "-d", "-s", tmuxSessionName, "-n", "claude",
+      claudePath, ...args
+    ].map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+
+    try {
+      execSync(`tmux new-session -d -s '${tmuxSessionName}' -n claude -x 200 -y 50`, { stdio: "ignore" });
+      const envVars = `CODECAST_MANAGED_SESSION='${sessionId}' CODECAST_SESSION_ID='${sessionId}'`;
+      execSync(`tmux send-keys -t '${tmuxSessionName}' "${envVars} ${claudePath} ${args.map(a => `'${a}'`).join(' ')}" Enter`, { stdio: "ignore" });
+      log(`Created tmux session and started Claude`);
+
+      // Attach to the tmux session
+      const attach = spawn("tmux", ["attach-session", "-t", tmuxSessionName], {
+        stdio: "inherit",
+      });
+
+      attach.on("exit", async (code) => {
+        log(`Tmux attach exited with code ${code}`);
+        // Clean up tmux session
+        try {
+          execSync(`tmux kill-session -t '${tmuxSessionName}'`, { stdio: "ignore" });
+        } catch {}
+        process.exit(code ?? 0);
+      });
+
+      // Set up message polling with tmux injection
+      const pollForMessages = async () => {
+        try {
+          const messages = await client.query("managedSessions:getPendingMessagesForSession" as any, {
+            session_id: sessionId,
+            api_token: config.auth_token,
+          });
+
+          for (const msg of messages as any[]) {
+            log(`Delivering message: ${msg.content.slice(0, 50)}...`);
+            try {
+              const escapedContent = msg.content.replace(/'/g, "'\\''");
+              execSync(`tmux send-keys -t '${tmuxSessionName}' '${escapedContent}'`, { stdio: "ignore" });
+              await sleep(100);
+              execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+              log(`Injected via tmux send-keys to session ${tmuxSessionName}`);
+
+              await client.mutation("managedSessions:markMessageDelivered" as any, {
+                message_id: msg._id,
+                api_token: config.auth_token,
+              });
+              log(`Message delivered and marked`);
+            } catch (err) {
+              log(`Failed to inject: ${err}`);
+            }
+          }
+        } catch {}
+      };
+
+      const sendHeartbeat = async () => {
+        try {
+          await client.mutation("managedSessions:heartbeat" as any, {
+            session_id: sessionId,
+            api_token: config.auth_token,
+          });
+        } catch {}
+      };
+
+      setInterval(pollForMessages, 2000);
+      setInterval(sendHeartbeat, 30000);
+
+      // Watch for conversation ID
+      const claudeDir = path.join(os.homedir(), ".claude", "projects");
+      if (fs.existsSync(claudeDir)) {
+        let conversationId: string | null = null;
+        const watcher = fs.watch(claudeDir, { recursive: true }, async (_eventType, filename) => {
+          if (!filename || !filename.endsWith(".jsonl") || conversationId) return;
+          const match = filename.match(/([0-9a-f-]{36})\.jsonl$/);
+          if (match) {
+            const claudeSessionId = match[1];
+            log(`Session file detected: ${claudeSessionId}`);
+            setTimeout(async () => {
+              try {
+                const result = await client.query("managedSessions:getConversationBySessionId" as any, {
+                  claude_session_id: claudeSessionId,
+                  api_token: config.auth_token,
+                });
+                if (result?.conversation_id && !conversationId) {
+                  conversationId = result.conversation_id;
+                  log(`Found conversation: ${conversationId}`);
+                  await client.mutation("managedSessions:updateSessionConversation" as any, {
+                    session_id: sessionId,
+                    conversation_id: conversationId,
+                    api_token: config.auth_token,
+                  });
+                  log(`Linked managed session to conversation`);
+                }
+              } catch {}
+            }, 2000);
+          }
+        });
+        attach.on("exit", () => watcher.close());
+      }
+
+      return; // Early return - tmux handles everything
+    } catch (err) {
+      log(`Failed to create tmux session: ${err}`);
+      // Fall through to direct spawn
+    }
+  }
+
   const claude = spawn(claudePath, args, {
     stdio: "inherit",
     env: {
@@ -118,9 +246,26 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
   let pollInterval: NodeJS.Timeout | null = null;
   let heartbeatInterval: NodeJS.Timeout | null = null;
 
-  const injectMessage = (content: string): boolean => {
+  const tmuxPane = getTmuxPane();
+  log(`Tmux pane: ${tmuxPane || "none"}`);
+
+  const injectMessage = async (content: string): Promise<boolean> => {
+    if (tmuxPane) {
+      try {
+        const escapedContent = content.replace(/'/g, "'\\''");
+        execSync(`tmux send-keys -t ${tmuxPane} '${escapedContent}'`, { stdio: "ignore" });
+        await sleep(100);
+        execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+        log(`Injected via tmux send-keys to pane ${tmuxPane}`);
+        return true;
+      } catch (err) {
+        log(`Failed to inject via tmux: ${err}`);
+        return false;
+      }
+    }
+
     if (!ttyPath) {
-      log("No TTY path available for injection");
+      log("No TTY path or tmux pane available for injection");
       return false;
     }
 
@@ -128,6 +273,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
       const fd = fs.openSync(ttyPath, "w");
       fs.writeSync(fd, content + "\n");
       fs.closeSync(fd);
+      log("Injected via TTY file write");
       return true;
     } catch (err) {
       log(`Failed to inject message: ${err}`);
@@ -145,7 +291,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
       for (const msg of messages as any[]) {
         log(`Delivering message: ${msg.content.slice(0, 50)}...`);
 
-        if (injectMessage(msg.content)) {
+        if (await injectMessage(msg.content)) {
           await client.mutation("managedSessions:markMessageDelivered" as any, {
             message_id: msg._id,
             api_token: config.auth_token,
