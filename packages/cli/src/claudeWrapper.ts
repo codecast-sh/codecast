@@ -32,9 +32,12 @@ function ensureInboxDir(): void {
   }
 }
 
+const LOG_FILE = "/tmp/codecast-claude.log";
+
 function log(message: string): void {
   const timestamp = new Date().toISOString();
-  console.error(`[codecast-claude ${timestamp}] ${message}`);
+  const line = `[codecast-claude ${timestamp}] ${message}\n`;
+  fs.appendFileSync(LOG_FILE, line);
 }
 
 function getTtyPath(): string | null {
