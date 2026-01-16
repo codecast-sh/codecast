@@ -1,6 +1,6 @@
 {
   "name": "@codecast/cli",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Sync coding agent conversations to a shared Convex database",
   "type": "module",
   "bin": {
@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
     "@inquirer/prompts": "^8.2.0",
     "chokidar": "^4.0.3",
     "commander": "^12.1.0",
