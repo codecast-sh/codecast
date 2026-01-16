@@ -13,9 +13,166 @@ import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
-import { hashPath } from "./hash.js";
+import Anthropic from "@anthropic-ai/sdk";
 
 const program = new Command();
+
+/**
+ * Finds the session ID for the current Claude Code process by:
+ * 1. Walking up process tree to find parent Claude process
+ * 2. If Claude has --resume flag, extract session ID from it
+ * 3. Otherwise, find session file matching Claude's start time
+ */
+function findCurrentSessionFromProcess(projectRoot: string): string | null {
+  const debug = !!process.env.DEBUG;
+  try {
+    // Walk up process tree to find Claude parent
+    let pid = process.ppid;
+    let claudePid: number | null = null;
+    let claudeArgs: string | null = null;
+
+    if (debug) console.error(`[DEBUG] Starting process walk from ppid: ${pid}`);
+
+    while (pid > 1) {
+      try {
+        const result = execSync(`ps -o ppid=,args= -p ${pid}`, {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "ignore"],
+        }).trim();
+
+        const match = result.match(/^\s*(\d+)\s+(.*)$/);
+        if (!match) {
+          if (debug) console.error(`[DEBUG] No match for pid ${pid}, breaking`);
+          break;
+        }
+
+        const ppid = parseInt(match[1]);
+        const args = match[2];
+
+        if (debug) console.error(`[DEBUG] PID ${pid}: ${args.slice(0, 60)}...`);
+
+        if (args.includes("claude")) {
+          claudePid = pid;
+          claudeArgs = args;
+          if (debug) console.error(`[DEBUG] Found Claude at PID ${pid}`);
+          break;
+        }
+
+        pid = ppid;
+      } catch (e) {
+        if (debug) console.error(`[DEBUG] Error walking process tree: ${e}`);
+        break;
+      }
+    }
+
+    if (!claudePid || !claudeArgs) {
+      if (debug) console.error(`[DEBUG] Could not find Claude process`);
+      return null;
+    }
+
+    // Check if Claude was started with --resume <session_id>
+    const resumeMatch = claudeArgs.match(/--resume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+    if (resumeMatch) {
+      return resumeMatch[1];
+    }
+
+    // Get Claude process start time
+    const startTimeResult = execSync(`ps -o lstart= -p ${claudePid}`, {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    const claudeStartTime = new Date(startTimeResult).getTime();
+
+    if (debug) console.error(`[DEBUG] Claude start time: ${startTimeResult} (${claudeStartTime})`);
+
+    // Find session file with matching creation time
+    const projectDir = projectRoot.replace(/\//g, "-");
+    const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
+
+    if (debug) console.error(`[DEBUG] Sessions dir: ${sessionsDir}`);
+
+    if (!fs.existsSync(sessionsDir)) {
+      if (debug) console.error(`[DEBUG] Sessions dir does not exist`);
+      return null;
+    }
+
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/;
+    const sessionFiles = fs.readdirSync(sessionsDir)
+      .filter(f => uuidPattern.test(f))
+      .map(f => {
+        const filePath = path.join(sessionsDir, f);
+        const stats = fs.statSync(filePath);
+        // Read first line to get session start timestamp
+        let firstTimestamp: number | null = null;
+        try {
+          const content = fs.readFileSync(filePath, "utf-8");
+          const firstLine = content.split("\n")[0];
+          if (firstLine) {
+            const entry = JSON.parse(firstLine);
+            // Try various timestamp formats
+            if (entry.timestamp && typeof entry.timestamp === "number") {
+              firstTimestamp = entry.timestamp;
+            } else if (entry.snapshot?.timestamp) {
+              firstTimestamp = new Date(entry.snapshot.timestamp).getTime();
+            }
+          }
+        } catch {
+          // Use birthtime as fallback
+        }
+        // Always fallback to birthtime if we couldn't parse timestamp
+        if (!firstTimestamp) {
+          firstTimestamp = stats.birthtime.getTime();
+        }
+        return {
+          id: path.basename(f, ".jsonl"),
+          firstTimestamp,
+          birthtime: stats.birthtime.getTime(),
+        };
+      });
+
+    // Find session that started closest to (and just after) Claude process start
+    // Allow 30 second window for process startup
+    const tolerance = 30000;
+
+    if (debug) {
+      console.error(`[DEBUG] Total session files: ${sessionFiles.length}`);
+      // Show the 5 most recent sessions by timestamp
+      const recentSessions = [...sessionFiles].sort((a, b) => b.firstTimestamp! - a.firstTimestamp!).slice(0, 5);
+      for (const s of recentSessions) {
+        const diff = s.firstTimestamp! - claudeStartTime;
+        console.error(`[DEBUG] Session ${s.id.slice(0, 8)}: ts=${s.firstTimestamp} diff=${diff}ms`);
+      }
+    }
+
+    const candidates = sessionFiles.filter(f =>
+      f.firstTimestamp! >= claudeStartTime - tolerance &&
+      f.firstTimestamp! <= claudeStartTime + tolerance * 2
+    );
+
+    if (debug) console.error(`[DEBUG] Candidates within tolerance: ${candidates.length}`);
+
+    if (candidates.length === 1) {
+      if (debug) console.error(`[DEBUG] Returning single candidate: ${candidates[0].id}`);
+      return candidates[0].id;
+    }
+
+    // Multiple candidates - pick the one closest to Claude start time
+    if (candidates.length > 1) {
+      candidates.sort((a, b) =>
+        Math.abs(a.firstTimestamp! - claudeStartTime) -
+        Math.abs(b.firstTimestamp! - claudeStartTime)
+      );
+      if (debug) console.error(`[DEBUG] Returning closest of ${candidates.length}: ${candidates[0].id}`);
+      return candidates[0].id;
+    }
+
+    if (debug) console.error(`[DEBUG] No candidates found`);
+    return null;
+  } catch (e) {
+    if (process.env.DEBUG) console.error(`[DEBUG] Exception: ${e}`);
+    return null;
+  }
+}
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -989,15 +1146,15 @@ program
   .description(
     "Search conversation history for context\n\n" +
     "By default uses hybrid search (keyword + semantic).\n" +
+    "Quotes matter: \"error handling\" matches exact phrase, error handling matches both words anywhere.\n" +
     "Use -g to search all sessions globally.\n" +
     "Use -u to search only user messages.\n" +
     "Use --keyword for keyword-only, --semantic for semantic-only.\n\n" +
     "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
-    "  codecast search \"auth\"              # hybrid search (default)\n" +
-    "  codecast search \"auth\" --keyword    # keyword only\n" +
-    "  codecast search \"error handling\" --semantic  # semantic only\n" +
-    "  codecast search \"auth\" -g -s 7d     # global, last 7 days"
+    "  codecast search auth                 # word match\n" +
+    "  codecast search \"error handling\"    # exact phrase match\n" +
+    "  codecast search auth -g -s 7d        # global, last 7 days"
   )
   .argument("<query>", "Search query (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
@@ -1083,12 +1240,8 @@ program
         process.exit(1);
       }
 
-      const { formatSearchResults, formatSemanticSearchResults } = await import("./formatter.js");
-      if (mode === "keyword") {
-        console.log(formatSearchResults(result, { projectPath }));
-      } else {
-        console.log(formatSemanticSearchResults(result, { projectPath }));
-      }
+      const { formatSearchResults } = await import("./formatter.js");
+      console.log(formatSearchResults(result, { projectPath }));
     } catch (error) {
       console.error("Search failed:", error instanceof Error ? error.message : error);
       process.exit(1);
@@ -1728,19 +1881,30 @@ program
 
     let sessionId = options.session;
 
-    if (!sessionId) {
-      // Find git root - Claude Code stores sessions at the git root level
-      let projectRoot = process.cwd();
-      try {
-        projectRoot = execSync("git rev-parse --show-toplevel", {
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "ignore"],
-        }).trim();
-      } catch {
-        // Not a git repo, use CWD
-      }
+    // Find git root - Claude Code stores sessions at the git root level
+    let projectRoot = process.cwd();
+    try {
+      projectRoot = execSync("git rev-parse --show-toplevel", {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim();
+    } catch {
+      // Not a git repo, use CWD
+    }
 
-      // Try to get session from history.jsonl first (most reliable with multiple concurrent sessions)
+    if (!sessionId) {
+      // First try: trace from parent Claude process (most reliable for concurrent sessions)
+      sessionId = findCurrentSessionFromProcess(projectRoot);
+      if (sessionId && process.env.DEBUG) {
+        console.error(`[DEBUG] Found session from process: ${sessionId}`);
+      }
+    }
+
+    if (!sessionId) {
+      if (process.env.DEBUG) {
+        console.error(`[DEBUG] Process detection failed, falling back to history.jsonl`);
+      }
+      // Fallback: history.jsonl (works when not called from Claude subprocess)
       const historyPath = path.join(process.env.HOME || "", ".claude", "history.jsonl");
       if (fs.existsSync(historyPath)) {
         try {
@@ -1751,6 +1915,9 @@ program
               const entry = JSON.parse(line);
               if (entry.project === projectRoot && entry.sessionId) {
                 sessionId = entry.sessionId;
+                if (process.env.DEBUG) {
+                  console.error(`[DEBUG] Found session from history: ${sessionId}`);
+                }
                 break;
               }
             } catch {
@@ -1761,35 +1928,36 @@ program
           // Fall through to mtime-based detection
         }
       }
-
-      // Fallback to mtime-based detection if history lookup failed
-      if (!sessionId) {
-        const projectDir = projectRoot.replace(/\//g, "-");
-        const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
-
-        if (!fs.existsSync(sessionsDir)) {
-          console.error("No Claude Code sessions found for current project");
-          console.error(`Looked in: ${sessionsDir}`);
-          process.exit(1);
-        }
-
-        const files = fs.readdirSync(sessionsDir)
-          .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
-          .map(f => ({
-            name: f,
-            path: path.join(sessionsDir, f),
-            mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
-          }))
-          .sort((a, b) => b.mtime - a.mtime);
-
-        if (files.length === 0) {
-          console.error("No session files found for current project");
-          process.exit(1);
-        }
-
-        sessionId = path.basename(files[0].name, ".jsonl");
-      }
     }
+
+    if (!sessionId) {
+      // Last fallback: mtime-based detection
+      const projectDir = projectRoot.replace(/\//g, "-");
+      const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
+
+      if (!fs.existsSync(sessionsDir)) {
+        console.error("No Claude Code sessions found for current project");
+        console.error(`Looked in: ${sessionsDir}`);
+        process.exit(1);
+      }
+
+      const files = fs.readdirSync(sessionsDir)
+        .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
+        .map(f => ({
+          name: f,
+          path: path.join(sessionsDir, f),
+          mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
+        }))
+        .sort((a, b) => b.mtime - a.mtime);
+
+      if (files.length === 0) {
+        console.error("No session files found for current project");
+        process.exit(1);
+      }
+
+      sessionId = path.basename(files[0].name, ".jsonl");
+    }
+
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
@@ -2766,11 +2934,14 @@ program
     "  codecast ask \"when did we last refactor the feed?\"\n" +
     "  codecast ask \"what's the pattern for adding CLI commands?\"\n" +
     "  codecast ask \"why did we switch to Convex?\"\n" +
-    "  codecast ask \"auth bug\" -g         # search globally"
+    "  codecast ask \"auth bug\" -g         # search globally\n" +
+    "  codecast ask \"auth\" -s 7d          # search last 7 days"
   )
   .argument("<query>", "Natural language question")
   .option("-g, --global", "Search all sessions (not just current project)")
   .option("-n, --limit <n>", "Number of sessions to analyze", "3")
+  .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
+  .option("-e, --end <date>", "End date/time")
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -2778,9 +2949,33 @@ program
       process.exit(1);
     }
 
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      console.error("ANTHROPIC_API_KEY not set. Export it to use RAG-powered answers.");
+      process.exit(1);
+    }
+
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     const projectPath = options.global ? undefined : process.cwd();
     const limit = parseInt(options.limit);
+
+    let startTime: number | undefined;
+    let endTime: number | undefined;
+
+    if (options.start) {
+      startTime = parseRelativeDate(options.start) ?? undefined;
+      if (!startTime) {
+        console.error(`Invalid start date: ${options.start}`);
+        process.exit(1);
+      }
+    }
+    if (options.end) {
+      endTime = parseRelativeDate(options.end) ?? undefined;
+      if (!endTime) {
+        console.error(`Invalid end date: ${options.end}`);
+        process.exit(1);
+      }
+    }
 
     const searchTerms = query
       .toLowerCase()
@@ -2788,7 +2983,7 @@ program
       .split(/\s+/)
       .filter((w: string) => w.length > 2 && !["the", "did", "was", "what", "when", "why", "how", "for", "with"].includes(w));
 
-    const searchQuery = searchTerms.slice(0, 5).join(" ");
+    const searchQuery = searchTerms.slice(0, 8).join(" ");
 
     if (!searchQuery) {
       console.error("Query too vague. Include more specific terms.");
@@ -2804,8 +2999,10 @@ program
           query: searchQuery,
           limit: limit * 3,
           offset: 0,
-          context_before: 1,
-          context_after: 1,
+          start_time: startTime,
+          end_time: endTime,
+          context_before: 2,
+          context_after: 2,
           project_path: projectPath,
         }),
       });
@@ -2832,13 +3029,12 @@ program
         id: string;
         title: string;
         messages: Array<{ line: number; role: string; content: string }>;
-        matchLines: number[];
       }> = [];
 
       for (const conv of topSessions) {
         const matchLines = conv.matches.map((m: { line: number }) => m.line);
-        const minLine = Math.max(1, Math.min(...matchLines) - 2);
-        const maxLine = Math.max(...matchLines) + 2;
+        const minLine = Math.max(1, Math.min(...matchLines) - 3);
+        const maxLine = Math.max(...matchLines) + 3;
 
         const readResponse = await fetch(`${siteUrl}/cli/read`, {
           method: "POST",
@@ -2858,13 +3054,62 @@ program
             id: conv.id,
             title: conv.title,
             messages: readResult.messages,
-            matchLines,
           });
         }
       }
 
-      const { formatAskResults } = await import("./formatter.js");
-      console.log(formatAskResults({ query, sessions: sessionDetails, searchTerms }));
+      if (sessionDetails.length === 0) {
+        console.log(`<ANSWER query="${query}">`);
+        console.log("Found sessions but couldn't retrieve messages.");
+        console.log("</ANSWER>");
+        process.exit(0);
+      }
+
+      // Format context for RAG
+      const contextParts: string[] = [];
+      for (const session of sessionDetails) {
+        const sessionContext = [`## Session: ${session.title} [${session.id.slice(0, 7)}]`];
+        for (const msg of session.messages) {
+          if (msg.content) {
+            const role = msg.role === "user" ? "User" : "Assistant";
+            const truncated = msg.content.length > 2000 ? msg.content.slice(0, 2000) + "..." : msg.content;
+            sessionContext.push(`${role} (line ${msg.line}): ${truncated}`);
+          }
+        }
+        contextParts.push(sessionContext.join("\n"));
+      }
+      const context = contextParts.join("\n\n---\n\n");
+
+      // Call Haiku for RAG
+      const anthropic = new Anthropic({ apiKey });
+      const response = await anthropic.messages.create({
+        model: "claude-3-5-haiku-latest",
+        max_tokens: 1024,
+        messages: [
+          {
+            role: "user",
+            content: `You are answering questions about past coding sessions. Use the provided context to answer the question. Be concise and direct. If the context doesn't contain enough information, say so.
+
+<context>
+${context}
+</context>
+
+Question: ${query}
+
+Answer the question based on the context above. Include specific details like values, file paths, or code snippets when relevant. At the end, list the source sessions used.`,
+          },
+        ],
+      });
+
+      const answer = response.content[0].type === "text" ? response.content[0].text : "";
+
+      console.log(`<ANSWER query="${query}">`);
+      console.log(answer);
+      console.log("\nSources:");
+      for (const session of sessionDetails) {
+        console.log(`- [${session.id.slice(0, 7)}] ${session.title}`);
+      }
+      console.log("</ANSWER>");
     } catch (error) {
       console.error("Ask failed:", error instanceof Error ? error.message : error);
       process.exit(1);
