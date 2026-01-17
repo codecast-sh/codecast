@@ -1,0 +1,31 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="topClip">
+      <rect x="0" y="0" width="1024" height="492"/>
+    </clipPath>
+    <clipPath id="bottomClip">
+      <rect x="0" y="532" width="1024" height="492"/>
+    </clipPath>
+  </defs>
+  
+  <!-- Dark gray arc - thicker -->
+  <path d="M 242 512
+           A 270 270 0 0 1 701 323
+           L 645 379
+           A 190 190 0 0 0 322 512
+           Z" 
+        fill="#444444"
+        clip-path="url(#topClip)"/>
+  
+  <!-- Coral arc - thicker -->
+  <path d="M 242 512
+           A 270 270 0 0 0 701 701
+           L 645 645
+           A 190 190 0 0 1 322 512
+           Z" 
+        fill="#e86c5d"
+        clip-path="url(#bottomClip)"/>
+  
+  <!-- Center dot -->
+  <circle cx="512" cy="512" r="52" fill="#444444"/>
+</svg>
