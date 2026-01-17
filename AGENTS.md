@@ -15,9 +15,10 @@ For testing the web app locally see email and password in packages/web/.env.loca
 ## CLI Commands
 
 ```bash
-# Search & Browse
-codecast search "auth"                # search current project
-codecast search "bug" -g -s 7d        # global, last 7 days
+# Search & Browse (quotes = exact phrase, no quotes = all words anywhere)
+codecast search auth                  # finds "auth" anywhere
+codecast search "error handling"      # exact phrase match
+codecast search bug -g -s 7d          # global, last 7 days
 codecast feed                         # browse recent conversations
 codecast read <id> 15:25              # read messages 15-25
 
@@ -36,6 +37,18 @@ codecast decisions add "title" --reason "why"
 ```
 
 Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n (limit)
+
+## CLI Release
+
+```bash
+cd packages/cli
+# 1. Bump version in package.json and src/update.ts
+# 2. Commit and push
+git tag -a v1.0.X -m "release(cli): v1.0.X"
+git push origin v1.0.X  # triggers GitHub Actions build
+# 3. Upload to R2 (needs AWS creds)
+./scripts/deploy.sh     # builds, uploads binaries, updates latest.json
+```
 
 ## Debugging Lessons
 
