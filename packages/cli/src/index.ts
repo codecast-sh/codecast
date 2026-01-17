@@ -2942,6 +2942,7 @@ program
   .option("-n, --limit <n>", "Number of sessions to analyze", "3")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
   .option("-e, --end <date>", "End date/time")
+  .option("-d, --debug", "Show context sent to LLM")
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -2955,35 +2956,89 @@ program
       process.exit(1);
     }
 
-    const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const projectPath = options.global ? undefined : process.cwd();
-    const limit = parseInt(options.limit);
+    const anthropic = new Anthropic({ apiKey });
 
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const limit = parseInt(options.limit);
+    const paddingLines = 8;
+    const messageCharLimit = 4000;
+
+    let suggestedGlobal = false;
+    let suggestedStart: string | undefined;
+    let suggestedEnd: string | undefined;
     let startTime: number | undefined;
     let endTime: number | undefined;
 
-    if (options.start) {
-      startTime = parseRelativeDate(options.start) ?? undefined;
-      if (!startTime) {
-        console.error(`Invalid start date: ${options.start}`);
-        process.exit(1);
-      }
-    }
-    if (options.end) {
-      endTime = parseRelativeDate(options.end) ?? undefined;
-      if (!endTime) {
-        console.error(`Invalid end date: ${options.end}`);
-        process.exit(1);
-      }
-    }
+    const stopWords = new Set(["the", "did", "was", "what", "when", "why", "how", "for", "with", "does", "have", "has", "had", "do", "are", "is", "were", "been", "being"]);
 
-    const searchTerms = query
+    const baseSearchTerms = query
       .toLowerCase()
       .replace(/[?'"]/g, "")
       .split(/\s+/)
-      .filter((w: string) => w.length > 2 && !["the", "did", "was", "what", "when", "why", "how", "for", "with"].includes(w));
+      .filter((w: string) => w.length > 2 && !stopWords.has(w));
 
+    // Let Haiku propose richer search tokens to capture intent (e.g., feature names or file paths)
+    let llmSearchTerms: string[] = [];
+    try {
+      const expansion = await anthropic.messages.create({
+        model: "claude-3-5-haiku-latest",
+        max_tokens: 128,
+        temperature: 0.2,
+        messages: [
+          {
+            role: "user",
+            content:
+`Turn the user's question into 3-6 concise, high-signal search terms that will be ANDed together by the search engine (too many terms over-filters).
+Also, suggest flags if useful; include {"global":true} only if the question clearly implies cross-project or global scope.
+Return JSON like {"terms":["a","b"],"flags":{"global":true,"start":"30d","end":"7d"}}.
+Omit flags you are unsure about.
+Question: ${query}`,
+          },
+        ],
+      });
+      const expansionText = expansion.content[0].type === "text" ? expansion.content[0].text : "";
+      try {
+        const parsed = JSON.parse(expansionText);
+        if (Array.isArray(parsed?.terms)) {
+          llmSearchTerms = parsed.terms.map((w: string) => w.trim().toLowerCase()).filter((w: string) => w.length > 2);
+        }
+        if (parsed?.flags) {
+          suggestedGlobal = !!parsed.flags.global;
+          if (typeof parsed.flags.start === "string") suggestedStart = parsed.flags.start;
+          if (typeof parsed.flags.end === "string") suggestedEnd = parsed.flags.end;
+        }
+      } catch {
+        llmSearchTerms = expansionText
+          .split(/[,\n]/)
+          .map((w) => w.trim().toLowerCase())
+          .filter((w) => w.length > 2);
+      }
+    } catch {
+      // If expansion fails, fall back to the base terms without interrupting the flow.
+    }
+
+    const searchTerms = Array.from(new Set([...baseSearchTerms, ...llmSearchTerms]));
     const searchQuery = searchTerms.slice(0, 8).join(" ");
+    const baseQuery = baseSearchTerms.slice(0, 8).join(" ");
+
+    const projectPath = (options.global || suggestedGlobal) ? undefined : process.cwd();
+
+    const startHint = options.start ?? suggestedStart;
+    if (startHint) {
+      startTime = parseRelativeDate(startHint) ?? undefined;
+      if (!startTime) {
+        console.error(`Invalid start date: ${startHint}`);
+        process.exit(1);
+      }
+    }
+    const endHint = options.end ?? suggestedEnd;
+    if (endHint) {
+      endTime = parseRelativeDate(endHint) ?? undefined;
+      if (!endTime) {
+        console.error(`Invalid end date: ${endHint}`);
+        process.exit(1);
+      }
+    }
 
     if (!searchQuery) {
       console.error("Query too vague. Include more specific terms.");
@@ -2991,30 +3046,64 @@ program
     }
 
     try {
-      const searchResponse = await fetch(`${siteUrl}/cli/search`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_token: config.auth_token,
-          query: searchQuery,
-          limit: limit * 3,
-          offset: 0,
-          start_time: startTime,
-          end_time: endTime,
-          context_before: 2,
-          context_after: 2,
-          project_path: projectPath,
-        }),
-      });
+      if (process.env.ASK_DEBUG) {
+        console.error(`[ask] query="${query}" search="${searchQuery}" start=${startTime} end=${endTime} project_path=${projectPath || "GLOBAL"} terms=${JSON.stringify(searchTerms)}`);
+      }
+      const runSearch = async (q: string) => {
+        if (process.env.ASK_DEBUG) console.error(`[ask] hitting search with query="${q}"`);
+        const resp = await fetch(`${siteUrl}/cli/search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            query: q,
+            limit: limit * 3,
+            offset: 0,
+            start_time: startTime,
+            end_time: endTime,
+            context_before: paddingLines,
+            context_after: paddingLines,
+            project_path: projectPath,
+          }),
+        });
+        return resp.json();
+      };
 
-      const searchResult = await searchResponse.json();
+      let searchResult = await runSearch(searchQuery);
+
+      if ((!searchResult.conversations || searchResult.conversations.length === 0) && llmSearchTerms.length > 0) {
+        if (process.env.ASK_DEBUG) console.error("[ask] first search empty, retrying with base terms only");
+        searchResult = await runSearch(baseQuery || searchQuery);
+      }
+
+      if (!searchResult.conversations || searchResult.conversations.length === 0) {
+        const minimalQuery = (baseSearchTerms[0] ? [baseSearchTerms[0], baseSearchTerms[1]].filter(Boolean).join(" ") : "") || "recent work";
+        if (process.env.ASK_DEBUG) console.error(`[ask] second search empty, retrying with minimal query "${minimalQuery}"`);
+        searchResult = await runSearch(minimalQuery);
+      }
 
       if (searchResult.error) {
         console.error(`Error: ${searchResult.error}`);
         process.exit(1);
       }
 
-      if (!searchResult.conversations || searchResult.conversations.length === 0) {
+      const normalizePath = (p?: string | null) => p ? path.resolve(p).replace(/\/$/, "") : null;
+      const targetPath = normalizePath(projectPath);
+      const conversations = (searchResult.conversations || []).filter((conv: any) => {
+        if (!targetPath) return true;
+        const convPath = normalizePath(conv.project_path);
+        return convPath === targetPath;
+      });
+
+      if (process.env.ASK_DEBUG) {
+        const sample = conversations.slice(0, 5).map((c: any) => `${c.id.slice(0,7)}:${c.project_path || "null"}`);
+        console.error(`[ask] conversations after project filter (${conversations.length}): ${sample.join(", ")}`);
+      }
+
+      if (conversations.length === 0) {
+        if (process.env.ASK_DEBUG) {
+          console.error("[ask] search returned empty result after project filter");
+        }
         console.log(`<ANSWER query="${query}">`);
         console.log("No matching conversations found.");
         if (projectPath) {
@@ -3024,7 +3113,7 @@ program
         process.exit(0);
       }
 
-      const topSessions = searchResult.conversations.slice(0, limit);
+      const topSessions = conversations.slice(0, limit);
       const sessionDetails: Array<{
         id: string;
         title: string;
@@ -3033,8 +3122,8 @@ program
 
       for (const conv of topSessions) {
         const matchLines = conv.matches.map((m: { line: number }) => m.line);
-        const minLine = Math.max(1, Math.min(...matchLines) - 3);
-        const maxLine = Math.max(...matchLines) + 3;
+        const minLine = Math.max(1, Math.min(...matchLines) - paddingLines);
+        const maxLine = Math.max(...matchLines) + paddingLines;
 
         const readResponse = await fetch(`${siteUrl}/cli/read`, {
           method: "POST",
@@ -3072,7 +3161,9 @@ program
         for (const msg of session.messages) {
           if (msg.content) {
             const role = msg.role === "user" ? "User" : "Assistant";
-            const truncated = msg.content.length > 2000 ? msg.content.slice(0, 2000) + "..." : msg.content;
+            const truncated = msg.content.length > messageCharLimit
+              ? msg.content.slice(0, messageCharLimit) + "..."
+              : msg.content;
             sessionContext.push(`${role} (line ${msg.line}): ${truncated}`);
           }
         }
@@ -3080,8 +3171,14 @@ program
       }
       const context = contextParts.join("\n\n---\n\n");
 
+      if (options.debug) {
+        console.log("=== CONTEXT SENT TO LLM ===\n");
+        console.log(context);
+        console.log("\n=== END CONTEXT ===");
+        process.exit(0);
+      }
+
       // Call Haiku for RAG
-      const anthropic = new Anthropic({ apiKey });
       const response = await anthropic.messages.create({
         model: "claude-3-5-haiku-latest",
         max_tokens: 1024,
