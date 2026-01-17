@@ -1253,6 +1253,9 @@ function acquireLock(): boolean {
   if (fs.existsSync(PID_FILE)) {
     try {
       const existingPid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
+      if (existingPid === process.pid) {
+        return true;
+      }
       if (!isNaN(existingPid) && isProcessRunning(existingPid)) {
         return false;
       }
