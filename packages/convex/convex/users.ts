@@ -184,8 +184,9 @@ export const getUserActivity = query({
     const limit = Math.min(args.limit ?? 3, 5);
     const conversations = await ctx.db
       .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .filter((q) => q.eq(q.field("is_private"), false))
+      .withIndex("by_user_private", (q) =>
+        q.eq("user_id", args.user_id).eq("is_private", false)
+      )
       .order("desc")
       .take(limit);
     return conversations.map(c => ({
@@ -212,8 +213,9 @@ export const getUserStats = query({
     }
     const conversations = await ctx.db
       .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .filter((q) => q.eq(q.field("is_private"), false))
+      .withIndex("by_user_private", (q) =>
+        q.eq("user_id", args.user_id).eq("is_private", false)
+      )
       .order("desc")
       .take(10);
     const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);
