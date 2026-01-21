@@ -518,6 +518,28 @@ function showStatus(): void {
   console.log(`  Convex: ${convexConnected ? "connected" : "disconnected"}`);
 
   console.log("");
+
+  // Show sync settings
+  const syncMode = config?.sync_mode || "all";
+  const syncProjects = config?.sync_projects || [];
+
+  console.log("  Sync Settings:");
+  if (syncMode === "all") {
+    console.log("    Mode: all projects");
+  } else {
+    console.log(`    Mode: selected (${syncProjects.length} project${syncProjects.length === 1 ? "" : "s"})`);
+    if (syncProjects.length > 0) {
+      for (const p of syncProjects.slice(0, 5)) {
+        console.log(`      - ${p}`);
+      }
+      if (syncProjects.length > 5) {
+        console.log(`      ... and ${syncProjects.length - 5} more`);
+      }
+    }
+  }
+  console.log("    Change: codecast sync-settings");
+
+  console.log("");
 }
 
 function stopDaemon(): void {
