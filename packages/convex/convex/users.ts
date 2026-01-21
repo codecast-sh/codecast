@@ -181,13 +181,23 @@ export const getUserActivity = query({
     if (!user || user.hide_activity) {
       return [];
     }
+    const limit = Math.min(args.limit ?? 3, 5);
     const conversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
       .filter((q) => q.eq(q.field("is_private"), false))
       .order("desc")
-      .take(args.limit ?? 10);
-    return conversations;
+      .take(limit);
+    return conversations.map(c => ({
+      _id: c._id,
+      title: c.title,
+      subtitle: c.subtitle,
+      status: c.status,
+      message_count: c.message_count,
+      updated_at: c.updated_at,
+      started_at: c.started_at,
+      project_path: c.project_path,
+    }));
   },
 });
 
@@ -205,12 +215,13 @@ export const getUserStats = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
       .filter((q) => q.eq(q.field("is_private"), false))
       .order("desc")
-      .take(100);
+      .take(10);
     const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);
+    const activeCount = conversations.filter((c) => c.status === "active").length;
     return {
       total_conversations: conversations.length,
       total_messages: totalMessages,
-      active_conversations: conversations.filter((c) => c.status === "active").length,
+      active_conversations: activeCount,
     };
   },
 });
@@ -231,7 +242,7 @@ export const getUserAbstractActivity = query({
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
       .order("desc")
-      .take(100);
+      .take(10);
 
     const weekConversations = recentConversations.filter(c => c.started_at > oneWeekAgo);
     const monthConversations = recentConversations.filter(c => c.started_at > oneMonthAgo);
@@ -268,7 +279,7 @@ export const getUserAbstractActivity = query({
         .query("team_activity_events")
         .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
         .order("desc")
-        .take(50);
+        .take(15);
 
       const weekEvents = teamEvents.filter(e => e.timestamp > oneWeekAgo);
       const monthEvents = teamEvents.filter(e => e.timestamp > oneMonthAgo);
