@@ -13,6 +13,9 @@ const TYPING_PHRASES = [
   "sharing how you built that feature",
   "picking up where your teammate left off",
   "searching 'how did we implement auth?'",
+  "your agent remembering why you chose that architecture",
+  "asking 'what did we decide about caching?'",
+  "your agent learning from last week's session",
 ];
 
 function TypingEffect() {
@@ -209,13 +212,21 @@ export default function LandingPage() {
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-6 pt-20 pb-8">
         <div className="text-center max-w-3xl mx-auto">
-          <Link href="#mobile-app" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium mb-6 hover:bg-amber-100 transition-colors">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-            </span>
-            Now with Mobile App
-          </Link>
+          <div className="flex flex-wrap gap-2 justify-center mb-6">
+            <Link href="#mobile-app" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium hover:bg-amber-100 transition-colors">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+              </span>
+              Now with Mobile App
+            </Link>
+            <Link href="#memory" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium hover:bg-purple-100 transition-colors">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              Global Agent Memory
+            </Link>
+          </div>
 
           <h1 className="text-5xl md:text-6xl font-bold text-stone-900 leading-[1.1] tracking-tight mb-6">
             Your AI coding sessions,<br />
@@ -224,7 +235,7 @@ export default function LandingPage() {
 
           <p className="text-xl text-stone-600 leading-relaxed mb-4 max-w-2xl mx-auto">
             Real-time sync for Claude Code. Watch your agent work from any device,
-            share sessions with your team, search through your AI coding history.
+            share sessions with your team, and give it memory across every session.
           </p>
 
           <p className="text-lg text-stone-500 mb-8 font-mono min-h-[28px]">
@@ -257,10 +268,11 @@ export default function LandingPage() {
 
       {/* Stats */}
       <section className="border-y border-stone-200 bg-white py-12">
-        <div className="max-w-4xl mx-auto px-6">
-          <div className="grid grid-cols-3 gap-8">
+        <div className="max-w-5xl mx-auto px-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
             <StatCard value="12K+" label="Sessions synced" />
             <StatCard value="<50ms" label="Sync latency" />
+            <StatCard value="∞" label="Session recall" />
             <StatCard value="100%" label="Private by default" />
           </div>
         </div>
@@ -313,6 +325,75 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* Memory Comparison */}
+      <section id="memory" className="max-w-6xl mx-auto px-6 py-20">
+        <div className="text-center mb-12">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium mb-6">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            Global Agent Memory
+          </div>
+          <h2 className="text-3xl font-bold text-stone-900 mb-4">
+            Your agent finally remembers
+          </h2>
+          <p className="text-lg text-stone-500 max-w-2xl mx-auto">
+            Every AI session starts fresh. Codecast changes that by giving your agent
+            searchable access to all your past conversations.
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+          <div className="bg-stone-100 rounded-xl p-6 border-2 border-stone-200">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-full bg-stone-300 flex items-center justify-center">
+                <svg className="w-4 h-4 text-stone-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </div>
+              <span className="font-semibold text-stone-500">Without memory</span>
+            </div>
+            <div className="space-y-3 font-mono text-sm">
+              <div className="bg-white rounded-lg p-3 border border-stone-200">
+                <p className="text-stone-400 text-xs mb-1">You, every time:</p>
+                <p className="text-stone-600">&quot;Let me explain the codebase again... we use NextAuth with Convex, the auth flow works like...&quot;</p>
+              </div>
+              <div className="bg-white rounded-lg p-3 border border-stone-200">
+                <p className="text-stone-400 text-xs mb-1">Agent:</p>
+                <p className="text-stone-500">&quot;I don&apos;t have context from previous sessions. Can you explain the architecture?&quot;</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-purple-50 rounded-xl p-6 border-2 border-purple-200">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-full bg-purple-500 flex items-center justify-center">
+                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <span className="font-semibold text-purple-700">With Codecast</span>
+            </div>
+            <div className="space-y-3 font-mono text-sm">
+              <div className="bg-white rounded-lg p-3 border border-purple-200">
+                <p className="text-purple-400 text-xs mb-1">You:</p>
+                <p className="text-stone-700">&quot;Add password reset to auth&quot;</p>
+              </div>
+              <div className="bg-white rounded-lg p-3 border border-purple-200">
+                <p className="text-purple-400 text-xs mb-1">Agent with memory:</p>
+                <p className="text-stone-700">&quot;I see from your session 3 days ago you use NextAuth with Convex. I&apos;ll add a reset flow that matches your existing patterns...&quot;</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="text-center mt-8">
+          <p className="text-sm text-stone-500">
+            Works automatically. Your agent can search past sessions using <code className="bg-stone-100 px-1.5 py-0.5 rounded text-stone-700">codecast search</code> and <code className="bg-stone-100 px-1.5 py-0.5 rounded text-stone-700">codecast ask</code>.
+          </p>
+        </div>
+      </section>
+
       {/* Features */}
       <section className="bg-stone-900 text-white py-20">
         <div className="max-w-6xl mx-auto px-6">
@@ -322,6 +403,21 @@ export default function LandingPage() {
                 Built for developers who ship fast
               </h2>
               <div className="space-y-6">
+                <div className="flex gap-4 bg-purple-500/10 -mx-4 px-4 py-4 rounded-xl border border-purple-500/20">
+                  <div className="w-10 h-10 rounded-lg bg-purple-500/30 flex items-center justify-center shrink-0">
+                    <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="font-semibold text-lg">Global agent memory</h3>
+                      <span className="text-[10px] font-bold uppercase tracking-wider bg-purple-500 text-white px-1.5 py-0.5 rounded">Core</span>
+                    </div>
+                    <p className="text-stone-300">Give your AI agent persistent memory across sessions. It searches past conversations to recall context, decisions, and how you built things.</p>
+                  </div>
+                </div>
+
                 <div className="flex gap-4">
                   <div className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center shrink-0">
                     <svg className="w-5 h-5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -355,18 +451,6 @@ export default function LandingPage() {
                   <div>
                     <h3 className="font-semibold text-lg mb-1">Searchable history</h3>
                     <p className="text-stone-400">&quot;How did we implement that API?&quot; Search across all conversations, tool calls, and file changes.</p>
-                  </div>
-                </div>
-
-                <div className="flex gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0">
-                    <svg className="w-5 h-5 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-lg mb-1">Agent memory</h3>
-                    <p className="text-stone-400">Give your AI agent persistent memory across sessions. It can search past conversations to recall context and decisions.</p>
                   </div>
                 </div>
               </div>
@@ -413,15 +497,15 @@ export default function LandingPage() {
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
-              Powerful CLI
+              CLI for Agent Memory
             </Link>
             <h2 className="text-3xl font-bold text-stone-900 mb-4">
-              Your AI agent, with a memory
+              How agents access memory
             </h2>
             <p className="text-lg text-stone-600 leading-relaxed mb-6">
-              The codecast CLI gives your AI agent persistent memory across sessions.
-              Search past conversations, resume work, track architectural decisions,
-              and let your agent learn from its own history.
+              Add a few lines to your CLAUDE.md and your agent gains full memory access.
+              It can search past sessions, ask questions about previous work, and recall
+              decisions you made weeks ago.
             </p>
             <div className="space-y-3 mb-6">
               <div className="flex items-center gap-3 text-stone-600">
