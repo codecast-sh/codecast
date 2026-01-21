@@ -956,6 +956,90 @@ export const getSharedConversation = query({
   },
 });
 
+export const getConversationPublic = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return { access_level: "not_found" as const, conversation: null };
+    }
+
+    const authUserId = await getAuthUserId(ctx);
+    let accessLevel: "owner" | "team" | "shared" | "denied" = "denied";
+
+    if (authUserId) {
+      const isOwner = conversation.user_id.toString() === authUserId.toString();
+      if (isOwner) {
+        accessLevel = "owner";
+      } else if (conversation.is_private === false) {
+        const authUser = await ctx.db.get(authUserId);
+        if (authUser?.team_id && authUser.team_id.toString() === conversation.team_id?.toString()) {
+          accessLevel = "team";
+        }
+      }
+    }
+
+    if (accessLevel === "denied" && conversation.share_token) {
+      accessLevel = "shared";
+    }
+
+    if (accessLevel === "denied") {
+      return { access_level: "denied" as const, conversation: null };
+    }
+
+    const limit = args.limit ?? 100;
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("desc")
+      .take(limit + 1);
+
+    const hasMore = messages.length > limit;
+    const resultMessages = hasMore ? messages.slice(0, limit) : messages;
+    const sortedMessages = resultMessages.sort((a, b) => a.timestamp - b.timestamp);
+    const oldestTimestamp = sortedMessages.length > 0 ? sortedMessages[0].timestamp : null;
+
+    const user = await ctx.db.get(conversation.user_id);
+
+    let firstUserMessage = "";
+    for (const msg of sortedMessages) {
+      const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+      if (msg.role === "user" && !hasToolResults) {
+        const text = msg.content?.trim();
+        if (text) {
+          firstUserMessage = text.slice(0, 120);
+          if (text.length > 120) firstUserMessage += "...";
+          break;
+        }
+      }
+    }
+
+    const title = conversation.title
+      || firstUserMessage
+      || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
+      || `Session ${conversation.session_id.slice(0, 8)}`;
+
+    return {
+      access_level: accessLevel,
+      conversation: {
+        ...conversation,
+        title,
+        messages: sortedMessages,
+        user: user ? { name: user.name, email: user.email } : null,
+        has_more_above: hasMore,
+        oldest_timestamp: oldestTimestamp,
+        fork_count: conversation.fork_count,
+        forked_from: conversation.forked_from,
+      },
+    };
+  },
+});
+
 export const searchConversations = query({
   args: {
     query: v.string(),
