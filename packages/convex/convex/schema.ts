@@ -32,6 +32,7 @@ export default defineSchema({
     status: v.optional(v.union(v.literal("available"), v.literal("busy"), v.literal("away"))),
     timezone: v.optional(v.string()),
     hide_activity: v.optional(v.boolean()),
+    share_session_metadata: v.optional(v.boolean()),
     encryption_enabled: v.optional(v.boolean()),
     encryption_master_key: v.optional(v.string()),
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),

@@ -201,6 +201,36 @@ export default function UserProfilePage() {
               </div>
             )}
 
+            {abstractActivity.recent_sessions && abstractActivity.recent_sessions.length > 0 && (
+              <div className="pt-3 border-t border-sol-border">
+                <div className="text-sm text-sol-base1 mb-2">Recent Sessions</div>
+                <div className="space-y-3">
+                  {abstractActivity.recent_sessions.map((session, i) => (
+                    <div key={i} className="text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sol-text font-medium truncate flex-1 mr-2">{session.title}</span>
+                        <span className="text-sol-base01 text-xs whitespace-nowrap">
+                          {session.message_count} msgs
+                        </span>
+                      </div>
+                      {session.subtitle && (
+                        <div className="text-xs text-sol-base01 mt-1 line-clamp-2 whitespace-pre-line">
+                          {session.subtitle}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 mt-1 text-xs text-sol-base01">
+                        {session.project && <span className="font-mono">{session.project}</span>}
+                        <span>{getRelativeTime(session.updated_at)}</span>
+                        {session.status === "active" && (
+                          <span className="px-1.5 py-0.5 bg-sol-green/20 text-sol-green rounded text-xs">active</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {abstractActivity.team_activity && (
               <div className="pt-3 border-t border-sol-border">
                 <div className="text-sm text-sol-base1 mb-2">Git Activity</div>
