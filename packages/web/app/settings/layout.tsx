@@ -11,6 +11,7 @@ const tabs = [
   { name: "Profile", path: "/settings/profile" },
   { name: "Accounts", path: "/settings/accounts" },
   { name: "Team", path: "/settings/team" },
+  { name: "Integrations", path: "/settings/integrations/github-app" },
   { name: "Privacy", path: "/settings/privacy" },
 ];
 
@@ -38,19 +39,23 @@ export default function SettingsLayout({
           </div>
 
           <div className="flex gap-2 border-b border-sol-border">
-            {tabs.map((tab) => (
-              <button
-                key={tab.path}
-                onClick={() => router.push(tab.path)}
-                className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
-                  pathname === tab.path
-                    ? "border-sol-cyan text-sol-cyan"
-                    : "border-transparent text-sol-base1 hover:text-sol-text"
-                }`}
-              >
-                {tab.name}
-              </button>
-            ))}
+            {tabs.map((tab) => {
+              const isActive = pathname === tab.path || pathname?.startsWith(tab.path + "/") ||
+                (tab.path.includes("/integrations") && pathname?.startsWith("/settings/integrations"));
+              return (
+                <button
+                  key={tab.path}
+                  onClick={() => router.push(tab.path)}
+                  className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
+                    isActive
+                      ? "border-sol-cyan text-sol-cyan"
+                      : "border-transparent text-sol-base1 hover:text-sol-text"
+                  }`}
+                >
+                  {tab.name}
+                </button>
+              );
+            })}
           </div>
 
           {children}

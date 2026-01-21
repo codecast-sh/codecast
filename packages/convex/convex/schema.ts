@@ -509,4 +509,32 @@ export default defineSchema({
     .index("by_delivery_id", ["delivery_id"])
     .index("by_processed", ["processed"])
     .index("by_event_type", ["event_type"]),
+
+  github_app_installations: defineTable({
+    team_id: v.id("teams"),
+    installation_id: v.number(),
+    account_login: v.string(),
+    account_type: v.union(v.literal("User"), v.literal("Organization")),
+    account_id: v.number(),
+    repository_selection: v.union(v.literal("all"), v.literal("selected")),
+    repositories: v.optional(v.array(v.object({
+      id: v.number(),
+      name: v.string(),
+      full_name: v.string(),
+    }))),
+    suspended_at: v.optional(v.number()),
+    installed_by_user_id: v.optional(v.id("users")),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_team_id", ["team_id"])
+    .index("by_installation_id", ["installation_id"])
+    .index("by_account_login", ["account_login"]),
+
+  github_installation_tokens: defineTable({
+    installation_id: v.number(),
+    token: v.string(),
+    expires_at: v.number(),
+    created_at: v.number(),
+  }).index("by_installation_id", ["installation_id"]),
 });

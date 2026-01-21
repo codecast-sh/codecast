@@ -69,6 +69,187 @@ http.route({
 });
 
 http.route({
+  path: "/api/github-app/callback",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const installationId = url.searchParams.get("installation_id");
+    const setupAction = url.searchParams.get("setup_action");
+    const state = url.searchParams.get("state");
+
+    if (!installationId) {
+      return new Response("Missing installation_id", { status: 400 });
+    }
+
+    if (setupAction === "install" || setupAction === "update") {
+      let teamId: string | null = null;
+      let userId: string | null = null;
+      if (state) {
+        try {
+          const stateData = JSON.parse(atob(state));
+          teamId = stateData.team_id;
+          userId = stateData.user_id;
+        } catch {
+        }
+      }
+
+      if (!teamId) {
+        const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?error=missing_team`;
+        return new Response(null, {
+          status: 302,
+          headers: { Location: redirectUrl },
+        });
+      }
+
+      try {
+        const installationDetails = await ctx.runAction(internal.githubApp.fetchInstallationDetails, {
+          installation_id: parseInt(installationId),
+        });
+
+        await ctx.runMutation(internal.githubApp.storeInstallation, {
+          team_id: teamId as any,
+          installation_id: installationDetails.installation_id,
+          account_login: installationDetails.account_login,
+          account_type: installationDetails.account_type,
+          account_id: installationDetails.account_id,
+          repository_selection: installationDetails.repository_selection,
+          repositories: installationDetails.repositories,
+          installed_by_user_id: userId as any,
+        });
+
+        const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?success=true`;
+        return new Response(null, {
+          status: 302,
+          headers: { Location: redirectUrl },
+        });
+      } catch (error) {
+        console.error("Failed to process GitHub App installation:", error);
+        const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?error=installation_failed`;
+        return new Response(null, {
+          status: 302,
+          headers: { Location: redirectUrl },
+        });
+      }
+    }
+
+    const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app`;
+    return new Response(null, {
+      status: 302,
+      headers: { Location: redirectUrl },
+    });
+  }),
+});
+
+http.route({
+  path: "/api/webhooks/github-app",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const signature = request.headers.get("X-Hub-Signature-256");
+    const deliveryId = request.headers.get("X-GitHub-Delivery");
+    const eventType = request.headers.get("X-GitHub-Event");
+
+    if (!deliveryId || !eventType) {
+      return new Response(JSON.stringify({ error: "Missing required headers" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const body = await request.text();
+    const webhookSecret = process.env.GITHUB_APP_WEBHOOK_SECRET;
+
+    if (webhookSecret && signature) {
+      const encoder = new TextEncoder();
+      const keyData = encoder.encode(webhookSecret);
+      const messageData = encoder.encode(body);
+
+      const key = await crypto.subtle.importKey(
+        "raw",
+        keyData,
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      );
+
+      const signatureBuffer = await crypto.subtle.sign("HMAC", key, messageData);
+      const hashArray = Array.from(new Uint8Array(signatureBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      const expectedSignature = "sha256=" + hashHex;
+
+      if (signature !== expectedSignature) {
+        return new Response(JSON.stringify({ error: "Invalid signature" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    const payload = JSON.parse(body);
+
+    if (eventType === "installation") {
+      const action = payload.action;
+      const installationId = payload.installation?.id;
+
+      if (action === "deleted" && installationId) {
+        await ctx.runMutation(internal.githubApp.removeInstallation, {
+          installation_id: installationId,
+        });
+      } else if (action === "suspend" && installationId) {
+        await ctx.runMutation(internal.githubApp.suspendInstallation, {
+          installation_id: installationId,
+          suspended_at: Date.now(),
+        });
+      } else if (action === "unsuspend" && installationId) {
+        await ctx.runMutation(internal.githubApp.unsuspendInstallation, {
+          installation_id: installationId,
+        });
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (eventType === "installation_repositories") {
+      const installationId = payload.installation?.id;
+      if (installationId && payload.repositories_added) {
+        const existing = await ctx.runQuery(internal.githubApp.getCachedToken, {
+          installation_id: installationId,
+        });
+        if (existing) {
+        }
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (["pull_request", "push", "issue_comment", "pull_request_review", "pull_request_review_comment"].includes(eventType)) {
+      const action = payload.action;
+      const result = await ctx.runMutation(internal.githubWebhooks.storeWebhookEvent, {
+        delivery_id: deliveryId,
+        event_type: eventType,
+        action,
+        payload: body,
+      });
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response(JSON.stringify({ success: true, ignored: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }),
+});
+
+http.route({
   path: "/api/webhooks/github",
   method: "POST",
   handler: httpAction(async (ctx, request) => {

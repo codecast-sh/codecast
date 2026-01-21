@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, internalMutation, internalAction, internalQuery, action } from "./_generated/server";
+import { internalMutation, internalAction, internalQuery } from "./_generated/server";
 import { internal, api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
@@ -70,7 +70,7 @@ export const processPROpenedEvent = internalAction({
     const prNumber: number = pr.number;
     const headRef: string = pr.head.ref;
 
-    const result: { matched_conversation_id: Id<"conversations"> | null; pr_id: Id<"pull_requests"> | null; github_access_token: string | null } = await ctx.runMutation(internal.githubWebhooks.matchPRToConversation, {
+    const result = await ctx.runMutation(internal.githubWebhooks.matchPRToConversation, {
       event_id: args.event_id,
       repository: repositoryFullName,
       pr_number: prNumber,
@@ -84,26 +84,46 @@ export const processPROpenedEvent = internalAction({
     });
 
     let filesSynced = false;
-    if (result.pr_id && result.github_access_token) {
-      try {
-        const filesData = await ctx.runAction(internal.githubApi.getPRFiles, {
-          repository: repositoryFullName,
-          pr_number: prNumber,
-          github_access_token: result.github_access_token,
-        });
+    if (result.pr_id) {
+      let token = result.github_access_token;
 
-        await ctx.runMutation(api.pull_requests.updatePRFiles, {
-          pr_id: result.pr_id,
-          files: filesData.files,
-          additions: filesData.additions,
-          deletions: filesData.deletions,
-          changed_files: filesData.changed_files,
-          commits_count: filesData.commits_count,
-          base_ref: filesData.base_ref,
-        });
-        filesSynced = true;
-      } catch (error) {
-        console.error("Failed to fetch PR files:", error);
+      const installation = result.team_id ? await ctx.runQuery(internal.githubWebhooks.getInstallationForRepository, {
+        repository: repositoryFullName,
+        team_id: result.team_id,
+      }) : null;
+
+      if (installation) {
+        try {
+          const tokenResult = await ctx.runAction(internal.githubApp.getInstallationToken, {
+            installation_id: installation.installation_id,
+          });
+          token = tokenResult.token;
+        } catch (error) {
+          console.error("Failed to get installation token, falling back to user token:", error);
+        }
+      }
+
+      if (token) {
+        try {
+          const filesData = await ctx.runAction(internal.githubApi.getPRFiles, {
+            repository: repositoryFullName,
+            pr_number: prNumber,
+            github_access_token: token,
+          });
+
+          await ctx.runMutation(api.pull_requests.updatePRFiles, {
+            pr_id: result.pr_id,
+            files: filesData.files,
+            additions: filesData.additions,
+            deletions: filesData.deletions,
+            changed_files: filesData.changed_files,
+            commits_count: filesData.commits_count,
+            base_ref: filesData.base_ref,
+          });
+          filesSynced = true;
+        } catch (error) {
+          console.error("Failed to fetch PR files:", error);
+        }
       }
     }
 
@@ -150,9 +170,29 @@ export const processPRSynchronizeEvent = internalAction({
       return { success: false, reason: "PR not found in database" };
     }
 
-    const token = await ctx.runQuery(internal.githubWebhooks.getTokenForPR, {
-      pr_id: prData._id,
+    let token: string | null = null;
+
+    const installation = await ctx.runQuery(internal.githubWebhooks.getInstallationForRepository, {
+      repository: repositoryFullName,
+      team_id: prData.team_id as Id<"teams">,
     });
+
+    if (installation) {
+      try {
+        const tokenResult = await ctx.runAction(internal.githubApp.getInstallationToken, {
+          installation_id: installation.installation_id,
+        });
+        token = tokenResult.token;
+      } catch (error) {
+        console.error("Failed to get installation token:", error);
+      }
+    }
+
+    if (!token) {
+      token = await ctx.runQuery(internal.githubWebhooks.getTokenForPR, {
+        pr_id: prData._id,
+      });
+    }
 
     if (!token) {
       await ctx.runMutation(internal.githubWebhooks.markEventProcessed, { event_id: args.event_id });
@@ -272,6 +312,51 @@ export const getTokenForPR = internalQuery({
   },
 });
 
+export const getInstallationForRepository = internalQuery({
+  args: {
+    repository: v.string(),
+    team_id: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args) => {
+    const [owner] = args.repository.split("/");
+
+    if (args.team_id) {
+      const teamId = args.team_id;
+      const installations = await ctx.db
+        .query("github_app_installations")
+        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+        .collect();
+
+      for (const installation of installations) {
+        if (installation.account_login === owner) {
+          if (installation.repository_selection === "all") {
+            return installation;
+          }
+          if (installation.repositories?.some((r) => r.full_name === args.repository)) {
+            return installation;
+          }
+        }
+      }
+    }
+
+    const byOwner = await ctx.db
+      .query("github_app_installations")
+      .withIndex("by_account_login", (q) => q.eq("account_login", owner))
+      .collect();
+
+    for (const installation of byOwner) {
+      if (installation.repository_selection === "all") {
+        return installation;
+      }
+      if (installation.repositories?.some((r) => r.full_name === args.repository)) {
+        return installation;
+      }
+    }
+
+    return null;
+  },
+});
+
 export const markEventProcessed = internalMutation({
   args: {
     event_id: v.id("github_webhook_events"),
@@ -304,7 +389,7 @@ export const matchPRToConversation = internalMutation({
 
     if (!teamId) {
       await ctx.db.patch(args.event_id, { processed: true });
-      return { matched_conversation_id: null, pr_id: null, github_access_token: null };
+      return { matched_conversation_id: null, pr_id: null, github_access_token: null, team_id: null };
     }
 
     let githubAccessToken: string | null = null;
@@ -352,6 +437,7 @@ export const matchPRToConversation = internalMutation({
       matched_conversation_id: conversations[0]?._id || null,
       pr_id: prId,
       github_access_token: githubAccessToken,
+      team_id: teamId,
     };
   },
 });
