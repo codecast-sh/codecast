@@ -34,6 +34,8 @@ export default defineSchema({
     hide_activity: v.optional(v.boolean()),
     encryption_enabled: v.optional(v.boolean()),
     encryption_master_key: v.optional(v.string()),
+    sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
+    sync_projects: v.optional(v.array(v.string())),
   })
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])

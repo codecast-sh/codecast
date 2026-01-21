@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { verifyApiToken } from "./apiTokens";
 
 export const getCurrentUser = query({
   args: {},
@@ -282,5 +283,88 @@ export const unlinkGitHub = mutation({
       github_access_token: undefined,
     });
     return userId;
+  },
+});
+
+export const updateSyncSettings = mutation({
+  args: {
+    sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
+    sync_projects: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    const updateData: Record<string, unknown> = {};
+    if (args.sync_mode !== undefined) {
+      updateData.sync_mode = args.sync_mode;
+    }
+    if (args.sync_projects !== undefined) {
+      updateData.sync_projects = args.sync_projects;
+    }
+    await ctx.db.patch(userId, updateData);
+    return userId;
+  },
+});
+
+export const getSyncSettings = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return null;
+    }
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      return null;
+    }
+    return {
+      sync_mode: user.sync_mode ?? "all",
+      sync_projects: user.sync_projects ?? [],
+    };
+  },
+});
+
+export const getSyncSettingsForCLI = query({
+  args: {
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) {
+      return { error: "Unauthorized" };
+    }
+    const user = await ctx.db.get(result.userId);
+    if (!user) {
+      return { error: "User not found" };
+    }
+    return {
+      sync_mode: user.sync_mode ?? "all",
+      sync_projects: user.sync_projects ?? [],
+    };
+  },
+});
+
+export const updateSyncSettingsForCLI = mutation({
+  args: {
+    api_token: v.string(),
+    sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
+    sync_projects: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) {
+      return { error: "Unauthorized" };
+    }
+    const updateData: Record<string, unknown> = {};
+    if (args.sync_mode !== undefined) {
+      updateData.sync_mode = args.sync_mode;
+    }
+    if (args.sync_projects !== undefined) {
+      updateData.sync_projects = args.sync_projects;
+    }
+    await ctx.db.patch(result.userId, updateData);
+    return { success: true };
   },
 });

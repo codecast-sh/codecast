@@ -14,6 +14,7 @@ import { getPosition, setPosition } from "./positionTracker.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import Anthropic from "@anthropic-ai/sdk";
+import { checkbox, confirm } from "@inquirer/prompts";
 
 const program = new Command();
 
@@ -196,6 +197,8 @@ interface Config {
   memory_enabled?: boolean;
   memory_version?: string;
   claude_args?: string;
+  sync_mode?: "all" | "selected";
+  sync_projects?: string[];
   created_at?: string;
   updated_at?: string;
 }
@@ -249,6 +252,52 @@ function detectAgents(): DetectedAgent[] {
   }
 
   return agents;
+}
+
+interface DiscoveredProject {
+  path: string;
+  dirName: string;
+  sessionCount: number;
+  lastModified: Date;
+}
+
+function discoverProjects(): DiscoveredProject[] {
+  const projectsPath = path.join(process.env.HOME || "", ".claude", "projects");
+  if (!fs.existsSync(projectsPath)) {
+    return [];
+  }
+
+  const projects: DiscoveredProject[] = [];
+  const entries = fs.readdirSync(projectsPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+
+    const dirPath = path.join(projectsPath, entry.name);
+    const projectPath = "/" + entry.name.replace(/-/g, "/").slice(1);
+
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/;
+    const sessionFiles = fs.readdirSync(dirPath).filter(f => uuidPattern.test(f));
+
+    if (sessionFiles.length === 0) continue;
+
+    let lastModified = new Date(0);
+    for (const file of sessionFiles) {
+      const stats = fs.statSync(path.join(dirPath, file));
+      if (stats.mtime > lastModified) {
+        lastModified = stats.mtime;
+      }
+    }
+
+    projects.push({
+      path: projectPath,
+      dirName: entry.name,
+      sessionCount: sessionFiles.length,
+      lastModified,
+    });
+  }
+
+  return projects.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
 }
 
 function ensureConfigDir(): void {
@@ -357,6 +406,8 @@ codecast links
 \`\`\`
 
 Display the Dashboard and Share URLs from the output.
+
+Note: If the session hasn't been synced yet, this command will automatically sync it first before returning the links.
 `;
 
 function installSlashCommand(): void {
@@ -691,6 +742,8 @@ async function runAuth(): Promise<void> {
   console.log(`API Token: ${maskToken(config.auth_token || "")}`);
   console.log(`Config: ${CONFIG_FILE}\n`);
 
+  await promptProjectSelection(config);
+
   if (!isDaemonRunning()) {
     console.log("Starting daemon...");
     startDaemon();
@@ -700,6 +753,79 @@ async function runAuth(): Promise<void> {
 
   console.log("\nStatus:");
   showStatus();
+}
+
+async function promptProjectSelection(config: Config): Promise<void> {
+  const projects = discoverProjects();
+
+  if (projects.length === 0) {
+    console.log("No projects found to sync yet. Sessions will sync automatically.\n");
+    config.sync_mode = "all";
+    config.sync_projects = [];
+    writeConfig(config);
+    return;
+  }
+
+  console.log("--- Sync Settings ---");
+  console.log(`Found ${projects.length} project${projects.length === 1 ? "" : "s"} with Claude Code sessions.\n`);
+
+  const syncAll = await confirm({
+    message: "Sync all projects? (recommended)",
+    default: true,
+  });
+
+  if (syncAll) {
+    config.sync_mode = "all";
+    config.sync_projects = [];
+    writeConfig(config);
+    await updateSyncSettingsOnServer(config);
+    console.log("\nAll sessions will be synced.\n");
+    return;
+  }
+
+  const choices = projects.map(p => ({
+    name: `${p.path} (${p.sessionCount} session${p.sessionCount === 1 ? "" : "s"})`,
+    value: p.path,
+    checked: true,
+  }));
+
+  console.log("\nSelect which projects to sync (use arrow keys and space to toggle):\n");
+
+  const selectedProjects = await checkbox({
+    message: "Projects to sync:",
+    choices,
+    pageSize: 15,
+  });
+
+  config.sync_mode = "selected";
+  config.sync_projects = selectedProjects;
+  writeConfig(config);
+  await updateSyncSettingsOnServer(config);
+
+  if (selectedProjects.length === 0) {
+    console.log("\nNo projects selected. You can change this later with 'codecast config sync'.\n");
+  } else {
+    console.log(`\n${selectedProjects.length} project${selectedProjects.length === 1 ? "" : "s"} will be synced.\n`);
+  }
+}
+
+async function updateSyncSettingsOnServer(config: Config): Promise<void> {
+  if (!config.auth_token || !config.convex_url) return;
+
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    await fetch(`${siteUrl}/cli/sync-settings/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        sync_mode: config.sync_mode,
+        sync_projects: config.sync_projects,
+      }),
+    });
+  } catch {
+    // Silently fail - local config is the source of truth for daemon
+  }
 }
 
 const MEMORY_SNIPPET = `
@@ -956,6 +1082,80 @@ async function runSync(): Promise<void> {
   }
 }
 
+async function syncSingleSession(sessionId: string, projectRoot: string): Promise<boolean> {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.user_id) {
+    return false;
+  }
+
+  const projectDir = projectRoot.replace(/\//g, "-");
+  const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
+  const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+
+  if (!fs.existsSync(sessionFile)) {
+    return false;
+  }
+
+  try {
+    const stats = fs.statSync(sessionFile);
+    const content = fs.readFileSync(sessionFile, "utf-8");
+    const messages = parseSessionFile(content);
+
+    if (messages.length === 0) {
+      return false;
+    }
+
+    const slug = extractSlug(content);
+    const syncService = new SyncService({
+      convexUrl: config.convex_url || CONVEX_URL,
+      authToken: config.auth_token,
+      userId: config.user_id,
+    });
+
+    let conversationId: string | null = null;
+    const actualProjectPath = "/" + projectDir.slice(1).replace(/-/g, "/");
+
+    try {
+      conversationId = await syncService.createConversation({
+        userId: config.user_id!,
+        sessionId,
+        agentType: "claude_code",
+        projectPath: actualProjectPath,
+        slug,
+        startedAt: messages[0]?.timestamp || Date.now(),
+      });
+    } catch (err) {
+      const errorMsg = (err as Error).message;
+      if (!errorMsg.includes("already exists")) {
+        throw err;
+      }
+      return true;
+    }
+
+    if (conversationId) {
+      for (const msg of messages) {
+        await syncService.addMessage({
+          conversationId,
+          messageUuid: msg.uuid,
+          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+          content: msg.content,
+          timestamp: msg.timestamp,
+          thinking: msg.thinking,
+          toolCalls: msg.toolCalls,
+          toolResults: msg.toolResults,
+          images: msg.images,
+          subtype: msg.subtype,
+        });
+      }
+    }
+
+    setPosition(sessionFile, stats.size);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 program
   .name("codecast")
   .description(
@@ -1073,6 +1273,98 @@ program
 
     const displayValue = sensitiveKeys.includes(configKey) ? maskToken(value) : value;
     console.log(`Updated ${configKey}: ${displayValue}`);
+  });
+
+program
+  .command("sync-settings")
+  .description(
+    "View or modify which projects are synced\n\n" +
+    "Examples:\n" +
+    "  codecast sync-settings           # View current settings and select projects\n" +
+    "  codecast sync-settings --all     # Sync all projects\n" +
+    "  codecast sync-settings --show    # Show current settings only"
+  )
+  .option("--all", "Sync all projects")
+  .option("--show", "Show current settings without prompting")
+  .action(async (options) => {
+    const config = readConfig();
+
+    if (!config?.auth_token) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const projects = discoverProjects();
+
+    if (options.show) {
+      console.log("\nSync Settings:");
+      console.log(`  Mode: ${config.sync_mode || "all"}`);
+      if (config.sync_mode === "selected" && config.sync_projects?.length) {
+        console.log("  Selected projects:");
+        for (const p of config.sync_projects) {
+          console.log(`    - ${p}`);
+        }
+      } else {
+        console.log("  All projects will be synced.");
+      }
+      console.log(`\n  Available projects: ${projects.length}`);
+      for (const p of projects.slice(0, 10)) {
+        console.log(`    - ${p.path} (${p.sessionCount} sessions)`);
+      }
+      if (projects.length > 10) {
+        console.log(`    ... and ${projects.length - 10} more`);
+      }
+      return;
+    }
+
+    if (options.all) {
+      config.sync_mode = "all";
+      config.sync_projects = [];
+      writeConfig(config);
+      await updateSyncSettingsOnServer(config);
+      console.log("Updated: All projects will be synced.");
+      return;
+    }
+
+    if (projects.length === 0) {
+      console.log("No projects found with Claude Code sessions.");
+      return;
+    }
+
+    console.log(`\nFound ${projects.length} project${projects.length === 1 ? "" : "s"}.\n`);
+
+    const syncAll = await confirm({
+      message: "Sync all projects?",
+      default: config.sync_mode !== "selected",
+    });
+
+    if (syncAll) {
+      config.sync_mode = "all";
+      config.sync_projects = [];
+      writeConfig(config);
+      await updateSyncSettingsOnServer(config);
+      console.log("\nAll sessions will be synced.");
+      return;
+    }
+
+    const choices = projects.map(p => ({
+      name: `${p.path} (${p.sessionCount} session${p.sessionCount === 1 ? "" : "s"})`,
+      value: p.path,
+      checked: config.sync_mode !== "selected" || (config.sync_projects?.includes(p.path) ?? true),
+    }));
+
+    const selectedProjects = await checkbox({
+      message: "Select projects to sync:",
+      choices,
+      pageSize: 15,
+    });
+
+    config.sync_mode = "selected";
+    config.sync_projects = selectedProjects;
+    writeConfig(config);
+    await updateSyncSettingsOnServer(config);
+
+    console.log(`\n${selectedProjects.length} project${selectedProjects.length === 1 ? "" : "s"} selected for syncing.`);
   });
 
 program
@@ -1960,7 +2252,7 @@ program
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    try {
+    const getLinks = async (): Promise<{ dashboard_url: string; share_url: string } | null> => {
       const response = await fetch(`${siteUrl}/cli/session-links`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1969,11 +2261,27 @@ program
           api_token: config.auth_token,
         }),
       });
-
       const result = await response.json();
-
       if (result.error) {
-        console.error(`Error: ${result.error}`);
+        return null;
+      }
+      return result;
+    };
+
+    try {
+      let result = await getLinks();
+
+      if (!result) {
+        console.log("Session not found on server. Syncing...");
+        const synced = await syncSingleSession(sessionId, projectRoot);
+        if (synced) {
+          console.log("Sync complete. Getting links...\n");
+          result = await getLinks();
+        }
+      }
+
+      if (!result) {
+        console.error("Error: Session not found. Make sure the session exists and has been synced.");
         process.exit(1);
       }
 

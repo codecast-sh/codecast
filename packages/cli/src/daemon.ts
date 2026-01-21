@@ -29,6 +29,8 @@ interface Config {
   convex_url?: string;
   auth_token?: string;
   excluded_paths?: string;
+  sync_mode?: "all" | "selected";
+  sync_projects?: string[];
 }
 
 interface ConversationCache {
@@ -207,6 +209,22 @@ function isPathExcluded(projectPath: string, excludedPaths?: string): boolean {
   }
 
   return false;
+}
+
+function isProjectAllowedToSync(projectPath: string, config: Config): boolean {
+  if (!config.sync_mode || config.sync_mode === "all") {
+    return true;
+  }
+
+  if (!config.sync_projects || config.sync_projects.length === 0) {
+    return false;
+  }
+
+  const normalizedProject = path.resolve(projectPath);
+  return config.sync_projects.some(allowed => {
+    const normalizedAllowed = path.resolve(allowed);
+    return normalizedProject === normalizedAllowed || normalizedProject.startsWith(normalizedAllowed + path.sep);
+  });
 }
 
 function getGitInfo(projectPath: string): GitInfo | undefined {
@@ -1433,6 +1451,11 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (!isProjectAllowedToSync(event.projectPath, config)) {
+      log(`Skipping sync for non-selected project: ${event.projectPath}`);
+      return;
+    }
+
     let sync = fileSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
@@ -1483,6 +1506,11 @@ async function main(): Promise<void> {
 
     if (isPathExcluded(event.workspacePath, config.excluded_paths)) {
       log(`Skipping sync for excluded path: ${event.workspacePath}`);
+      return;
+    }
+
+    if (!isProjectAllowedToSync(event.workspacePath, config)) {
+      log(`Skipping sync for non-selected project: ${event.workspacePath}`);
       return;
     }
 
