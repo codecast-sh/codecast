@@ -18,6 +18,11 @@ export default function PrivacyPage() {
     await updatePrivacySettings({ hide_activity: !user.hide_activity });
   };
 
+  const handleToggleShareMetadata = async () => {
+    const currentValue = user.share_session_metadata !== false;
+    await updatePrivacySettings({ share_session_metadata: !currentValue });
+  };
+
   const handleToggleEncryption = async () => {
     if (!user.encryption_enabled) {
       const masterKey = crypto.getRandomValues(new Uint8Array(32));
@@ -65,6 +70,26 @@ export default function PrivacyPage() {
               <span
                 className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                   user.hide_activity ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+          <div className="flex items-center justify-between py-3 border-t border-sol-border">
+            <div>
+              <Label className="text-sol-text font-medium">Share Session Details with Team</Label>
+              <div className="text-sm text-sol-base1">
+                Show session titles and summaries on your team profile
+              </div>
+            </div>
+            <button
+              onClick={handleToggleShareMetadata}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                user.share_session_metadata !== false ? "bg-sol-cyan" : "bg-sol-base02"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  user.share_session_metadata !== false ? "translate-x-6" : "translate-x-1"
                 }`}
               />
             </button>

@@ -136,6 +136,7 @@ export const updateNotificationPreferences = mutation({
 export const updatePrivacySettings = mutation({
   args: {
     hide_activity: v.optional(v.boolean()),
+    share_session_metadata: v.optional(v.boolean()),
     encryption_enabled: v.optional(v.boolean()),
     encryption_master_key: v.optional(v.string()),
   },
@@ -147,6 +148,9 @@ export const updatePrivacySettings = mutation({
     const updateData: any = {};
     if (args.hide_activity !== undefined) {
       updateData.hide_activity = args.hide_activity;
+    }
+    if (args.share_session_metadata !== undefined) {
+      updateData.share_session_metadata = args.share_session_metadata;
     }
     if (args.encryption_enabled !== undefined) {
       updateData.encryption_enabled = args.encryption_enabled;
@@ -350,6 +354,18 @@ export const getUserAbstractActivity = query({
       }
     }
 
+    const shareMetadata = user.share_session_metadata !== false;
+
+    const recentSessions = shareMetadata ? weekConversations.slice(0, 5).map(c => ({
+      title: c.title || 'Untitled Session',
+      subtitle: c.subtitle,
+      message_count: c.message_count,
+      project: c.project_path?.split('/').pop(),
+      started_at: c.started_at,
+      updated_at: c.updated_at,
+      status: c.status,
+    })) : [];
+
     return {
       last_active: user.daemon_last_seen,
       is_currently_active: activeSession !== undefined,
@@ -360,9 +376,11 @@ export const getUserAbstractActivity = query({
       month_messages: monthTotalMessages,
       activity_streak: streak,
       recent_projects: recentProjects,
+      recent_sessions: recentSessions,
       recent_commits: recentCommits,
       peak_hours: peakHours,
       team_activity: teamActivityStats,
+      share_session_metadata: shareMetadata,
     };
   },
 });
