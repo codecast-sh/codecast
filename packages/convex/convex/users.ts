@@ -204,12 +204,152 @@ export const getUserStats = query({
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
       .filter((q) => q.eq(q.field("is_private"), false))
-      .collect();
+      .order("desc")
+      .take(100);
     const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);
     return {
       total_conversations: conversations.length,
       total_messages: totalMessages,
       active_conversations: conversations.filter((c) => c.status === "active").length,
+    };
+  },
+});
+
+export const getUserAbstractActivity = query({
+  args: {
+    user_id: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.user_id);
+    if (!user) return null;
+
+    const now = Date.now();
+    const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const oneMonthAgo = now - 30 * 24 * 60 * 60 * 1000;
+
+    const recentConversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+      .order("desc")
+      .take(100);
+
+    const weekConversations = recentConversations.filter(c => c.started_at > oneWeekAgo);
+    const monthConversations = recentConversations.filter(c => c.started_at > oneMonthAgo);
+    const activeSession = recentConversations.find(c => c.status === "active");
+
+    const projectCounts: Record<string, { sessions: number; messages: number; lastActive: number }> = {};
+    monthConversations.forEach(c => {
+      const project = c.project_path?.split('/').pop() || 'Unknown';
+      if (!projectCounts[project]) {
+        projectCounts[project] = { sessions: 0, messages: 0, lastActive: 0 };
+      }
+      projectCounts[project].sessions++;
+      projectCounts[project].messages += c.message_count;
+      projectCounts[project].lastActive = Math.max(projectCounts[project].lastActive, c.updated_at);
+    });
+
+    const recentProjects = Object.entries(projectCounts)
+      .sort(([,a], [,b]) => b.lastActive - a.lastActive)
+      .slice(0, 5)
+      .map(([name, stats]) => ({
+        name,
+        sessions: stats.sessions,
+        messages: stats.messages,
+      }));
+
+    const weekTotalMessages = weekConversations.reduce((sum, c) => sum + c.message_count, 0);
+    const monthTotalMessages = monthConversations.reduce((sum, c) => sum + c.message_count, 0);
+
+    let teamActivityStats = null;
+    let recentCommits: Array<{ message: string; branch?: string; filesChanged?: number; timestamp: number }> = [];
+
+    if (user.team_id) {
+      const teamEvents = await ctx.db
+        .query("team_activity_events")
+        .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
+        .order("desc")
+        .take(50);
+
+      const weekEvents = teamEvents.filter(e => e.timestamp > oneWeekAgo);
+      const monthEvents = teamEvents.filter(e => e.timestamp > oneMonthAgo);
+
+      const weekCommits = weekEvents.filter(e => e.event_type === "commit_pushed").length;
+      const monthCommits = monthEvents.filter(e => e.event_type === "commit_pushed").length;
+      const weekPRs = weekEvents.filter(e => e.event_type === "pr_created" || e.event_type === "pr_merged").length;
+      const monthPRs = monthEvents.filter(e => e.event_type === "pr_created" || e.event_type === "pr_merged").length;
+
+      const weekFilesChanged = weekEvents
+        .filter(e => e.event_type === "commit_pushed" && e.metadata?.files_changed)
+        .reduce((sum, e) => sum + (e.metadata?.files_changed || 0), 0);
+
+      const recentBranches = monthEvents
+        .filter(e => e.metadata?.git_branch)
+        .map(e => e.metadata!.git_branch!)
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .slice(0, 5);
+
+      recentCommits = monthEvents
+        .filter(e => e.event_type === "commit_pushed")
+        .slice(0, 5)
+        .map(e => ({
+          message: e.title,
+          branch: e.metadata?.git_branch,
+          filesChanged: e.metadata?.files_changed,
+          timestamp: e.timestamp,
+        }));
+
+      teamActivityStats = {
+        week_commits: weekCommits,
+        month_commits: monthCommits,
+        week_prs: weekPRs,
+        month_prs: monthPRs,
+        week_files_changed: weekFilesChanged,
+        recent_branches: recentBranches,
+      };
+    }
+
+    const hourOfDay: Record<number, number> = {};
+    monthConversations.forEach(c => {
+      const hour = new Date(c.started_at).getHours();
+      hourOfDay[hour] = (hourOfDay[hour] || 0) + 1;
+    });
+    const peakHours = Object.entries(hourOfDay)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 3)
+      .map(([hour]) => parseInt(hour));
+
+
+    const daySet = new Set<string>();
+    recentConversations.forEach(c => {
+      const day = new Date(c.started_at).toISOString().split('T')[0];
+      daySet.add(day);
+    });
+    const sortedDays = Array.from(daySet).sort().reverse();
+    let streak = 0;
+    for (let i = 0; i < sortedDays.length; i++) {
+      const expectedDate = new Date(Date.now() - i * 86400000).toISOString().split('T')[0];
+      if (sortedDays[i] === expectedDate) {
+        streak++;
+      } else if (i === 0 && sortedDays[0] === new Date(Date.now() - 86400000).toISOString().split('T')[0]) {
+        streak++;
+      } else {
+        break;
+      }
+    }
+
+    return {
+      last_active: user.daemon_last_seen,
+      is_currently_active: activeSession !== undefined,
+      current_project: activeSession?.project_path?.split('/').pop(),
+      week_sessions: weekConversations.length,
+      month_sessions: monthConversations.length,
+      week_messages: weekTotalMessages,
+      month_messages: monthTotalMessages,
+      activity_streak: streak,
+      recent_projects: recentProjects,
+      recent_commits: recentCommits,
+      peak_hours: peakHours,
+      team_activity: teamActivityStats,
     };
   },
 });

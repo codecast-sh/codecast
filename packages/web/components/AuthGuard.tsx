@@ -6,13 +6,8 @@ import { useEffect, useRef, useState } from "react";
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const router = useRouter();
-  const hasBeenAuthenticated = useRef(false);
   const [authCheckComplete, setAuthCheckComplete] = useState(false);
   const checkCount = useRef(0);
-
-  if (isAuthenticated) {
-    hasBeenAuthenticated.current = true;
-  }
 
   useEffect(() => {
     if (!isLoading) {
@@ -29,8 +24,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (authCheckComplete && !isAuthenticated) {
-      const reason = hasBeenAuthenticated.current ? "?reason=session_expired" : "";
-      router.push(`/login${reason}`);
+      router.push("/");
     }
   }, [authCheckComplete, isAuthenticated, router]);
 

@@ -20,6 +20,10 @@ export default function UserProfilePage() {
     api.users.getUserStats,
     profileUser?._id ? { user_id: profileUser._id } : "skip"
   );
+  const abstractActivity = useQuery(
+    api.users.getUserAbstractActivity,
+    profileUser?._id ? { user_id: profileUser._id } : "skip"
+  );
 
   if (!currentUser) {
     return null;
@@ -150,15 +154,131 @@ export default function UserProfilePage() {
         </div>
       </Card>
 
-      {userStats && (
+      {!profileUser.hide_activity && abstractActivity && (
         <Card className="p-6 bg-sol-bg border-sol-border mb-6">
-          <h2 className="text-lg font-semibold text-sol-text mb-4">Activity Stats</h2>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-sol-text">Activity Overview</h2>
+            {abstractActivity.activity_streak > 0 && (
+              <span className="px-2 py-1 bg-sol-orange/20 text-sol-orange text-xs rounded-full font-medium">
+                {abstractActivity.activity_streak} day streak
+              </span>
+            )}
+          </div>
+
+          {abstractActivity.is_currently_active && (
+            <div className="flex items-center gap-2 text-sol-green text-sm mb-4 p-2 bg-sol-green/10 rounded">
+              <span className="w-2 h-2 rounded-full bg-sol-green animate-pulse" />
+              Currently working on {abstractActivity.current_project || 'a session'}
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="text-center">
+                <div className="text-xl font-bold text-sol-cyan">{abstractActivity.week_sessions}</div>
+                <div className="text-xs text-sol-base01">Sessions</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-bold text-sol-cyan">{abstractActivity.week_messages}</div>
+                <div className="text-xs text-sol-base01">Messages</div>
+              </div>
+            </div>
+            <div className="text-xs text-sol-base01 text-center -mt-2">This week</div>
+
+            {abstractActivity.recent_projects.length > 0 && (
+              <div className="pt-3 border-t border-sol-border">
+                <div className="text-sm text-sol-base1 mb-2">Recent Projects</div>
+                <div className="space-y-2">
+                  {abstractActivity.recent_projects.map((project) => (
+                    <div key={project.name} className="flex items-center justify-between text-sm">
+                      <span className="text-sol-text font-medium">{project.name}</span>
+                      <span className="text-sol-base01 text-xs">
+                        {project.sessions} sessions, {project.messages} msgs
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {abstractActivity.team_activity && (
+              <div className="pt-3 border-t border-sol-border">
+                <div className="text-sm text-sol-base1 mb-2">Git Activity</div>
+                <div className="grid grid-cols-3 gap-3 text-sm mb-3">
+                  <div className="text-center p-2 bg-sol-base02/50 rounded">
+                    <div className="font-bold text-sol-green">{abstractActivity.team_activity.week_commits}</div>
+                    <div className="text-xs text-sol-base01">Commits</div>
+                  </div>
+                  <div className="text-center p-2 bg-sol-base02/50 rounded">
+                    <div className="font-bold text-sol-violet">{abstractActivity.team_activity.week_prs}</div>
+                    <div className="text-xs text-sol-base01">PRs</div>
+                  </div>
+                  <div className="text-center p-2 bg-sol-base02/50 rounded">
+                    <div className="font-bold text-sol-cyan">{abstractActivity.team_activity.week_files_changed || 0}</div>
+                    <div className="text-xs text-sol-base01">Files Changed</div>
+                  </div>
+                </div>
+                {abstractActivity.team_activity.recent_branches.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-xs text-sol-base01 mb-1">Active branches</div>
+                    <div className="flex flex-wrap gap-1">
+                      {abstractActivity.team_activity.recent_branches.map((branch) => (
+                        <span
+                          key={branch}
+                          className="px-2 py-0.5 bg-sol-base02 text-sol-text text-xs rounded font-mono"
+                        >
+                          {branch}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {abstractActivity.recent_commits.length > 0 && (
+              <div className="pt-3 border-t border-sol-border">
+                <div className="text-sm text-sol-base1 mb-2">Recent Commits</div>
+                <div className="space-y-2">
+                  {abstractActivity.recent_commits.map((commit, i) => (
+                    <div key={i} className="text-sm">
+                      <div className="text-sol-text truncate">{commit.message}</div>
+                      <div className="text-xs text-sol-base01 flex gap-2">
+                        {commit.branch && <span className="font-mono">{commit.branch}</span>}
+                        {commit.filesChanged && <span>{commit.filesChanged} files</span>}
+                        <span>{getRelativeTime(commit.timestamp)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {abstractActivity.peak_hours.length > 0 && (
+              <div className="pt-3 border-t border-sol-border">
+                <div className="text-xs text-sol-base01 mb-1">Usually active around</div>
+                <div className="text-sm text-sol-text">
+                  {abstractActivity.peak_hours.map((h) => {
+                    const period = h >= 12 ? 'PM' : 'AM';
+                    const hour = h % 12 || 12;
+                    return `${hour}${period}`;
+                  }).join(', ')}
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {userStats && userActivity && userActivity.length > 0 && (
+        <Card className="p-6 bg-sol-bg border-sol-border mb-6">
+          <h2 className="text-lg font-semibold text-sol-text mb-4">Shared Sessions</h2>
+          <div className="grid grid-cols-3 gap-4 mb-4">
             <div>
               <div className="text-2xl font-bold text-sol-cyan">
                 {userStats.total_conversations}
               </div>
-              <div className="text-sm text-sol-base1">Conversations</div>
+              <div className="text-sm text-sol-base1">Shared</div>
             </div>
             <div>
               <div className="text-2xl font-bold text-sol-cyan">
@@ -173,12 +293,6 @@ export default function UserProfilePage() {
               <div className="text-sm text-sol-base1">Active</div>
             </div>
           </div>
-        </Card>
-      )}
-
-      {userActivity && userActivity.length > 0 && (
-        <Card className="p-6 bg-sol-bg border-sol-border">
-          <h2 className="text-lg font-semibold text-sol-text mb-4">Recent Activity</h2>
           <div className="space-y-3">
             {userActivity.map((conversation) => (
               <Link
@@ -218,12 +332,6 @@ export default function UserProfilePage() {
               </Link>
             ))}
           </div>
-        </Card>
-      )}
-
-      {(!userActivity || userActivity.length === 0) && !profileUser.hide_activity && (
-        <Card className="p-6 bg-sol-bg border-sol-border">
-          <p className="text-sol-base1 text-center">No recent activity.</p>
         </Card>
       )}
 
