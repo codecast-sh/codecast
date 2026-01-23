@@ -285,18 +285,18 @@ export const getPRsForTimeline = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    let prs = await ctx.db.query("pull_requests").collect();
+    const limit = args.limit ?? 50;
+
+    let prs = await ctx.db
+      .query("pull_requests")
+      .withIndex("by_updated_at")
+      .order("desc")
+      .take(limit * 2);
 
     if (args.repository) {
       prs = prs.filter((pr) => pr.repository === args.repository);
     }
 
-    prs.sort((a, b) => b.updated_at - a.updated_at);
-
-    if (args.limit) {
-      prs = prs.slice(0, args.limit);
-    }
-
-    return prs;
+    return prs.slice(0, limit);
   },
 });

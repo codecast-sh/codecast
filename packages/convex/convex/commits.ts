@@ -155,9 +155,13 @@ export const getCommitsForTimeline = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    let query = ctx.db.query("commits").withIndex("by_timestamp");
+    const limit = args.limit ?? 100;
 
-    const commits = await query.collect();
+    const commits = await ctx.db
+      .query("commits")
+      .withIndex("by_timestamp")
+      .order("desc")
+      .take(limit * 2);
 
     let filtered = commits;
 
@@ -173,13 +177,7 @@ export const getCommitsForTimeline = query({
       filtered = filtered.filter((c) => c.repository === args.repository);
     }
 
-    filtered.sort((a, b) => b.timestamp - a.timestamp);
-
-    if (args.limit) {
-      filtered = filtered.slice(0, args.limit);
-    }
-
-    return filtered;
+    return filtered.slice(0, limit);
   },
 });
 

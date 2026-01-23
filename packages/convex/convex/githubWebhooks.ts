@@ -43,6 +43,10 @@ export const storeWebhookEvent = internalMutation({
           event_id: eventId,
         });
       }
+    } else if (args.event_type === "push") {
+      void ctx.scheduler.runAfter(0, internal.githubWebhooks.processPushEvent, {
+        event_id: eventId,
+      });
     }
 
     return { success: true, duplicate: false };
@@ -256,6 +260,109 @@ export const processPRClosedEvent = internalAction({
   },
 });
 
+export const processPushEvent = internalAction({
+  args: {
+    event_id: v.id("github_webhook_events"),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; reason?: string; commits_created?: number }> => {
+    const event = await ctx.runQuery(internal.githubWebhooks.getWebhookEvent, {
+      event_id: args.event_id,
+    });
+
+    if (!event || event.processed) {
+      return { success: false, reason: "Event not found or already processed" };
+    }
+
+    const payload = JSON.parse(event.payload) as any;
+    const repository: string = payload.repository?.full_name;
+    const commits: any[] = payload.commits || [];
+    const ref: string = payload.ref || "";
+
+    if (!repository || commits.length === 0) {
+      await ctx.runMutation(internal.githubWebhooks.markEventProcessed, { event_id: args.event_id });
+      return { success: true, reason: "No commits in push event", commits_created: 0 };
+    }
+
+    const branchName = ref.replace("refs/heads/", "");
+
+    let commitsCreated = 0;
+    for (const commit of commits) {
+      const sha = commit.id;
+      const message = commit.message || "";
+      const authorName = commit.author?.name || commit.author?.username || "Unknown";
+      const authorEmail = commit.author?.email || "";
+      const timestamp = commit.timestamp ? new Date(commit.timestamp).getTime() : Date.now();
+
+      const added = commit.added?.length || 0;
+      const removed = commit.removed?.length || 0;
+      const modified = commit.modified?.length || 0;
+      const filesChanged = added + removed + modified;
+
+      const insertions = added + modified;
+      const deletions = removed;
+
+      const created = await ctx.runMutation(internal.githubWebhooks.createCommitFromPush, {
+        sha,
+        message,
+        author_name: authorName,
+        author_email: authorEmail,
+        timestamp,
+        files_changed: filesChanged,
+        insertions,
+        deletions,
+        repository,
+        branch: branchName,
+      });
+
+      if (created) {
+        commitsCreated++;
+      }
+    }
+
+    await ctx.runMutation(internal.githubWebhooks.markEventProcessed, { event_id: args.event_id });
+    return { success: true, commits_created: commitsCreated };
+  },
+});
+
+export const createCommitFromPush = internalMutation({
+  args: {
+    sha: v.string(),
+    message: v.string(),
+    author_name: v.string(),
+    author_email: v.string(),
+    timestamp: v.number(),
+    files_changed: v.number(),
+    insertions: v.number(),
+    deletions: v.number(),
+    repository: v.string(),
+    branch: v.string(),
+  },
+  handler: async (ctx, args): Promise<boolean> => {
+    const existing = await ctx.db
+      .query("commits")
+      .withIndex("by_sha", (q) => q.eq("sha", args.sha))
+      .first();
+
+    if (existing) {
+      return false;
+    }
+
+    await ctx.db.insert("commits", {
+      sha: args.sha,
+      message: args.message,
+      author_name: args.author_name,
+      author_email: args.author_email,
+      timestamp: args.timestamp,
+      files_changed: args.files_changed,
+      insertions: args.insertions,
+      deletions: args.deletions,
+      repository: args.repository,
+    });
+
+    return true;
+  },
+});
+
 export const getWebhookEvent = internalQuery({
   args: {
     event_id: v.id("github_webhook_events"),
@@ -382,10 +489,22 @@ export const matchPRToConversation = internalMutation({
   handler: async (ctx, args) => {
     const conversations = await ctx.db
       .query("conversations")
-      .filter((q) => q.eq(q.field("git_branch"), args.head_ref))
+      .withIndex("by_git_branch", (q) => q.eq("git_branch", args.head_ref))
       .collect();
 
-    const teamId = conversations[0]?.team_id;
+    let teamId = conversations[0]?.team_id;
+
+    if (!teamId) {
+      const [owner] = args.repository.split("/");
+      const installation = await ctx.db
+        .query("github_app_installations")
+        .withIndex("by_account_login", (q) => q.eq("account_login", owner))
+        .first();
+
+      if (installation) {
+        teamId = installation.team_id;
+      }
+    }
 
     if (!teamId) {
       await ctx.db.patch(args.event_id, { processed: true });

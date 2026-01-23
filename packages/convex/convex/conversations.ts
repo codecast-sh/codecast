@@ -123,6 +123,25 @@ export const createConversation = mutation({
 
     const now = Date.now();
     const startedAt = args.started_at ?? now;
+
+    // Check if this conversation should be auto-shared based on team_share_paths
+    const user = await ctx.db.get(args.user_id);
+    let isPrivate = true;
+    let autoShared = false;
+    if (user?.team_share_paths && user.team_share_paths.length > 0 && args.team_id) {
+      const conversationPath = args.git_root || args.project_path;
+      if (conversationPath) {
+        for (const sharePath of user.team_share_paths) {
+          // Prefix match: conversation path starts with share path
+          if (conversationPath === sharePath || conversationPath.startsWith(sharePath + "/")) {
+            isPrivate = false;
+            autoShared = true;
+            break;
+          }
+        }
+      }
+    }
+
     const conversationId = await ctx.db.insert("conversations", {
       user_id: args.user_id,
       team_id: args.team_id,
@@ -135,7 +154,8 @@ export const createConversation = mutation({
       started_at: startedAt,
       updated_at: startedAt,
       message_count: 0,
-      is_private: true,
+      is_private: isPrivate,
+      auto_shared: autoShared || undefined,
       status: "active",
       parent_message_uuid: args.parent_message_uuid,
       git_commit_hash: args.git_commit_hash,
@@ -862,6 +882,8 @@ export const listConversations = query({
           is_favorite: c.is_favorite || false,
           fork_count: c.fork_count || 0,
           forked_from: c.forked_from || null,
+          is_private: c.is_private,
+          auto_shared: c.auto_shared || false,
         };
       })
     );

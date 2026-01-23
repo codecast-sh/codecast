@@ -137,6 +137,12 @@ export const updatePrivacySettings = mutation({
   args: {
     hide_activity: v.optional(v.boolean()),
     share_session_metadata: v.optional(v.boolean()),
+    activity_visibility: v.optional(v.union(
+      v.literal("detailed"),
+      v.literal("summary"),
+      v.literal("minimal"),
+      v.literal("hidden")
+    )),
     encryption_enabled: v.optional(v.boolean()),
     encryption_master_key: v.optional(v.string()),
   },
@@ -151,6 +157,9 @@ export const updatePrivacySettings = mutation({
     }
     if (args.share_session_metadata !== undefined) {
       updateData.share_session_metadata = args.share_session_metadata;
+    }
+    if (args.activity_visibility !== undefined) {
+      updateData.activity_visibility = args.activity_visibility;
     }
     if (args.encryption_enabled !== undefined) {
       updateData.encryption_enabled = args.encryption_enabled;
@@ -537,5 +546,76 @@ export const updateSyncSettingsForCLI = mutation({
     }
     await ctx.db.patch(result.userId, updateData);
     return { success: true };
+  },
+});
+
+export const getTeamSharePaths = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return null;
+    }
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      return null;
+    }
+    return user.team_share_paths ?? [];
+  },
+});
+
+export const updateTeamSharePaths = mutation({
+  args: {
+    team_share_paths: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    await ctx.db.patch(userId, {
+      team_share_paths: args.team_share_paths,
+    });
+    return { success: true };
+  },
+});
+
+export const getRecentProjectPaths = query({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return [];
+    }
+    const limit = args.limit ?? 10;
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .order("desc")
+      .take(100);
+
+    const pathCounts = new Map<string, { count: number; lastActive: number }>();
+    for (const conv of conversations) {
+      const path = conv.git_root || conv.project_path;
+      if (!path) continue;
+      const existing = pathCounts.get(path);
+      if (existing) {
+        existing.count++;
+        existing.lastActive = Math.max(existing.lastActive, conv.updated_at);
+      } else {
+        pathCounts.set(path, { count: 1, lastActive: conv.updated_at });
+      }
+    }
+
+    return Array.from(pathCounts.entries())
+      .sort((a, b) => b[1].lastActive - a[1].lastActive)
+      .slice(0, limit)
+      .map(([path, stats]) => ({
+        path,
+        count: stats.count,
+        lastActive: stats.lastActive,
+      }));
   },
 });

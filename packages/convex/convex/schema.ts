@@ -33,10 +33,17 @@ export default defineSchema({
     timezone: v.optional(v.string()),
     hide_activity: v.optional(v.boolean()),
     share_session_metadata: v.optional(v.boolean()),
+    activity_visibility: v.optional(v.union(
+      v.literal("detailed"),
+      v.literal("summary"),
+      v.literal("minimal"),
+      v.literal("hidden")
+    )),
     encryption_enabled: v.optional(v.boolean()),
     encryption_master_key: v.optional(v.string()),
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
     sync_projects: v.optional(v.array(v.string())),
+    team_share_paths: v.optional(v.array(v.string())),
   })
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])
@@ -83,6 +90,7 @@ export default defineSchema({
     forked_from: v.optional(v.id("conversations")),
     is_favorite: v.optional(v.boolean()),
     short_id: v.optional(v.string()),
+    auto_shared: v.optional(v.boolean()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
@@ -97,7 +105,8 @@ export default defineSchema({
     .index("by_share_token", ["share_token"])
     .index("by_session_id", ["session_id"])
     .index("by_short_id", ["short_id"])
-    .index("by_forked_from", ["forked_from"]),
+    .index("by_forked_from", ["forked_from"])
+    .index("by_git_branch", ["git_branch"]),
 
   public_conversations: defineTable({
     conversation_id: v.id("conversations"),
@@ -394,7 +403,8 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_github_pr_id", ["github_pr_id"])
     .index("by_repository", ["repository"])
-    .index("by_head_ref", ["head_ref"]),
+    .index("by_head_ref", ["head_ref"])
+    .index("by_updated_at", ["updated_at"]),
 
   reviews: defineTable({
     pull_request_id: v.id("pull_requests"),
