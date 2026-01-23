@@ -20,6 +20,7 @@ import type * as decisions from "../decisions.js";
 import type * as embeddings from "../embeddings.js";
 import type * as fileTouches from "../fileTouches.js";
 import type * as githubApi from "../githubApi.js";
+import type * as githubApp from "../githubApp.js";
 import type * as githubWebhooks from "../githubWebhooks.js";
 import type * as health from "../health.js";
 import type * as http from "../http.js";
@@ -59,6 +60,7 @@ declare const fullApi: ApiFromModules<{
   embeddings: typeof embeddings;
   fileTouches: typeof fileTouches;
   githubApi: typeof githubApi;
+  githubApp: typeof githubApp;
   githubWebhooks: typeof githubWebhooks;
   health: typeof health;
   http: typeof http;
