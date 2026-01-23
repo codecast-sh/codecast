@@ -49,6 +49,8 @@ type Conversation = {
   is_favorite?: boolean;
   fork_count?: number;
   forked_from?: string | null;
+  is_private?: boolean;
+  auto_shared?: boolean;
 };
 
 function formatDuration(ms: number): string {
@@ -258,10 +260,12 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
 
   const user = useQuery(api.users.getCurrentUser);
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
+  const setPrivacy = useMutation(api.conversations.setPrivacy);
   const teamMembers = useQuery(
     api.teams.getTeamMembers,
-    filter === "team" && user?.team_id ? { team_id: user.team_id } : "skip"
+    user?.team_id ? { team_id: user.team_id } : "skip"
   );
+  const hasTeammates = teamMembers && teamMembers.length > 1;
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -610,6 +614,31 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             </span>
                           )}
                         </div>
+                        {conv.is_own && hasTeammates && (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setPrivacy({ conversation_id: conv._id as Id<"conversations">, is_private: !conv.is_private });
+                            }}
+                            className={`p-1 rounded transition-colors flex-shrink-0 ${
+                              !conv.is_private
+                                ? "text-emerald-400 hover:text-emerald-300"
+                                : "text-sol-text-dim/30 hover:text-sol-text-muted opacity-0 group-hover:opacity-100"
+                            }`}
+                            title={conv.is_private ? "Share with team" : "Make private"}
+                          >
+                            {conv.is_private ? (
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                              </svg>
+                            ) : (
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                              </svg>
+                            )}
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.preventDefault();
