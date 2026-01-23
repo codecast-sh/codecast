@@ -2510,30 +2510,42 @@ export const deleteByProjectHash = mutation({
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) throw new Error("Not authenticated");
 
-    const conversations = await ctx.db
+    const conv = await ctx.db
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
       .filter((q) => q.eq(q.field("project_hash"), args.project_hash))
-      .collect();
+      .first();
 
-    let deletedConvs = 0;
+    if (!conv) return { deletedConversations: 0, deletedMessages: 0, hasMore: false };
+
     let deletedMessages = 0;
-
-    for (const conv of conversations) {
-      const messages = await ctx.db
+    for (let i = 0; i < 50; i++) {
+      const msgs = await ctx.db
         .query("messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .collect();
-
-      for (const msg of messages) {
-        await ctx.db.delete(msg._id);
+        .take(10);
+      if (msgs.length === 0) break;
+      for (const m of msgs) {
+        await ctx.db.delete(m._id);
         deletedMessages++;
       }
-
-      await ctx.db.delete(conv._id);
-      deletedConvs++;
     }
 
-    return { deletedConversations: deletedConvs, deletedMessages };
+    const hasMoreMsgs = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+      .first();
+
+    if (!hasMoreMsgs) {
+      await ctx.db.delete(conv._id);
+      const moreConvs = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+        .filter((q) => q.eq(q.field("project_hash"), args.project_hash))
+        .first();
+      return { deletedConversations: 1, deletedMessages, hasMore: !!moreConvs };
+    }
+
+    return { deletedConversations: 0, deletedMessages, hasMore: true };
   },
 });
