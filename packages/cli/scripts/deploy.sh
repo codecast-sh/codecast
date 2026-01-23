@@ -3,13 +3,17 @@ set -e
 
 cd "$(dirname "$0")/.."
 
-: "${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID}"
-: "${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY}"
+if [[ -z "$AWS_ACCESS_KEY_ID" && -f .env.deploy ]]; then
+  export $(cat .env.deploy | xargs)
+fi
+
+: "${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID or create .env.deploy}"
+: "${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY or create .env.deploy}"
 
 R2_BUCKET="codecast"
 R2_ENDPOINT="https://518bafbd08199d43fe9080a12a7ac1b7.r2.cloudflarestorage.com"
 export AWS_DEFAULT_REGION="auto"
-BINARIES_DIR="../web/public/binaries"
+BINARIES_DIR="../web/binaries"
 
 VERSION=$(jq -r '.version' package.json)
 echo "Deploying codecast CLI v$VERSION"
