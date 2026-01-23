@@ -64,9 +64,13 @@ interface DaemonState {
   timestamp?: number;
   authExpired?: boolean;
   authFailureCount?: number;
+  lastWatchdogCheck?: number;
+  watchdogRestarts?: number;
 }
 
 const AUTH_FAILURE_THRESHOLD = 5;
+const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const WATCHDOG_STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 
 
 function log(message: string): void {
@@ -1285,6 +1289,106 @@ function acquireLock(): boolean {
   return true;
 }
 
+function findStaleSessionFiles(lastSyncTime: number): string[] {
+  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+  const staleFiles: string[] = [];
+
+  if (!fs.existsSync(claudeProjectsDir)) {
+    return staleFiles;
+  }
+
+  try {
+    const projectDirs = fs.readdirSync(claudeProjectsDir);
+    for (const projectDir of projectDirs) {
+      const projectPath = path.join(claudeProjectsDir, projectDir);
+      const stat = fs.statSync(projectPath);
+      if (!stat.isDirectory()) continue;
+
+      const files = fs.readdirSync(projectPath);
+      for (const file of files) {
+        if (!file.endsWith(".jsonl")) continue;
+        const filePath = path.join(projectPath, file);
+        try {
+          const fileStat = fs.statSync(filePath);
+          if (fileStat.mtimeMs > lastSyncTime) {
+            staleFiles.push(filePath);
+          }
+        } catch {
+          // Skip files we can't stat
+        }
+      }
+    }
+  } catch (err) {
+    log(`Watchdog: Error scanning for stale files: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return staleFiles;
+}
+
+function startWatchdog(
+  watcher: SessionWatcher,
+  config: Config
+): NodeJS.Timeout {
+  log("Watchdog started");
+
+  return setInterval(() => {
+    const state = readDaemonState();
+    const now = Date.now();
+
+    saveDaemonState({ lastWatchdogCheck: now });
+
+    if (state?.authExpired) {
+      return;
+    }
+
+    if (isSyncPaused()) {
+      return;
+    }
+
+    const lastSync = state?.lastSyncTime || 0;
+    const timeSinceSync = now - lastSync;
+
+    if (timeSinceSync < WATCHDOG_STALE_THRESHOLD_MS) {
+      return;
+    }
+
+    const staleFiles = findStaleSessionFiles(lastSync);
+    if (staleFiles.length === 0) {
+      return;
+    }
+
+    log(`Watchdog: Detected ${staleFiles.length} files modified since last sync (${Math.round(timeSinceSync / 60000)}m ago)`);
+
+    const currentRestarts = state?.watchdogRestarts || 0;
+    saveDaemonState({ watchdogRestarts: currentRestarts + 1 });
+
+    for (const filePath of staleFiles) {
+      const parts = filePath.split(path.sep);
+      const sessionId = parts[parts.length - 1].replace(".jsonl", "");
+      const projectDirName = parts[parts.length - 2];
+      const projectPath = projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
+
+      if (config.excluded_paths && isPathExcluded(projectPath, config.excluded_paths)) {
+        continue;
+      }
+
+      if (!isProjectAllowedToSync(projectPath, config)) {
+        continue;
+      }
+
+      log(`Watchdog: Re-emitting session event for ${sessionId}`);
+      watcher.emit("session", {
+        eventType: "change",
+        sessionId,
+        filePath,
+        projectPath,
+      });
+    }
+
+    log(`Watchdog: Triggered rescan of ${staleFiles.length} files`);
+  }, WATCHDOG_INTERVAL_MS);
+}
+
 async function main(): Promise<void> {
   ensureConfigDir();
 
@@ -1483,6 +1587,8 @@ async function main(): Promise<void> {
   });
 
   watcher.start();
+
+  const watchdogInterval = startWatchdog(watcher, config);
 
   const cursorWatcher = new CursorWatcher();
   const cursorSyncs = new Map<string, InvalidateSync>();
@@ -1788,6 +1894,9 @@ async function main(): Promise<void> {
     if (permissionUnsubscribe) {
       permissionUnsubscribe();
     }
+
+    clearInterval(watchdogInterval);
+    log("Watchdog stopped");
 
     watcher.stop();
     cursorWatcher.stop();
