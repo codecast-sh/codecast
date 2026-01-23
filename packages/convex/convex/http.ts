@@ -360,7 +360,7 @@ http.route({
       return new Response(JSON.stringify({
         conversation_id: result.conversation_id,
         dashboard_url: `https://codecast.sh/conversation/${result.conversation_id}`,
-        share_url: `https://codecast.sh/share/${result.share_token}`,
+        share_url: `https://codecast.sh/conversation/${result.conversation_id}`,
       }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
