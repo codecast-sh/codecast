@@ -8,6 +8,7 @@ import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
+import { c, fmt, icons } from "./colors.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -481,63 +482,66 @@ function showStatus(): void {
 
   console.log("");
 
+  const row = (label: string, value: string) => {
+    console.log(`  ${fmt.muted(label.padEnd(14))} ${value}`);
+  };
+
   if (state?.authExpired) {
-    console.log("  Auth: expired");
-    console.log("  Run 'codecast auth' to re-authenticate");
+    row("Auth", fmt.warning("expired"));
+    console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast auth")} ${fmt.muted("to re-authenticate")}`);
   } else if (config?.auth_token) {
-    console.log("  Auth: authenticated");
+    row("Auth", fmt.success(icons.check + " authenticated"));
     if (config.user_id) {
-      console.log(`  User: ${config.user_id}`);
+      row("User", fmt.id(config.user_id));
     }
   } else {
-    console.log("  Auth: not authenticated");
-    console.log("  Run 'codecast auth' to authenticate");
+    row("Auth", fmt.muted(icons.cross + " not authenticated"));
+    console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast auth")} ${fmt.muted("to authenticate")}`);
   }
 
   console.log("");
 
   if (pid) {
-    console.log(`  Daemon: running (PID: ${pid})`);
+    row("Daemon", fmt.success(icons.check + " running") + fmt.muted(` (PID ${pid})`));
 
     if (state?.lastSyncTime) {
-      console.log(`  Last sync: ${formatRelativeTime(state.lastSyncTime)}`);
+      row("Last sync", fmt.value(formatRelativeTime(state.lastSyncTime)));
     } else {
-      console.log("  Last sync: never");
+      row("Last sync", fmt.muted("never"));
     }
 
     const queueSize = state?.pendingQueueSize ?? 0;
-    console.log(`  Pending queue: ${queueSize} items`);
+    row("Queue", queueSize > 0 ? fmt.number(queueSize) + fmt.muted(" items") : fmt.muted("empty"));
   } else {
-    console.log("  Daemon: stopped");
+    row("Daemon", fmt.muted(icons.cross + " stopped"));
     if (config?.auth_token) {
-      console.log("  Run 'codecast start' to start syncing");
+      console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast start")} ${fmt.muted("to start syncing")}`);
     }
   }
 
   const convexConnected = pid && (state?.connected ?? false);
-  console.log(`  Convex: ${convexConnected ? "connected" : "disconnected"}`);
+  row("Convex", convexConnected ? fmt.success(icons.check + " connected") : fmt.muted(icons.cross + " disconnected"));
 
   console.log("");
 
-  // Show sync settings
   const syncMode = config?.sync_mode || "all";
   const syncProjects = config?.sync_projects || [];
 
-  console.log("  Sync Settings:");
+  console.log(`  ${fmt.muted("Sync Settings")}`);
   if (syncMode === "all") {
-    console.log("    Mode: all projects");
+    row("  Mode", fmt.value("all projects"));
   } else {
-    console.log(`    Mode: selected (${syncProjects.length} project${syncProjects.length === 1 ? "" : "s"})`);
+    row("  Mode", fmt.value("selected") + fmt.muted(` (${syncProjects.length})`));
     if (syncProjects.length > 0) {
       for (const p of syncProjects.slice(0, 5)) {
-        console.log(`      - ${p}`);
+        console.log(`      ${fmt.muted(icons.bullet)} ${fmt.path(p)}`);
       }
       if (syncProjects.length > 5) {
-        console.log(`      ... and ${syncProjects.length - 5} more`);
+        console.log(`      ${fmt.muted(`... and ${syncProjects.length - 5} more`)}`);
       }
     }
   }
-  console.log("    Change: codecast sync-settings");
+  console.log(`  ${fmt.muted("  Change:")} ${fmt.cmd("codecast sync-settings")}`);
 
   console.log("");
 }
@@ -697,18 +701,18 @@ async function runLogin(setupToken: string): Promise<void> {
 }
 
 async function runAuth(): Promise<void> {
-  console.log("\n=== codecast Authentication ===\n");
+  console.log(`\n${c.bold}codecast${c.reset} ${fmt.muted("Authentication")}\n`);
 
   const agents = detectAgents();
   if (agents.length > 0) {
-    console.log("Detected coding agents:");
+    console.log(fmt.muted("Detected coding agents:"));
     for (const agent of agents) {
-      console.log(`  - ${agent.name}`);
+      console.log(`  ${fmt.muted(icons.bullet)} ${fmt.value(agent.name)}`);
     }
     console.log();
   }
 
-  console.log("Opening browser for authentication...\n");
+  console.log(`${fmt.muted("Opening browser for authentication...")}\n`);
 
   const authServer = new AuthServer({ port: 42424, timeout: 300000 });
   const nonce = authServer.getNonce();
@@ -717,15 +721,15 @@ async function runAuth(): Promise<void> {
 
   const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}`;
 
-  console.log(`If the browser doesn't open, visit:\n  ${cliUrl}\n`);
+  console.log(`${fmt.muted("If the browser doesn't open, visit:")}\n  ${fmt.accent(cliUrl)}\n`);
 
   try {
     await open(cliUrl);
   } catch {
-    console.log("Could not open browser automatically.");
+    console.log(fmt.muted("Could not open browser automatically."));
   }
 
-  console.log("Waiting for authentication...\n");
+  console.log(`${fmt.muted("Waiting for authentication...")}\n`);
 
   const authResult = await authServer.start();
 
@@ -759,10 +763,10 @@ async function runAuth(): Promise<void> {
 
   installSlashCommand();
 
-  console.log("Authenticated successfully!\n");
-  console.log(`User ID: ${config.user_id}`);
-  console.log(`API Token: ${maskToken(config.auth_token || "")}`);
-  console.log(`Config: ${CONFIG_FILE}\n`);
+  console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
+  console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
+  console.log(`  ${fmt.muted("Token")}    ${fmt.value(maskToken(config.auth_token || ""))}`);
+  console.log(`  ${fmt.muted("Config")}   ${fmt.path(CONFIG_FILE)}\n`);
 
   await promptProjectSelection(config);
 
@@ -983,7 +987,7 @@ async function runSync(): Promise<void> {
     return;
   }
 
-  console.log("\nFinding unsynced conversations...\n");
+  console.log(`\n${fmt.muted("Finding unsynced conversations...")}\n`);
 
   const sessionFiles = await glob("**/*.jsonl", {
     cwd: projectsPath,
@@ -1015,11 +1019,11 @@ async function runSync(): Promise<void> {
   }
 
   if (unsyncedFiles.length === 0) {
-    console.log("All conversations are already synced.");
+    console.log(`${fmt.success(icons.check)} ${fmt.muted("All conversations are already synced.")}`);
     return;
   }
 
-  console.log(`Syncing ${unsyncedFiles.length} conversations...\n`);
+  console.log(`${fmt.muted("Syncing")} ${fmt.number(unsyncedFiles.length)} ${fmt.muted("conversations...")}\n`);
 
   const syncService = new SyncService({
     convexUrl: config.convex_url || CONVEX_URL,
@@ -1096,11 +1100,11 @@ async function runSync(): Promise<void> {
     }
   }
 
-  console.log(`\n\nSync complete!`);
-  console.log(`  Synced: ${syncedCount} conversations`);
+  console.log(`\n\n${fmt.success(icons.check)} ${c.bold}Sync complete!${c.reset}`);
+  console.log(`  ${fmt.muted("Synced")}  ${fmt.number(syncedCount)} ${fmt.muted("conversations")}`);
 
   if (errorCount > 0) {
-    console.log(`  Errors: ${errorCount}`);
+    console.log(`  ${fmt.error("Errors")}  ${fmt.number(errorCount)}`);
   }
 }
 
@@ -2215,37 +2219,7 @@ program
     }
 
     if (!sessionId) {
-      if (process.env.DEBUG) {
-        console.error(`[DEBUG] Process detection failed, falling back to history.jsonl`);
-      }
-      // Fallback: history.jsonl (works when not called from Claude subprocess)
-      const historyPath = path.join(process.env.HOME || "", ".claude", "history.jsonl");
-      if (fs.existsSync(historyPath)) {
-        try {
-          const historyContent = fs.readFileSync(historyPath, "utf-8");
-          const lines = historyContent.trim().split("\n").reverse();
-          for (const line of lines) {
-            try {
-              const entry = JSON.parse(line);
-              if (entry.project === projectRoot && entry.sessionId) {
-                sessionId = entry.sessionId;
-                if (process.env.DEBUG) {
-                  console.error(`[DEBUG] Found session from history: ${sessionId}`);
-                }
-                break;
-              }
-            } catch {
-              // Skip malformed lines
-            }
-          }
-        } catch {
-          // Fall through to mtime-based detection
-        }
-      }
-    }
-
-    if (!sessionId) {
-      // Last fallback: mtime-based detection
+      // Fallback: find most recently active session file
       const projectDir = projectRoot.replace(/\//g, "-");
       const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
 
@@ -2254,6 +2228,9 @@ program
         console.error(`Looked in: ${sessionsDir}`);
         process.exit(1);
       }
+
+      const now = Date.now();
+      const ACTIVE_THRESHOLD = 5 * 60 * 1000; // 5 minutes
 
       const files = fs.readdirSync(sessionsDir)
         .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
@@ -2269,7 +2246,27 @@ program
         process.exit(1);
       }
 
-      sessionId = path.basename(files[0].name, ".jsonl");
+      // Check if there's exactly one recently active session
+      const activeSessions = files.filter(f => now - f.mtime < ACTIVE_THRESHOLD);
+
+      if (process.env.DEBUG) {
+        console.error(`[DEBUG] Found ${files.length} sessions, ${activeSessions.length} active in last 5min`);
+        for (const f of files.slice(0, 5)) {
+          const age = Math.round((now - f.mtime) / 1000);
+          console.error(`[DEBUG]   ${path.basename(f.name, ".jsonl").slice(0, 8)}... age=${age}s`);
+        }
+      }
+
+      if (activeSessions.length === 1) {
+        sessionId = path.basename(activeSessions[0].name, ".jsonl");
+      } else if (activeSessions.length > 1) {
+        // Multiple active sessions - pick most recent but warn
+        sessionId = path.basename(activeSessions[0].name, ".jsonl");
+        console.error(`Note: ${activeSessions.length} active sessions found. Using most recent. Use -s <id> to specify.`);
+      } else {
+        // No active sessions - use most recent overall
+        sessionId = path.basename(files[0].name, ".jsonl");
+      }
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");

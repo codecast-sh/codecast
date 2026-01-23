@@ -1,14 +1,4 @@
-// ANSI color codes
-const c = {
-  reset: "\x1b[0m",
-  bold: "\x1b[1m",
-  dim: "\x1b[2m",
-  blue: "\x1b[34m",
-  green: "\x1b[32m",
-  cyan: "\x1b[36m",
-  yellow: "\x1b[33m",
-  magenta: "\x1b[35m",
-};
+import { c, fmt, icons } from "./colors.js";
 
 interface SearchMatch {
   line: number;
