@@ -6,7 +6,7 @@ type ContentBlock =
   | { type: "image"; source: { type: string; media_type: string; data: string } };
 
 export interface ClaudeSessionEntry {
-  type: "user" | "assistant" | "summary" | "file-history-snapshot" | "system";
+  type: "user" | "assistant" | "human" | "summary" | "file-history-snapshot" | "system";
   subtype?: "local_command" | "stop_hook_summary" | "compact_boundary";
   uuid?: string;
   parentUuid?: string;
@@ -14,7 +14,7 @@ export interface ClaudeSessionEntry {
   slug?: string;
   timestamp?: string;
   content?: string;
-  message?: {
+  message?: string | {
     role: "user" | "assistant";
     content: string | ContentBlock[];
     model?: string;
@@ -82,55 +82,65 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
       continue;
     }
 
-    if (entry.type !== "user" && entry.type !== "assistant") continue;
+    // Handle old format: type is "human" instead of "user"
+    const normalizedType = entry.type === "human" ? "user" : entry.type;
+    if (normalizedType !== "user" && normalizedType !== "assistant") continue;
     if (!entry.message) continue;
 
-    const role = entry.message.role;
-    const content = entry.message.content;
-
+    let role: "user" | "assistant";
     let textContent = "";
     let thinking = "";
     const toolCalls: ToolCall[] = [];
     const toolResults: ToolResult[] = [];
     const images: ImageBlock[] = [];
 
-    if (typeof content === "string") {
-      textContent = content;
-    } else if (Array.isArray(content)) {
-      for (const block of content) {
-        if (block.type === "text") {
-          textContent += block.text;
-        } else if (block.type === "thinking") {
-          thinking += block.thinking;
-        } else if (block.type === "tool_use") {
-          toolCalls.push({ id: block.id, name: block.name, input: block.input });
-        } else if (block.type === "tool_result") {
-          let toolResultContent = block.content;
-          if (Array.isArray(block.content)) {
-            const contentArray = block.content as Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
-            toolResultContent = contentArray
-              .filter((c) => c.type === "text" && c.text)
-              .map((c) => c.text)
-              .join("");
-            for (const item of contentArray) {
-              if (item.type === "image" && item.source) {
-                images.push({
-                  mediaType: item.source.media_type,
-                  data: item.source.data,
-                });
+    // Handle old format: message is a string directly
+    if (typeof entry.message === "string") {
+      role = normalizedType;
+      textContent = entry.message;
+    } else {
+      // New format: message is an object with role and content
+      role = entry.message.role;
+      const content = entry.message.content;
+
+      if (typeof content === "string") {
+        textContent = content;
+      } else if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "text") {
+            textContent += block.text;
+          } else if (block.type === "thinking") {
+            thinking += block.thinking;
+          } else if (block.type === "tool_use") {
+            toolCalls.push({ id: block.id, name: block.name, input: block.input });
+          } else if (block.type === "tool_result") {
+            let toolResultContent = block.content;
+            if (Array.isArray(block.content)) {
+              const contentArray = block.content as Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
+              toolResultContent = contentArray
+                .filter((c) => c.type === "text" && c.text)
+                .map((c) => c.text)
+                .join("");
+              for (const item of contentArray) {
+                if (item.type === "image" && item.source) {
+                  images.push({
+                    mediaType: item.source.media_type,
+                    data: item.source.data,
+                  });
+                }
               }
             }
+            toolResults.push({
+              toolUseId: block.tool_use_id,
+              content: toolResultContent,
+              isError: block.is_error,
+            });
+          } else if (block.type === "image") {
+            images.push({
+              mediaType: block.source.media_type,
+              data: block.source.data,
+            });
           }
-          toolResults.push({
-            toolUseId: block.tool_use_id,
-            content: toolResultContent,
-            isError: block.is_error,
-          });
-        } else if (block.type === "image") {
-          images.push({
-            mediaType: block.source.media_type,
-            data: block.source.data,
-          });
         }
       }
     }
