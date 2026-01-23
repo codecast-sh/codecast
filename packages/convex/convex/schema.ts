@@ -47,7 +47,8 @@ export default defineSchema({
   })
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])
-    .index("by_github_id", ["github_id"]),
+    .index("by_github_id", ["github_id"])
+    .index("by_team_id", ["team_id"]),
 
   teams: defineTable({
     name: v.string(),

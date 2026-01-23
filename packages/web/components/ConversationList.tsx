@@ -14,22 +14,22 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 type Conversation = {
   _id: string;
   user_id: string;
-  title: string;
+  title?: string;
   subtitle?: string | null;
   first_user_message?: string;
   first_assistant_message?: string;
   message_alternates?: Array<{ role: "user" | "assistant"; content: string }>;
   tool_names?: string[];
   subagent_types?: string[];
-  agent_type: string;
+  agent_type?: string;
   model?: string | null;
   slug?: string | null;
   started_at: number;
   updated_at: number;
   duration_ms: number;
-  message_count: number;
+  message_count?: number;
   ai_message_count?: number;
-  tool_call_count: number;
+  tool_call_count?: number;
   is_active: boolean;
   author_name: string;
   is_own: boolean;
@@ -51,6 +51,8 @@ type Conversation = {
   forked_from?: string | null;
   is_private?: boolean;
   auto_shared?: boolean;
+  visibility_mode?: "full" | "detailed" | "summary" | "minimal";
+  activity_summary?: string;
 };
 
 function formatDuration(ms: number): string {
@@ -232,8 +234,8 @@ function getAgentTypeLabel(agentType: string): string {
 }
 
 function createConversationAriaLabel(conv: Conversation): string {
-  const title = cleanTitle(conv.title);
-  const agentType = getAgentTypeLabel(conv.agent_type);
+  const title = cleanTitle(conv.title || "Untitled");
+  const agentType = getAgentTypeLabel(conv.agent_type || "claude_code");
   const time = getRelativeTime(conv.updated_at);
   const status = conv.is_active ? ", active" : "";
   return `${title}, ${agentType}, ${time}${status}`;
@@ -584,28 +586,57 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
             {group.conversations.map((conv) => {
               const convIndex = flatConversations.findIndex(c => c._id === conv._id);
               const isFocused = convIndex === focusedIndex;
+
+              if (conv.visibility_mode === "summary" || conv.visibility_mode === "minimal") {
+                return (
+                  <div
+                    key={conv._id}
+                    className="relative bg-sol-bg-alt/30 border border-sol-border/30 rounded-lg p-3"
+                    role="listitem"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 text-sm text-sol-text-muted">
+                        <span className="font-medium text-sol-text">{conv.author_name}</span>
+                        {conv.is_active && (
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                        )}
+                      </div>
+                      <span className="text-sol-text-muted text-sm">{conv.activity_summary}</span>
+                      <span className="text-sol-text-dim text-xs ml-auto">{getRelativeTime(conv.updated_at)}</span>
+                    </div>
+                  </div>
+                );
+              }
+
               return (
                 <Link
                   key={conv._id}
-                  href={`/conversation/${conv._id}`}
-                  className="group block relative"
+                  href={conv.visibility_mode === "detailed" ? "#" : `/conversation/${conv._id}`}
+                  className={`group block relative ${conv.visibility_mode === "detailed" ? "cursor-default" : ""}`}
                   role="listitem"
                   aria-label={createConversationAriaLabel(conv)}
                   aria-current={isFocused ? "true" : undefined}
+                  onClick={conv.visibility_mode === "detailed" ? (e) => e.preventDefault() : undefined}
                 >
-                  <div className={`relative bg-white dark:bg-sol-bg-alt/60 border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 hover:border-sol-yellow/50 transition-all duration-200 shadow-sm hover:shadow-md dark:shadow-none ${
-                    isFocused
-                      ? "ring-2 ring-sol-yellow border-sol-yellow/60"
-                      : "border-sol-border/40"
+                  <div className={`relative bg-white dark:bg-sol-bg-alt/60 border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 transition-all duration-200 shadow-sm dark:shadow-none ${
+                    conv.visibility_mode === "detailed"
+                      ? "border-sol-border/30 opacity-80"
+                      : isFocused
+                        ? "ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
+                        : "border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
                   }`}>
                   <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
                       {/* Header row: title + timestamp */}
                       <div className="flex items-start justify-between gap-3 mb-1">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
-                          <AgentIcon agentType={conv.agent_type} className="w-4 h-4 shrink-0" />
-                          <span className="text-sol-text font-medium text-base group-hover:text-sol-yellow transition-colors truncate">
-                            {cleanTitle(conv.title)}
+                          <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4 shrink-0" />
+                          <span className={`font-medium text-base transition-colors truncate ${
+                            conv.visibility_mode === "detailed"
+                              ? "text-sol-text-muted"
+                              : "text-sol-text group-hover:text-sol-yellow"
+                          }`}>
+                            {cleanTitle(conv.title || "Untitled")}
                           </span>
                           {conv.is_active && (
                             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50 shrink-0">
@@ -726,8 +757,8 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             {formatDuration(conv.duration_ms)}
                           </span>
                         )}
-                        {conv.message_count > 0 && (
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${getMessageCountColor(conv.message_count)}`}>
+                        {(conv.message_count ?? 0) > 0 && (
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${getMessageCountColor(conv.message_count ?? 0)}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                             </svg>
@@ -790,7 +821,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             : "border-sol-border/40"
                         }`}>
                         <div className="flex items-center gap-2 mb-1">
-                          <AgentIcon agentType={child.agent_type} className="w-3.5 h-3.5 shrink-0" />
+                          <AgentIcon agentType={child.agent_type || "claude_code"} className="w-3.5 h-3.5 shrink-0" />
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
                             Subagent
                           </span>
@@ -806,8 +837,8 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                           {child.duration_ms > 60000 && (
                             <span>{formatDuration(child.duration_ms)}</span>
                           )}
-                          {child.message_count > 0 && (
-                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${getMessageCountColor(child.message_count)}`}>
+                          {(child.message_count ?? 0) > 0 && (
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${getMessageCountColor(child.message_count ?? 0)}`}>
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                               </svg>
