@@ -12,7 +12,6 @@ import "prismjs/components/prism-bash";
 import "prismjs/components/prism-css";
 import "prismjs/components/prism-markdown";
 import "prismjs/components/prism-yaml";
-import "prismjs/themes/prism-tomorrow.css";
 
 function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'added' | 'removed' | 'context'; content: string }> {
   // Simple LCS-based diff
@@ -167,32 +166,26 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
           const lineNumStr = lineNum !== undefined ? String(lineNum).padStart(lineNumWidth) : ' '.repeat(lineNumWidth);
           const prefix = type === 'added' ? '+' : type === 'removed' ? '-' : ' ';
           const bgClass = type === 'added'
-            ? 'bg-sol-green/25 border-l-2 border-sol-green'
+            ? 'diff-line-added'
             : type === 'removed'
-            ? 'bg-sol-red/25 border-l-2 border-sol-red'
+            ? 'diff-line-removed'
             : '';
-          const textClass = type === 'added'
-            ? 'text-sol-green'
-            : type === 'removed'
-            ? 'text-sol-red'
-            : 'text-sol-text-muted';
           const prefixClass = type === 'added'
-            ? 'text-sol-green font-bold'
+            ? 'text-sol-green/70'
             : type === 'removed'
-            ? 'text-sol-red font-bold'
+            ? 'text-sol-red/70'
             : 'text-sol-text-dim';
 
-          const shouldHighlight = type === 'context' && language;
-          const highlightedContent = shouldHighlight ? highlightCode(content, language) : null;
+          const highlightedContent = language ? highlightCode(content, language) : null;
 
           return (
             <div key={i} className={`whitespace-pre ${bgClass}`}>
               <span className="select-none text-sol-text-dim">{lineNumStr}</span>
               <span className={`select-none ${prefixClass}`}> {prefix} </span>
-              {shouldHighlight ? (
-                <span dangerouslySetInnerHTML={{ __html: highlightedContent! }} />
+              {highlightedContent ? (
+                <span dangerouslySetInnerHTML={{ __html: highlightedContent }} />
               ) : (
-                <span className={textClass}>{content}</span>
+                <span className="text-sol-text-secondary">{content}</span>
               )}
             </div>
           );

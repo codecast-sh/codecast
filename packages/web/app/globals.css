@@ -381,3 +381,126 @@
   color: var(--sol-text-muted);
 }
 
+/* Prism.js Solarized theme */
+code[class*="language-"],
+pre[class*="language-"] {
+  color: var(--sol-text-secondary);
+  background: none;
+  font-family: var(--font-mono), monospace;
+  text-align: left;
+  white-space: pre;
+  word-spacing: normal;
+  word-break: normal;
+  word-wrap: normal;
+  line-height: 1.5;
+  tab-size: 4;
+  hyphens: none;
+}
+
+pre[class*="language-"] {
+  padding: 1em;
+  margin: 0;
+  overflow: auto;
+  background: var(--sol-bg-alt);
+}
+
+:not(pre) > code[class*="language-"] {
+  padding: 0.1em 0.3em;
+  border-radius: 0.3em;
+  background: var(--sol-bg-alt);
+}
+
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: var(--hljs-comment);
+  font-style: italic;
+}
+
+.token.punctuation {
+  color: var(--sol-text-muted);
+}
+
+.token.namespace {
+  opacity: 0.7;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol {
+  color: var(--hljs-number);
+}
+
+.token.selector,
+.token.attr-name,
+.token.char,
+.token.builtin {
+  color: var(--hljs-type);
+}
+
+.token.string,
+.token.attr-value,
+.token.template-string {
+  color: var(--hljs-string);
+}
+
+.token.operator,
+.token.entity,
+.token.url {
+  color: var(--sol-text-secondary);
+}
+
+.token.atrule,
+.token.keyword {
+  color: var(--hljs-keyword);
+}
+
+.token.function,
+.token.class-name {
+  color: var(--hljs-function);
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: var(--hljs-variable);
+}
+
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+
+.token.italic {
+  font-style: italic;
+}
+
+.token.entity {
+  cursor: help;
+}
+
+/* Diff-specific styles - subdued backgrounds with preserved syntax highlighting */
+.diff-line-added {
+  background-color: color-mix(in srgb, var(--sol-green) 15%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--sol-green) 60%, transparent);
+}
+
+.diff-line-removed {
+  background-color: color-mix(in srgb, var(--sol-red) 12%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--sol-red) 60%, transparent);
+}
+
+.dark .diff-line-added {
+  background-color: color-mix(in srgb, var(--sol-green) 18%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--sol-green) 50%, transparent);
+}
+
+.dark .diff-line-removed {
+  background-color: color-mix(in srgb, var(--sol-red) 15%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--sol-red) 50%, transparent);
+}
+
