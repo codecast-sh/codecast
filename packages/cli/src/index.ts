@@ -180,6 +180,7 @@ const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
+const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -611,10 +612,14 @@ function startDaemon(): void {
       stdio: "ignore",
     });
   } else {
-    // Binary mode: spawn self with _daemon command
-    child = spawn(process.argv[0], ["_daemon"], {
+    // Binary mode: spawn self with env var to trigger daemon mode
+    // Using env var bypasses Bun's argument parsing which treats args as scripts
+    // Pass "version" as a dummy command to prevent Bun from showing help
+    const logFd = fs.openSync(LOG_FILE, "a");
+    child = spawn(process.argv[0], ["version"], {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", logFd, logFd],
+      env: { ...process.env, CODECAST_DAEMON_MODE: "1" },
     });
   }
 
@@ -1967,7 +1972,7 @@ function getExecutableInfo(): { executablePath: string; args: string[] } {
   const isBinary = !__filename.endsWith(".ts") && !__filename.endsWith(".js");
 
   if (isBinary) {
-    return { executablePath: process.argv[0], args: ["_daemon"] };
+    return { executablePath: process.argv[0], args: ["--", "_daemon"] };
   } else if (isBundle) {
     return { executablePath: process.execPath, args: [path.resolve(__dirname, "daemon.js")] };
   } else {
@@ -3797,4 +3802,9 @@ checkForUpdates().then(async (available) => {
   }
 });
 
-program.parse();
+// Early daemon mode check - bypasses commander.js arg parsing for binary spawns
+if (process.env.CODECAST_DAEMON_MODE === "1") {
+  import("./daemon.js").then(({ runDaemon }) => runDaemon());
+} else {
+  program.parse();
+}
