@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Dev wrapper for codecast CLI - runs from source
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" || echo "$0")")" && pwd)"
+exec bun run "$SCRIPT_DIR/../src/index.ts" "$@"

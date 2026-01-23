@@ -48,3 +48,17 @@ codecast learn list                   # view saved patterns
 codecast auth    # authenticate with codecast.sh
 codecast sync    # start syncing conversations
 ```
+
+## Development
+
+Run the CLI from source code:
+
+```bash
+# Option 1: Use bun directly
+bun run src/index.ts <command>
+
+# Option 2: Install local wrapper (recommended)
+ln -sf $(pwd)/scripts/codecast-local ~/.local/bin/codecast
+```
+
+The wrapper runs from source, so changes take effect immediately without rebuilding.
