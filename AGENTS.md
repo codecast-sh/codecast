@@ -42,12 +42,13 @@ Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n
 
 ```bash
 cd packages/cli
-# 1. Bump version in package.json and src/update.ts
-# 2. Commit and push
+# 1. Bump version in package.json AND src/update.ts (must match!)
+# 2. Deploy (builds binaries and uploads to R2)
+./scripts/deploy.sh     # uses .env.deploy for R2 credentials
+# 3. Verify: curl -fsSL codecast.sh/install | sh && codecast --version
+# 4. Commit, tag, push
 git tag -a v1.0.X -m "release(cli): v1.0.X"
-git push origin v1.0.X  # triggers GitHub Actions build
-# 3. Upload to R2 (needs AWS creds)
-./scripts/deploy.sh     # builds, uploads binaries, updates latest.json
+git push origin v1.0.X
 ```
 
 ## Debugging Lessons
