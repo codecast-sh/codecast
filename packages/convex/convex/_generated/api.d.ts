@@ -27,6 +27,7 @@ import type * as http from "../http.js";
 import type * as images from "../images.js";
 import type * as managedSessions from "../managedSessions.js";
 import type * as messages from "../messages.js";
+import type * as migrations from "../migrations.js";
 import type * as notifications from "../notifications.js";
 import type * as patterns from "../patterns.js";
 import type * as pendingMessages from "../pendingMessages.js";
@@ -67,6 +68,7 @@ declare const fullApi: ApiFromModules<{
   images: typeof images;
   managedSessions: typeof managedSessions;
   messages: typeof messages;
+  migrations: typeof migrations;
   notifications: typeof notifications;
   patterns: typeof patterns;
   pendingMessages: typeof pendingMessages;
