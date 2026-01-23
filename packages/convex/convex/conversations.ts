@@ -725,14 +725,12 @@ export const listConversations = query({
         .take(fetchLimit);
 
       let filtered = allConversations.filter((c) => {
-        if (!user.team_id || c.team_id?.toString() !== user.team_id.toString()) {
-          return false;
-        }
+        if (!user.team_id) return false;
+        const owner = teamUserMap.get(c.user_id.toString());
+        if (!owner) return false;
         if (c.is_private === false) {
           return true;
         }
-        const owner = teamUserMap.get(c.user_id.toString());
-        if (!owner) return false;
         const visibility = owner.activity_visibility || "detailed";
         return visibility !== "hidden";
       });
