@@ -2473,3 +2473,67 @@ export const feedForCLI = query({
     };
   },
 });
+
+export const listProjectHashes = query({
+  args: { api_token: v.optional(v.string()), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) throw new Error("Not authenticated");
+
+    const limit = args.limit || 5000;
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .take(limit);
+
+    const hashes = new Map<string, { count: number; sample_title: string | null }>();
+
+    for (const conv of conversations) {
+      const hash = conv.project_hash || "__no_project__";
+      const existing = hashes.get(hash);
+      if (existing) {
+        existing.count++;
+      } else {
+        hashes.set(hash, { count: 1, sample_title: conv.title || null });
+      }
+    }
+
+    return Array.from(hashes.entries())
+      .map(([hash, data]) => ({ hash, count: data.count, sample_title: data.sample_title }))
+      .sort((a, b) => b.count - a.count);
+  },
+});
+
+export const deleteByProjectHash = mutation({
+  args: { project_hash: v.string(), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) throw new Error("Not authenticated");
+
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .filter((q) => q.eq(q.field("project_hash"), args.project_hash))
+      .collect();
+
+    let deletedConvs = 0;
+    let deletedMessages = 0;
+
+    for (const conv of conversations) {
+      const messages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .collect();
+
+      for (const msg of messages) {
+        await ctx.db.delete(msg._id);
+        deletedMessages++;
+      }
+
+      await ctx.db.delete(conv._id);
+      deletedConvs++;
+    }
+
+    return { deletedConversations: deletedConvs, deletedMessages };
+  },
+});
