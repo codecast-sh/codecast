@@ -101,10 +101,10 @@ export default function GitHubAppPage() {
             {installations.map((installation) => (
               <div
                 key={installation._id}
-                className="flex items-center justify-between p-4 bg-sol-base02 rounded border border-sol-border"
+                className="flex items-center justify-between p-4 bg-sol-base2 dark:bg-sol-base02 rounded border border-sol-border"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-sol-base03 flex items-center justify-center">
+                  <div className="w-10 h-10 rounded-full bg-sol-base3 dark:bg-sol-base03 flex items-center justify-center">
                     <span className="text-sol-text font-medium">
                       {installation.account_login[0].toUpperCase()}
                     </span>
@@ -112,7 +112,7 @@ export default function GitHubAppPage() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-sol-text font-medium">{installation.account_login}</span>
-                      <span className="text-xs px-2 py-0.5 bg-sol-base03 rounded text-sol-base1">
+                      <span className="text-xs px-2 py-0.5 bg-sol-base3 dark:bg-sol-base03 rounded text-sol-base1">
                         {installation.account_type}
                       </span>
                     </div>
@@ -160,7 +160,7 @@ export default function GitHubAppPage() {
               .map((repo) => (
                 <div
                   key={repo.id}
-                  className="flex items-center gap-2 py-2 px-3 bg-sol-base02 rounded border border-sol-border"
+                  className="flex items-center gap-2 py-2 px-3 bg-sol-base2 dark:bg-sol-base02 rounded border border-sol-border"
                 >
                   <svg
                     className="w-4 h-4 text-sol-base1"
