@@ -115,21 +115,14 @@ export class SessionWatcher extends EventEmitter {
       return;
     }
 
-    // Separate recently modified files from older files
+    // Only emit recently modified files on startup - watchdog handles older files
     const recentFiles = files.filter(f => now - f.mtimeMs < RECENT_THRESHOLD_MS);
-    const olderFiles = files.filter(f => now - f.mtimeMs >= RECENT_THRESHOLD_MS);
 
-    // Sort recent files by mtime descending (most recent first) - active sessions get priority
+    // Sort recent files by mtime descending (most recent first)
     recentFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
-    // Sort older files by size ascending (small files first)
-    olderFiles.sort((a, b) => a.size - b.size);
-
-    // Emit recent files first, then older files
+    // Only emit recent files to avoid flooding the API on startup
     for (const file of recentFiles) {
-      this.handleFileEvent(file.path, "add");
-    }
-    for (const file of olderFiles) {
       this.handleFileEvent(file.path, "add");
     }
   }

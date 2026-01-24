@@ -13,51 +13,6 @@ import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
 import { InvalidateSync } from "./invalidateSync.js";
 import { promisify } from "util";
-
-// Simple semaphore to limit concurrent operations
-class Semaphore {
-  private permits: number;
-  private queue: (() => void)[] = [];
-
-  constructor(permits: number) {
-    this.permits = permits;
-  }
-
-  async acquire(): Promise<void> {
-    if (this.permits > 0) {
-      this.permits--;
-      return;
-    }
-    return new Promise((resolve) => {
-      this.queue.push(resolve);
-    });
-  }
-
-  release(): void {
-    const next = this.queue.shift();
-    if (next) {
-      next();
-    } else {
-      this.permits++;
-    }
-  }
-
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    await this.acquire();
-    try {
-      return await fn();
-    } finally {
-      this.release();
-    }
-  }
-}
-
-// Limit concurrent sync operations per agent type to prevent starvation
-const claudeSemaphore = new Semaphore(3);
-const cursorSemaphore = new Semaphore(3);
-const codexSemaphore = new Semaphore(2);
-// Priority semaphore for watchdog-detected stale files - bypasses main queue
-const prioritySemaphore = new Semaphore(1);
 import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
 
@@ -1433,26 +1388,23 @@ function startWatchdog(
         continue;
       }
 
-      log(`Watchdog: Priority sync for stale session ${sessionId}`);
+      log(`Watchdog: Syncing stale session ${sessionId}`);
 
-      // Use priority semaphore to bypass the main queue
-      await prioritySemaphore.run(async () => {
-        await processSessionFile(
-          filePath,
-          sessionId,
-          projectPath,
-          deps.syncService,
-          deps.config.user_id!,
-          deps.conversationCache,
-          deps.retryQueue,
-          deps.pendingMessages,
-          deps.titleCache,
-          deps.updateState
-        );
-      });
+      await processSessionFile(
+        filePath,
+        sessionId,
+        projectPath,
+        deps.syncService,
+        deps.config.user_id!,
+        deps.conversationCache,
+        deps.retryQueue,
+        deps.pendingMessages,
+        deps.titleCache,
+        deps.updateState
+      );
     }
 
-    log(`Watchdog: Priority sync completed for ${staleFiles.length} files`);
+    log(`Watchdog: Sync completed for ${staleFiles.length} files`);
   }, WATCHDOG_INTERVAL_MS);
 }
 
@@ -1607,7 +1559,6 @@ async function main(): Promise<void> {
   watcher.on("session", (event: SessionEvent) => {
     const filePath = event.filePath;
 
-
     const state = readDaemonState();
     if (state?.authExpired) {
       return;
@@ -1632,20 +1583,18 @@ async function main(): Promise<void> {
     let sync = fileSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await claudeSemaphore.run(async () => {
-          await processSessionFile(
-            filePath,
-            event.sessionId,
-            event.projectPath,
-            syncService,
-            config.user_id!,
-            conversationCache,
-            retryQueue,
-            pendingMessages,
-            titleCache,
-            updateState
-          );
-        });
+        await processSessionFile(
+          filePath,
+          event.sessionId,
+          event.projectPath,
+          syncService,
+          config.user_id!,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState
+        );
       });
       fileSyncs.set(filePath, sync);
     }
@@ -1702,19 +1651,17 @@ async function main(): Promise<void> {
     let sync = cursorSyncs.get(dbPath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await cursorSemaphore.run(async () => {
-          await processCursorSession(
-            dbPath,
-            event.sessionId,
-            event.workspacePath,
-            syncService,
-            config.user_id!,
-            conversationCache,
-            retryQueue,
-            pendingMessages,
-            updateState
-          );
-        });
+        await processCursorSession(
+          dbPath,
+          event.sessionId,
+          event.workspacePath,
+          syncService,
+          config.user_id!,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          updateState
+        );
       });
       cursorSyncs.set(dbPath, sync);
     }
@@ -1751,19 +1698,17 @@ async function main(): Promise<void> {
     let sync = codexSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await codexSemaphore.run(async () => {
-          await processCodexSession(
-            filePath,
-            event.sessionId,
-            syncService,
-            config.user_id!,
-            conversationCache,
-            retryQueue,
-            pendingMessages,
-            titleCache,
-            updateState
-          );
-        });
+        await processCodexSession(
+          filePath,
+          event.sessionId,
+          syncService,
+          config.user_id!,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState
+        );
       });
       codexSyncs.set(filePath, sync);
     }
