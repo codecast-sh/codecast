@@ -92,8 +92,10 @@ export default defineSchema({
     is_favorite: v.optional(v.boolean()),
     short_id: v.optional(v.string()),
     auto_shared: v.optional(v.boolean()),
+    skip_title_generation: v.optional(v.boolean()),
   })
     .index("by_user_id", ["user_id"])
+    .index("by_user_updated", ["user_id", "updated_at"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
@@ -107,7 +109,8 @@ export default defineSchema({
     .index("by_session_id", ["session_id"])
     .index("by_short_id", ["short_id"])
     .index("by_forked_from", ["forked_from"])
-    .index("by_git_branch", ["git_branch"]),
+    .index("by_git_branch", ["git_branch"])
+    .index("by_parent_message_uuid", ["parent_message_uuid"]),
 
   public_conversations: defineTable({
     conversation_id: v.id("conversations"),
@@ -548,4 +551,16 @@ export default defineSchema({
     expires_at: v.number(),
     created_at: v.number(),
   }).index("by_installation_id", ["installation_id"]),
+
+  message_shares: defineTable({
+    share_token: v.string(),
+    message_id: v.id("messages"),
+    user_id: v.id("users"),
+    context_before: v.optional(v.number()),
+    context_after: v.optional(v.number()),
+    note: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_share_token", ["share_token"])
+    .index("by_message_id", ["message_id"]),
 });

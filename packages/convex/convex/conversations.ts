@@ -332,7 +332,7 @@ export const getAllMessages = query({
       }
     }
 
-    const messageLimit = args.limit ?? 500;
+    const messageLimit = Math.min(args.limit ?? 50, 100);
 
     let messagesQuery = ctx.db
       .query("messages")
@@ -378,21 +378,6 @@ export const getAllMessages = query({
 
     const childConversations: Array<{ _id: string; title: string }> = [];
     const childConversationMap: Record<string, string> = {};
-
-    const childConvs = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
-      .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
-      .take(100);
-
-    const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
-    for (const conv of childConvs) {
-      if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
-        const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
-        childConversations.push({ _id: conv._id, title: childTitle });
-        childConversationMap[conv.parent_message_uuid] = conv._id;
-      }
-    }
 
     let forkedFromDetails = null;
     if (conversation.forked_from) {
@@ -727,18 +712,17 @@ export const listConversations = query({
 
     let conversations;
     if (args.filter === "my") {
+      // Use by_user_updated index to sort by updated_at (most recent activity first)
       const query = ctx.db
         .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .withIndex("by_user_updated", (q) =>
+          cursorTimestamp
+            ? q.eq("user_id", userId).lt("updated_at", cursorTimestamp)
+            : q.eq("user_id", userId)
+        )
         .order("desc");
 
-      const allResults = await query.take(limit + 1 + (cursorTimestamp ? 100 : 0));
-
-      let filtered = allResults;
-      if (cursorTimestamp) {
-        filtered = allResults.filter(c => c.updated_at < cursorTimestamp);
-      }
-      conversations = filtered.slice(0, limit + 1);
+      conversations = await query.take(limit + 1);
     } else {
       const fetchLimit = cursorTimestamp ? 200 : (limit + 1) * 3;
       const allConversations = await ctx.db
