@@ -137,7 +137,7 @@ export const analyzeMessageRoles = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const limit = args.limit ?? 100;
+    const limit = Math.min(args.limit ?? 20, 50);
 
     const conversations = await ctx.db
       .query("conversations")

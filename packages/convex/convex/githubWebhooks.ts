@@ -490,7 +490,7 @@ export const matchPRToConversation = internalMutation({
     const conversations = await ctx.db
       .query("conversations")
       .withIndex("by_git_branch", (q) => q.eq("git_branch", args.head_ref))
-      .collect();
+      .take(50);
 
     let teamId = conversations[0]?.team_id;
 
@@ -524,7 +524,7 @@ export const matchPRToConversation = internalMutation({
       const teamMembers = await ctx.db
         .query("users")
         .filter((q) => q.eq(q.field("team_id"), teamId))
-        .collect();
+        .take(20);
 
       for (const member of teamMembers) {
         if (member.github_access_token) {
