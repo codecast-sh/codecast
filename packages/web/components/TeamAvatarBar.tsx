@@ -76,6 +76,9 @@ export function TeamAvatarBar() {
                 </div>
               )}
             </div>
+            {online && (
+              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-400 border-2 border-sol-bg rounded-full" />
+            )}
             <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1 bg-sol-bg-alt border border-sol-border rounded text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg">
               <div className="font-medium text-sol-text">{displayName}</div>
               <div className={online ? "text-emerald-400" : "text-sol-text-muted"}>
