@@ -305,6 +305,8 @@ export const getConversation = query({
 export const getAllMessages = query({
   args: {
     conversation_id: v.id("conversations"),
+    limit: v.optional(v.number()),
+    before_timestamp: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -330,13 +332,29 @@ export const getAllMessages = query({
       }
     }
 
-    const messages = await ctx.db
+    const messageLimit = args.limit ?? 500;
+
+    let messagesQuery = ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
         q.eq("conversation_id", args.conversation_id)
-      )
-      .order("asc")
-      .collect();
+      );
+
+    if (args.before_timestamp !== undefined) {
+      messagesQuery = messagesQuery.filter((q) =>
+        q.lt(q.field("timestamp"), args.before_timestamp!)
+      );
+    }
+
+    const messages = await messagesQuery
+      .order("desc")
+      .take(messageLimit + 1);
+
+    const hasMore = messages.length > messageLimit;
+    if (hasMore) {
+      messages.pop();
+    }
+    messages.reverse();
 
     const user = await ctx.db.get(conversation.user_id);
 
@@ -409,6 +427,8 @@ export const getAllMessages = query({
       })
     );
 
+    const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
+
     return {
       ...conversation,
       title,
@@ -417,6 +437,8 @@ export const getAllMessages = query({
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
+      has_more_above: hasMore,
+      oldest_timestamp: oldestTimestamp,
       fork_count: conversation.fork_count,
       forked_from: conversation.forked_from,
       forked_from_details: forkedFromDetails,
@@ -870,6 +892,7 @@ export const listConversations = query({
         }
 
         const authorName = conversationUser?.name || conversationUser?.email?.split("@")[0] || "Unknown";
+        const authorAvatar = conversationUser?.image || conversationUser?.github_avatar_url || null;
         const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
 
         if (visibilityMode === "summary") {
@@ -880,6 +903,7 @@ export const listConversations = query({
             user_id: c.user_id,
             visibility_mode: visibilityMode,
             author_name: authorName,
+            author_avatar: authorAvatar,
             is_own: c.user_id.toString() === userId.toString(),
             is_active: isActive,
             updated_at: c.updated_at,
@@ -898,6 +922,7 @@ export const listConversations = query({
             user_id: c.user_id,
             visibility_mode: visibilityMode,
             author_name: authorName,
+            author_avatar: authorAvatar,
             is_own: c.user_id.toString() === userId.toString(),
             is_active: isActive,
             updated_at: c.updated_at,
@@ -914,10 +939,10 @@ export const listConversations = query({
           user_id: c.user_id,
           visibility_mode: visibilityMode,
           title,
-          subtitle: c.subtitle || null,
-          first_user_message: firstUserMessage,
-          first_assistant_message: firstAssistantMessage,
-          message_alternates: messageAlternates,
+          subtitle: visibilityMode === "full" ? (c.subtitle || null) : null,
+          first_user_message: visibilityMode === "full" ? firstUserMessage : null,
+          first_assistant_message: visibilityMode === "full" ? firstAssistantMessage : null,
+          message_alternates: visibilityMode === "full" ? messageAlternates : [],
           tool_names: toolNames,
           subagent_types: subagentTypes,
           agent_type: c.agent_type,
@@ -931,6 +956,7 @@ export const listConversations = query({
           tool_call_count: toolCallCount,
           is_active: isActive,
           author_name: authorName,
+          author_avatar: authorAvatar,
           is_own: c.user_id.toString() === userId.toString(),
           parent_conversation_id: visibilityMode === "full" ? parentConversationId : null,
           latest_todos: visibilityMode === "full" ? latestTodos : undefined,
@@ -1858,6 +1884,48 @@ export const updateTitle = mutation({
   },
 });
 
+export const setSkipTitleGeneration = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    skip: v.boolean(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    let isTeamMember = false;
+    if (!isOwner && conversation.team_id) {
+      const authUser = await ctx.db.get(authUserId);
+      if (authUser?.team_id && authUser.team_id.toString() === conversation.team_id.toString()) {
+        isTeamMember = true;
+      }
+    }
+
+    if (!isOwner && !isTeamMember) {
+      throw new Error("Unauthorized: can only update your own conversations");
+    }
+
+    await ctx.db.patch(args.conversation_id, {
+      skip_title_generation: args.skip,
+    });
+
+    if (args.api_token) {
+      await ctx.db.patch(conversation.user_id, {
+        daemon_last_seen: Date.now(),
+      });
+    }
+  },
+});
+
 export const listPrivateConversations = query({
   args: {
     api_token: v.string(),
@@ -2561,14 +2629,12 @@ export const listProjectHashes = query({
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) throw new Error("Not authenticated");
 
-    const limit = args.limit || 5000;
     const conversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-      .take(limit);
+      .take(args.limit || 100);
 
     const hashes = new Map<string, { count: number; sample_title: string | null }>();
-
     for (const conv of conversations) {
       const hash = conv.project_hash || "__no_project__";
       const existing = hashes.get(hash);
@@ -2585,3 +2651,41 @@ export const listProjectHashes = query({
   },
 });
 
+export const deleteByProjectHash = mutation({
+  args: { project_hash: v.string(), api_token: v.optional(v.string()), conv_id: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) throw new Error("Not authenticated");
+
+    let convId: Id<"conversations"> | null = null;
+    if (args.conv_id) {
+      convId = args.conv_id as Id<"conversations">;
+    } else {
+      const convs = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+        .take(100);
+      const conv = convs.find(c => c.project_hash === args.project_hash);
+      if (!conv) return { deleted: 0, hasMore: false, conv_id: null };
+      convId = conv._id;
+    }
+
+    const msgs = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
+      .take(50);
+
+    for (const m of msgs) await ctx.db.delete(m._id);
+
+    const hasMoreMsgs = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
+      .first();
+
+    if (!hasMoreMsgs) {
+      await ctx.db.delete(convId);
+      return { deleted: 1, hasMore: false, conv_id: null };
+    }
+    return { deleted: 0, hasMore: true, conv_id: convId };
+  },
+});

@@ -53,6 +53,7 @@ type Conversation = {
   auto_shared?: boolean;
   visibility_mode?: "full" | "detailed" | "summary" | "minimal";
   activity_summary?: string;
+  author_avatar?: string | null;
 };
 
 function formatDuration(ms: number): string {
@@ -595,12 +596,21 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                     role="listitem"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-2 text-sm text-sol-text-muted">
-                        <span className="font-medium text-sol-text">{conv.author_name}</span>
-                        {conv.is_active && (
-                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                        )}
-                      </div>
+                      {conv.author_avatar ? (
+                        <img
+                          src={conv.author_avatar}
+                          alt={conv.author_name}
+                          className="w-6 h-6 rounded-full shrink-0"
+                        />
+                      ) : (
+                        <div className="w-6 h-6 rounded-full bg-sol-base02 flex items-center justify-center shrink-0">
+                          <span className="text-xs text-sol-text-muted">{conv.author_name?.charAt(0).toUpperCase()}</span>
+                        </div>
+                      )}
+                      <span className="font-medium text-sol-text text-sm">{conv.author_name}</span>
+                      {conv.is_active && (
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      )}
                       <span className="text-sol-text-muted text-sm">{conv.activity_summary}</span>
                       <span className="text-sol-text-dim text-xs ml-auto">{getRelativeTime(conv.updated_at)}</span>
                     </div>
@@ -744,8 +754,19 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
 
 
                       <div className="flex items-center gap-2 text-xs flex-wrap text-sol-text-muted0">
-                        {!conv.is_own && (
-                          <span className="font-medium">
+                        {(filter === "team" || !conv.is_own) && (
+                          <span className="flex items-center gap-1.5 font-medium">
+                            {conv.author_avatar ? (
+                              <img
+                                src={conv.author_avatar}
+                                alt={conv.author_name}
+                                className="w-4 h-4 rounded-full"
+                              />
+                            ) : (
+                              <span className="w-4 h-4 rounded-full bg-sol-base02 flex items-center justify-center text-[8px] text-sol-text-muted">
+                                {conv.author_name?.charAt(0).toUpperCase()}
+                              </span>
+                            )}
                             {conv.author_name}
                           </span>
                         )}
