@@ -939,7 +939,7 @@ export const listConversations = query({
           user_id: c.user_id,
           visibility_mode: visibilityMode,
           title,
-          subtitle: visibilityMode === "full" ? (c.subtitle || null) : null,
+          subtitle: (visibilityMode === "full" || visibilityMode === "detailed") ? (c.subtitle || null) : null,
           first_user_message: visibilityMode === "full" ? firstUserMessage : null,
           first_assistant_message: visibilityMode === "full" ? firstAssistantMessage : null,
           message_alternates: visibilityMode === "full" ? messageAlternates : [],
