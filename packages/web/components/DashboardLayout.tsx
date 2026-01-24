@@ -9,6 +9,7 @@ import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
+import { TeamAvatarBar } from "./TeamAvatarBar";
 import { Button } from "./ui/button";
 import { Logo } from "./Logo";
 import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose } from "lucide-react";
@@ -141,6 +142,9 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
               <GlobalSearch />
             </div>
           </div>
+
+          {/* Team avatars */}
+          <TeamAvatarBar />
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">

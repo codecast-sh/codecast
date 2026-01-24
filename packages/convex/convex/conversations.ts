@@ -1163,6 +1163,14 @@ export const searchConversations = query({
       return [];
     }
 
+    const teamUsers = user.team_id
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id!))
+          .collect()
+      : [];
+    const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
+
     const searchTerm = args.query.trim();
     if (!searchTerm || searchTerm.length < 2) {
       return [];
@@ -1214,11 +1222,12 @@ export const searchConversations = query({
       const conv = await ctx.db.get(messages[0].conversation_id);
       if (!conv) continue;
 
-      // Check access
+      // Check access - user can see their own conversations, or non-private
+      // conversations from team members
       const isOwn = conv.user_id.toString() === userId.toString();
       if (!isOwn) {
         if (conv.is_private !== false) continue;
-        if (!user.team_id || conv.team_id?.toString() !== user.team_id.toString()) {
+        if (!teamUserIds.has(conv.user_id.toString())) {
           continue;
         }
       }
@@ -1522,6 +1531,14 @@ export const searchForCLI = query({
       return { error: "User not found" };
     }
 
+    const teamUsers = user.team_id
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id!))
+          .collect()
+      : [];
+    const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
+
     const searchTerm = args.query.trim();
     if (!searchTerm || searchTerm.length < 2) {
       return { error: "Query must be at least 2 characters" };
@@ -1585,10 +1602,12 @@ export const searchForCLI = query({
       const conv = await ctx.db.get(messages[0].conversation_id);
       if (!conv) continue;
 
+      // Check access - user can see their own conversations, or non-private
+      // conversations from team members
       const isOwn = conv.user_id.toString() === authUserId.toString();
       if (!isOwn) {
         if (conv.is_private !== false) continue;
-        if (!user.team_id || conv.team_id?.toString() !== user.team_id.toString()) {
+        if (!teamUserIds.has(conv.user_id.toString())) {
           continue;
         }
       }
@@ -1748,12 +1767,19 @@ export const readConversationMessages = mutation({
       return { error: "Conversation not found" };
     }
 
+    // Check access - user can see their own conversations, or non-private
+    // conversations from team members
     const isOwn = conv.user_id.toString() === authUserId.toString();
     if (!isOwn) {
       if (conv.is_private !== false) {
         return { error: "Access denied" };
       }
-      if (!user.team_id || conv.team_id?.toString() !== user.team_id.toString()) {
+      // Check if conversation owner is in the user's team
+      if (!user.team_id) {
+        return { error: "Access denied" };
+      }
+      const convOwner = await ctx.db.get(conv.user_id);
+      if (!convOwner || convOwner.team_id?.toString() !== user.team_id.toString()) {
         return { error: "Access denied" };
       }
     }

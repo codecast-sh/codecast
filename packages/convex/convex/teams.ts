@@ -109,6 +109,7 @@ export const getTeamMembers = query({
         _id: u._id,
         name: u.name,
         email: u.email,
+        image: u.image,
         role: u.role,
         daemon_last_seen: u.daemon_last_seen,
         github_username: u.github_username,
