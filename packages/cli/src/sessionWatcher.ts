@@ -47,9 +47,12 @@ export class SessionWatcher extends EventEmitter {
       fs.mkdirSync(this.projectsPath, { recursive: true });
     }
 
+    // Scan existing files
+    this.emitExistingFilesSorted();
+
     this.watcher = watch(this.projectsPath, {
       persistent: true,
-      ignoreInitial: false,
+      ignoreInitial: true, // We handle initial files ourselves for sorting
       depth: 2,
       awaitWriteFinish: {
         stabilityThreshold: 100,
@@ -77,6 +80,47 @@ export class SessionWatcher extends EventEmitter {
     this.watcher.on("ready", () => {
       this.emit("ready");
     });
+  }
+
+  private emitExistingFilesSorted(): void {
+    const files: { path: string; size: number }[] = [];
+
+    try {
+      const projectDirs = fs.readdirSync(this.projectsPath);
+      for (const projectDir of projectDirs) {
+        const projectPath = path.join(this.projectsPath, projectDir);
+        try {
+          const stat = fs.statSync(projectPath);
+          if (!stat.isDirectory()) continue;
+
+          const sessionFiles = fs.readdirSync(projectPath);
+          for (const file of sessionFiles) {
+            if (!file.endsWith(".jsonl")) continue;
+            const filePath = path.join(projectPath, file);
+            try {
+              const fileStat = fs.statSync(filePath);
+              files.push({ path: filePath, size: fileStat.size });
+            } catch {
+              // Skip files we can't stat
+            }
+          }
+        } catch {
+          // Skip directories we can't read
+        }
+      }
+    } catch {
+      // Directory doesn't exist or can't be read
+      return;
+    }
+
+    // Sort by size ascending (small files first) - this ensures small sessions
+    // don't get blocked behind large files waiting for semaphore permits
+    files.sort((a, b) => a.size - b.size);
+
+    // Emit events for each file
+    for (const file of files) {
+      this.handleFileEvent(file.path, "add");
+    }
   }
 
   stop(): void {
