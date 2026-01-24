@@ -83,7 +83,9 @@ export class SessionWatcher extends EventEmitter {
   }
 
   private emitExistingFilesSorted(): void {
-    const files: { path: string; size: number }[] = [];
+    const files: { path: string; size: number; mtimeMs: number }[] = [];
+    const RECENT_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+    const now = Date.now();
 
     try {
       const projectDirs = fs.readdirSync(this.projectsPath);
@@ -99,7 +101,7 @@ export class SessionWatcher extends EventEmitter {
             const filePath = path.join(projectPath, file);
             try {
               const fileStat = fs.statSync(filePath);
-              files.push({ path: filePath, size: fileStat.size });
+              files.push({ path: filePath, size: fileStat.size, mtimeMs: fileStat.mtimeMs });
             } catch {
               // Skip files we can't stat
             }
@@ -113,12 +115,21 @@ export class SessionWatcher extends EventEmitter {
       return;
     }
 
-    // Sort by size ascending (small files first) - this ensures small sessions
-    // don't get blocked behind large files waiting for semaphore permits
-    files.sort((a, b) => a.size - b.size);
+    // Separate recently modified files from older files
+    const recentFiles = files.filter(f => now - f.mtimeMs < RECENT_THRESHOLD_MS);
+    const olderFiles = files.filter(f => now - f.mtimeMs >= RECENT_THRESHOLD_MS);
 
-    // Emit events for each file
-    for (const file of files) {
+    // Sort recent files by mtime descending (most recent first) - active sessions get priority
+    recentFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    // Sort older files by size ascending (small files first)
+    olderFiles.sort((a, b) => a.size - b.size);
+
+    // Emit recent files first, then older files
+    for (const file of recentFiles) {
+      this.handleFileEvent(file.path, "add");
+    }
+    for (const file of olderFiles) {
       this.handleFileEvent(file.path, "add");
     }
   }
