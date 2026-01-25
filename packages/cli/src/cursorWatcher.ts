@@ -37,6 +37,7 @@ export class CursorWatcher extends EventEmitter {
   private cursorPath: string;
   private workspaceStates: Map<string, WorkspaceState> = new Map();
   private pollFrequencyMs: number;
+  private isFirstPoll: boolean = true;
 
   constructor(cursorPath?: string, pollFrequencyMs: number = 2000) {
     super();
@@ -97,6 +98,12 @@ export class CursorWatcher extends EventEmitter {
   private pollWorkspaces(workspaceStoragePath: string): void {
     try {
       const workspaceDirs = fs.readdirSync(workspaceStoragePath);
+      if (this.isFirstPoll) {
+        console.log(`[CursorWatcher] Found ${workspaceDirs.length} workspace directories`);
+      }
+
+      // Build list of workspaces with their db paths and mtimes
+      const workspaces: { hash: string; dbPath: string; mtime: number }[] = [];
 
       for (const workspaceHash of workspaceDirs) {
         const dbPath = path.join(
@@ -110,15 +117,62 @@ export class CursorWatcher extends EventEmitter {
         }
 
         try {
-          this.checkWorkspaceForChanges(workspaceHash, dbPath);
+          const stat = fs.statSync(dbPath);
+          workspaces.push({ hash: workspaceHash, dbPath, mtime: stat.mtimeMs });
+        } catch {
+          // Skip files we can't stat
+        }
+      }
+
+      // Sort by mtime descending (newest first) on first poll
+      if (this.isFirstPoll) {
+        workspaces.sort((a, b) => b.mtime - a.mtime);
+        this.isFirstPoll = false;
+      }
+
+      for (const workspace of workspaces) {
+        try {
+          this.checkWorkspaceForChanges(workspace.hash, workspace.dbPath);
         } catch (err) {
           const error = err instanceof Error ? err : new Error(String(err));
-          this.emit("error", new Error(`Failed to check workspace ${workspaceHash}: ${error.message}`));
+          this.emit("error", new Error(`Failed to check workspace ${workspace.hash}: ${error.message}`));
         }
       }
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       this.emit("error", error);
+    }
+  }
+
+  private getWorkspaceFolderPath(workspaceStorageDir: string): string | null {
+    const workspaceJsonPath = path.join(workspaceStorageDir, "workspace.json");
+    try {
+      if (!fs.existsSync(workspaceJsonPath)) {
+        return null;
+      }
+      const content = fs.readFileSync(workspaceJsonPath, "utf-8");
+      const data = JSON.parse(content);
+
+      // workspace.json contains { "folder": "file:///path/to/folder" }
+      // or { "workspace": "file:///path/to/workspace.code-workspace" }
+      const folderUri = data.folder || data.workspace;
+      if (!folderUri) {
+        return null;
+      }
+
+      // Convert file:// URI to path
+      if (folderUri.startsWith("file://")) {
+        const decoded = decodeURIComponent(folderUri.slice(7));
+        // On Windows, remove leading slash from /C:/path
+        if (process.platform === "win32" && decoded.match(/^\/[A-Z]:/i)) {
+          return decoded.slice(1);
+        }
+        return decoded;
+      }
+
+      return folderUri;
+    } catch {
+      return null;
     }
   }
 
@@ -139,7 +193,7 @@ export class CursorWatcher extends EventEmitter {
 
       const maxRowIdResult = db
         .query<{ maxRowId: number | null }, []>(
-          "SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'aiService.prompts'"
+          "SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata'"
         )
         .get();
 
@@ -147,15 +201,20 @@ export class CursorWatcher extends EventEmitter {
 
       const state = this.workspaceStates.get(workspaceHash);
 
+      // Get actual workspace folder path from workspace.json
+      const workspaceStorageDir = path.dirname(dbPath);
+      const actualPath = this.getWorkspaceFolderPath(workspaceStorageDir) || workspaceHash;
+
       if (!state) {
         this.workspaceStates.set(workspaceHash, {
           lastRowId: maxRowId,
           lastCheck: Date.now(),
         });
         if (maxRowId > 0) {
+          console.log(`[CursorWatcher] Emitting session for ${workspaceHash} (${actualPath}), maxRowId=${maxRowId}`);
           this.emit("session", {
             sessionId: workspaceHash,
-            workspacePath: workspaceHash,
+            workspacePath: actualPath,
             dbPath,
             eventType: "add",
           });
@@ -165,7 +224,7 @@ export class CursorWatcher extends EventEmitter {
         state.lastCheck = Date.now();
         this.emit("session", {
           sessionId: workspaceHash,
-          workspacePath: workspaceHash,
+          workspacePath: actualPath,
           dbPath,
           eventType: "change",
         });

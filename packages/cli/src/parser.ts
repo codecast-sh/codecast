@@ -263,6 +263,34 @@ export interface CursorPrompt {
   role: "user" | "assistant";
 }
 
+function parseTimestamp(value: unknown): number {
+  if (!value) return Date.now();
+
+  // If it's a number, could be Unix seconds or milliseconds
+  if (typeof value === "number") {
+    // Unix timestamps in seconds are ~10 digits, milliseconds are ~13
+    if (value < 10000000000) {
+      return value * 1000; // Convert seconds to ms
+    }
+    return value;
+  }
+
+  // If it's a string, try parsing
+  if (typeof value === "string") {
+    const parsed = new Date(value).getTime();
+    if (!isNaN(parsed)) {
+      return parsed;
+    }
+    // Try parsing as number string
+    const num = parseInt(value, 10);
+    if (!isNaN(num)) {
+      return num < 10000000000 ? num * 1000 : num;
+    }
+  }
+
+  return Date.now();
+}
+
 export function parseCursorPrompts(dbValue: string): ParsedMessage[] {
   try {
     const data = JSON.parse(dbValue);
@@ -275,9 +303,7 @@ export function parseCursorPrompts(dbValue: string): ParsedMessage[] {
     for (const item of data) {
       if (!item || typeof item !== "object") continue;
 
-      const timestamp = item.timestamp
-        ? new Date(item.timestamp).getTime()
-        : Date.now();
+      const timestamp = parseTimestamp(item.timestamp || item.createdAt || item.created_at);
 
       const role = item.role === "user" ? "user" : "assistant";
       const content = typeof item.text === "string" ? item.text : "";
