@@ -175,6 +175,7 @@ type ConversationViewProps = {
   onClearHighlight?: () => void;
   embedded?: boolean;
   showMessageInput?: boolean;
+  targetMessageId?: string;
 };
 
 export interface ConversationViewHandle {
@@ -858,6 +859,20 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
     messageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+  const generateShareLink = useMutation(api.messages.generateMessageShareLink);
+
+  const handleShare = async () => {
+    try {
+      const token = await generateShareLink({
+        message_id: messageId as Id<"messages">,
+      });
+      const url = `${window.location.origin}/share/message/${token}`;
+      await copyToClipboard(url);
+      toast.success("Share link copied!");
+    } catch (err) {
+      toast.error("Failed to create share link");
+    }
+  };
 
   const handleCopy = async () => {
     try {
@@ -896,8 +911,18 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group bg-sol-blue/15 border border-sol-blue/40 rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group bg-sol-blue/15 border border-sol-blue/40 rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""}`}>
       <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+        <button
+          onClick={handleShare}
+          className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
+          title="Share message"
+          aria-label="Share message"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+          </svg>
+        </button>
         <button
           onClick={handleCopyLink}
           className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
@@ -1034,6 +1059,20 @@ function AssistantBlock({
     messageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+  const generateShareLink = useMutation(api.messages.generateMessageShareLink);
+
+  const handleShare = async () => {
+    try {
+      const token = await generateShareLink({
+        message_id: messageId as Id<"messages">,
+      });
+      const url = `${window.location.origin}/share/message/${token}`;
+      await copyToClipboard(url);
+      toast.success("Share link copied!");
+    } catch (err) {
+      toast.error("Failed to create share link");
+    }
+  };
 
   const toolResultMap = useMemo(() => {
     const map: Record<string, ToolResult> = {};
@@ -1099,9 +1138,19 @@ function AssistantBlock({
   }
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""}`}>
       {hasContent && (
         <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5">
+          <button
+            onClick={handleShare}
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            title="Share message"
+            aria-label="Share message"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+            </svg>
+          </button>
           <button
             onClick={handleCopyLink}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
@@ -1540,7 +1589,7 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, onClearHighlight, embedded, showMessageInput = true }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -1553,6 +1602,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const shouldRestoreScrollRef = useRef(false);
   const prevTimelineLengthRef = useRef<number>(0);
   const isNearBottomRef = useRef(true);
+  const hasScrolledToTarget = useRef(false);
 
   const messages = conversation?.messages || [];
 
@@ -1934,6 +1984,29 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     }
   }, [highlightedMessageId, timeline, virtualizer]);
+
+  useEffect(() => {
+    if (!targetMessageId || timeline.length === 0 || hasScrolledToTarget.current) {
+      return;
+    }
+
+    const itemIndex = timeline.findIndex(item => {
+      if (item.type === 'message') {
+        return item.data._id === targetMessageId;
+      }
+      return false;
+    });
+
+    if (itemIndex >= 0) {
+      hasScrolledToTarget.current = true;
+      setUserScrolled(true);
+      setTimeout(() => {
+        virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
+        setHighlightedMessageId(targetMessageId);
+        setTimeout(() => setHighlightedMessageId(null), 3000);
+      }, 200);
+    }
+  }, [targetMessageId, timeline, virtualizer]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

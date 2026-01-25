@@ -2,8 +2,8 @@ import { MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 
 const WINDOW_MS = 60 * 1000;
-const WRITE_LIMIT = 30;
-export const MESSAGE_LIMIT = 300;
+const WRITE_LIMIT = 500; // Temporarily increased for bulk import
+export const MESSAGE_LIMIT = 3000; // Temporarily increased for bulk import
 
 export class RateLimitError extends Error {
   constructor(message: string) {

@@ -415,7 +415,7 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
         author_name: conv.author_name,
         timestamp: conv.updated_at,
         duration_ms: conv.duration_ms,
-        message_count: conv.message_count,
+        message_count: conv.message_count ?? 0,
         is_active: conv.is_active,
         is_own: conv.is_own,
       });

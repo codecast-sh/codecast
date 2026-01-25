@@ -79,6 +79,27 @@ async function getAuthenticatedUserIdReadOnly(
   return null;
 }
 
+export const clearSyncCursors = mutation({
+  args: {
+    user_id: v.id("users"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId || authUserId.toString() !== args.user_id.toString()) {
+      throw new Error("Authentication failed");
+    }
+    const cursors = await ctx.db
+      .query("sync_cursors")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+      .collect();
+    for (const cursor of cursors) {
+      await ctx.db.delete(cursor._id);
+    }
+    return { deleted: cursors.length };
+  },
+});
+
 export const getSyncCursor = query({
   args: {
     user_id: v.id("users"),

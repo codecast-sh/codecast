@@ -16,20 +16,80 @@ import { copyToClipboard } from "../../../lib/utils";
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONVEX_ID_REGEX = /^[a-z0-9]{32}$/;
 
+function ConversationLoadingSkeleton() {
+  return (
+    <DashboardLayout>
+      <div className="max-w-4xl mx-auto px-4 py-4 space-y-6 animate-pulse motion-reduce:animate-none">
+        <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-6 h-6 rounded bg-sol-blue/30" />
+            <div className="h-3 w-12 bg-sol-blue/30 rounded" />
+            <div className="h-3 w-16 bg-sol-blue/20 rounded" />
+          </div>
+          <div className="pl-8 space-y-2">
+            <div className="h-3 bg-sol-blue/20 rounded w-3/4" />
+            <div className="h-3 bg-sol-blue/20 rounded w-1/2" />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-6 h-6 rounded bg-sol-yellow/60" />
+            <div className="h-3 w-14 bg-sol-bg-alt rounded" />
+            <div className="h-3 w-16 bg-sol-bg-alt rounded" />
+          </div>
+          <div className="pl-8 space-y-2">
+            <div className="h-3 bg-sol-bg-alt rounded w-full" />
+            <div className="h-3 bg-sol-bg-alt rounded w-5/6" />
+            <div className="h-3 bg-sol-bg-alt rounded w-4/5" />
+          </div>
+        </div>
+
+        <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-6 h-6 rounded bg-sol-blue/30" />
+            <div className="h-3 w-12 bg-sol-blue/30 rounded" />
+            <div className="h-3 w-16 bg-sol-blue/20 rounded" />
+          </div>
+          <div className="pl-8">
+            <div className="h-3 bg-sol-blue/20 rounded w-2/3" />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-6 h-6 rounded bg-sol-yellow/60" />
+            <div className="h-3 w-14 bg-sol-bg-alt rounded" />
+            <div className="h-3 w-16 bg-sol-bg-alt rounded" />
+          </div>
+          <div className="pl-8 space-y-2">
+            <div className="h-3 bg-sol-bg-alt rounded w-full" />
+            <div className="h-3 bg-sol-bg-alt rounded w-11/12" />
+            <div className="h-3 bg-sol-bg-alt rounded w-3/4" />
+            <div className="h-3 bg-sol-bg-alt rounded w-5/6" />
+          </div>
+        </div>
+      </div>
+    </DashboardLayout>
+  );
+}
+
 function OwnerView({
   id,
   highlightQuery,
   onClearHighlight,
+  targetMessageId,
 }: {
   id: string;
   highlightQuery?: string;
   onClearHighlight: () => void;
+  targetMessageId?: string;
 }) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [showShareCopied, setShowShareCopied] = useState(false);
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
-  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useConversationMessages(id);
+  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder, isSearchingForTarget } = useConversationMessages(id, targetMessageId);
   const commits = useQuery(api.commits.getCommitsForConversation, {
     conversation_id: id as Id<"conversations">,
   });
@@ -142,22 +202,34 @@ function OwnerView({
     </div>
   );
 
+  if (!conversation) {
+    return <ConversationLoadingSkeleton />;
+  }
+
   return (
     <DashboardLayout>
-      {conversation && (
-        <ConversationDiffLayout
-          conversation={conversation as ConversationData}
-          commits={commits || []}
-          pullRequests={pullRequests || []}
-          headerExtra={shareControls}
-          hasMoreAbove={hasMoreAbove}
-          isLoadingOlder={isLoadingOlder}
-          onLoadOlder={loadOlder}
-          highlightQuery={highlightQuery}
-          onClearHighlight={onClearHighlight}
-          embedded
-        />
+      {isSearchingForTarget && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-sol-bg-alt border border-sol-border rounded-full px-4 py-2 shadow-lg flex items-center gap-2">
+          <svg className="w-4 h-4 animate-spin text-sol-cyan" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+          <span className="text-sm text-sol-text-secondary">Finding message...</span>
+        </div>
       )}
+      <ConversationDiffLayout
+        conversation={conversation as ConversationData}
+        commits={commits || []}
+        pullRequests={pullRequests || []}
+        headerExtra={shareControls}
+        hasMoreAbove={hasMoreAbove}
+        isLoadingOlder={isLoadingOlder}
+        onLoadOlder={loadOlder}
+        highlightQuery={highlightQuery}
+        onClearHighlight={onClearHighlight}
+        embedded
+        targetMessageId={targetMessageId}
+      />
     </DashboardLayout>
   );
 }
@@ -299,6 +371,14 @@ export default function ConversationPage() {
   const searchParams = useSearchParams();
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
+  const [targetMessageId, setTargetMessageId] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && hash.startsWith("#msg-")) {
+      setTargetMessageId(hash.slice(5));
+    }
+  }, []);
 
   const handleClearHighlight = () => {
     const url = new URL(window.location.href);
@@ -331,11 +411,7 @@ export default function ConversationPage() {
 
   if (isUUID) {
     if (sessionLookup === undefined) {
-      return (
-        <main className="h-screen flex flex-col bg-sol-base03 items-center justify-center">
-          <div className="text-sol-base0">Loading...</div>
-        </main>
-      );
+      return <ConversationLoadingSkeleton />;
     }
     if (sessionLookup === null) {
       return <NotFoundView />;
@@ -344,11 +420,7 @@ export default function ConversationPage() {
   }
 
   if (publicData === undefined) {
-    return (
-      <main className="h-screen flex flex-col bg-sol-base03 items-center justify-center">
-        <div className="text-sol-base0">Loading...</div>
-      </main>
-    );
+    return <ConversationLoadingSkeleton />;
   }
 
   if (publicData.access_level === "not_found") {
@@ -365,6 +437,7 @@ export default function ConversationPage() {
         id={id}
         highlightQuery={highlightQuery}
         onClearHighlight={handleClearHighlight}
+        targetMessageId={targetMessageId}
       />
     );
   }

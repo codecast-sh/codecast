@@ -67,10 +67,16 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   };
 
   const handleDirectoryClick = (dir: string) => {
+    const newDir = directoryFilter === dir ? null : dir;
     if (!isDashboard) {
-      router.push("/dashboard");
+      if (newDir) {
+        router.push(`/dashboard?dir=${encodeURIComponent(newDir)}`);
+      } else {
+        router.push("/dashboard");
+      }
+    } else {
+      onDirectoryFilterChange?.(newDir);
     }
-    onDirectoryFilterChange?.(directoryFilter === dir ? null : dir);
     onMobileClose?.();
   };
 
@@ -296,7 +302,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
                           ) : (
                             <span className="w-3 h-3 flex-shrink-0" />
                           )}
-                          <span className="truncate flex-1 leading-tight">{cleanTitle(conv.title)}</span>
+                          <span className="truncate flex-1 leading-tight">{cleanTitle(conv.title || "Untitled")}</span>
                           <span className="text-[10px] text-sol-text-dim flex-shrink-0 tabular-nums">{conv.message_count}</span>
                         </Link>
                       ))}

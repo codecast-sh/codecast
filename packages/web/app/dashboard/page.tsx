@@ -14,7 +14,9 @@ export default function DashboardPage() {
   const [filter, setFilter] = useState<"my" | "team">(
     filterParam === "team" ? "team" : "my"
   );
-  const [directoryFilter, setDirectoryFilter] = useState<string | null>(null);
+  const [directoryFilter, setDirectoryFilter] = useState<string | null>(
+    searchParams.get("dir")
+  );
   const [memberFilter, setMemberFilter] = useState<string | null>(
     searchParams.get("member")
   );
@@ -41,10 +43,28 @@ export default function DashboardPage() {
     router.replace(`/dashboard?${params.toString()}`, { scroll: false });
   }, [searchParams, router]);
 
+  const handleDirectoryFilterChange = useCallback((dir: string | null) => {
+    setDirectoryFilter(dir);
+    const params = new URLSearchParams(searchParams.toString());
+    if (dir) {
+      params.set("dir", dir);
+    } else {
+      params.delete("dir");
+    }
+    router.replace(`/dashboard?${params.toString()}`, { scroll: false });
+  }, [searchParams, router]);
+
   useEffect(() => {
     const memberParam = searchParams.get("member");
     if (memberParam !== memberFilter) {
       setMemberFilter(memberParam);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const dirParam = searchParams.get("dir");
+    if (dirParam !== directoryFilter) {
+      setDirectoryFilter(dirParam);
     }
   }, [searchParams]);
 
@@ -78,7 +98,7 @@ export default function DashboardPage() {
         filter={filter}
         onFilterChange={handleFilterChange}
         directoryFilter={directoryFilter}
-        onDirectoryFilterChange={setDirectoryFilter}
+        onDirectoryFilterChange={handleDirectoryFilterChange}
       >
         <ConversationList
           filter={filter}

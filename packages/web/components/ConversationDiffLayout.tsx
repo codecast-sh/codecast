@@ -41,6 +41,7 @@ interface ConversationDiffLayoutProps {
   onLoadOlder?: () => void;
   highlightQuery?: string;
   onClearHighlight?: () => void;
+  targetMessageId?: string;
 }
 
 export function ConversationDiffLayout({
@@ -53,6 +54,7 @@ export function ConversationDiffLayout({
   isLoadingOlder,
   onLoadOlder,
   highlightQuery,
+  targetMessageId,
 }: ConversationDiffLayoutProps) {
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
@@ -146,6 +148,7 @@ export function ConversationDiffLayout({
     onLoadOlder,
     highlightQuery,
     embedded,
+    targetMessageId,
   };
 
   // Mobile: tabs layout
