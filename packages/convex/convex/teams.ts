@@ -102,23 +102,24 @@ export const getTeamMembers = query({
     team_id: v.id("teams"),
   },
   handler: async (ctx, args) => {
-    const users = await ctx.db.query("users").collect();
-    return users
-      .filter((u) => u.team_id?.toString() === args.team_id.toString())
-      .map((u) => ({
-        _id: u._id,
-        name: u.name,
-        email: u.email,
-        image: u.image,
-        role: u.role,
-        daemon_last_seen: u.daemon_last_seen,
-        github_username: u.github_username,
-        github_avatar_url: u.github_avatar_url,
-        title: u.title,
-        bio: u.bio,
-        status: u.status,
-        timezone: u.timezone,
-      }));
+    const users = await ctx.db
+      .query("users")
+      .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
+      .collect();
+    return users.map((u) => ({
+      _id: u._id,
+      name: u.name,
+      email: u.email,
+      image: u.image,
+      role: u.role,
+      daemon_last_seen: u.daemon_last_seen,
+      github_username: u.github_username,
+      github_avatar_url: u.github_avatar_url,
+      title: u.title,
+      bio: u.bio,
+      status: u.status,
+      timezone: u.timezone,
+    }));
   },
 });
 
