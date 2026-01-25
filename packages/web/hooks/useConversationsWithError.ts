@@ -2,15 +2,20 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
+import { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 type ConversationResult = ReturnType<typeof useQuery<typeof api.conversations.listConversations>>;
 
-export function useConversationsWithError(filter: "my" | "team") {
+export function useConversationsWithError(filter: "my" | "team", memberId?: string | null) {
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [allConversations, setAllConversations] = useState<any[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  const result = useQuery(api.conversations.listConversations, { filter, cursor });
+  const result = useQuery(api.conversations.listConversations, {
+    filter,
+    cursor,
+    memberId: memberId ? (memberId as Id<"users">) : undefined,
+  });
   const [hasShownError, setHasShownError] = useState(false);
   const loadingStartTime = useRef<number | null>(null);
   const retryToastId = useRef<string | number | null>(null);
@@ -69,11 +74,11 @@ export function useConversationsWithError(filter: "my" | "team") {
     }
   }, [result, cursor]);
 
-  // Reset when filter changes
+  // Reset when filter or memberId changes
   useEffect(() => {
     setCursor(undefined);
     setAllConversations([]);
-  }, [filter]);
+  }, [filter, memberId]);
 
   const loadMore = useCallback(() => {
     if (result?.nextCursor && !isLoadingMore) {

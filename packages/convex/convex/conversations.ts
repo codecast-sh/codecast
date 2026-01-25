@@ -688,6 +688,7 @@ export const listConversations = query({
     filter: v.union(v.literal("my"), v.literal("team")),
     limit: v.optional(v.number()),
     cursor: v.optional(v.string()),
+    memberId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -719,6 +720,27 @@ export const listConversations = query({
           cursorTimestamp
             ? q.eq("user_id", userId).lt("updated_at", cursorTimestamp)
             : q.eq("user_id", userId)
+        )
+        .order("desc");
+
+      conversations = await query.take(limit + 1);
+    } else if (args.memberId) {
+      // Filter by specific team member - use index for efficient pagination
+      const targetMember = teamUserMap.get(args.memberId.toString());
+      if (!targetMember) {
+        return { conversations: [], nextCursor: null };
+      }
+      const visibility = targetMember.activity_visibility || "detailed";
+      if (visibility === "hidden") {
+        return { conversations: [], nextCursor: null };
+      }
+
+      const query = ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (q) =>
+          cursorTimestamp
+            ? q.eq("user_id", args.memberId!).lt("updated_at", cursorTimestamp)
+            : q.eq("user_id", args.memberId!)
         )
         .order("desc");
 
@@ -757,7 +779,8 @@ export const listConversations = query({
 
         type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
         let visibilityMode: VisibilityMode = "full";
-        if (args.filter === "team" && c.is_private !== false) {
+        const isOwn = c.user_id.toString() === userId.toString();
+        if (args.filter === "team" && !isOwn) {
           const owner = teamUserMap.get(c.user_id.toString());
           visibilityMode = (owner?.activity_visibility as VisibilityMode) || "detailed";
         }

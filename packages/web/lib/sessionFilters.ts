@@ -23,6 +23,14 @@ export function isTrivialSubagent(c: FilterableSession): boolean {
   return aiMsgCount <= 1 && userMsgCount === 0;
 }
 
+export function isDefaultTitleSession(c: FilterableSession): boolean {
+  const title = c.title?.trim() || "";
+  if (!title || title === "Untitled") return true;
+  if (/^Session\s+[a-f0-9-]{8,}/i.test(title)) return true;
+  if (/^Session\s+agent-/i.test(title)) return true;
+  return false;
+}
+
 export function isWarmupSession(c: FilterableSession): boolean {
   if (c.title?.toLowerCase() === "warmup") return true;
   if ((c.message_count ?? 0) > 3) return false;
@@ -48,6 +56,8 @@ export function isWarmupSession(c: FilterableSession): boolean {
   return warmupPatterns.some((p) => firstAssistantMsg.includes(p));
 }
 
-export function shouldShowSession(c: FilterableSession): boolean {
-  return !isTrivialSubagent(c) && !isWarmupSession(c);
+export function shouldShowSession(c: FilterableSession, options?: { excludeDefaultTitles?: boolean }): boolean {
+  if (isTrivialSubagent(c) || isWarmupSession(c)) return false;
+  if (options?.excludeDefaultTitles && isDefaultTitleSession(c)) return false;
+  return true;
 }

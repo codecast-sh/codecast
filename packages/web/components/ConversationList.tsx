@@ -4,7 +4,7 @@ import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { shouldShowSession, isSubagent } from "../lib/sessionFilters";
+import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
@@ -254,7 +254,7 @@ interface ConversationListProps {
 
 export function ConversationList({ filter, directoryFilter, memberFilter, onMemberFilterChange }: ConversationListProps) {
   const router = useRouter();
-  const { conversations, hasMore, loadMore, isLoadingMore, isLoading } = useConversationsWithError(filter);
+  const { conversations, hasMore, loadMore, isLoadingMore, isLoading } = useConversationsWithError(filter, memberFilter);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
@@ -281,7 +281,14 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
     if (!conversations || conversations.length === 0) return { filteredConversations: [], counts: { long: 0, active: 0, subagent: 0, main: 0 }, directories: [] };
     const convs = conversations as Conversation[];
 
-    const nonTrivialConvs = convs.filter(c => shouldShowSession(c));
+    const nonTrivialConvs = convs.filter(c => {
+      // For summary/minimal visibility, don't filter by title (they intentionally don't have titles)
+      if (c.visibility_mode === "summary" || c.visibility_mode === "minimal") {
+        return !isTrivialSubagent(c) && !isWarmupSession(c);
+      }
+      // For team view, filter out default-titled sessions from others
+      return shouldShowSession(c, { excludeDefaultTitles: filter === "team" && !c.is_own });
+    });
 
     // Derive git root from project_path if git_root is not set
     // Common patterns: /Users/x/src/repo, /home/x/projects/repo, etc.
@@ -328,9 +335,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
       filtered = filtered.filter(c => deriveGitRoot(c) === directoryFilter);
     }
 
-    if (memberFilter) {
-      filtered = filtered.filter(c => c.user_id === memberFilter);
-    }
+    // memberFilter is now handled server-side for proper pagination
 
     if (timeFilter === "long") {
       filtered = filtered.filter(c => c.duration_ms >= 20 * 60 * 1000);
@@ -381,7 +386,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
     filtered = withChildren as any;
 
     return { filteredConversations: filtered, counts, directories };
-  }, [conversations, timeFilter, subagentFilter, directoryFilter, memberFilter]);
+  }, [conversations, filter, timeFilter, subagentFilter, directoryFilter]);
 
   const flatConversations = useMemo(() => {
     const flat: Conversation[] = [];
