@@ -613,10 +613,9 @@ function startDaemon(): void {
     });
   } else {
     // Binary mode: spawn self with env var to trigger daemon mode
-    // Using env var bypasses Bun's argument parsing which treats args as scripts
-    // Pass "version" as a dummy command to prevent Bun from showing help
+    // CODECAST_DAEMON_MODE check happens before commander.js parsing, so no args needed
     const logFd = fs.openSync(LOG_FILE, "a");
-    child = spawn(process.argv[0], ["version"], {
+    child = spawn(process.argv[0], [], {
       detached: true,
       stdio: ["ignore", logFd, logFd],
       env: { ...process.env, CODECAST_DAEMON_MODE: "1" },
