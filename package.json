@@ -9,7 +9,9 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "convex:dev": "cd packages/convex && convex dev",
+    "convex:deploy": "cd packages/convex && convex deploy"
   },
   "devDependencies": {
     "turbo": "^2.3.0",
