@@ -38,6 +38,7 @@ coverage/
 
 # Convex
 .convex/
+**/convex/_generated/
 
 # Worktrees
 .conductor/
