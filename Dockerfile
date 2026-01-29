@@ -3,7 +3,7 @@ FROM oven/bun:1 AS builder
 WORKDIR /app
 
 # Copy package files
-COPY package.json bun.lockb ./
+COPY package.json bun.lock ./
 COPY packages/web/package.json packages/web/
 COPY packages/convex/package.json packages/convex/
 COPY packages/cli/package.json packages/cli/
