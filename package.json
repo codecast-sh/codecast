@@ -6,6 +6,7 @@
     "packages/*"
   ],
   "scripts": {
+    "start": "cd packages/web && bun run start",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
