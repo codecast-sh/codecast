@@ -2305,11 +2305,20 @@ async function main(): Promise<void> {
   await new Promise(() => {});
 }
 
+// Flag to prevent double execution when imported and called via runDaemon
+let daemonStarted = false;
+
 export async function runDaemon(): Promise<void> {
+  if (daemonStarted) return;
+  daemonStarted = true;
   return main();
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("daemon.js")) {
+// Only run directly if executed as the main module (not when imported)
+// Note: In compiled binaries, CODECAST_DAEMON_MODE is used instead
+if (!process.env.CODECAST_DAEMON_MODE &&
+    (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("daemon.js"))) {
+  daemonStarted = true;
   main().catch((err) => {
     logError("Fatal error", err instanceof Error ? err : new Error(String(err)));
     flushRemoteLogs().finally(() => process.exit(1));

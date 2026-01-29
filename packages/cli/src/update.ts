@@ -3,7 +3,7 @@ import * as path from "path";
 import * as os from "os";
 import { execSync, spawn } from "child_process";
 
-const VERSION = "1.0.15";
+const VERSION = "1.0.16";
 const MEMORY_VERSION = "2";
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
