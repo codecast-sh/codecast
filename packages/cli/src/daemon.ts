@@ -1651,13 +1651,22 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  process.on("uncaughtException", (err) => {
+  process.on("uncaughtException", async (err) => {
     logError("Uncaught exception", err);
+    // Flush logs immediately before crash
+    if (syncServiceRef) {
+      await flushRemoteLogs(syncServiceRef).catch(() => {});
+    }
+    process.exit(1);
   });
 
-  process.on("unhandledRejection", (reason) => {
+  process.on("unhandledRejection", async (reason) => {
     const err = reason instanceof Error ? reason : new Error(String(reason));
     logError("Unhandled rejection", err);
+    // Flush logs immediately before crash
+    if (syncServiceRef) {
+      await flushRemoteLogs(syncServiceRef).catch(() => {});
+    }
   });
 
   try {
@@ -1861,7 +1870,20 @@ async function main(): Promise<void> {
   // Startup scan: sync any files that were missed while daemon was down
   const performStartupScan = async () => {
     const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-    const unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
+
+    // Safety check: ensure directory exists
+    if (!fs.existsSync(claudeProjectsDir)) {
+      log("Startup scan: No projects directory found, skipping");
+      return;
+    }
+
+    let unsyncedFiles: string[] = [];
+    try {
+      unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
+    } catch (err) {
+      logError("Startup scan failed to find unsynced files", err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
 
     if (unsyncedFiles.length > 0) {
       log(`Startup scan: Found ${unsyncedFiles.length} files needing sync`);
