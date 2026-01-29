@@ -310,26 +310,24 @@ export const getAllMessages = query({
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    if (!authUserId) {
-      return null;
-    }
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) {
       return null;
     }
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
-    if (!isOwner) {
-      if (conversation.is_private !== false) {
-        return null;
-      }
+
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isShared = !!conversation.share_token;
+    let isTeamMember = false;
+
+    if (authUserId && !isOwner && conversation.is_private === false) {
       const authUser = await ctx.db.get(authUserId);
-      if (
-        !authUser ||
-        !authUser.team_id ||
-        authUser.team_id.toString() !== conversation.team_id?.toString()
-      ) {
-        return null;
+      if (authUser?.team_id && authUser.team_id.toString() === conversation.team_id?.toString()) {
+        isTeamMember = true;
       }
+    }
+
+    if (!isOwner && !isTeamMember && !isShared) {
+      return null;
     }
 
     const messageLimit = Math.min(args.limit ?? 50, 100);
