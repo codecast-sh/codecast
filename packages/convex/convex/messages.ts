@@ -226,6 +226,54 @@ export const generateMessageShareLink = mutation({
   },
 });
 
+export const findMessageByContent = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    search_term: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return null;
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      if (conversation.is_private !== false) {
+        return null;
+      }
+      const authUser = await ctx.db.get(authUserId);
+      if (
+        !authUser ||
+        !authUser.team_id ||
+        authUser.team_id.toString() !== conversation.team_id?.toString()
+      ) {
+        return null;
+      }
+    }
+
+    const searchLower = args.search_term.toLowerCase();
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("asc")
+      .collect();
+
+    for (const msg of messages) {
+      if (msg.content && msg.content.toLowerCase().includes(searchLower)) {
+        return { message_id: msg._id, timestamp: msg.timestamp };
+      }
+    }
+
+    return null;
+  },
+});
+
 export const getSharedMessage = query({
   args: {
     share_token: v.string(),

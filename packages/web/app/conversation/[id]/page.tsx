@@ -10,6 +10,7 @@ import { ConversationDiffLayout } from "../../../components/ConversationDiffLayo
 import { PublicCommentSection } from "../../../components/PublicCommentSection";
 import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
+import { useSharedConversationMessages } from "../../../hooks/useSharedConversationMessages";
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { copyToClipboard } from "../../../lib/utils";
 
@@ -89,7 +90,7 @@ function OwnerView({
   const [showShareCopied, setShowShareCopied] = useState(false);
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
-  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder, isSearchingForTarget } = useConversationMessages(id, targetMessageId);
+  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
   const commits = useQuery(api.commits.getCommitsForConversation, {
     conversation_id: id as Id<"conversations">,
   });
@@ -234,21 +235,23 @@ function OwnerView({
   );
 }
 
-function SharedView({ conversation }: { conversation: ConversationData }) {
+function SharedView({ id }: { id: string }) {
   const router = useRouter();
   const [isForking, setIsForking] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
+
+  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useSharedConversationMessages(id);
 
   const forkConversation = useMutation(api.conversations.forkConversation);
   const currentUser = useQuery(api.users.getCurrentUser);
 
   const commentCount = useQuery(
     api.publicComments.getPublicComments,
-    { conversation_id: conversation._id as Id<"conversations"> }
+    conversation ? { conversation_id: conversation._id as Id<"conversations"> } : "skip"
   );
 
   const handleFork = async () => {
-    if (isForking || !conversation.share_token) return;
+    if (isForking || !conversation?.share_token) return;
     setIsForking(true);
     try {
       const newConversationId = await forkConversation({ share_token: conversation.share_token });
@@ -262,16 +265,23 @@ function SharedView({ conversation }: { conversation: ConversationData }) {
     }
   };
 
+  if (!conversation) {
+    return <ConversationLoadingSkeleton />;
+  }
+
   const forkCount = conversation.fork_count ?? 0;
 
   return (
     <>
       <ConversationView
-        conversation={conversation}
+        conversation={conversation as ConversationData}
         commits={[]}
         backHref="/"
         backLabel="Home"
         showMessageInput={false}
+        hasMoreAbove={hasMoreAbove}
+        isLoadingOlder={isLoadingOlder}
+        onLoadOlder={loadOlder}
         headerExtra={
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-sol-base00 px-2 py-1 bg-sol-base02 rounded">
@@ -442,8 +452,8 @@ export default function ConversationPage() {
     );
   }
 
-  if (publicData.access_level === "shared" && publicData.conversation) {
-    return <SharedView conversation={publicData.conversation as ConversationData} />;
+  if (publicData.access_level === "shared") {
+    return <SharedView id={id} />;
   }
 
   return <DeniedView />;

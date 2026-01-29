@@ -1074,6 +1074,7 @@ export const getConversationPublic = query({
   args: {
     conversation_id: v.id("conversations"),
     limit: v.optional(v.number()),
+    before_timestamp: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
@@ -1105,11 +1106,19 @@ export const getConversationPublic = query({
     }
 
     const limit = args.limit ?? 100;
-    const messages = await ctx.db
+    let messagesQuery = ctx.db
       .query("messages")
-      .withIndex("by_conversation_id", (q) =>
+      .withIndex("by_conversation_timestamp", (q) =>
         q.eq("conversation_id", args.conversation_id)
-      )
+      );
+
+    if (args.before_timestamp !== undefined) {
+      messagesQuery = messagesQuery.filter((q) =>
+        q.lt(q.field("timestamp"), args.before_timestamp!)
+      );
+    }
+
+    const messages = await messagesQuery
       .order("desc")
       .take(limit + 1);
 

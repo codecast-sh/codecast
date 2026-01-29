@@ -18,7 +18,8 @@ type Message = {
 
 export function useConversationMessages(
   conversationId: string,
-  targetMessageId?: string
+  targetMessageId?: string,
+  highlightQuery?: string
 ) {
   const [lastTimestamp, setLastTimestamp] = useState<number | null>(null);
   const [oldestTimestamp, setOldestTimestamp] = useState<number | null>(null);
@@ -42,6 +43,17 @@ export function useConversationMessages(
       ? {
           conversation_id: conversationId as Id<"conversations">,
           message_id: targetMessageId as Id<"messages">,
+        }
+      : "skip"
+  );
+
+  const cleanedHighlightQuery = highlightQuery?.replace(/^"|"$/g, "").trim();
+  const highlightMessageResult = useQuery(
+    api.messages.findMessageByContent,
+    cleanedHighlightQuery
+      ? {
+          conversation_id: conversationId as Id<"conversations">,
+          search_term: cleanedHighlightQuery,
         }
       : "skip"
   );
@@ -159,6 +171,44 @@ export function useConversationMessages(
     isLoadingOlder,
     oldestTimestamp,
     targetMessageTimestamp,
+  ]);
+
+  const highlightSearchAttempts = useRef(0);
+  useEffect(() => {
+    if (!highlightMessageResult || !cachedMessages.length) {
+      return;
+    }
+
+    const highlightFound = cachedMessages.some(
+      (m) => m._id === highlightMessageResult.message_id
+    );
+
+    if (highlightFound) {
+      setIsSearchingForTarget(false);
+      highlightSearchAttempts.current = 0;
+      return;
+    }
+
+    if (
+      hasMoreAbove &&
+      !isLoadingOlder &&
+      highlightSearchAttempts.current < maxSearchAttempts &&
+      oldestTimestamp !== null &&
+      highlightMessageResult.timestamp < oldestTimestamp
+    ) {
+      setIsSearchingForTarget(true);
+      highlightSearchAttempts.current += 1;
+      setIsLoadingOlder(true);
+      setLoadOlderTimestamp(oldestTimestamp);
+    } else if (!hasMoreAbove || highlightSearchAttempts.current >= maxSearchAttempts) {
+      setIsSearchingForTarget(false);
+    }
+  }, [
+    highlightMessageResult,
+    cachedMessages,
+    hasMoreAbove,
+    isLoadingOlder,
+    oldestTimestamp,
   ]);
 
   const loadOlder = useCallback(() => {
