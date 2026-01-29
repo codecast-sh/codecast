@@ -328,6 +328,16 @@ function writeConfig(config: Config): void {
   fs.chmodSync(CONFIG_FILE, 0o600);
 }
 
+function logCliError(command: string, error: string): void {
+  const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
+  const timestamp = new Date().toISOString();
+  const line = `[${timestamp}] [CLI ERROR] ${command}: ${error}\n`;
+  try {
+    fs.appendFileSync(LOG_FILE, line);
+  } catch {
+  }
+}
+
 interface FullReadResult {
   conversation: {
     id: string;
@@ -1887,34 +1897,58 @@ program
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
-      let conversations: Array<{
-        id: string;
-        session_id?: string;
-        title: string;
-        subtitle?: string | null;
-        project_path: string | null;
-        updated_at: string;
-        message_count: number;
-        goal?: string;
-        matches?: Array<{ content: string; role: string }>;
-      }> = [];
-
-      const searchResponse = await fetch(`${siteUrl}/cli/resume-search`, {
+      const response = await fetch(`${siteUrl}/cli/feed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
+          limit: limit * 3,
+          offset: 0,
           query,
-          limit,
           project_path: projectPath,
         }),
       });
 
-      const searchResult = await searchResponse.json();
-
-      if (!searchResult.error && searchResult.conversations && searchResult.conversations.length > 0) {
-        conversations = searchResult.conversations;
+      if (!response.ok) {
+        const text = await response.text();
+        logCliError("resume", `HTTP ${response.status}: ${text.slice(0, 200)}`);
+        console.error(`Server error: ${response.status}`);
+        process.exit(1);
       }
+
+      const responseText = await response.text();
+      let result: { error?: string; conversations?: Array<{ id: string; title: string; subtitle?: string | null; project_path: string | null; updated_at: string; message_count: number; session_id?: string; preview?: Array<{ role: string; content: string }> }> };
+      try {
+        result = JSON.parse(responseText);
+      } catch {
+        logCliError("resume", `Invalid JSON response: ${responseText.slice(0, 200)}`);
+        console.error("Server returned invalid response");
+        process.exit(1);
+      }
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const extractGoalFromPreview = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
+        if (!preview) return undefined;
+        const firstUser = preview.find((m) => m.role === "user");
+        return firstUser?.content;
+      };
+
+      const queryWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length > 1);
+
+      const rawConversations = (result.conversations || []).map((conv) => ({
+        ...conv,
+        goal: extractGoalFromPreview(conv.preview),
+      }));
+
+      const conversations = rawConversations.filter((conv) => {
+        if (queryWords.length <= 1) return true;
+        const searchText = [conv.title, conv.subtitle, conv.goal].filter(Boolean).join(" ").toLowerCase();
+        return queryWords.every((word: string) => searchText.includes(word));
+      }).slice(0, limit);
 
       if (conversations.length === 0) {
         console.log(`No sessions found matching "${query}"`);
