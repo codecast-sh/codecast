@@ -235,12 +235,12 @@ function OwnerView({
   );
 }
 
-function SharedView({ id }: { id: string }) {
+function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; highlightQuery?: string; onClearHighlight: () => void }) {
   const router = useRouter();
   const [isForking, setIsForking] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
 
-  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder } = useSharedConversationMessages(id);
+  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder, isSearchingForTarget } = useSharedConversationMessages(id, highlightQuery);
 
   const forkConversation = useMutation(api.conversations.forkConversation);
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -273,6 +273,15 @@ function SharedView({ id }: { id: string }) {
 
   return (
     <>
+      {isSearchingForTarget && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-sol-bg-alt border border-sol-border rounded-full px-4 py-2 shadow-lg flex items-center gap-2">
+          <svg className="w-4 h-4 animate-spin text-sol-cyan" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+          <span className="text-sm text-sol-text-secondary">Finding message...</span>
+        </div>
+      )}
       <ConversationView
         conversation={conversation as ConversationData}
         commits={[]}
@@ -282,6 +291,8 @@ function SharedView({ id }: { id: string }) {
         hasMoreAbove={hasMoreAbove}
         isLoadingOlder={isLoadingOlder}
         onLoadOlder={loadOlder}
+        highlightQuery={highlightQuery}
+        onClearHighlight={onClearHighlight}
         headerExtra={
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-sol-base00 px-2 py-1 bg-sol-base02 rounded">
@@ -453,7 +464,7 @@ export default function ConversationPage() {
   }
 
   if (publicData.access_level === "shared") {
-    return <SharedView id={id} />;
+    return <SharedView id={id} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} />;
   }
 
   return <DeniedView />;

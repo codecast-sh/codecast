@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -16,7 +16,7 @@ type Message = {
   subtype?: string;
 };
 
-export function useSharedConversationMessages(conversationId: string) {
+export function useSharedConversationMessages(conversationId: string, highlightQuery?: string) {
   const [oldestTimestamp, setOldestTimestamp] = useState<number | null>(null);
   const [cachedMessages, setCachedMessages] = useState<Message[]>([]);
   const [cachedConversation, setCachedConversation] = useState<any>(null);
@@ -24,10 +24,24 @@ export function useSharedConversationMessages(conversationId: string) {
   const [loadOlderTimestamp, setLoadOlderTimestamp] = useState<number | undefined>(undefined);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [accessLevel, setAccessLevel] = useState<string | null>(null);
+  const [isSearchingForTarget, setIsSearchingForTarget] = useState(false);
+  const highlightSearchAttempts = useRef(0);
+  const maxSearchAttempts = 20;
 
   const initialData = useQuery(
     api.conversations.getConversationPublic,
     { conversation_id: conversationId as Id<"conversations">, limit: 100 }
+  );
+
+  const cleanedHighlightQuery = highlightQuery?.replace(/^"|"$/g, "").trim();
+  const highlightMessageResult = useQuery(
+    api.messages.findMessageByContentPublic,
+    cleanedHighlightQuery
+      ? {
+          conversation_id: conversationId as Id<"conversations">,
+          search_term: cleanedHighlightQuery,
+        }
+      : "skip"
   );
 
   const olderMessagesData = useQuery(
@@ -86,6 +100,43 @@ export function useSharedConversationMessages(conversationId: string) {
     }
   }, [olderMessagesData]);
 
+  useEffect(() => {
+    if (!highlightMessageResult || !cachedMessages.length) {
+      return;
+    }
+
+    const highlightFound = cachedMessages.some(
+      (m) => m._id === highlightMessageResult.message_id
+    );
+
+    if (highlightFound) {
+      setIsSearchingForTarget(false);
+      highlightSearchAttempts.current = 0;
+      return;
+    }
+
+    if (
+      hasMoreAbove &&
+      !isLoadingOlder &&
+      highlightSearchAttempts.current < maxSearchAttempts &&
+      oldestTimestamp !== null &&
+      highlightMessageResult.timestamp < oldestTimestamp
+    ) {
+      setIsSearchingForTarget(true);
+      highlightSearchAttempts.current += 1;
+      setIsLoadingOlder(true);
+      setLoadOlderTimestamp(oldestTimestamp);
+    } else if (!hasMoreAbove || highlightSearchAttempts.current >= maxSearchAttempts) {
+      setIsSearchingForTarget(false);
+    }
+  }, [
+    highlightMessageResult,
+    cachedMessages,
+    hasMoreAbove,
+    isLoadingOlder,
+    oldestTimestamp,
+  ]);
+
   const loadOlder = useCallback(() => {
     if (oldestTimestamp !== null && hasMoreAbove && !isLoadingOlder) {
       setIsLoadingOlder(true);
@@ -106,5 +157,6 @@ export function useSharedConversationMessages(conversationId: string) {
     hasMoreAbove,
     isLoadingOlder,
     loadOlder,
+    isSearchingForTarget,
   };
 }

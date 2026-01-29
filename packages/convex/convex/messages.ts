@@ -274,6 +274,39 @@ export const findMessageByContent = query({
   },
 });
 
+export const findMessageByContentPublic = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    search_term: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+    if (!conversation.share_token) {
+      return null;
+    }
+
+    const searchLower = args.search_term.toLowerCase();
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("asc")
+      .collect();
+
+    for (const msg of messages) {
+      if (msg.content && msg.content.toLowerCase().includes(searchLower)) {
+        return { message_id: msg._id, timestamp: msg.timestamp };
+      }
+    }
+
+    return null;
+  },
+});
+
 export const getSharedMessage = query({
   args: {
     share_token: v.string(),
