@@ -3447,13 +3447,34 @@ program
       return;
     }
     console.log(`Updating from v${getVersion()} to v${available}...`);
+
+    // Check if daemon is running before update
+    const daemonWasRunning = getDaemonPid() !== null;
+    if (daemonWasRunning) {
+      console.log("Stopping daemon...");
+      stopDaemon();
+    }
+
     const success = await performUpdate();
     if (success) {
       if (config.memory_enabled) {
         installMemorySnippet(true);
       }
-      console.log("\nRestart codecast to use the new version");
+
+      // Restart daemon if it was running
+      if (daemonWasRunning) {
+        console.log("Restarting daemon...");
+        startDaemon();
+        console.log(`Updated to v${available} and restarted daemon`);
+      } else {
+        console.log(`Updated to v${available}`);
+      }
     } else {
+      // Try to restart daemon even if update failed
+      if (daemonWasRunning) {
+        console.log("Restarting daemon...");
+        startDaemon();
+      }
       process.exit(1);
     }
   });
