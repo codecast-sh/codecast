@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_22", "bun"]
+
+[phases.install]
+cmds = ["bun install"]
+
+[phases.build]
+cmds = ["cd packages/web && rm -rf .next && bun run build"]
+
+[start]
+cmd = "cd packages/web && bun run start"
