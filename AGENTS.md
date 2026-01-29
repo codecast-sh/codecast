@@ -38,8 +38,15 @@ codecast decisions add "title" --reason "why"
 
 Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n (limit)
 
-## CLI Release
+## Deployment
 
+### Full Deploy (recommended)
+```bash
+./scripts/deploy-all.sh
+```
+Deploys everything: Convex functions, CLI (if changed), and web app to Vercel.
+
+### CLI-Only Release
 ```bash
 cd packages/cli
 # 1. Bump version in package.json AND src/update.ts (must match!)
