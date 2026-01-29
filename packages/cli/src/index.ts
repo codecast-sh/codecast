@@ -616,10 +616,10 @@ function startDaemon(): void {
   } else {
     // Binary mode: spawn self with env var to trigger daemon mode
     // CODECAST_DAEMON_MODE check happens before commander.js parsing, so no args needed
-    const logFd = fs.openSync(LOG_FILE, "a");
+    // Note: Don't redirect stdout/stderr to log file - daemon handles its own logging
     child = spawn(process.argv[0], [], {
       detached: true,
-      stdio: ["ignore", logFd, logFd],
+      stdio: "ignore",
       env: { ...process.env, CODECAST_DAEMON_MODE: "1" },
     });
   }
