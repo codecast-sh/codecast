@@ -1541,7 +1541,8 @@ http.route({
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
     } catch (error) {
-      return new Response(JSON.stringify({ error: "Internal error" }), {
+      console.error("CLI log error:", error);
+      return new Response(JSON.stringify({ error: "Internal error", details: error instanceof Error ? error.message : String(error) }), {
         status: 500,
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
