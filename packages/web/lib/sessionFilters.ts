@@ -31,6 +31,17 @@ export function isDefaultTitleSession(c: FilterableSession): boolean {
   return false;
 }
 
+export const SYSTEM_MESSAGE_PREFIXES = [
+  "[Using:",
+  "[Request",
+  "[SUGGESTION MODE:",
+];
+
+export function isSystemMessageSession(c: FilterableSession): boolean {
+  const title = c.title?.trim() || "";
+  return SYSTEM_MESSAGE_PREFIXES.some(prefix => title.startsWith(prefix));
+}
+
 export function isWarmupSession(c: FilterableSession): boolean {
   if (c.title?.toLowerCase() === "warmup") return true;
   if ((c.message_count ?? 0) > 3) return false;
@@ -57,7 +68,7 @@ export function isWarmupSession(c: FilterableSession): boolean {
 }
 
 export function shouldShowSession(c: FilterableSession, options?: { excludeDefaultTitles?: boolean }): boolean {
-  if (isTrivialSubagent(c) || isWarmupSession(c)) return false;
+  if (isTrivialSubagent(c) || isWarmupSession(c) || isSystemMessageSession(c)) return false;
   if (options?.excludeDefaultTitles && isDefaultTitleSession(c)) return false;
   return true;
 }

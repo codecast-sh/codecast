@@ -71,51 +71,31 @@ echo "3. Pushing to git (triggers Railway deploy)..."
 git push origin main 2>/dev/null && echo "   ✓ Pushed" || echo "   Already up to date"
 echo ""
 
-# 4. Trigger Railway deploy and tail logs
-echo "4. Deploying to Railway..."
-if command -v railway &> /dev/null; then
-  # Get the latest deployment
-  echo "   Triggering Railway deployment..."
+# 4. Wait for Railway to auto-deploy from git push
+echo "4. Waiting for Railway deployment..."
+echo "   Railway auto-deploys on push to main"
+echo "   Waiting 120s for build and deploy..."
 
-  # Use railway up to deploy and stream logs
-  railway up --detach 2>&1 | head -5 || true
-
-  echo "   Waiting for Railway build to start..."
-  sleep 5
-
-  # Tail the deployment logs
-  echo ""
-  echo "   === Railway Build Logs ==="
-  timeout 180 railway logs --build 2>&1 | while IFS= read -r line; do
-    echo "   $line"
-    # Check for success/failure indicators
-    if echo "$line" | grep -q "Deploy.*successful\|Deployment live"; then
-      echo ""
-      echo "   ✓ Railway deployment successful!"
-      break
-    fi
-    if echo "$line" | grep -q "Deploy.*failed\|Build failed\|error"; then
-      echo ""
-      echo "   ✗ Railway deployment may have failed - check logs"
-    fi
-  done || echo "   (Log streaming timed out - check Railway dashboard)"
-  echo "   ==========================="
-  echo ""
-
-  # Verify the deployment
-  echo "5. Verifying deployment..."
+# Poll for deployment completion
+for i in {1..12}; do
   sleep 10
   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://codecast.sh/admin/daemon-logs?_=$(date +%s)")
   if [[ "$HTTP_CODE" == "200" ]]; then
-    echo "   ✓ /admin/daemon-logs is live (HTTP $HTTP_CODE)"
-  else
-    echo "   ⚠ /admin/daemon-logs returned HTTP $HTTP_CODE (may still be deploying)"
-    echo "   Check: https://codecast.sh/admin/daemon-logs"
+    echo "   ✓ Deployment verified! /admin/daemon-logs is live (HTTP $HTTP_CODE)"
+    break
   fi
-else
-  echo "   Railway CLI not installed - skipping log streaming"
-  echo "   Install with: brew install railway"
-  echo "   Monitor at: https://railway.app"
+  echo "   ... still deploying ($((i*10))s) - HTTP $HTTP_CODE"
+done
+
+if [[ "$HTTP_CODE" != "200" ]]; then
+  echo ""
+  echo "   ⚠ /admin/daemon-logs returned HTTP $HTTP_CODE after 120s"
+  echo "   Railway deployment may have failed or is still in progress"
+  echo "   Check Railway dashboard: https://railway.app"
+  echo ""
+  echo "   To debug Railway builds:"
+  echo "   1. Run: railway link (select codecast project)"
+  echo "   2. Run: railway logs --build"
 fi
 echo ""
 

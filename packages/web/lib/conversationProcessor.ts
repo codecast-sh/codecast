@@ -12,18 +12,14 @@ export type MessageAlternate = {
   content: string;
 };
 
+import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
+
 const COMMAND_PATTERNS = [
   /^<command-name>([^<]*)<\/command-name>/,
   /^<command-message>([^<]*)<\/command-message>/,
   /^<local-command-stdout>/,
   /^<local-command-stderr>/,
   /^Caveat:/,
-];
-
-const SYSTEM_MESSAGE_PREFIXES = [
-  "[Using:",
-  "[Request",
-  "[SUGGESTION MODE:",
 ];
 
 export function isSystemMessage(content: string): boolean {
@@ -103,10 +99,6 @@ export function getConversationPreview(
 
 export function cleanTitle(title: string): string {
   const cleaned = cleanContent(title);
-
-  // Filter out system message titles
-  if (isSystemMessage(cleaned)) return "Untitled";
-
   if (cleaned.length > 0) return cleaned;
 
   // If title was entirely a command, extract something useful
