@@ -103,6 +103,10 @@ export function getConversationPreview(
 
 export function cleanTitle(title: string): string {
   const cleaned = cleanContent(title);
+
+  // Filter out system message titles
+  if (isSystemMessage(cleaned)) return "Untitled";
+
   if (cleaned.length > 0) return cleaned;
 
   // If title was entirely a command, extract something useful
