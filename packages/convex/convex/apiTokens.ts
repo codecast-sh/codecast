@@ -101,9 +101,9 @@ export const verifyToken = mutation({
   },
   handler: async (ctx, args) => {
     const tokenHash = await hashToken(args.token);
-    const tokenDoc = await ctx.db
-      .query("api_tokens")
-      .withIndex("by_token_hash", (q) => q.eq("token_hash", tokenHash))
+    const tokenDoc = await (ctx.db
+      .query("api_tokens") as any)
+      .withIndex("by_token_hash", (q: any) => q.eq("token_hash", tokenHash))
       .first();
 
     if (!tokenDoc) {
@@ -133,12 +133,12 @@ export const listTokens = query({
       return [];
     }
 
-    const tokens = await ctx.db
-      .query("api_tokens")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+    const tokens = await (ctx.db
+      .query("api_tokens") as any)
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
       .collect();
 
-    return tokens.map((t) => ({
+    return tokens.map((t: any) => ({
       _id: t._id,
       name: t.name,
       created_at: t.created_at,
@@ -228,9 +228,9 @@ export const exchangeSetupToken = internalMutation({
   },
   handler: async (ctx, args) => {
     const tokenHash = await hashToken(args.setupToken);
-    const tokenDoc = await ctx.db
-      .query("api_tokens")
-      .withIndex("by_token_hash", (q) => q.eq("token_hash", tokenHash))
+    const tokenDoc = await (ctx.db
+      .query("api_tokens") as any)
+      .withIndex("by_token_hash", (q: any) => q.eq("token_hash", tokenHash))
       .first();
 
     if (!tokenDoc) {

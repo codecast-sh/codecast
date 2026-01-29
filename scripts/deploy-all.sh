@@ -12,6 +12,18 @@ if [[ -n $(git status --porcelain) ]]; then
   exit 1
 fi
 
+# 0. Pre-flight: Verify web build works
+echo "0. Pre-flight check: Building web app..."
+cd packages/web
+if ! npm run build > /dev/null 2>&1; then
+  echo "   ✗ Web build failed! Fix errors before deploying."
+  npm run build 2>&1 | tail -20
+  exit 1
+fi
+cd ../..
+echo "   ✓ Web build passed"
+echo ""
+
 # 1. Deploy Convex functions
 echo "1. Deploying Convex functions..."
 cd packages/convex
