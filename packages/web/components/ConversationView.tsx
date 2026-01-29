@@ -1598,6 +1598,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [diffExpanded, setDiffExpanded] = useState(false);
   const [commentMessageId, setCommentMessageId] = useState<Id<"messages"> | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const prevScrollHeightRef = useRef<number>(0);
   const shouldRestoreScrollRef = useRef(false);
   const prevTimelineLengthRef = useRef<number>(0);
@@ -1654,24 +1656,50 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // Track if we've already scrolled for this highlight query
   const hasScrolledToHighlight = useRef(false);
 
-  // Find and highlight first message matching search query
+  // Find all messages matching search query
   useEffect(() => {
     if (!highlightQuery || messages.length === 0) {
       setHighlightedMessageId(null);
+      setAllMatchingMessageIds([]);
+      setCurrentMatchIndex(0);
       hasScrolledToHighlight.current = false;
       return;
     }
     const terms = parseSearchTerms(highlightQuery);
     if (terms.length === 0) return;
 
+    const matchingIds: string[] = [];
     for (const msg of messages) {
       const content = msg.content?.toLowerCase() || "";
       if (terms.some(term => content.includes(term))) {
-        setHighlightedMessageId(msg._id);
-        return;
+        matchingIds.push(msg._id);
       }
     }
+
+    setAllMatchingMessageIds(matchingIds);
+    if (matchingIds.length > 0) {
+      setHighlightedMessageId(matchingIds[0]);
+      setCurrentMatchIndex(0);
+    } else {
+      setHighlightedMessageId(null);
+    }
   }, [highlightQuery, messages]);
+
+  const goToNextMatch = useCallback(() => {
+    if (allMatchingMessageIds.length === 0) return;
+    const nextIndex = (currentMatchIndex + 1) % allMatchingMessageIds.length;
+    setCurrentMatchIndex(nextIndex);
+    setHighlightedMessageId(allMatchingMessageIds[nextIndex]);
+    hasScrolledToHighlight.current = false;
+  }, [allMatchingMessageIds, currentMatchIndex]);
+
+  const goToPrevMatch = useCallback(() => {
+    if (allMatchingMessageIds.length === 0) return;
+    const prevIndex = currentMatchIndex === 0 ? allMatchingMessageIds.length - 1 : currentMatchIndex - 1;
+    setCurrentMatchIndex(prevIndex);
+    setHighlightedMessageId(allMatchingMessageIds[prevIndex]);
+    hasScrolledToHighlight.current = false;
+  }, [allMatchingMessageIds, currentMatchIndex]);
 
   // Highlight all text occurrences of search query in the DOM
   useEffect(() => {
@@ -2296,16 +2324,49 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 {headerExtra}
 
                 {highlightQuery && (
-                  <button
-                    onClick={onClearHighlight}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-200/50 dark:bg-amber-800/30 text-amber-800 dark:text-amber-200 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 transition-colors"
-                    title="Clear search highlight"
-                  >
-                    <span className="max-w-[120px] truncate">{highlightQuery}</span>
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  <div className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-200/50 dark:bg-amber-800/30 text-amber-800 dark:text-amber-200">
+                    <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
-                  </button>
+                    <span className="max-w-[100px] truncate" title={highlightQuery}>{highlightQuery}</span>
+                    {allMatchingMessageIds.length > 0 && (
+                      <>
+                        <span className="text-[10px] opacity-70 ml-1">
+                          {currentMatchIndex + 1}/{allMatchingMessageIds.length}
+                        </span>
+                        <button
+                          onClick={goToPrevMatch}
+                          className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
+                          title="Previous match"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={goToNextMatch}
+                          className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
+                          title="Next match"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                      </>
+                    )}
+                    {allMatchingMessageIds.length === 0 && (
+                      <span className="text-[10px] opacity-70 ml-1">0 matches</span>
+                    )}
+                    <button
+                      onClick={onClearHighlight}
+                      className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors ml-1"
+                      title="Clear search"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
                 )}
 
                 <button

@@ -55,6 +55,7 @@ export function ConversationDiffLayout({
   onLoadOlder,
   highlightQuery,
   targetMessageId,
+  onClearHighlight,
 }: ConversationDiffLayoutProps) {
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
@@ -147,6 +148,7 @@ export function ConversationDiffLayout({
     isLoadingOlder,
     onLoadOlder,
     highlightQuery,
+    onClearHighlight,
     embedded,
     targetMessageId,
   };
