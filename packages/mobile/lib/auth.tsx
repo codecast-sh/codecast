@@ -1,6 +1,8 @@
 import { useEffect, useState, createContext, useContext, ReactNode } from 'react';
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as LocalAuthentication from 'expo-local-authentication';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { useAuthActions } from '@convex-dev/auth/react';
 import { useConvexAuth } from 'convex/react';
 
@@ -12,7 +14,9 @@ export interface AuthContextType {
   isLoading: boolean;
   isBiometricAvailable: boolean;
   isBiometricEnabled: boolean;
+  isAppleAuthAvailable: boolean;
   signInWithGitHub: () => Promise<void>;
+  signInWithApple: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -28,11 +32,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useConvexAuth();
   const [isBiometricAvailable, setIsBiometricAvailable] = useState(false);
   const [isBiometricEnabled, setIsBiometricEnabled] = useState(false);
+  const [isAppleAuthAvailable, setIsAppleAuthAvailable] = useState(false);
 
   useEffect(() => {
     checkBiometricAvailability();
     checkBiometricEnabled();
+    checkAppleAuthAvailability();
   }, []);
+
+  const checkAppleAuthAvailability = async () => {
+    if (Platform.OS === 'ios') {
+      const isAvailable = await AppleAuthentication.isAvailableAsync();
+      setIsAppleAuthAvailable(isAvailable);
+    }
+  };
 
   const checkBiometricAvailability = async () => {
     const compatible = await LocalAuthentication.hasHardwareAsync();
@@ -47,6 +60,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInWithGitHub = async () => {
     await signIn('github');
+  };
+
+  const signInWithApple = async () => {
+    if (Platform.OS !== 'ios') {
+      throw new Error('Apple Sign In is only available on iOS');
+    }
+    const credential = await AppleAuthentication.signInAsync({
+      requestedScopes: [
+        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+        AppleAuthentication.AppleAuthenticationScope.EMAIL,
+      ],
+    });
+    if (credential.identityToken) {
+      await signIn('apple', { idToken: credential.identityToken });
+    } else {
+      throw new Error('No identity token received from Apple');
+    }
   };
 
   const signInWithEmail = async (email: string, password: string) => {
@@ -87,7 +117,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         isBiometricAvailable,
         isBiometricEnabled,
+        isAppleAuthAvailable,
         signInWithGitHub,
+        signInWithApple,
         signInWithEmail,
         signUpWithEmail,
         signOut,

@@ -2,6 +2,7 @@ import { convexAuth } from "@convex-dev/auth/server";
 import { Password } from "@convex-dev/auth/providers/Password";
 import { Email } from "@convex-dev/auth/providers/Email";
 import GitHub from "@auth/core/providers/github";
+import Apple from "@auth/core/providers/apple";
 import { Resend as ResendAPI } from "resend";
 import { alphabet, generateRandomString } from "oslo/crypto";
 
@@ -58,6 +59,18 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           github_username: profile.login,
           github_avatar_url: profile.avatar_url,
           github_access_token: tokens.access_token,
+        };
+      },
+    }),
+    Apple({
+      profile(profile) {
+        return {
+          id: profile.sub,
+          email: profile.email,
+          name: profile.name
+            ? `${profile.name.firstName ?? ""} ${profile.name.lastName ?? ""}`.trim()
+            : profile.email?.split("@")[0],
+          image: undefined,
         };
       },
     }),
