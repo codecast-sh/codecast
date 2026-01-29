@@ -1,8 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode, useRef } from "react";
-import { useQuery, useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback, lazy, Suspense } from "react";
 
 type Theme = "dark" | "light";
 
@@ -19,27 +17,15 @@ function getInitialTheme(): Theme {
   return stored || "light";
 }
 
+const ThemeSyncWithServer = lazy(() => import("./ThemeSyncWithServer"));
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [mounted, setMounted] = useState(false);
-  const serverThemeApplied = useRef(false);
-
-  const user = useQuery(api.users.getCurrentUser);
-  const setThemeMutation = useMutation(api.users.setTheme);
 
   useEffect(() => {
     setMounted(true);
   }, []);
-
-  useEffect(() => {
-    if (user !== undefined && !serverThemeApplied.current) {
-      serverThemeApplied.current = true;
-      if (user?.theme) {
-        setTheme(user.theme);
-        localStorage.setItem("codecast-theme", user.theme);
-      }
-    }
-  }, [user]);
 
   useEffect(() => {
     if (mounted) {
@@ -49,13 +35,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [theme, mounted]);
 
-  const toggleTheme = () => {
-    const newTheme = theme === "dark" ? "light" : "dark";
-    setTheme(newTheme);
-    if (user) {
-      setThemeMutation({ theme: newTheme });
-    }
-  };
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => prev === "dark" ? "light" : "dark");
+  }, []);
 
   if (!mounted) {
     return null;
@@ -63,6 +45,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
+      <Suspense fallback={null}>
+        <ThemeSyncWithServer theme={theme} setTheme={setTheme} />
+      </Suspense>
       {children}
     </ThemeContext.Provider>
   );

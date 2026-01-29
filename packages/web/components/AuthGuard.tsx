@@ -1,34 +1,42 @@
 "use client";
-import { useConvexAuth } from "convex/react";
+import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+
+function RedirectToHome() {
+  const router = useRouter();
+  useEffect(() => {
+    router.push("/");
+  }, [router]);
+  return null;
+}
+
+function AuthGuardInner({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <AuthLoading>
+        <div className="min-h-screen flex items-center justify-center bg-sol-base02">
+          <div className="text-sol-base0">Loading...</div>
+        </div>
+      </AuthLoading>
+      <Unauthenticated>
+        <RedirectToHome />
+      </Unauthenticated>
+      <Authenticated>
+        {children}
+      </Authenticated>
+    </>
+  );
+}
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useConvexAuth();
-  const router = useRouter();
-  const [authCheckComplete, setAuthCheckComplete] = useState(false);
-  const checkCount = useRef(0);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    if (!isLoading) {
-      if (isAuthenticated) {
-        setAuthCheckComplete(true);
-      } else {
-        checkCount.current += 1;
-        const delay = checkCount.current === 1 ? 500 : 100;
-        const timer = setTimeout(() => setAuthCheckComplete(true), delay);
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [isLoading, isAuthenticated]);
+    setMounted(true);
+  }, []);
 
-  useEffect(() => {
-    if (authCheckComplete && !isAuthenticated) {
-      router.push("/");
-    }
-  }, [authCheckComplete, isAuthenticated, router]);
-
-  if (isLoading || (!isAuthenticated && !authCheckComplete)) {
+  if (!mounted) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-sol-base02">
         <div className="text-sol-base0">Loading...</div>
@@ -36,9 +44,5 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!isAuthenticated) {
-    return null;
-  }
-
-  return <>{children}</>;
+  return <AuthGuardInner>{children}</AuthGuardInner>;
 }
