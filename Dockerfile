@@ -2,25 +2,17 @@ FROM oven/bun:1 AS builder
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json bun.lock ./
-COPY packages/web/package.json packages/web/
-COPY packages/convex/package.json packages/convex/
-COPY packages/cli/package.json packages/cli/
+# Copy everything for workspace resolution
+COPY . .
 
 # Install dependencies
 RUN bun install
 
-# Copy source files
-COPY . .
-
 # Build convex (types)
-WORKDIR /app/packages/convex
-RUN bun run build 2>/dev/null || true
+RUN cd packages/convex && bun run build 2>/dev/null || true
 
 # Build web
-WORKDIR /app/packages/web
-RUN rm -rf .next && bun run build
+RUN cd packages/web && rm -rf .next && bun run build
 
 # Production image
 FROM oven/bun:1-slim
