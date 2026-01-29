@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import * as fs from "fs";
 import * as path from "path";
-import { execSync, exec } from "child_process";
+import { execSync, exec, spawn } from "child_process";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
@@ -139,6 +139,17 @@ function logError(message: string, error?: Error, sessionId?: string): void {
 
 function logWarn(message: string, sessionId?: string): void {
   log(message, "warn", { session_id: sessionId });
+}
+
+function logLifecycle(event: string, details?: string): void {
+  const message = details ? `[LIFECYCLE] ${event}: ${details}` : `[LIFECYCLE] ${event}`;
+  log(message, "info");
+  remoteLogQueue.push({
+    level: "info",
+    message,
+    metadata: { error_code: event },
+    timestamp: Date.now(),
+  });
 }
 
 function logHealthSummary(): void {
@@ -1502,6 +1513,15 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
       const success = await performUpdate();
       if (success) {
         log("Update successful, restarting daemon...");
+        // Spawn new daemon before exiting (don't rely on launchd/systemd)
+        const child = spawn(process.execPath, process.argv.slice(1), {
+          detached: true,
+          stdio: "ignore",
+          env: { ...process.env, CODECAST_RESTART: "1" },
+        });
+        child.unref();
+        // Give it a moment to start
+        await new Promise(resolve => setTimeout(resolve, 500));
         process.exit(0);
       } else {
         log("Update failed, will retry later");
@@ -1689,7 +1709,8 @@ async function main(): Promise<void> {
     daemonVersion = "unknown";
   }
 
-  log("Daemon started");
+  const isRestart = process.env.CODECAST_RESTART === "1";
+  logLifecycle("daemon_start", `v${daemonVersion} PID=${process.pid}${isRestart ? " (restart after update)" : ""}`);
   log(`PID: ${process.pid}`);
 
   if (isSyncPaused()) {
@@ -2302,7 +2323,7 @@ async function main(): Promise<void> {
       }
     }
 
-    log("Shutdown complete");
+    logLifecycle("daemon_stop", "graceful shutdown");
     await flushRemoteLogs();
     process.exit(0);
   };
