@@ -53,7 +53,7 @@ export class SessionWatcher extends EventEmitter {
     this.watcher = watch(this.projectsPath, {
       persistent: true,
       ignoreInitial: true, // We handle initial files ourselves for sorting
-      depth: 2,
+      depth: 4, // Increased to catch subagent files in session/subagents/ folders
       awaitWriteFinish: {
         stabilityThreshold: 100,
         pollInterval: 50,
@@ -87,29 +87,31 @@ export class SessionWatcher extends EventEmitter {
     const RECENT_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
     const now = Date.now();
 
-    try {
-      const projectDirs = fs.readdirSync(this.projectsPath);
-      for (const projectDir of projectDirs) {
-        const projectPath = path.join(this.projectsPath, projectDir);
-        try {
-          const stat = fs.statSync(projectPath);
-          if (!stat.isDirectory()) continue;
-
-          const sessionFiles = fs.readdirSync(projectPath);
-          for (const file of sessionFiles) {
-            if (!file.endsWith(".jsonl")) continue;
-            const filePath = path.join(projectPath, file);
+    // Recursively scan for .jsonl files up to depth 4
+    const scanDir = (dir: string, depth: number) => {
+      if (depth > 4) return;
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            scanDir(fullPath, depth + 1);
+          } else if (entry.name.endsWith(".jsonl")) {
             try {
-              const fileStat = fs.statSync(filePath);
-              files.push({ path: filePath, size: fileStat.size, mtimeMs: fileStat.mtimeMs });
+              const fileStat = fs.statSync(fullPath);
+              files.push({ path: fullPath, size: fileStat.size, mtimeMs: fileStat.mtimeMs });
             } catch {
               // Skip files we can't stat
             }
           }
-        } catch {
-          // Skip directories we can't read
         }
+      } catch {
+        // Skip directories we can't read
       }
+    };
+
+    try {
+      scanDir(this.projectsPath, 0);
     } catch {
       // Directory doesn't exist or can't be read
       return;

@@ -12,6 +12,8 @@ import { c, fmt, icons } from "./colors.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
+import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
+import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import Anthropic from "@anthropic-ai/sdk";
@@ -1234,6 +1236,205 @@ program
   .description("Show daemon status, connection state, and sync information")
   .action(() => {
     showStatus();
+  });
+
+program
+  .command("health")
+  .description("Show detailed sync health information including dropped operations and pending files")
+  .option("--clear-dropped", "Clear the dropped operations log")
+  .option("--reconcile", "Run reconciliation against backend to find discrepancies")
+  .action(async (options) => {
+    console.log("");
+    console.log(fmt.muted("  Sync Health Report"));
+    console.log("");
+
+    const row = (label: string, value: string, indent = 2) => {
+      console.log(`${"  ".repeat(indent)}${fmt.muted(label.padEnd(18))} ${value}`);
+    };
+
+    // Check for dropped operations
+    const droppedPath = path.join(CONFIG_DIR, "dropped-operations.json");
+    let droppedOps: any[] = [];
+    try {
+      if (fs.existsSync(droppedPath)) {
+        droppedOps = JSON.parse(fs.readFileSync(droppedPath, "utf-8"));
+      }
+    } catch {
+      // ignore
+    }
+
+    if (options.clearDropped && droppedOps.length > 0) {
+      fs.unlinkSync(droppedPath);
+      console.log(fmt.success("  Cleared dropped operations log"));
+      console.log("");
+      return;
+    }
+
+    // Handle --reconcile option
+    if (options.reconcile) {
+      const config = readConfig();
+      if (!config?.auth_token || !config?.convex_url) {
+        console.log(fmt.error("  Not authenticated. Run 'codecast auth' first."));
+        console.log("");
+        return;
+      }
+
+      console.log(fmt.muted("  Running reconciliation against backend..."));
+      console.log("");
+
+      const syncService = new SyncService({
+        convexUrl: config.convex_url,
+        authToken: config.auth_token,
+        userId: config.user_id,
+      });
+
+      try {
+        const result = await performReconciliation(
+          syncService,
+          (msg, level) => {
+            if (level === "warn") {
+              console.log(`  ${fmt.warning(msg)}`);
+            } else if (level === "error") {
+              console.log(`  ${fmt.error(msg)}`);
+            } else {
+              console.log(`  ${fmt.muted(msg)}`);
+            }
+          },
+          100
+        );
+
+        console.log("");
+        console.log(`  ${fmt.muted("Reconciliation Results")}`);
+        row("Checked", fmt.number(result.checked) + fmt.muted(" sessions"), 2);
+
+        if (result.discrepancies.length === 0) {
+          row("Status", fmt.success("All sessions match backend"), 2);
+        } else {
+          row("Discrepancies", fmt.warning(String(result.discrepancies.length)), 2);
+
+          const confirm = await import("@inquirer/prompts").then(m => m.confirm);
+          console.log("");
+          const shouldRepair = await confirm({
+            message: "Reset affected sessions for re-sync?",
+            default: true,
+          });
+
+          if (shouldRepair) {
+            const repaired = await repairDiscrepancies(result.discrepancies, (msg) => {
+              console.log(`  ${fmt.muted(msg)}`);
+            });
+            console.log("");
+            console.log(fmt.success(`  Reset ${repaired} sessions. They will re-sync on next daemon cycle.`));
+          }
+        }
+      } catch (err) {
+        console.log(fmt.error(`  Reconciliation failed: ${err instanceof Error ? err.message : String(err)}`));
+      }
+
+      console.log("");
+      return;
+    }
+
+    // Dropped operations
+    console.log(`  ${fmt.muted("Dropped Operations")}`);
+    if (droppedOps.length === 0) {
+      row("Count", fmt.success("0") + fmt.muted(" (none dropped)"), 2);
+    } else {
+      row("Count", fmt.warning(String(droppedOps.length)), 2);
+      const recentDropped = droppedOps.slice(-5);
+      for (const op of recentDropped) {
+        const time = formatRelativeTime(op.droppedAt);
+        const sessionId = op.sessionId ? op.sessionId.slice(0, 8) + "..." : "unknown";
+        console.log(`      ${fmt.muted(icons.bullet)} ${fmt.value(op.type)} ${fmt.muted(`(${sessionId})`)} ${fmt.muted(time)}`);
+        if (op.lastError) {
+          console.log(`        ${fmt.error(op.lastError.slice(0, 60))}`);
+        }
+      }
+      if (droppedOps.length > 5) {
+        console.log(`      ${fmt.muted(`... and ${droppedOps.length - 5} more`)}`);
+      }
+      console.log(`      ${fmt.muted("Use")} ${fmt.cmd("codecast health --clear-dropped")} ${fmt.muted("to clear")}`);
+    }
+    console.log("");
+
+    // Pending files (files modified since last sync)
+    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+    const unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
+
+    console.log(`  ${fmt.muted("Pending Sync")}`);
+    if (unsyncedFiles.length === 0) {
+      row("Files", fmt.success("0") + fmt.muted(" (all synced)"), 2);
+    } else {
+      row("Files", fmt.warning(String(unsyncedFiles.length)) + fmt.muted(" need syncing"), 2);
+      for (const filePath of unsyncedFiles.slice(0, 5)) {
+        const sessionId = path.basename(filePath, ".jsonl").slice(0, 8) + "...";
+        console.log(`      ${fmt.muted(icons.bullet)} ${fmt.value(sessionId)}`);
+      }
+      if (unsyncedFiles.length > 5) {
+        console.log(`      ${fmt.muted(`... and ${unsyncedFiles.length - 5} more`)}`);
+      }
+    }
+    console.log("");
+
+    // Retry queue
+    const retryPath = path.join(CONFIG_DIR, "retry-queue.json");
+    let retryOps: any[] = [];
+    try {
+      if (fs.existsSync(retryPath)) {
+        retryOps = JSON.parse(fs.readFileSync(retryPath, "utf-8"));
+      }
+    } catch {
+      // ignore
+    }
+
+    console.log(`  ${fmt.muted("Retry Queue")}`);
+    if (retryOps.length === 0) {
+      row("Items", fmt.success("0") + fmt.muted(" (empty)"), 2);
+    } else {
+      row("Items", fmt.number(retryOps.length) + fmt.muted(" pending retry"), 2);
+      for (const op of retryOps.slice(0, 3)) {
+        const attempts = op.attempts || 0;
+        console.log(`      ${fmt.muted(icons.bullet)} ${fmt.value(op.type)} ${fmt.muted(`(attempt ${attempts}/${10})`)}`);
+      }
+      if (retryOps.length > 3) {
+        console.log(`      ${fmt.muted(`... and ${retryOps.length - 3} more`)}`);
+      }
+    }
+    console.log("");
+
+    // Last reconciliation
+    const lastRecon = getLastReconciliation();
+    console.log(`  ${fmt.muted("Reconciliation")}`);
+    if (lastRecon) {
+      row("Last run", fmt.value(formatRelativeTime(lastRecon.timestamp)), 2);
+      if (lastRecon.discrepancyCount === 0) {
+        row("Result", fmt.success("No discrepancies"), 2);
+      } else {
+        row("Result", fmt.warning(`${lastRecon.discrepancyCount} discrepancies found`), 2);
+      }
+    } else {
+      row("Last run", fmt.muted("never"), 2);
+    }
+    console.log(`      ${fmt.muted("Use")} ${fmt.cmd("codecast health --reconcile")} ${fmt.muted("to run now")}`);
+    console.log("");
+
+    // Sync ledger summary
+    const syncRecords = getAllSyncRecords();
+    const recordCount = Object.keys(syncRecords).length;
+
+    console.log(`  ${fmt.muted("Sync Ledger")}`);
+    row("Tracked files", fmt.number(recordCount), 2);
+
+    if (recordCount > 0) {
+      const records = Object.values(syncRecords);
+      const totalMessages = records.reduce((sum, r) => sum + (r.messageCount || 0), 0);
+      const lastSync = Math.max(...records.map(r => r.lastSyncedAt || 0));
+      row("Total messages", fmt.number(totalMessages), 2);
+      if (lastSync > 0) {
+        row("Last activity", fmt.value(formatRelativeTime(lastSync)), 2);
+      }
+    }
+    console.log("");
   });
 
 program
@@ -3253,6 +3454,42 @@ program
       }
       console.log("\nRestart codecast to use the new version");
     } else {
+      process.exit(1);
+    }
+  });
+
+program
+  .command("force-update")
+  .description("Set minimum CLI version to force remote clients to update (admin only)")
+  .argument("<version>", "Minimum version required (e.g., 1.0.12)")
+  .action(async (version) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    if (!/^\d+\.\d+\.\d+$/.test(version)) {
+      console.error("Invalid version format. Use semver (e.g., 1.0.12)");
+      process.exit(1);
+    }
+
+    const syncService = new SyncService({
+      convexUrl: config.convex_url,
+      authToken: config.auth_token,
+      userId: config.user_id,
+    });
+
+    try {
+      await syncService.getClient().mutation(
+        "systemConfig:setMinCliVersion" as any,
+        { version, api_token: config.auth_token }
+      );
+      console.log(`Minimum CLI version set to ${version}`);
+      console.log("Remote daemons will auto-update within 5 minutes");
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`Failed to set min version: ${errMsg}`);
       process.exit(1);
     }
   });

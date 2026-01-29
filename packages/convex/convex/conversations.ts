@@ -2722,3 +2722,41 @@ export const deleteByProjectHash = mutation({
     return { deleted: 0, hasMore: true, conv_id: convId };
   },
 });
+
+export const getMessageCountsForReconciliation = query({
+  args: {
+    session_ids: v.array(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication required");
+    }
+
+    const results: Array<{
+      session_id: string;
+      conversation_id: string;
+      message_count: number;
+      updated_at: number;
+    }> = [];
+
+    for (const sessionId of args.session_ids.slice(0, 100)) {
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", sessionId))
+        .first();
+
+      if (conv && conv.user_id.toString() === authUserId.toString()) {
+        results.push({
+          session_id: sessionId,
+          conversation_id: conv._id,
+          message_count: conv.message_count || 0,
+          updated_at: conv.updated_at || conv._creationTime,
+        });
+      }
+    }
+
+    return results;
+  },
+});

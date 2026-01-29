@@ -1,4 +1,5 @@
 import fs from "fs";
+import path from "path";
 
 export interface RetryOperation {
   id: string;
@@ -9,6 +10,18 @@ export interface RetryOperation {
   createdAt: number;
   lastError?: string;
   rateLimitDelayMs?: number;
+}
+
+export interface DroppedOperation {
+  id: string;
+  type: "createConversation" | "addMessage";
+  params: Record<string, unknown>;
+  attempts: number;
+  createdAt: number;
+  droppedAt: number;
+  lastError?: string;
+  sessionId?: string;
+  conversationId?: string;
 }
 
 export function parseRateLimitDelay(error: string): number | null {
@@ -22,13 +35,16 @@ export function parseRateLimitDelay(error: string): number | null {
   return null;
 }
 
+export type LogLevel = "info" | "warn" | "error";
+
 export interface RetryQueueConfig {
   initialDelayMs?: number;
   maxDelayMs?: number;
   maxAttempts?: number;
   concurrency?: number;
   persistPath?: string;
-  onLog?: (message: string) => void;
+  droppedPath?: string;
+  onLog?: (message: string, level?: LogLevel) => void;
 }
 
 const DEFAULT_INITIAL_DELAY = 1000;
@@ -45,7 +61,8 @@ export class RetryQueue {
   private maxAttempts: number;
   private concurrency: number;
   private persistPath: string | null;
-  private log: (message: string) => void;
+  private droppedPath: string | null;
+  private log: (message: string, level?: LogLevel) => void;
   private processing = false;
   private rateLimitedUntil = 0;
 
@@ -55,6 +72,7 @@ export class RetryQueue {
     this.maxAttempts = config.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
     this.concurrency = config.concurrency ?? DEFAULT_CONCURRENCY;
     this.persistPath = config.persistPath ?? null;
+    this.droppedPath = config.droppedPath ?? null;
     this.log = config.onLog ?? (() => {});
     this.load();
   }
@@ -226,8 +244,10 @@ export class RetryQueue {
 
     if (op.attempts >= this.maxAttempts) {
       this.log(
-        `Max retries reached for ${op.type} (id: ${op.id}), dropping operation`
+        `DROPPED: ${op.type} after ${op.attempts} attempts. Last error: ${error}. Session: ${op.params.sessionId || 'unknown'}`,
+        "error"
       );
+      this.recordDroppedOperation(op);
       this.queue.delete(op.id);
       return;
     }
@@ -237,8 +257,65 @@ export class RetryQueue {
     op.nextRetryAt = Date.now() + nextDelay;
     op.rateLimitDelayMs = rateLimitDelay ?? undefined;
     this.log(
-      `Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms${rateLimitDelay ? ' (rate limited)' : ''} (id: ${op.id})`
+      `Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms${rateLimitDelay ? ' (rate limited)' : ''} (id: ${op.id})`,
+      "warn"
     );
+  }
+
+  private recordDroppedOperation(op: RetryOperation): void {
+    if (!this.droppedPath) return;
+
+    const dropped: DroppedOperation = {
+      id: op.id,
+      type: op.type,
+      params: op.params,
+      attempts: op.attempts,
+      createdAt: op.createdAt,
+      droppedAt: Date.now(),
+      lastError: op.lastError,
+      sessionId: op.params.sessionId as string | undefined,
+      conversationId: op.params.conversationId as string | undefined,
+    };
+
+    try {
+      let existing: DroppedOperation[] = [];
+      if (fs.existsSync(this.droppedPath)) {
+        try {
+          existing = JSON.parse(fs.readFileSync(this.droppedPath, "utf-8"));
+        } catch {
+          existing = [];
+        }
+      }
+
+      existing.push(dropped);
+
+      // Keep only last 1000 dropped operations
+      if (existing.length > 1000) {
+        existing = existing.slice(-1000);
+      }
+
+      fs.writeFileSync(this.droppedPath, JSON.stringify(existing, null, 2));
+      this.log(`Recorded dropped operation to ${this.droppedPath}`);
+    } catch (err) {
+      this.log(`Failed to record dropped operation: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  getDroppedOperations(): DroppedOperation[] {
+    if (!this.droppedPath || !fs.existsSync(this.droppedPath)) {
+      return [];
+    }
+    try {
+      return JSON.parse(fs.readFileSync(this.droppedPath, "utf-8"));
+    } catch {
+      return [];
+    }
+  }
+
+  clearDroppedOperations(): void {
+    if (this.droppedPath && fs.existsSync(this.droppedPath)) {
+      fs.unlinkSync(this.droppedPath);
+    }
   }
 
   getQueueSize(): number {

@@ -402,4 +402,76 @@ export class SyncService {
       throw error;
     }
   }
+
+  async getMinCliVersion(): Promise<string | null> {
+    try {
+      const version = await this.client.query(
+        "systemConfig:getMinCliVersion" as any,
+        {}
+      );
+      return version as string | null;
+    } catch {
+      return null;
+    }
+  }
+
+  async syncLogs(logs: Array<{
+    level: "debug" | "info" | "warn" | "error";
+    message: string;
+    metadata?: {
+      session_id?: string;
+      error_code?: string;
+      stack?: string;
+    };
+    daemon_version?: string;
+    platform?: string;
+    timestamp: number;
+  }>): Promise<{ inserted: number } | null> {
+    if (!this.apiToken || logs.length === 0) {
+      return null;
+    }
+    try {
+      const result = await this.client.mutation(
+        "daemonLogs:insertBatch" as any,
+        {
+          api_token: this.apiToken,
+          logs,
+        }
+      );
+      return result as { inserted: number };
+    } catch {
+      return null;
+    }
+  }
+
+  async getMessageCountsForReconciliation(sessionIds: string[]): Promise<Array<{
+    session_id: string;
+    conversation_id: string;
+    message_count: number;
+    updated_at: number;
+  }>> {
+    if (!this.apiToken || sessionIds.length === 0) {
+      return [];
+    }
+    try {
+      const result = await this.client.query(
+        "conversations:getMessageCountsForReconciliation" as any,
+        {
+          session_ids: sessionIds,
+          api_token: this.apiToken,
+        }
+      );
+      return result as Array<{
+        session_id: string;
+        conversation_id: string;
+        message_count: number;
+        updated_at: number;
+      }>;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
 }

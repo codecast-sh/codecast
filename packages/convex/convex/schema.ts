@@ -563,4 +563,33 @@ export default defineSchema({
   })
     .index("by_share_token", ["share_token"])
     .index("by_message_id", ["message_id"]),
+
+  system_config: defineTable({
+    key: v.string(),
+    value: v.string(),
+    updated_at: v.number(),
+    updated_by: v.optional(v.id("users")),
+  }).index("by_key", ["key"]),
+
+  daemon_logs: defineTable({
+    user_id: v.id("users"),
+    level: v.union(
+      v.literal("debug"),
+      v.literal("info"),
+      v.literal("warn"),
+      v.literal("error")
+    ),
+    message: v.string(),
+    metadata: v.optional(v.object({
+      session_id: v.optional(v.string()),
+      error_code: v.optional(v.string()),
+      stack: v.optional(v.string()),
+    })),
+    daemon_version: v.optional(v.string()),
+    platform: v.optional(v.string()),
+    timestamp: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_timestamp", ["user_id", "timestamp"])
+    .index("by_user_level", ["user_id", "level"]),
 });

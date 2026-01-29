@@ -8,6 +8,7 @@ import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
 import { parseSessionFile, extractSlug, extractParentUuid, extractSummaryTitle, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
+import { markSynced, getSyncRecord, findUnsyncedFiles } from "./syncLedger.js";
 import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
@@ -15,6 +16,8 @@ import { InvalidateSync } from "./invalidateSync.js";
 import { promisify } from "util";
 import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
+import { getVersion, performUpdate } from "./update.js";
+import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 
 const execAsync = promisify(exec);
 
@@ -70,13 +73,77 @@ interface DaemonState {
 
 const AUTH_FAILURE_THRESHOLD = 5;
 const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const RECONCILIATION_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const WATCHDOG_STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const LOG_FLUSH_INTERVAL_MS = 30 * 1000; // 30 seconds
+const MAX_LOG_QUEUE_SIZE = 200;
 
+type LogLevel = "debug" | "info" | "warn" | "error";
 
-function log(message: string): void {
+interface RemoteLog {
+  level: LogLevel;
+  message: string;
+  metadata?: {
+    session_id?: string;
+    error_code?: string;
+    stack?: string;
+  };
+  timestamp: number;
+}
+
+const remoteLogQueue: RemoteLog[] = [];
+let syncServiceRef: SyncService | null = null;
+let daemonVersion: string | undefined;
+const platform = process.platform;
+
+function log(message: string, level: LogLevel = "info", metadata?: RemoteLog["metadata"]): void {
   const timestamp = new Date().toISOString();
-  const line = `[${timestamp}] ${message}\n`;
+  const levelTag = level === "info" ? "" : `[${level.toUpperCase()}] `;
+  const line = `[${timestamp}] ${levelTag}${message}\n`;
   fs.appendFileSync(LOG_FILE, line);
+
+  if (level === "warn" || level === "error") {
+    remoteLogQueue.push({
+      level,
+      message: message.slice(0, 2000),
+      metadata,
+      timestamp: Date.now(),
+    });
+    if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
+      remoteLogQueue.shift();
+    }
+  }
+}
+
+function logError(message: string, error?: Error, sessionId?: string): void {
+  const errMsg = error ? `${message}: ${error.message}` : message;
+  log(errMsg, "error", {
+    session_id: sessionId,
+    error_code: error?.name,
+    stack: error?.stack?.slice(0, 1000),
+  });
+}
+
+function logWarn(message: string, sessionId?: string): void {
+  log(message, "warn", { session_id: sessionId });
+}
+
+async function flushRemoteLogs(): Promise<void> {
+  if (!syncServiceRef || remoteLogQueue.length === 0) {
+    return;
+  }
+  const logsToSend = remoteLogQueue.splice(0, 100);
+  const logsWithMeta = logsToSend.map(l => ({
+    ...l,
+    daemon_version: daemonVersion,
+    platform,
+  }));
+  try {
+    await syncServiceRef.syncLogs(logsWithMeta);
+  } catch {
+    remoteLogQueue.unshift(...logsToSend);
+  }
 }
 
 function ensureConfigDir(): void {
@@ -169,7 +236,7 @@ function handleAuthFailure(): boolean {
   const currentCount = (state.authFailureCount || 0) + 1;
 
   if (currentCount >= AUTH_FAILURE_THRESHOLD) {
-    log(`Auth failed ${currentCount} times consecutively - marking auth as expired`);
+    logError(`Auth failed ${currentCount} times consecutively - marking auth as expired`);
     saveDaemonState({ authExpired: true, authFailureCount: currentCount });
     return true;
   }
@@ -589,6 +656,7 @@ async function processSessionFile(
   }
 
     setPosition(filePath, stats.size);
+    markSynced(filePath, stats.size, messages.length, conversationId);
     log(`Synced ${messages.length} messages for session ${sessionId}`);
 
     const lastAssistantMessage = messages.filter(m => m.role === "assistant").pop();
@@ -1292,9 +1360,10 @@ function acquireLock(): boolean {
   return true;
 }
 
-function findStaleSessionFiles(lastSyncTime: number): string[] {
+function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   const staleFiles: string[] = [];
+  const now = Date.now();
 
   if (!fs.existsSync(claudeProjectsDir)) {
     return staleFiles;
@@ -1313,7 +1382,21 @@ function findStaleSessionFiles(lastSyncTime: number): string[] {
         const filePath = path.join(projectPath, file);
         try {
           const fileStat = fs.statSync(filePath);
-          if (fileStat.mtimeMs > lastSyncTime) {
+          const fileAge = now - fileStat.mtimeMs;
+
+          // Skip files older than maxAge (default 7 days)
+          if (fileAge > maxAgeMs) continue;
+
+          // Check sync ledger for this file
+          const syncRecord = getSyncRecord(filePath);
+          if (!syncRecord) {
+            // Never synced - add to stale list
+            staleFiles.push(filePath);
+          } else if (fileStat.mtimeMs > syncRecord.lastSyncedAt) {
+            // Modified after last sync - add to stale list
+            staleFiles.push(filePath);
+          } else if (fileStat.size > syncRecord.lastSyncedPosition) {
+            // New content since last sync
             staleFiles.push(filePath);
           }
         } catch {
@@ -1338,6 +1421,119 @@ interface WatchdogDependencies {
   updateState: () => void;
 }
 
+function compareVersions(a: string, b: string): number {
+  const partsA = a.split(".").map(Number);
+  const partsB = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+    const numA = partsA[i] || 0;
+    const numB = partsB[i] || 0;
+    if (numA > numB) return 1;
+    if (numA < numB) return -1;
+  }
+  return 0;
+}
+
+async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> {
+  try {
+    const minVersion = await syncService.getMinCliVersion();
+    if (!minVersion) return false;
+
+    const currentVersion = getVersion();
+    if (compareVersions(currentVersion, minVersion) < 0) {
+      log(`Force update required: current=${currentVersion} min=${minVersion}`);
+      log("Performing automatic update...");
+      const success = await performUpdate();
+      if (success) {
+        log("Update successful, restarting daemon...");
+        process.exit(0);
+      } else {
+        log("Update failed, will retry later");
+      }
+      return true;
+    }
+    return false;
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log(`Version check failed: ${errMsg}`);
+    return false;
+  }
+}
+
+function startVersionChecker(syncService: SyncService): NodeJS.Timeout {
+  checkForForcedUpdate(syncService);
+
+  return setInterval(() => {
+    checkForForcedUpdate(syncService);
+  }, VERSION_CHECK_INTERVAL_MS);
+}
+
+function logHealthReport(retryQueue: RetryQueue): void {
+  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+  const unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
+  const droppedOps = retryQueue.getDroppedOperations();
+  const queueSize = retryQueue.size();
+
+  // Only log if there are issues
+  if (unsyncedFiles.length > 0 || droppedOps.length > 0 || queueSize > 10) {
+    logWarn(
+      `Health: ${unsyncedFiles.length} pending files, ${droppedOps.length} dropped ops, ${queueSize} in retry queue`
+    );
+  } else {
+    log(`Health: All synced, no issues`);
+  }
+}
+
+function startReconciliation(syncService: SyncService, retryQueue: RetryQueue): NodeJS.Timeout {
+  log("Reconciliation scheduler started (runs every hour)");
+
+  // Run initial reconciliation after 5 minutes (let daemon stabilize first)
+  setTimeout(async () => {
+    try {
+      // Log health report
+      logHealthReport(retryQueue);
+
+      const result = await performReconciliation(
+        syncService,
+        (msg, level) => log(msg, level || "info")
+      );
+
+      if (result.discrepancies.length > 0) {
+        logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
+        // Auto-repair by resetting positions
+        const repaired = await repairDiscrepancies(result.discrepancies, log);
+        log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
+      }
+    } catch (err) {
+      logError("Initial reconciliation failed", err instanceof Error ? err : new Error(String(err)));
+    }
+  }, 5 * 60 * 1000);
+
+  return setInterval(async () => {
+    const state = readDaemonState();
+    if (state?.authExpired) {
+      return;
+    }
+
+    try {
+      // Log health report
+      logHealthReport(retryQueue);
+
+      const result = await performReconciliation(
+        syncService,
+        (msg, level) => log(msg, level || "info")
+      );
+
+      if (result.discrepancies.length > 0) {
+        logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
+        const repaired = await repairDiscrepancies(result.discrepancies, log);
+        log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
+      }
+    } catch (err) {
+      logError("Reconciliation failed", err instanceof Error ? err : new Error(String(err)));
+    }
+  }, RECONCILIATION_INTERVAL_MS);
+}
+
 function startWatchdog(
   deps: WatchdogDependencies
 ): NodeJS.Timeout {
@@ -1357,19 +1553,13 @@ function startWatchdog(
       return;
     }
 
-    const lastSync = state?.lastSyncTime || 0;
-    const timeSinceSync = now - lastSync;
-
-    if (timeSinceSync < WATCHDOG_STALE_THRESHOLD_MS) {
-      return;
-    }
-
-    const staleFiles = findStaleSessionFiles(lastSync);
+    // Use sync ledger to find files that need syncing (modified after their last sync)
+    const staleFiles = findStaleSessionFiles();
     if (staleFiles.length === 0) {
       return;
     }
 
-    log(`Watchdog: Detected ${staleFiles.length} files modified since last sync (${Math.round(timeSinceSync / 60000)}m ago)`);
+    log(`Watchdog: Detected ${staleFiles.length} files needing sync`);
 
     const currentRestarts = state?.watchdogRestarts || 0;
     saveDaemonState({ watchdogRestarts: currentRestarts + 1 });
@@ -1418,14 +1608,19 @@ async function main(): Promise<void> {
   }
 
   process.on("uncaughtException", (err) => {
-    log(`Uncaught exception: ${err.message}`);
-    log(err.stack || "");
+    logError("Uncaught exception", err);
   });
 
   process.on("unhandledRejection", (reason) => {
-    const msg = reason instanceof Error ? reason.message : String(reason);
-    log(`Unhandled rejection: ${msg}`);
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logError("Unhandled rejection", err);
   });
+
+  try {
+    daemonVersion = getVersion();
+  } catch {
+    daemonVersion = "unknown";
+  }
 
   log("Daemon started");
   log(`PID: ${process.pid}`);
@@ -1452,6 +1647,12 @@ async function main(): Promise<void> {
     authToken: config.auth_token,
     userId: config.user_id,
   });
+  syncServiceRef = syncService;
+
+  setInterval(() => {
+    flushRemoteLogs().catch(() => {});
+  }, LOG_FLUSH_INTERVAL_MS);
+
   const conversationCache = readConversationCache();
   const titleCache = readTitleCache();
   const pendingMessages: PendingMessages = {};
@@ -1462,7 +1663,8 @@ async function main(): Promise<void> {
     maxDelayMs: 60000,
     maxAttempts: 15,
     persistPath: `${CONFIG_DIR}/retry-queue.json`,
-    onLog: log,
+    droppedPath: `${CONFIG_DIR}/dropped-operations.json`,
+    onLog: (message, level) => log(message, level || "info"),
   });
 
   const updateState = () => {
@@ -1603,10 +1805,59 @@ async function main(): Promise<void> {
   });
 
   watcher.on("error", (error: Error) => {
-    log(`Watcher error: ${error.message}`);
+    logError("Watcher error", error);
   });
 
   watcher.start();
+
+  // Startup scan: sync any files that were missed while daemon was down
+  const performStartupScan = async () => {
+    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+    const unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
+
+    if (unsyncedFiles.length > 0) {
+      log(`Startup scan: Found ${unsyncedFiles.length} files needing sync`);
+
+      for (const filePath of unsyncedFiles) {
+        const parts = filePath.split(path.sep);
+        const sessionId = parts[parts.length - 1].replace(".jsonl", "");
+        const projectDirName = parts[parts.length - 2];
+        const projectPath = projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
+
+        if (config.excluded_paths && isPathExcluded(projectPath, config.excluded_paths)) {
+          continue;
+        }
+
+        if (!isProjectAllowedToSync(projectPath, config)) {
+          continue;
+        }
+
+        log(`Startup scan: Syncing ${sessionId}`);
+
+        await processSessionFile(
+          filePath,
+          sessionId,
+          projectPath,
+          syncService,
+          config.user_id!,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState
+        );
+      }
+
+      log(`Startup scan: Completed syncing ${unsyncedFiles.length} files`);
+    } else {
+      log("Startup scan: All files up to date");
+    }
+  };
+
+  // Run startup scan in background (don't block daemon startup)
+  performStartupScan().catch(err => {
+    logError("Startup scan failed", err instanceof Error ? err : new Error(String(err)));
+  });
 
   const watchdogInterval = startWatchdog({
     config,
@@ -1617,6 +1868,9 @@ async function main(): Promise<void> {
     titleCache,
     updateState,
   });
+
+  const versionCheckInterval = startVersionChecker(syncService);
+  const reconciliationInterval = startReconciliation(syncService, retryQueue);
 
   const cursorWatcher = new CursorWatcher();
   const cursorSyncs = new Map<string, InvalidateSync>();
@@ -1670,7 +1924,7 @@ async function main(): Promise<void> {
   });
 
   cursorWatcher.on("error", (error: Error) => {
-    log(`Cursor watcher error: ${error.message}`);
+    logError("Cursor watcher error", error);
   });
 
   cursorWatcher.start();
@@ -1717,7 +1971,7 @@ async function main(): Promise<void> {
   });
 
   codexWatcher.on("error", (error: Error) => {
-    log(`Codex watcher error: ${error.message}`);
+    logError("Codex watcher error", error);
   });
 
   codexWatcher.start();
@@ -1809,8 +2063,8 @@ async function main(): Promise<void> {
       saveDaemonState({ connected: true });
       resetReconnectDelay();
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      log(`Subscription error: ${errMsg}`);
+      const error = err instanceof Error ? err : new Error(String(err));
+      logError("Subscription error", error);
       saveDaemonState({ connected: false });
       if (unsubscribe) {
         unsubscribe();
@@ -1893,8 +2147,8 @@ async function main(): Promise<void> {
       );
       log("Permission subscription established successfully");
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      log(`Permission subscription error: ${errMsg}`);
+      const error = err instanceof Error ? err : new Error(String(err));
+      logError("Permission subscription error", error);
       if (permissionUnsubscribe) {
         permissionUnsubscribe();
         permissionUnsubscribe = null;
@@ -1924,7 +2178,9 @@ async function main(): Promise<void> {
     }
 
     clearInterval(watchdogInterval);
-    log("Watchdog stopped");
+    clearInterval(versionCheckInterval);
+    clearInterval(reconciliationInterval);
+    log("Watchdog and reconciliation stopped");
 
     watcher.stop();
     cursorWatcher.stop();
@@ -1958,6 +2214,7 @@ async function main(): Promise<void> {
     }
 
     log("Shutdown complete");
+    await flushRemoteLogs();
     process.exit(0);
   };
 
@@ -1984,7 +2241,7 @@ export async function runDaemon(): Promise<void> {
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("daemon.js")) {
   main().catch((err) => {
-    log(`Fatal error: ${err.message}`);
-    process.exit(1);
+    logError("Fatal error", err instanceof Error ? err : new Error(String(err)));
+    flushRemoteLogs().finally(() => process.exit(1));
   });
 }
