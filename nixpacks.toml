@@ -1,4 +1,7 @@
 # Force fresh build by disabling caching
+# Force Node provider instead of Turbo
+providers = []
+
 [phases.setup]
 nixPkgs = ["nodejs_22", "bun"]
 
