@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
+import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
 import { Button } from "../../../components/ui/button";
@@ -10,7 +11,12 @@ import { Button } from "../../../components/ui/button";
 function AccountsContent() {
   const user = useQuery(api.users.getCurrentUser);
   const unlinkGitHub = useMutation(api.users.unlinkGitHub);
+  const deleteAccount = useMutation(api.users.deleteAccount);
+  const { signOut } = useAuthActions();
   const [isUnlinking, setIsUnlinking] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [error, setError] = useState("");
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -40,6 +46,30 @@ function AccountsContent() {
       setError(err instanceof Error ? err.message : "Failed to disconnect GitHub");
     } finally {
       setIsUnlinking(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmText !== "DELETE") {
+      setError("Please type DELETE to confirm");
+      return;
+    }
+    setIsDeleting(true);
+    setError("");
+    try {
+      const result = await deleteAccount({});
+      if (result.completed) {
+        await signOut();
+        router.push("/");
+      } else {
+        setError(result.message);
+        setShowDeleteConfirm(false);
+        setDeleteConfirmText("");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete account");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -191,6 +221,68 @@ function AccountsContent() {
           <p className="mt-4 text-xs text-sol-base01">
             Use "Reconfigure" to update GitHub permissions if you need access to additional repositories or organizations.
           </p>
+        )}
+      </Card>
+
+      <Card className="p-6 bg-sol-bg border-sol-border border-red-500/30">
+        <h2 className="text-lg font-semibold text-red-400 mb-4">Danger Zone</h2>
+        <p className="text-sm text-sol-base1 mb-4">
+          Permanently delete your account and all associated data. This action cannot be undone.
+        </p>
+
+        {!showDeleteConfirm ? (
+          <Button
+            variant="outline"
+            onClick={() => setShowDeleteConfirm(true)}
+            className="text-red-400 border-red-500/30 hover:bg-red-500/10"
+          >
+            Delete Account
+          </Button>
+        ) : (
+          <div className="space-y-4">
+            <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+              <p className="text-red-400 text-sm font-medium mb-2">
+                This will permanently delete:
+              </p>
+              <ul className="text-sm text-red-300/80 space-y-1 list-disc list-inside">
+                <li>All your conversations and messages</li>
+                <li>All bookmarks and saved patterns</li>
+                <li>All API tokens and integrations</li>
+                <li>Your account and profile</li>
+              </ul>
+            </div>
+            <div>
+              <label className="block text-sm text-sol-text-muted mb-2">
+                Type <span className="font-mono text-red-400">DELETE</span> to confirm:
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                className="w-full px-3 py-2 bg-sol-bg border border-sol-border rounded-lg text-sol-text focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                placeholder="DELETE"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  setDeleteConfirmText("");
+                }}
+                className="text-sol-text border-sol-border"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleDeleteAccount}
+                disabled={isDeleting || deleteConfirmText !== "DELETE"}
+                className="bg-red-600 hover:bg-red-500 text-white disabled:opacity-50"
+              >
+                {isDeleting ? "Deleting..." : "Permanently Delete Account"}
+              </Button>
+            </div>
+          </div>
         )}
       </Card>
     </div>

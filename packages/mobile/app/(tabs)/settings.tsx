@@ -1,10 +1,13 @@
-import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView, View as RNView, Text as RNText } from 'react-native';
+import { useState } from 'react';
+import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView, View as RNView, Text as RNText, TextInput } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Theme, Spacing } from '@/constants/Theme';
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const {
     signOut,
     isBiometricAvailable,
@@ -15,6 +18,8 @@ export default function SettingsScreen() {
 
   const currentUser = useQuery(api.users.getCurrentUser);
   const updateNotificationPreferences = useMutation(api.users.updateNotificationPreferences);
+  const deleteAccountMutation = useMutation(api.users.deleteAccount);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleToggleBiometric = async () => {
     if (isBiometricEnabled) {
@@ -68,6 +73,49 @@ export default function SettingsScreen() {
           text: 'Sign Out',
           style: 'destructive',
           onPress: signOut,
+        },
+      ]
+    );
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account',
+      'This will permanently delete your account and all your data. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            Alert.prompt(
+              'Confirm Deletion',
+              'Type DELETE to confirm account deletion:',
+              async (text) => {
+                if (text?.toUpperCase() === 'DELETE') {
+                  setIsDeleting(true);
+                  try {
+                    const result = await deleteAccountMutation({});
+                    if (result.completed) {
+                      await signOut();
+                      router.replace('/auth/login');
+                    } else {
+                      Alert.alert('Partial Deletion', result.message, [
+                        { text: 'OK', onPress: () => handleDeleteAccount() }
+                      ]);
+                    }
+                  } catch (error) {
+                    Alert.alert('Error', 'Failed to delete account. Please try again.');
+                  } finally {
+                    setIsDeleting(false);
+                  }
+                } else if (text) {
+                  Alert.alert('Error', 'Please type DELETE to confirm');
+                }
+              },
+              'plain-text'
+            );
+          },
         },
       ]
     );
@@ -203,6 +251,23 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </RNView>
 
+      <RNView style={styles.section}>
+        <RNText style={styles.dangerSectionTitle}>Danger Zone</RNText>
+        <TouchableOpacity
+          style={styles.deleteButton}
+          onPress={handleDeleteAccount}
+          activeOpacity={0.7}
+          disabled={isDeleting}
+        >
+          <RNText style={styles.deleteButtonText}>
+            {isDeleting ? 'Deleting...' : 'Delete Account'}
+          </RNText>
+        </TouchableOpacity>
+        <RNText style={styles.deleteWarning}>
+          Permanently delete your account and all data. This cannot be undone.
+        </RNText>
+      </RNView>
+
       <RNView style={styles.footer}>
         <RNText style={styles.footerText}>Codecast v1.0.0</RNText>
       </RNView>
@@ -310,6 +375,35 @@ const styles = StyleSheet.create({
     color: Theme.red,
     fontSize: 16,
     fontWeight: '600',
+  },
+  dangerSectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#ef4444',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: Spacing.sm,
+    marginLeft: Spacing.xs,
+  },
+  deleteButton: {
+    backgroundColor: '#ef444420',
+    padding: Spacing.lg,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ef4444',
+  },
+  deleteButtonText: {
+    color: '#ef4444',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  deleteWarning: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    textAlign: 'center',
+    marginTop: Spacing.sm,
+    paddingHorizontal: Spacing.md,
   },
   footer: {
     alignItems: 'center',
