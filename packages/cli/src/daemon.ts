@@ -29,6 +29,7 @@ const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 
 interface Config {
   user_id?: string;
+  team_id?: string;
   convex_url?: string;
   auth_token?: string;
   excluded_paths?: string;
@@ -378,6 +379,7 @@ async function processSessionFile(
   projectPath: string,
   syncService: SyncService,
   userId: string,
+  teamId: string | undefined,
   conversationCache: ConversationCache,
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
@@ -477,6 +479,7 @@ async function processSessionFile(
 
       conversationId = await syncService.createConversation({
         userId,
+        teamId,
         sessionId,
         agentType: "claude_code",
         projectPath,
@@ -583,6 +586,7 @@ async function processSessionFile(
 
       retryQueue.add("createConversation", {
         userId,
+        teamId,
         sessionId,
         agentType: "claude_code",
         projectPath,
@@ -647,6 +651,7 @@ async function processSessionFile(
 
           conversationId = await syncService.createConversation({
             userId,
+            teamId,
             sessionId,
             agentType: "claude_code",
             projectPath,
@@ -763,6 +768,7 @@ async function processCursorSession(
   workspacePath: string,
   syncService: SyncService,
   userId: string,
+  teamId: string | undefined,
   conversationCache: ConversationCache,
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
@@ -802,6 +808,7 @@ async function processCursorSession(
 
       conversationId = await syncService.createConversation({
         userId,
+        teamId,
         sessionId,
         agentType: "cursor",
         projectPath: workspacePath,
@@ -882,6 +889,7 @@ async function processCursorSession(
 
       retryQueue.add("createConversation", {
         userId,
+        teamId,
         sessionId,
         agentType: "cursor",
         projectPath: workspacePath,
@@ -930,6 +938,7 @@ async function processCursorSession(
         try {
           conversationId = await syncService.createConversation({
             userId,
+            teamId,
             sessionId,
             agentType: "cursor",
             projectPath: workspacePath,
@@ -987,6 +996,7 @@ async function processCodexSession(
   sessionId: string,
   syncService: SyncService,
   userId: string,
+  teamId: string | undefined,
   conversationCache: ConversationCache,
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
@@ -1081,6 +1091,7 @@ async function processCodexSession(
 
         conversationId = await syncService.createConversation({
           userId,
+          teamId,
           sessionId,
           agentType: "codex",
           projectPath: undefined,
@@ -1174,6 +1185,7 @@ async function processCodexSession(
 
         retryQueue.add("createConversation", {
           userId,
+          teamId,
           sessionId,
           agentType: "codex",
           title,
@@ -1222,6 +1234,7 @@ async function processCodexSession(
           try {
             conversationId = await syncService.createConversation({
               userId,
+              teamId,
               sessionId,
               agentType: "codex",
               title,
@@ -1630,6 +1643,7 @@ function startWatchdog(
         projectPath,
         deps.syncService,
         deps.config.user_id!,
+        deps.config.team_id,
         deps.conversationCache,
         deps.retryQueue,
         deps.pendingMessages,
@@ -1735,6 +1749,7 @@ async function main(): Promise<void> {
     if (op.type === "createConversation") {
       const params = op.params as {
         userId: string;
+        teamId?: string;
         sessionId: string;
         agentType: "claude_code" | "codex" | "cursor";
         projectPath: string;
@@ -1848,6 +1863,7 @@ async function main(): Promise<void> {
           event.projectPath,
           syncService,
           config.user_id!,
+          config.team_id,
           conversationCache,
           retryQueue,
           pendingMessages,
@@ -1910,6 +1926,7 @@ async function main(): Promise<void> {
           projectPath,
           syncService,
           config.user_id!,
+          config.team_id,
           conversationCache,
           retryQueue,
           pendingMessages,
@@ -1981,6 +1998,7 @@ async function main(): Promise<void> {
           event.workspacePath,
           syncService,
           config.user_id!,
+          config.team_id,
           conversationCache,
           retryQueue,
           pendingMessages,
@@ -2027,6 +2045,7 @@ async function main(): Promise<void> {
           event.sessionId,
           syncService,
           config.user_id!,
+          config.team_id,
           conversationCache,
           retryQueue,
           pendingMessages,

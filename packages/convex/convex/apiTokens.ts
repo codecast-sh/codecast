@@ -260,9 +260,12 @@ export const exchangeSetupToken = internalMutation({
       last_used_at: now,
     });
 
+    const user = await ctx.db.get(tokenDoc.user_id);
+
     return {
       auth_token: newToken,
       user_id: tokenDoc.user_id,
+      team_id: user?.team_id,
       convex_url: CONVEX_URL,
     };
   },

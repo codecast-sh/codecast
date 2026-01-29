@@ -668,6 +668,7 @@ async function runLogin(setupToken: string): Promise<void> {
     const config: Config = {
       ...existingConfig,
       user_id: result.user_id,
+      team_id: result.team_id,
       auth_token: result.auth_token,
       convex_url: result.convex_url || CONVEX_URL,
       web_url: WEB_URL,
@@ -1064,6 +1065,7 @@ async function runSync(): Promise<void> {
       try {
         conversationId = await syncService.createConversation({
           userId: config.user_id!,
+          teamId: config.team_id,
           sessionId,
           agentType: "claude_code",
           projectPath,
