@@ -44,12 +44,15 @@ Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n
 cd packages/cli
 # 1. Bump version in package.json AND src/update.ts (must match!)
 # 2. Deploy (builds binaries and uploads to R2)
-./scripts/deploy.sh     # uses .env.deploy for R2 credentials
+./scripts/deploy.sh              # normal release, users update manually
+./scripts/deploy.sh --force      # force all remote clients to auto-update
 # 3. Verify: curl -fsSL codecast.sh/install | sh && codecast --version
 # 4. Commit, tag, push
 git tag -a v1.0.X -m "release(cli): v1.0.X"
 git push origin v1.0.X
 ```
+
+Use `--force` for critical updates or breaking changes. Remote daemons will auto-update within 5 minutes.
 
 ## Debugging Lessons
 
