@@ -47,22 +47,9 @@ else
 fi
 echo ""
 
-# 3. Deploy web app to Vercel
-echo "3. Deploying web app to Vercel..."
-cd packages/web
-if command -v vercel &> /dev/null; then
-  vercel --prod --yes
-  echo "   ✓ Web app deployed"
-else
-  npx vercel --prod --yes
-  echo "   ✓ Web app deployed"
-fi
-cd ../..
-echo ""
-
-# 4. Push to git if not already pushed
-echo "4. Pushing to git..."
-git push origin main 2>/dev/null || echo "   Already up to date"
+# 3. Push to git (triggers Railway deploy)
+echo "3. Pushing to git (triggers Railway deploy)..."
+git push origin main 2>/dev/null && echo "   ✓ Pushed - Railway will auto-deploy" || echo "   Already up to date"
 echo ""
 
 echo "=== Deployment Complete ==="
@@ -70,4 +57,4 @@ echo ""
 echo "Deployed:"
 echo "  - Convex: https://little-bobcat-226.convex.cloud"
 echo "  - CLI:    https://dl.codecast.sh/latest.json"
-echo "  - Web:    https://codecast.sh"
+echo "  - Web:    https://codecast.sh (Railway auto-deploys on push)"

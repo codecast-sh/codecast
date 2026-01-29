@@ -44,7 +44,7 @@ Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n
 ```bash
 ./scripts/deploy-all.sh
 ```
-Deploys everything: Convex functions, CLI (if changed), and web app to Vercel.
+Deploys everything: Convex functions, CLI (if changed), and pushes to git (which triggers Railway auto-deploy for web).
 
 ### CLI-Only Release
 ```bash
@@ -60,6 +60,11 @@ git push origin v1.0.X
 ```
 
 Use `--force` for critical updates or breaking changes. Remote daemons will auto-update within 5 minutes.
+
+### Web App (Railway)
+The web app auto-deploys on push to main via Railway. No manual deploy needed.
+- Production: https://codecast.sh
+- Railway dashboard: https://railway.app
 
 ## Debugging Lessons
 
