@@ -1,0 +1,117 @@
+/* eslint-disable */
+/**
+ * Generated `api` utility.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run `npx convex dev`.
+ * @module
+ */
+
+import type * as apiTokens from "../apiTokens.js";
+import type * as auth from "../auth.js";
+import type * as bookmarks from "../bookmarks.js";
+import type * as cleanup from "../cleanup.js";
+import type * as comments from "../comments.js";
+import type * as commits from "../commits.js";
+import type * as conversations from "../conversations.js";
+import type * as crons from "../crons.js";
+import type * as daemonLogs from "../daemonLogs.js";
+import type * as decisions from "../decisions.js";
+import type * as embeddings from "../embeddings.js";
+import type * as fileTouches from "../fileTouches.js";
+import type * as githubApi from "../githubApi.js";
+import type * as githubApp from "../githubApp.js";
+import type * as githubWebhooks from "../githubWebhooks.js";
+import type * as health from "../health.js";
+import type * as http from "../http.js";
+import type * as images from "../images.js";
+import type * as managedSessions from "../managedSessions.js";
+import type * as messages from "../messages.js";
+import type * as migrations from "../migrations.js";
+import type * as notifications from "../notifications.js";
+import type * as patterns from "../patterns.js";
+import type * as pendingMessages from "../pendingMessages.js";
+import type * as permissions from "../permissions.js";
+import type * as publicComments from "../publicComments.js";
+import type * as pull_requests from "../pull_requests.js";
+import type * as rateLimit from "../rateLimit.js";
+import type * as reviews from "../reviews.js";
+import type * as syncCursors from "../syncCursors.js";
+import type * as systemConfig from "../systemConfig.js";
+import type * as teamActivity from "../teamActivity.js";
+import type * as teams from "../teams.js";
+import type * as titleGeneration from "../titleGeneration.js";
+import type * as users from "../users.js";
+
+import type {
+  ApiFromModules,
+  FilterApi,
+  FunctionReference,
+} from "convex/server";
+
+declare const fullApi: ApiFromModules<{
+  apiTokens: typeof apiTokens;
+  auth: typeof auth;
+  bookmarks: typeof bookmarks;
+  cleanup: typeof cleanup;
+  comments: typeof comments;
+  commits: typeof commits;
+  conversations: typeof conversations;
+  crons: typeof crons;
+  daemonLogs: typeof daemonLogs;
+  decisions: typeof decisions;
+  embeddings: typeof embeddings;
+  fileTouches: typeof fileTouches;
+  githubApi: typeof githubApi;
+  githubApp: typeof githubApp;
+  githubWebhooks: typeof githubWebhooks;
+  health: typeof health;
+  http: typeof http;
+  images: typeof images;
+  managedSessions: typeof managedSessions;
+  messages: typeof messages;
+  migrations: typeof migrations;
+  notifications: typeof notifications;
+  patterns: typeof patterns;
+  pendingMessages: typeof pendingMessages;
+  permissions: typeof permissions;
+  publicComments: typeof publicComments;
+  pull_requests: typeof pull_requests;
+  rateLimit: typeof rateLimit;
+  reviews: typeof reviews;
+  syncCursors: typeof syncCursors;
+  systemConfig: typeof systemConfig;
+  teamActivity: typeof teamActivity;
+  teams: typeof teams;
+  titleGeneration: typeof titleGeneration;
+  users: typeof users;
+}>;
+
+/**
+ * A utility for referencing Convex functions in your app's public API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = api.myModule.myFunction;
+ * ```
+ */
+export declare const api: FilterApi<
+  typeof fullApi,
+  FunctionReference<any, "public">
+>;
+
+/**
+ * A utility for referencing Convex functions in your app's internal API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = internal.myModule.myFunction;
+ * ```
+ */
+export declare const internal: FilterApi<
+  typeof fullApi,
+  FunctionReference<any, "internal">
+>;
+
+export declare const components: {};
