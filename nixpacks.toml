@@ -1,3 +1,4 @@
+# Force fresh build by disabling caching
 [phases.setup]
 nixPkgs = ["nodejs_22", "bun"]
 
@@ -5,7 +6,12 @@ nixPkgs = ["nodejs_22", "bun"]
 cmds = ["bun install"]
 
 [phases.build]
-cmds = ["cd packages/web && rm -rf .next && bun run build"]
+# Bust cache and force fresh build
+cmds = [
+  "echo 'Build timestamp: '$(date)",
+  "cd packages/web && rm -rf .next node_modules/.cache",
+  "cd packages/web && bun run build"
+]
 
 [start]
 cmd = "cd packages/web && bun run start"
