@@ -614,13 +614,11 @@ function startDaemon(): void {
       stdio: "ignore",
     });
   } else {
-    // Binary mode: spawn self with env var to trigger daemon mode
-    // CODECAST_DAEMON_MODE check happens before commander.js parsing, so no args needed
-    // Note: Don't redirect stdout/stderr to log file - daemon handles its own logging
-    child = spawn(process.argv[0], [], {
+    // Binary mode: spawn self with _daemon argument
+    // Use process.execPath which is the actual executable path in compiled binaries
+    child = spawn(process.execPath, ["_daemon"], {
       detached: true,
       stdio: "ignore",
-      env: { ...process.env, CODECAST_DAEMON_MODE: "1" },
     });
   }
 
@@ -4059,9 +4057,4 @@ checkForUpdates().then(async (available) => {
   }
 });
 
-// Early daemon mode check - bypasses commander.js arg parsing for binary spawns
-if (process.env.CODECAST_DAEMON_MODE === "1") {
-  import("./daemon.js").then(({ runDaemon }) => runDaemon());
-} else {
-  program.parse();
-}
+program.parse();

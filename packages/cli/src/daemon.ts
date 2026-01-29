@@ -2315,9 +2315,7 @@ export async function runDaemon(): Promise<void> {
 }
 
 // Only run directly if executed as the main module (not when imported)
-// Note: In compiled binaries, CODECAST_DAEMON_MODE is used instead
-if (!process.env.CODECAST_DAEMON_MODE &&
-    (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("daemon.js"))) {
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("daemon.js")) {
   daemonStarted = true;
   main().catch((err) => {
     logError("Fatal error", err instanceof Error ? err : new Error(String(err)));
