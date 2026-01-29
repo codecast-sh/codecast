@@ -97,6 +97,17 @@ let syncServiceRef: SyncService | null = null;
 let daemonVersion: string | undefined;
 const platform = process.platform;
 
+const syncStats = {
+  messagesSynced: 0,
+  conversationsCreated: 0,
+  sessionsActive: new Set<string>(),
+  lastReportTime: Date.now(),
+  errors: 0,
+  warnings: 0,
+};
+
+const HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
 function log(message: string, level: LogLevel = "info", metadata?: RemoteLog["metadata"]): void {
   const timestamp = new Date().toISOString();
   const levelTag = level === "info" ? "" : `[${level.toUpperCase()}] `;
@@ -127,6 +138,32 @@ function logError(message: string, error?: Error, sessionId?: string): void {
 
 function logWarn(message: string, sessionId?: string): void {
   log(message, "warn", { session_id: sessionId });
+}
+
+function logHealthSummary(): void {
+  const now = Date.now();
+  const periodMinutes = Math.round((now - syncStats.lastReportTime) / 60000);
+  const sessionsCount = syncStats.sessionsActive.size;
+
+  const summary = `Health OK: ${syncStats.messagesSynced} msgs synced, ${syncStats.conversationsCreated} convos created, ${sessionsCount} active sessions (${periodMinutes}min period)`;
+
+  log(summary, "info");
+
+  remoteLogQueue.push({
+    level: "info",
+    message: summary,
+    metadata: {
+      error_code: syncStats.errors > 0 ? `${syncStats.errors} errors` : undefined,
+    },
+    timestamp: now,
+  });
+
+  syncStats.messagesSynced = 0;
+  syncStats.conversationsCreated = 0;
+  syncStats.sessionsActive.clear();
+  syncStats.errors = 0;
+  syncStats.warnings = 0;
+  syncStats.lastReportTime = now;
 }
 
 async function flushRemoteLogs(): Promise<void> {
@@ -452,6 +489,7 @@ async function processSessionFile(
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Created conversation ${conversationId} for session ${sessionId}`);
+      syncStats.conversationsCreated++;
 
       if ((global as any).activeSessions) {
         (global as any).activeSessions.set(conversationId, {
@@ -658,6 +696,8 @@ async function processSessionFile(
     setPosition(filePath, stats.size);
     markSynced(filePath, stats.size, messages.length, conversationId);
     log(`Synced ${messages.length} messages for session ${sessionId}`);
+    syncStats.messagesSynced += messages.length;
+    syncStats.sessionsActive.add(sessionId);
 
     const lastAssistantMessage = messages.filter(m => m.role === "assistant").pop();
     if (lastAssistantMessage && conversationId) {
@@ -936,6 +976,8 @@ async function processCursorSession(
 
   setPosition(dbPath, maxRowId);
   log(`Synced ${messages.length} Cursor messages for session ${sessionId}`);
+  syncStats.messagesSynced += messages.length;
+  syncStats.sessionsActive.add(sessionId);
 
   updateStateCallback();
 }
@@ -1225,6 +1267,8 @@ async function processCodexSession(
 
     setPosition(filePath, stats.size);
     log(`Synced ${messages.length} Codex messages for session ${sessionId}`);
+    syncStats.messagesSynced += messages.length;
+    syncStats.sessionsActive.add(sessionId);
 
     updateStateCallback();
   } catch (err) {
@@ -1652,6 +1696,10 @@ async function main(): Promise<void> {
   setInterval(() => {
     flushRemoteLogs().catch(() => {});
   }, LOG_FLUSH_INTERVAL_MS);
+
+  setInterval(() => {
+    logHealthSummary();
+  }, HEALTH_REPORT_INTERVAL_MS);
 
   const conversationCache = readConversationCache();
   const titleCache = readTitleCache();
