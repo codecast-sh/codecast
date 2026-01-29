@@ -336,6 +336,22 @@ function logCliError(command: string, error: string): void {
     fs.appendFileSync(LOG_FILE, line);
   } catch {
   }
+
+  const config = readConfig();
+  if (config?.auth_token && config?.convex_url) {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    fetch(`${siteUrl}/cli/log`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        level: "error",
+        message: `[CLI] ${command}: ${error}`,
+        cli_version: getVersion(),
+        platform: process.platform,
+      }),
+    }).catch(() => {});
+  }
 }
 
 interface FullReadResult {
@@ -4091,6 +4107,10 @@ checkForUpdates().then(async (available) => {
   } else {
     showUpdateNotice(available);
   }
+});
+
+program.on("command:*", (operands) => {
+  logCliError("unknown-command", `Unknown command: ${operands.join(" ")}`);
 });
 
 program.parse();
