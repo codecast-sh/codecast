@@ -3,7 +3,7 @@ import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { cleanTitle } from "../lib/conversationProcessor";
+import { cleanTitle, isSystemMessage } from "../lib/conversationProcessor";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useRouter } from "next/navigation";
@@ -717,11 +717,10 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         if (alternates.length === 0) return null;
 
                         const clean = (c: string) => c?.replace(/<[^>]+>/g, "").replace(/^\s*Caveat:.*$/gm, "").trim() || "";
-                        const isToolMsg = (c: string) => c?.startsWith("[Using:") || c?.startsWith("[Request");
 
                         const processed = alternates
                           .map(m => ({ ...m, cleanContent: clean(m.content) }))
-                          .filter(m => m.cleanContent.length > 0 && !isToolMsg(m.cleanContent));
+                          .filter(m => m.cleanContent.length > 0 && !isSystemMessage(m.cleanContent));
 
                         if (processed.length === 0) return null;
 

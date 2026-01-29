@@ -20,6 +20,16 @@ const COMMAND_PATTERNS = [
   /^Caveat:/,
 ];
 
+const SYSTEM_MESSAGE_PREFIXES = [
+  "[Using:",
+  "[Request",
+  "[SUGGESTION MODE:",
+];
+
+export function isSystemMessage(content: string): boolean {
+  return SYSTEM_MESSAGE_PREFIXES.some(prefix => content.startsWith(prefix));
+}
+
 export function isCommandMessage(content: string): boolean {
   const trimmed = content.trim();
   return COMMAND_PATTERNS.some(pattern => pattern.test(trimmed));
@@ -81,7 +91,7 @@ export function getConversationPreview(
 
   return processed
     .filter(m => {
-      if (m.cleanContent.startsWith("[Using:")) return false;
+      if (isSystemMessage(m.cleanContent)) return false;
       if (m.role === "user") {
         const msgNorm = m.cleanContent.toLowerCase().trim().slice(0, 80);
         if (msgNorm === titleNorm) return false;
