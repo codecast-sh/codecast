@@ -453,6 +453,27 @@ function installSlashCommand(): void {
   }
 }
 
+function showWelcome(): void {
+  console.log(`${c.dim}${"─".repeat(50)}${c.reset}`);
+  console.log(`\n  ${c.bold}Welcome to codecast${c.reset} ${fmt.muted("— sync & search your agent sessions")}\n`);
+
+  const feature = (icon: string, title: string, desc: string) => {
+    console.log(`  ${fmt.accent(icon)}  ${c.bold}${title}${c.reset}`);
+    console.log(`     ${fmt.muted(desc)}`);
+  };
+
+  feature("◉", "Memory", "Your agent can search past conversations for context");
+  feature("◉", "Dashboard", "Browse sessions at codecast.sh with full-text search");
+  feature("◉", "Background Sync", "Sessions sync automatically as you work");
+
+  console.log(`\n  ${fmt.muted("Commands")}`);
+  console.log(`     ${fmt.cmd("codecast search")} ${fmt.muted("\"query\"")}    ${fmt.muted("Search past sessions")}`);
+  console.log(`     ${fmt.cmd("codecast feed")}              ${fmt.muted("Browse recent sessions")}`);
+  console.log(`     ${fmt.cmd("codecast status")}            ${fmt.muted("Check sync status")}`);
+
+  console.log(`\n${c.dim}${"─".repeat(50)}${c.reset}\n`);
+}
+
 function getDaemonPid(): number | null {
   if (!fs.existsSync(PID_FILE)) {
     return null;
@@ -799,11 +820,18 @@ async function runAuth(): Promise<void> {
   console.log(`  ${fmt.muted("Token")}    ${fmt.value(maskToken(config.auth_token || ""))}`);
   console.log(`  ${fmt.muted("Config")}   ${fmt.path(CONFIG_FILE)}\n`);
 
+  showWelcome();
+
   await promptProjectSelection(config);
 
   if (!isDaemonRunning()) {
     console.log("Starting daemon...");
     startDaemon();
+  }
+
+  // Set up autostart so daemon restarts on reboot/crash
+  if (ensureAutostart()) {
+    console.log("Auto-start configured (daemon will restart automatically)");
   }
 
   await promptMemoryEnablement();
@@ -885,6 +913,7 @@ async function updateSyncSettingsOnServer(config: Config): Promise<void> {
   }
 }
 
+const MEMORY_SNIPPET_END = "<!-- /codecast-memory -->";
 const MEMORY_SNIPPET = `
 ## Memory
 
@@ -912,6 +941,7 @@ codecast decisions add "title" --reason "why"
 \`\`\`
 
 Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n (limit)
+${MEMORY_SNIPPET_END}
 `;
 
 function installMemorySnippet(update = false): { installed: boolean; updated: boolean } {
@@ -935,10 +965,18 @@ function installMemorySnippet(update = false): { installed: boolean; updated: bo
   if (hasMemory && update) {
     const memoryStart = existing.indexOf("## Memory");
     let memoryEnd = existing.length;
-    const nextSection = existing.slice(memoryStart + 10).match(/\n## [A-Z]/);
-    if (nextSection && nextSection.index !== undefined) {
-      memoryEnd = memoryStart + 10 + nextSection.index;
+
+    const endMarkerIdx = existing.indexOf(MEMORY_SNIPPET_END, memoryStart);
+    if (endMarkerIdx !== -1) {
+      memoryEnd = endMarkerIdx + MEMORY_SNIPPET_END.length;
+      if (existing[memoryEnd] === "\n") memoryEnd++;
+    } else {
+      const nextSection = existing.slice(memoryStart + 10).match(/\n## [A-Z]/);
+      if (nextSection && nextSection.index !== undefined) {
+        memoryEnd = memoryStart + 10 + nextSection.index;
+      }
     }
+
     const before = existing.slice(0, memoryStart);
     const after = existing.slice(memoryEnd);
     existing = before + after;
@@ -956,6 +994,16 @@ async function promptMemoryEnablement(): Promise<void> {
   if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
     if (config.memory_enabled) {
       installMemorySnippet(false);
+    }
+    return;
+  }
+
+  if (config.memory_enabled && config.memory_version !== getMemoryVersion()) {
+    const result = installMemorySnippet(true);
+    config.memory_version = getMemoryVersion();
+    writeConfig(config);
+    if (result.updated) {
+      console.log("Memory snippet updated to latest version.");
     }
     return;
   }
@@ -1248,6 +1296,8 @@ program
   .description("Start the background daemon to automatically watch and sync conversations")
   .action(() => {
     startDaemon();
+    // Ensure autostart is configured so daemon restarts on reboot/crash
+    ensureAutostart();
   });
 
 program
@@ -2360,6 +2410,85 @@ WantedBy=default.target
     console.log("\nNote: Run these commands to enable:");
     console.log("  systemctl --user daemon-reload");
     console.log("  systemctl --user enable --now codecast.service");
+  }
+}
+
+function ensureAutostart(): boolean {
+  const platform = process.platform;
+  try {
+    if (platform === "darwin") {
+      const home = process.env.HOME;
+      if (!home) return false;
+      const plistPath = path.join(home, "Library", "LaunchAgents", "sh.codecast.daemon.plist");
+      if (fs.existsSync(plistPath)) return true; // Already set up
+
+      const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
+      if (!fs.existsSync(launchAgentsDir)) {
+        fs.mkdirSync(launchAgentsDir, { recursive: true });
+      }
+
+      const { executablePath, args } = getExecutableInfo();
+      const programArgs = [executablePath, ...args].map((arg) => `    <string>${arg}</string>`).join("\n");
+      const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.codecast.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+${programArgs}
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>${CONFIG_DIR}/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>${CONFIG_DIR}/launchd.err.log</string>
+</dict>
+</plist>
+`;
+      fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
+      spawnSync("launchctl", ["bootstrap", `gui/${process.getuid!()}`, plistPath], { stdio: "ignore" });
+      return true;
+    } else if (platform === "linux") {
+      const home = process.env.HOME;
+      if (!home) return false;
+      const servicePath = path.join(home, ".config", "systemd", "user", "codecast.service");
+      if (fs.existsSync(servicePath)) return true; // Already set up
+
+      const systemdUserDir = path.join(home, ".config", "systemd", "user");
+      if (!fs.existsSync(systemdUserDir)) {
+        fs.mkdirSync(systemdUserDir, { recursive: true });
+      }
+
+      const { executablePath, args } = getExecutableInfo();
+      const execStart = [executablePath, ...args].join(" ");
+      const serviceContent = `[Unit]
+Description=Codecast Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${execStart}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+`;
+      fs.writeFileSync(servicePath, serviceContent, { mode: 0o644 });
+      spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+      spawnSync("systemctl", ["--user", "enable", "codecast.service"], { stdio: "ignore" });
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 
