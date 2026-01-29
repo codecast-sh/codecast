@@ -619,3 +619,234 @@ export const getRecentProjectPaths = query({
       }));
   },
 });
+
+export const deleteAccount = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    let totalDeleted = 0;
+
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .take(50);
+
+    for (const conv of conversations) {
+      const messages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .take(500);
+      for (const msg of messages) {
+        await ctx.db.delete(msg._id);
+        totalDeleted++;
+      }
+
+      const fileTouches = await ctx.db
+        .query("file_touches")
+        .withIndex("by_conversation", (q) => q.eq("conversation_id", conv._id))
+        .take(200);
+      for (const ft of fileTouches) {
+        await ctx.db.delete(ft._id);
+        totalDeleted++;
+      }
+
+      const comments = await ctx.db
+        .query("comments")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .take(100);
+      for (const comment of comments) {
+        await ctx.db.delete(comment._id);
+        totalDeleted++;
+      }
+
+      const publicComments = await ctx.db
+        .query("public_comments")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .take(100);
+      for (const pc of publicComments) {
+        await ctx.db.delete(pc._id);
+        totalDeleted++;
+      }
+
+      const pendingPermissions = await ctx.db
+        .query("pending_permissions")
+        .withIndex("by_conversation_status", (q) => q.eq("conversation_id", conv._id))
+        .take(50);
+      for (const pp of pendingPermissions) {
+        await ctx.db.delete(pp._id);
+        totalDeleted++;
+      }
+
+      await ctx.db.delete(conv._id);
+      totalDeleted++;
+    }
+
+    const hasMoreConversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .first();
+
+    if (hasMoreConversations) {
+      return {
+        completed: false,
+        message: "Partial deletion complete. Run again to continue deleting account data.",
+        deleted: totalDeleted,
+      };
+    }
+
+    const bookmarks = await ctx.db
+      .query("bookmarks")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .take(100);
+    for (const b of bookmarks) {
+      await ctx.db.delete(b._id);
+      totalDeleted++;
+    }
+
+    const decisions = await ctx.db
+      .query("decisions")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .take(100);
+    for (const d of decisions) {
+      await ctx.db.delete(d._id);
+      totalDeleted++;
+    }
+
+    const patterns = await ctx.db
+      .query("patterns")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .take(100);
+    for (const p of patterns) {
+      await ctx.db.delete(p._id);
+      totalDeleted++;
+    }
+
+    const syncCursors = await ctx.db
+      .query("sync_cursors")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .take(100);
+    for (const sc of syncCursors) {
+      await ctx.db.delete(sc._id);
+      totalDeleted++;
+    }
+
+    const rateLimits = await ctx.db
+      .query("rate_limits")
+      .withIndex("by_user_endpoint", (q) => q.eq("user_id", userId))
+      .take(100);
+    for (const rl of rateLimits) {
+      await ctx.db.delete(rl._id);
+      totalDeleted++;
+    }
+
+    const apiTokens = await ctx.db
+      .query("api_tokens")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .take(50);
+    for (const at of apiTokens) {
+      await ctx.db.delete(at._id);
+      totalDeleted++;
+    }
+
+    const pendingMessages = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_user_status", (q) => q.eq("from_user_id", userId))
+      .take(100);
+    for (const pm of pendingMessages) {
+      await ctx.db.delete(pm._id);
+      totalDeleted++;
+    }
+
+    const managedSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .take(50);
+    for (const ms of managedSessions) {
+      await ctx.db.delete(ms._id);
+      totalDeleted++;
+    }
+
+    const notifications = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient", (q) => q.eq("recipient_user_id", userId))
+      .take(200);
+    for (const n of notifications) {
+      await ctx.db.delete(n._id);
+      totalDeleted++;
+    }
+
+    const daemonLogs = await ctx.db
+      .query("daemon_logs")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .take(500);
+    for (const dl of daemonLogs) {
+      await ctx.db.delete(dl._id);
+      totalDeleted++;
+    }
+
+    const messageShares = await ctx.db
+      .query("message_shares")
+      .filter((q) => q.eq(q.field("user_id"), userId))
+      .take(100);
+    for (const ms of messageShares) {
+      await ctx.db.delete(ms._id);
+      totalDeleted++;
+    }
+
+    const reviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_reviewer", (q) => q.eq("reviewer_user_id", userId))
+      .take(100);
+    for (const r of reviews) {
+      await ctx.db.delete(r._id);
+      totalDeleted++;
+    }
+
+    const teamActivityEvents = await ctx.db
+      .query("team_activity_events")
+      .withIndex("by_actor", (q) => q.eq("actor_user_id", userId))
+      .take(200);
+    for (const tae of teamActivityEvents) {
+      await ctx.db.delete(tae._id);
+      totalDeleted++;
+    }
+
+    // @ts-ignore - authAccounts is from @convex-dev/auth
+    const authAccounts = await ctx.db
+      .query("authAccounts")
+      .withIndex("userIdAndProvider", (q: any) => q.eq("userId", userId))
+      .take(10);
+    for (const aa of authAccounts) {
+      await ctx.db.delete(aa._id);
+      totalDeleted++;
+    }
+
+    // @ts-ignore - authSessions is from @convex-dev/auth
+    const authSessions = await ctx.db
+      .query("authSessions")
+      .withIndex("userId", (q: any) => q.eq("userId", userId))
+      .take(50);
+    for (const as of authSessions) {
+      await ctx.db.delete(as._id);
+      totalDeleted++;
+    }
+
+    await ctx.db.delete(userId);
+    totalDeleted++;
+
+    return {
+      completed: true,
+      message: "Account permanently deleted",
+      deleted: totalDeleted,
+    };
+  },
+});
