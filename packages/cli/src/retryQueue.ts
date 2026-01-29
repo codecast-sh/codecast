@@ -226,7 +226,7 @@ export class RetryQueue {
         const rateLimitDelay = parseRateLimitDelay(errorMsg);
         if (rateLimitDelay) {
           this.rateLimitedUntil = Date.now() + rateLimitDelay;
-          this.log(`Rate limited globally for ${rateLimitDelay}ms`);
+          this.log(`Rate limited globally for ${rateLimitDelay}ms`, "warn");
         }
         this.handleFailure(op, errorMsg);
       }

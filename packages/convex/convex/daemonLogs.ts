@@ -228,3 +228,71 @@ export const adminGetUsers = query({
       .sort((a, b) => (b?.lastLog ?? 0) - (a?.lastLog ?? 0));
   },
 });
+
+export const adminGetStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return null;
+    }
+
+    const currentUser = await ctx.db.get(authUserId);
+    if (!currentUser || currentUser.email !== ADMIN_EMAIL) {
+      return null;
+    }
+
+    const now = Date.now();
+    const oneHourAgo = now - 60 * 60 * 1000;
+    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+    const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+    const logs = await ctx.db.query("daemon_logs").order("desc").take(10000);
+
+    const logsLastHour = logs.filter((l) => l.timestamp >= oneHourAgo);
+    const logsLastDay = logs.filter((l) => l.timestamp >= oneDayAgo);
+    const logsLastWeek = logs.filter((l) => l.timestamp >= oneWeekAgo);
+
+    const countByLevel = (logList: typeof logs) => ({
+      error: logList.filter((l) => l.level === "error").length,
+      warn: logList.filter((l) => l.level === "warn").length,
+      info: logList.filter((l) => l.level === "info").length,
+      debug: logList.filter((l) => l.level === "debug").length,
+    });
+
+    const uniqueUsers = (logList: typeof logs) =>
+      new Set(logList.map((l) => l.user_id)).size;
+
+    const topErrors = logs
+      .filter((l) => l.level === "error")
+      .reduce((acc, log) => {
+        const key = log.message.slice(0, 100);
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+
+    const topErrorsList = Object.entries(topErrors)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([message, count]) => ({ message, count }));
+
+    return {
+      lastHour: {
+        total: logsLastHour.length,
+        ...countByLevel(logsLastHour),
+        uniqueUsers: uniqueUsers(logsLastHour),
+      },
+      lastDay: {
+        total: logsLastDay.length,
+        ...countByLevel(logsLastDay),
+        uniqueUsers: uniqueUsers(logsLastDay),
+      },
+      lastWeek: {
+        total: logsLastWeek.length,
+        ...countByLevel(logsLastWeek),
+        uniqueUsers: uniqueUsers(logsLastWeek),
+      },
+      topErrors: topErrorsList,
+    };
+  },
+});

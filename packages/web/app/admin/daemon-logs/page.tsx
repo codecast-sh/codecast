@@ -61,6 +61,7 @@ function AdminDaemonLogs() {
     userId: selectedUserId,
     since: sinceTimestamp,
   });
+  const stats = useQuery(api.daemonLogs.adminGetStats);
 
   const filteredLogs = useMemo(() => {
     if (!logsResult?.logs) return [];
@@ -107,6 +108,71 @@ function AdminDaemonLogs() {
             {filteredLogs.length} logs shown
           </div>
         </div>
+
+        {stats && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
+              <div className="text-xs text-gray-500 uppercase mb-1">Last Hour</div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-bold">{stats.lastHour.total}</span>
+                <span className="text-xs text-gray-500">{stats.lastHour.uniqueUsers} users</span>
+              </div>
+              <div className="flex gap-2 mt-2 text-xs">
+                {stats.lastHour.error > 0 && (
+                  <span className="text-red-400">{stats.lastHour.error} err</span>
+                )}
+                {stats.lastHour.warn > 0 && (
+                  <span className="text-yellow-400">{stats.lastHour.warn} warn</span>
+                )}
+              </div>
+            </div>
+            <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
+              <div className="text-xs text-gray-500 uppercase mb-1">Last 24h</div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-bold">{stats.lastDay.total}</span>
+                <span className="text-xs text-gray-500">{stats.lastDay.uniqueUsers} users</span>
+              </div>
+              <div className="flex gap-2 mt-2 text-xs">
+                {stats.lastDay.error > 0 && (
+                  <span className="text-red-400">{stats.lastDay.error} err</span>
+                )}
+                {stats.lastDay.warn > 0 && (
+                  <span className="text-yellow-400">{stats.lastDay.warn} warn</span>
+                )}
+              </div>
+            </div>
+            <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
+              <div className="text-xs text-gray-500 uppercase mb-1">Last 7d</div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-bold">{stats.lastWeek.total}</span>
+                <span className="text-xs text-gray-500">{stats.lastWeek.uniqueUsers} users</span>
+              </div>
+              <div className="flex gap-2 mt-2 text-xs">
+                {stats.lastWeek.error > 0 && (
+                  <span className="text-red-400">{stats.lastWeek.error} err</span>
+                )}
+                {stats.lastWeek.warn > 0 && (
+                  <span className="text-yellow-400">{stats.lastWeek.warn} warn</span>
+                )}
+              </div>
+            </div>
+            <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
+              <div className="text-xs text-gray-500 uppercase mb-1">Top Errors</div>
+              {stats.topErrors.length === 0 ? (
+                <div className="text-xs text-gray-600">No errors</div>
+              ) : (
+                <div className="space-y-1 mt-1">
+                  {stats.topErrors.slice(0, 3).map((err, i) => (
+                    <div key={i} className="text-xs text-gray-400 truncate" title={err.message}>
+                      <span className="text-red-400 font-mono mr-1">{err.count}x</span>
+                      {err.message.slice(0, 40)}...
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
           <div className="lg:col-span-1 bg-gray-900 rounded-lg p-4 border border-gray-800">

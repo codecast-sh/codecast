@@ -72,10 +72,6 @@ export class CursorWatcher extends EventEmitter {
     );
 
     if (!fs.existsSync(workspaceStoragePath)) {
-      this.emit(
-        "error",
-        new Error(`Cursor workspace storage not found at ${workspaceStoragePath}`)
-      );
       return;
     }
 

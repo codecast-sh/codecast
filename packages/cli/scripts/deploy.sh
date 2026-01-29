@@ -3,6 +3,22 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+FORCE_UPDATE=false
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --force)
+      FORCE_UPDATE=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Usage: ./scripts/deploy.sh [--force]"
+      echo "  --force  Force all remote clients to update immediately"
+      exit 1
+      ;;
+  esac
+done
+
 if [[ -z "$AWS_ACCESS_KEY_ID" && -f .env.deploy ]]; then
   export $(cat .env.deploy | xargs)
 fi
@@ -77,3 +93,13 @@ aws s3 cp /tmp/latest.json "s3://$R2_BUCKET/latest.json" \
 echo ""
 echo "Deployed v$VERSION"
 echo "  https://dl.codecast.sh/latest.json"
+
+if [[ "$FORCE_UPDATE" == "true" ]]; then
+  echo ""
+  echo "Setting minimum CLI version to force remote updates..."
+  codecast force-update "$VERSION"
+else
+  echo ""
+  echo "To force all remote clients to update:"
+  echo "  codecast force-update $VERSION"
+fi

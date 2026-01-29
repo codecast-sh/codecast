@@ -1471,7 +1471,7 @@ function logHealthReport(retryQueue: RetryQueue): void {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   const unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
   const droppedOps = retryQueue.getDroppedOperations();
-  const queueSize = retryQueue.size();
+  const queueSize = retryQueue.getQueueSize();
 
   // Only log if there are issues
   if (unsyncedFiles.length > 0 || droppedOps.length > 0 || queueSize > 10) {
@@ -2072,7 +2072,7 @@ async function main(): Promise<void> {
       }
 
       const delay = getReconnectDelay();
-      log(`Reconnecting in ${delay}ms`);
+      logWarn(`Connection lost, reconnecting in ${delay}ms (attempt ${reconnectAttempt})`);
       setTimeout(() => {
         setupSubscription();
       }, delay);
@@ -2155,7 +2155,7 @@ async function main(): Promise<void> {
       }
 
       const delay = getReconnectDelay();
-      log(`Reconnecting permission subscription in ${delay}ms`);
+      logWarn(`Permission subscription lost, reconnecting in ${delay}ms`);
       setTimeout(() => {
         setupPermissionSubscription();
       }, delay);
