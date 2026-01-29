@@ -518,6 +518,36 @@ function getRelativePath(fullPath: string): string {
   return parts.slice(-3).join("/");
 }
 
+const mcpToolNames: Record<string, string> = {
+  "mcp__claude-in-chrome__computer": "Browser",
+  "mcp__claude-in-chrome__navigate": "Navigate",
+  "mcp__claude-in-chrome__read_page": "Read Page",
+  "mcp__claude-in-chrome__find": "Find",
+  "mcp__claude-in-chrome__form_input": "Form",
+  "mcp__claude-in-chrome__javascript_tool": "JS",
+  "mcp__claude-in-chrome__tabs_context_mcp": "Tabs",
+  "mcp__claude-in-chrome__tabs_create_mcp": "New Tab",
+  "mcp__claude-in-chrome__update_plan": "Plan",
+  "mcp__claude-in-chrome__gif_creator": "GIF",
+  "mcp__claude-in-chrome__read_console_messages": "Console",
+  "mcp__claude-in-chrome__read_network_requests": "Network",
+  "mcp__claude-in-chrome__get_page_text": "Page Text",
+  "mcp__claude-in-chrome__upload_image": "Upload",
+  "mcp__claude-in-chrome__resize_window": "Resize",
+  "mcp__claude-in-chrome__shortcuts_list": "Shortcuts",
+  "mcp__claude-in-chrome__shortcuts_execute": "Shortcut",
+};
+
+function formatToolName(name: string): string {
+  if (mcpToolNames[name]) return mcpToolNames[name];
+  if (name.startsWith("mcp__")) {
+    const parts = name.split("__");
+    const method = parts[2] || parts[1] || "MCP";
+    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 12);
+  }
+  return name;
+}
+
 function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: ToolResult; changeIndex?: number }) {
   const isEdit = tool.name === "Edit" || tool.name === "Write";
   const [expanded, setExpanded] = useState(isEdit);
@@ -537,6 +567,19 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
   const relativePath = getRelativePath(filePath);
   const language = getFileExtension(filePath);
 
+  const truncateStr = (s: string, max: number) => s.length > max ? s.slice(0, max) + "..." : s;
+  const shortenUrl = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.replace(/^www\./, "");
+      const path = parsed.pathname;
+      if (path === "/" || path === "") return host;
+      return host + (path.length > 25 ? path.slice(0, 22) + "..." : path);
+    } catch {
+      return truncateStr(url, 40);
+    }
+  };
+
   const getToolSummary = () => {
     if (isEdit || isRead) return relativePath;
     if (isBash && parsedInput.command) {
@@ -545,6 +588,70 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
     }
     if (isGlob && parsedInput.pattern) return String(parsedInput.pattern);
     if (isGrep && parsedInput.pattern) return String(parsedInput.pattern);
+
+    if (tool.name === "mcp__claude-in-chrome__computer") {
+      const action = String(parsedInput.action || "");
+      if (action === "screenshot") return "Screenshot";
+      if (action === "left_click") {
+        const coord = parsedInput.coordinate as number[] | undefined;
+        return coord ? `Click (${coord[0]}, ${coord[1]})` : "Click";
+      }
+      if (action === "type") return `Type "${truncateStr(String(parsedInput.text || ""), 20)}"`;
+      if (action === "key") return `Key: ${String(parsedInput.text || "")}`;
+      if (action === "scroll") return `Scroll ${String(parsedInput.scroll_direction || "")}`;
+      if (action === "wait") return `Wait ${String(parsedInput.duration || "")}s`;
+      return action || "Browser";
+    }
+    if (tool.name === "mcp__claude-in-chrome__navigate") {
+      const url = String(parsedInput.url || "");
+      if (url === "back") return "Back";
+      if (url === "forward") return "Forward";
+      return url ? shortenUrl(url) : "Navigate";
+    }
+    if (tool.name === "mcp__claude-in-chrome__read_page") {
+      if (parsedInput.ref_id) return `Element ${String(parsedInput.ref_id)}`;
+      if (parsedInput.filter === "interactive") return "Interactive elements";
+      return "Page content";
+    }
+    if (tool.name === "mcp__claude-in-chrome__find") {
+      return parsedInput.query ? `"${truncateStr(String(parsedInput.query), 30)}"` : "Find";
+    }
+    if (tool.name === "mcp__claude-in-chrome__form_input") {
+      const ref = parsedInput.ref ? String(parsedInput.ref) : "";
+      const val = parsedInput.value;
+      if (ref && val !== undefined) return `${ref} = "${truncateStr(String(val), 20)}"`;
+      return "Set form";
+    }
+    if (tool.name === "mcp__claude-in-chrome__javascript_tool") {
+      return parsedInput.text ? truncateStr(String(parsedInput.text), 40) : "Execute JS";
+    }
+    if (tool.name === "mcp__claude-in-chrome__tabs_context_mcp") return "Get tabs";
+    if (tool.name === "mcp__claude-in-chrome__tabs_create_mcp") return "Create tab";
+    if (tool.name === "mcp__claude-in-chrome__update_plan") {
+      const domains = parsedInput.domains as string[] | undefined;
+      if (Array.isArray(domains) && domains.length) {
+        return domains.slice(0, 2).join(", ") + (domains.length > 2 ? "..." : "");
+      }
+      return "Plan";
+    }
+    if (tool.name === "mcp__claude-in-chrome__gif_creator") return String(parsedInput.action || "Record");
+    if (tool.name === "mcp__claude-in-chrome__read_console_messages") {
+      return parsedInput.pattern ? `Filter: ${String(parsedInput.pattern)}` : "Console";
+    }
+    if (tool.name === "mcp__claude-in-chrome__read_network_requests") {
+      return parsedInput.urlPattern ? `Filter: ${String(parsedInput.urlPattern)}` : "Network";
+    }
+    if (tool.name === "mcp__claude-in-chrome__get_page_text") return "Extract text";
+
+    if (tool.name.startsWith("mcp__")) {
+      const parts = tool.name.split("__");
+      const method = parts[2] || "";
+      const displayMethod = method.replace(/_/g, " ");
+      if (parsedInput.url) return shortenUrl(String(parsedInput.url));
+      if (parsedInput.query) return truncateStr(String(parsedInput.query), 30);
+      return displayMethod || parts[1] || "MCP";
+    }
+
     return null;
   };
 
@@ -590,9 +697,27 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
     Grep: "text-sol-violet/80",
     Task: "text-sol-cyan/80",
     TodoWrite: "text-sol-magenta/80",
+    "mcp__claude-in-chrome__computer": "text-sol-orange/80",
+    "mcp__claude-in-chrome__navigate": "text-sol-blue/80",
+    "mcp__claude-in-chrome__read_page": "text-sol-blue/80",
+    "mcp__claude-in-chrome__find": "text-sol-violet/80",
+    "mcp__claude-in-chrome__form_input": "text-sol-orange/80",
+    "mcp__claude-in-chrome__javascript_tool": "text-sol-orange/80",
+    "mcp__claude-in-chrome__tabs_context_mcp": "text-sol-text-dim",
+    "mcp__claude-in-chrome__tabs_create_mcp": "text-sol-text-dim",
+    "mcp__claude-in-chrome__update_plan": "text-sol-cyan/80",
+    "mcp__claude-in-chrome__gif_creator": "text-sol-magenta/80",
+    "mcp__claude-in-chrome__read_console_messages": "text-sol-green/80",
+    "mcp__claude-in-chrome__read_network_requests": "text-sol-green/80",
+    "mcp__claude-in-chrome__get_page_text": "text-sol-blue/80",
   };
 
-  const toolColor = toolColors[tool.name] || "text-sol-text-dim";
+  const getMcpColor = (name: string) => {
+    if (name.startsWith("mcp__")) return "text-sol-cyan/80";
+    return "text-sol-text-dim";
+  };
+
+  const toolColor = toolColors[tool.name] || getMcpColor(tool.name);
 
   const isClickable = isEdit && changeIndex !== undefined;
   const isSelected = isClickable && (
@@ -631,7 +756,7 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
         }`}
         onClick={handleClick}
       >
-        <span className={`font-mono ${toolColor}`}>{tool.name}</span>
+        <span className={`font-mono ${toolColor}`}>{formatToolName(tool.name)}</span>
         {summary && (
           <span className="text-sol-text-muted font-mono truncate">{summary}</span>
         )}

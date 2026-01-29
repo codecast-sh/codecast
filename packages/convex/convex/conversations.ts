@@ -55,6 +55,80 @@ function contentMatchesSearch(content: string, terms: { phrases: string[]; words
   return true;
 }
 
+function contentMatchesAnyTerm(content: string, terms: { phrases: string[]; words: string[]; all: string[] }): boolean {
+  const lowerContent = content.toLowerCase();
+  return terms.all.some(t => lowerContent.includes(t));
+}
+
+function conversationMatchesAllTerms(
+  messages: Array<{ content?: string | null }>,
+  terms: { phrases: string[]; words: string[] }
+): boolean {
+  const allContent = messages.map(m => (m.content || "").toLowerCase()).join(" ");
+  return contentMatchesSearch(allContent, terms);
+}
+
+function calculateProximityScore(
+  messages: Array<{ content?: string | null; _id: { toString(): string } }>,
+  terms: { all: string[] }
+): number {
+  if (terms.all.length <= 1) return 0;
+
+  const termPositions: Map<string, number[]> = new Map();
+  for (const term of terms.all) {
+    termPositions.set(term, []);
+  }
+
+  for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
+    const content = (messages[msgIdx].content || "").toLowerCase();
+    for (const term of terms.all) {
+      if (content.includes(term)) {
+        termPositions.get(term)!.push(msgIdx);
+      }
+    }
+  }
+
+  // Check if all terms appear in same message (best case)
+  const messageIndicesWithAllTerms = new Set<number>();
+  for (let i = 0; i < messages.length; i++) {
+    const content = (messages[i].content || "").toLowerCase();
+    if (terms.all.every(t => content.includes(t))) {
+      return 0; // Best score - all terms in one message
+    }
+  }
+
+  // Calculate minimum span across messages
+  let minSpan = Infinity;
+  const firstTermPositions = termPositions.get(terms.all[0]) || [];
+
+  for (const startPos of firstTermPositions) {
+    let maxEnd = startPos;
+    let valid = true;
+
+    for (const term of terms.all.slice(1)) {
+      const positions = termPositions.get(term) || [];
+      if (positions.length === 0) {
+        valid = false;
+        break;
+      }
+      // Find closest position to current range
+      let closest = positions[0];
+      for (const pos of positions) {
+        if (Math.abs(pos - startPos) < Math.abs(closest - startPos)) {
+          closest = pos;
+        }
+      }
+      maxEnd = Math.max(maxEnd, closest);
+    }
+
+    if (valid) {
+      minSpan = Math.min(minSpan, maxEnd - startPos + 1);
+    }
+  }
+
+  return minSpan === Infinity ? 1000 : minSpan;
+}
+
 function formatSlugAsTitle(slug: string): string {
   return slug
     .split('-')
@@ -1201,20 +1275,28 @@ export const searchConversations = query({
       .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
       .take(200);
 
-    // Filter for all terms and group by conversation
-    const conversationMatches = new Map<string, typeof searchResults>();
+    // Group messages by conversation (keep messages matching ANY term for context)
+    const conversationMessages = new Map<string, typeof searchResults>();
     for (const msg of searchResults) {
       if (userOnly && msg.role !== "user") {
         continue;
       }
-      if (!contentMatchesSearch(msg.content || "", terms)) {
+      if (!contentMatchesAnyTerm(msg.content || "", terms)) {
         continue;
       }
       const convId = msg.conversation_id.toString();
-      if (!conversationMatches.has(convId)) {
-        conversationMatches.set(convId, []);
+      if (!conversationMessages.has(convId)) {
+        conversationMessages.set(convId, []);
       }
-      conversationMatches.get(convId)!.push(msg);
+      conversationMessages.get(convId)!.push(msg);
+    }
+
+    // Filter to conversations where ALL terms appear (across any messages)
+    const conversationMatches = new Map<string, typeof searchResults>();
+    for (const [convId, messages] of conversationMessages) {
+      if (conversationMatchesAllTerms(messages, terms)) {
+        conversationMatches.set(convId, messages);
+      }
     }
 
     const results: Array<{
@@ -1230,6 +1312,7 @@ export const searchConversations = query({
       authorName: string;
       isOwn: boolean;
       messageCount: number;
+      proximityScore: number;
     }> = [];
 
     for (const [convId, messages] of conversationMatches) {
@@ -1272,6 +1355,8 @@ export const searchConversations = query({
         || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
         || `Session ${conv.session_id.slice(0, 8)}`;
 
+      const proximityScore = calculateProximityScore(messages, terms);
+
       results.push({
         conversationId: conv._id,
         title,
@@ -1301,10 +1386,17 @@ export const searchConversations = query({
         authorName: conversationUser?.name || "Unknown",
         isOwn,
         messageCount: conv.message_count || 0,
+        proximityScore,
       });
     }
 
-    const sorted = results.sort((a, b) => b.updatedAt - a.updatedAt);
+    // Sort by proximity first (lower = better), then by recency
+    const sorted = results.sort((a, b) => {
+      if (a.proximityScore !== b.proximityScore) {
+        return a.proximityScore - b.proximityScore;
+      }
+      return b.updatedAt - a.updatedAt;
+    });
     return { results: sorted.slice(0, limit), totalMatches: searchResults.length };
   },
 });
@@ -1574,18 +1666,26 @@ export const searchForCLI = query({
       .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
       .take(200);
 
-    const conversationMatches = new Map<string, typeof searchResults>();
+    // Group messages by conversation (keep messages matching ANY term for context)
+    const conversationMessages = new Map<string, typeof searchResults>();
     for (const msg of searchResults) {
       if (userOnly && msg.role !== "user") continue;
-      // Always filter for all terms (same as web search)
-      if (!contentMatchesSearch(msg.content || "", terms)) {
+      if (!contentMatchesAnyTerm(msg.content || "", terms)) {
         continue;
       }
       const convId = msg.conversation_id.toString();
-      if (!conversationMatches.has(convId)) {
-        conversationMatches.set(convId, []);
+      if (!conversationMessages.has(convId)) {
+        conversationMessages.set(convId, []);
       }
-      conversationMatches.get(convId)!.push(msg);
+      conversationMessages.get(convId)!.push(msg);
+    }
+
+    // Filter to conversations where ALL terms appear (across any messages)
+    const conversationMatches = new Map<string, typeof searchResults>();
+    for (const [convId, messages] of conversationMessages) {
+      if (conversationMatchesAllTerms(messages, terms)) {
+        conversationMatches.set(convId, messages);
+      }
     }
 
     const results: Array<{
@@ -1594,6 +1694,7 @@ export const searchForCLI = query({
       project_path: string | null;
       updated_at: string;
       message_count: number;
+      proximityScore: number;
       matches: Array<{
         line: number;
         role: string;
@@ -1723,18 +1824,27 @@ export const searchForCLI = query({
       // Sort matches by line number (chronological order)
       formattedMatches.sort((a, b) => a.line - b.line);
 
+      const proximityScore = calculateProximityScore(messages, terms);
+
       results.push({
         id: conv._id,
         title,
         project_path: conv.project_path || null,
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
+        proximityScore,
         matches: formattedMatches,
         context: [],
       });
     }
 
-    results.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+    // Sort by proximity first (lower = better), then by recency
+    results.sort((a, b) => {
+      if (a.proximityScore !== b.proximityScore) {
+        return a.proximityScore - b.proximityScore;
+      }
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    });
 
     return {
       total_matches: totalMatches,

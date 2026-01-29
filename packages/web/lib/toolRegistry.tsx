@@ -8,6 +8,14 @@ import {
   FileSearch,
   Globe,
   Code,
+  Monitor,
+  Navigation,
+  MousePointer,
+  Eye,
+  FormInput,
+  Camera,
+  Layers,
+  Settings,
   type LucideIcon
 } from "lucide-react";
 import { EditToolView } from "@/components/tools/EditToolView";
@@ -16,6 +24,24 @@ import { ReadToolView } from "@/components/tools/ReadToolView";
 import { TodoToolView } from "@/components/tools/TodoToolView";
 import { TaskToolView } from "@/components/tools/TaskToolView";
 import { DefaultToolView } from "@/components/tools/DefaultToolView";
+
+function truncate(str: string | undefined, max: number): string {
+  if (!str) return "";
+  return str.length > max ? str.slice(0, max) + "..." : str;
+}
+
+function shortenUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    const path = parsed.pathname;
+    if (path === "/" || path === "") return host;
+    const shortPath = path.length > 25 ? path.slice(0, 22) + "..." : path;
+    return host + shortPath;
+  } catch {
+    return url.length > 40 ? url.slice(0, 37) + "..." : url;
+  }
+}
 
 export interface ToolConfig {
   title: string;
@@ -173,11 +199,211 @@ export const toolRegistry: Record<string, ToolConfig> = {
       }
       return "Web fetch";
     }
+  },
+
+  "mcp__claude-in-chrome__computer": {
+    title: "Browser",
+    icon: MousePointer,
+    color: "orange",
+    component: DefaultToolView,
+    extractSummary: (input) => {
+      const action = input?.action;
+      if (action === "screenshot") return "Screenshot";
+      if (action === "left_click") {
+        const coord = input?.coordinate;
+        return coord ? `Click (${coord[0]}, ${coord[1]})` : "Click";
+      }
+      if (action === "type") return `Type "${truncate(input?.text, 20)}"`;
+      if (action === "key") return `Key: ${input?.text}`;
+      if (action === "scroll") return `Scroll ${input?.scroll_direction}`;
+      if (action === "wait") return `Wait ${input?.duration}s`;
+      if (action === "zoom") return "Zoom";
+      if (action === "hover") return "Hover";
+      return action || "Browser action";
+    }
+  },
+
+  "mcp__claude-in-chrome__navigate": {
+    title: "Navigate",
+    icon: Navigation,
+    color: "blue",
+    component: DefaultToolView,
+    extractSummary: (input) => {
+      if (input?.url) {
+        if (input.url === "back") return "Back";
+        if (input.url === "forward") return "Forward";
+        return shortenUrl(input.url);
+      }
+      return "Navigate";
+    }
+  },
+
+  "mcp__claude-in-chrome__read_page": {
+    title: "Read Page",
+    icon: Eye,
+    color: "blue",
+    component: DefaultToolView,
+    extractSummary: (input) => {
+      if (input?.ref_id) return `Element ${input.ref_id}`;
+      if (input?.filter === "interactive") return "Interactive elements";
+      return "Page content";
+    }
+  },
+
+  "mcp__claude-in-chrome__find": {
+    title: "Find",
+    icon: Search,
+    color: "violet",
+    component: DefaultToolView,
+    extractSummary: (input) => input?.query ? `"${truncate(input.query, 30)}"` : "Find element"
+  },
+
+  "mcp__claude-in-chrome__form_input": {
+    title: "Form Input",
+    icon: FormInput,
+    color: "amber",
+    component: DefaultToolView,
+    extractSummary: (input) => {
+      const ref = input?.ref;
+      const val = input?.value;
+      if (ref && val !== undefined) return `${ref} = "${truncate(String(val), 20)}"`;
+      return "Set form value";
+    }
+  },
+
+  "mcp__claude-in-chrome__javascript_tool": {
+    title: "JavaScript",
+    icon: Code,
+    color: "amber",
+    component: DefaultToolView,
+    extractSummary: (input) => {
+      if (input?.text) return truncate(input.text, 40);
+      return "Execute JS";
+    }
+  },
+
+  "mcp__claude-in-chrome__tabs_context_mcp": {
+    title: "Tab Context",
+    icon: Layers,
+    color: "gray",
+    component: DefaultToolView,
+    extractSummary: () => "Get tabs"
+  },
+
+  "mcp__claude-in-chrome__tabs_create_mcp": {
+    title: "New Tab",
+    icon: Layers,
+    color: "gray",
+    component: DefaultToolView,
+    extractSummary: () => "Create tab"
+  },
+
+  "mcp__claude-in-chrome__update_plan": {
+    title: "Update Plan",
+    icon: CheckSquare,
+    color: "cyan",
+    component: DefaultToolView,
+    extractSummary: (input) => {
+      const domains = input?.domains;
+      if (Array.isArray(domains) && domains.length) {
+        return domains.slice(0, 2).join(", ") + (domains.length > 2 ? "..." : "");
+      }
+      return "Plan update";
+    }
+  },
+
+  "mcp__claude-in-chrome__gif_creator": {
+    title: "GIF",
+    icon: Camera,
+    color: "pink",
+    component: DefaultToolView,
+    extractSummary: (input) => input?.action || "Record"
+  },
+
+  "mcp__claude-in-chrome__read_console_messages": {
+    title: "Console",
+    icon: Terminal,
+    color: "emerald",
+    component: DefaultToolView,
+    extractSummary: (input) => input?.pattern ? `Filter: ${input.pattern}` : "Read console"
+  },
+
+  "mcp__claude-in-chrome__read_network_requests": {
+    title: "Network",
+    icon: Globe,
+    color: "emerald",
+    component: DefaultToolView,
+    extractSummary: (input) => input?.urlPattern ? `Filter: ${input.urlPattern}` : "Read network"
+  },
+
+  "mcp__claude-in-chrome__get_page_text": {
+    title: "Page Text",
+    icon: FileText,
+    color: "blue",
+    component: DefaultToolView,
+    extractSummary: () => "Extract text"
+  },
+
+  "mcp__claude-in-chrome__upload_image": {
+    title: "Upload",
+    icon: Camera,
+    color: "violet",
+    component: DefaultToolView,
+    extractSummary: (input) => input?.filename || "Upload image"
+  },
+
+  "mcp__claude-in-chrome__resize_window": {
+    title: "Resize",
+    icon: Monitor,
+    color: "gray",
+    component: DefaultToolView,
+    extractSummary: (input) => input?.width && input?.height ? `${input.width}x${input.height}` : "Resize window"
+  },
+
+  "mcp__claude-in-chrome__shortcuts_list": {
+    title: "Shortcuts",
+    icon: Settings,
+    color: "gray",
+    component: DefaultToolView,
+    extractSummary: () => "List shortcuts"
+  },
+
+  "mcp__claude-in-chrome__shortcuts_execute": {
+    title: "Shortcut",
+    icon: Rocket,
+    color: "cyan",
+    component: DefaultToolView,
+    extractSummary: (input) => input?.command ? `/${input.command}` : "Run shortcut"
   }
 };
 
 export function getToolConfig(toolName: string): ToolConfig {
-  return toolRegistry[toolName] || {
+  if (toolRegistry[toolName]) {
+    return toolRegistry[toolName];
+  }
+
+  if (toolName.startsWith("mcp__")) {
+    const parts = toolName.split("__");
+    const serverName = parts[1] || "mcp";
+    const methodName = parts[2] || "";
+    const displayServer = serverName.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const displayMethod = methodName.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+    return {
+      title: displayMethod || displayServer,
+      icon: Globe,
+      color: "cyan",
+      component: DefaultToolView,
+      extractSummary: (input) => {
+        if (input?.url) return shortenUrl(input.url);
+        if (input?.query) return truncate(input.query, 30);
+        if (input?.action) return input.action;
+        return displayServer;
+      }
+    };
+  }
+
+  return {
     title: toolName,
     icon: Code,
     color: "gray",

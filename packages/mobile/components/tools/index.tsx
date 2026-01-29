@@ -22,6 +22,49 @@ function parseInput(input: string): Record<string, unknown> {
   }
 }
 
+const truncateStr = (s: string | undefined, max: number) => {
+  if (!s) return '';
+  return s.length > max ? s.slice(0, max) + '...' : s;
+};
+
+const shortenUrl = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, '');
+    const path = parsed.pathname;
+    if (path === '/' || path === '') return host;
+    return host + (path.length > 20 ? path.slice(0, 17) + '...' : path);
+  } catch {
+    return truncateStr(url, 30);
+  }
+};
+
+const mcpToolDisplayNames: Record<string, string> = {
+  'mcp__claude-in-chrome__computer': 'Browser',
+  'mcp__claude-in-chrome__navigate': 'Navigate',
+  'mcp__claude-in-chrome__read_page': 'Read Page',
+  'mcp__claude-in-chrome__find': 'Find',
+  'mcp__claude-in-chrome__form_input': 'Form',
+  'mcp__claude-in-chrome__javascript_tool': 'JS',
+  'mcp__claude-in-chrome__tabs_context_mcp': 'Tabs',
+  'mcp__claude-in-chrome__tabs_create_mcp': 'New Tab',
+  'mcp__claude-in-chrome__update_plan': 'Plan',
+  'mcp__claude-in-chrome__gif_creator': 'GIF',
+  'mcp__claude-in-chrome__read_console_messages': 'Console',
+  'mcp__claude-in-chrome__read_network_requests': 'Network',
+  'mcp__claude-in-chrome__get_page_text': 'Page Text',
+};
+
+function getDisplayName(name: string): string {
+  if (mcpToolDisplayNames[name]) return mcpToolDisplayNames[name];
+  if (name.startsWith('mcp__')) {
+    const parts = name.split('__');
+    const method = parts[2] || parts[1] || 'MCP';
+    return method.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).slice(0, 10);
+  }
+  return name;
+}
+
 function extractSummary(name: string, input: Record<string, unknown>): string {
   const filePath = input?.file_path as string;
   const fileName = filePath?.split('/').pop();
@@ -45,7 +88,60 @@ function extractSummary(name: string, input: Record<string, unknown>): string {
       return input?.pattern ? `Search ${input.pattern}` : 'Search code';
     case 'Task':
       return (input?.description as string) || 'Agent task';
+    case 'mcp__claude-in-chrome__computer': {
+      const action = input?.action as string;
+      if (action === 'screenshot') return 'Screenshot';
+      if (action === 'left_click') {
+        const coord = input?.coordinate as number[];
+        return coord ? `Click (${coord[0]}, ${coord[1]})` : 'Click';
+      }
+      if (action === 'type') return `Type "${truncateStr(input?.text as string, 15)}"`;
+      if (action === 'key') return `Key: ${input?.text}`;
+      if (action === 'scroll') return `Scroll ${input?.scroll_direction}`;
+      if (action === 'wait') return `Wait ${input?.duration}s`;
+      return action || 'Browser';
+    }
+    case 'mcp__claude-in-chrome__navigate': {
+      const url = input?.url as string;
+      if (url === 'back') return 'Back';
+      if (url === 'forward') return 'Forward';
+      return url ? shortenUrl(url) : 'Navigate';
+    }
+    case 'mcp__claude-in-chrome__read_page':
+      if (input?.ref_id) return `Element ${input.ref_id}`;
+      return input?.filter === 'interactive' ? 'Interactive' : 'Page';
+    case 'mcp__claude-in-chrome__find':
+      return input?.query ? `"${truncateStr(input.query as string, 20)}"` : 'Find';
+    case 'mcp__claude-in-chrome__form_input':
+      return input?.ref ? `${input.ref}` : 'Set form';
+    case 'mcp__claude-in-chrome__javascript_tool':
+      return truncateStr(input?.text as string, 25) || 'Execute JS';
+    case 'mcp__claude-in-chrome__tabs_context_mcp':
+      return 'Get tabs';
+    case 'mcp__claude-in-chrome__tabs_create_mcp':
+      return 'Create tab';
+    case 'mcp__claude-in-chrome__update_plan': {
+      const domains = input?.domains as string[];
+      if (Array.isArray(domains) && domains.length) {
+        return domains.slice(0, 2).join(', ') + (domains.length > 2 ? '...' : '');
+      }
+      return 'Plan';
+    }
+    case 'mcp__claude-in-chrome__gif_creator':
+      return (input?.action as string) || 'Record';
+    case 'mcp__claude-in-chrome__read_console_messages':
+      return input?.pattern ? `Filter: ${input.pattern}` : 'Console';
+    case 'mcp__claude-in-chrome__read_network_requests':
+      return input?.urlPattern ? `Filter: ${input.urlPattern}` : 'Network';
+    case 'mcp__claude-in-chrome__get_page_text':
+      return 'Extract text';
     default:
+      if (name.startsWith('mcp__')) {
+        if (input?.url) return shortenUrl(input.url as string);
+        if (input?.query) return truncateStr(input.query as string, 20);
+        const parts = name.split('__');
+        return parts[2]?.replace(/_/g, ' ') || parts[1] || 'MCP';
+      }
       return name;
   }
 }
@@ -60,8 +156,21 @@ function getToolColor(name: string): { bg: string; border: string; text: string 
     Glob: { bg: 'rgba(139, 92, 246, 0.1)', border: 'rgba(139, 92, 246, 0.25)', text: '#8b5cf6' },
     Grep: { bg: 'rgba(236, 72, 153, 0.1)', border: 'rgba(236, 72, 153, 0.25)', text: '#ec4899' },
     Task: { bg: 'rgba(6, 182, 212, 0.1)', border: 'rgba(6, 182, 212, 0.25)', text: '#06b6d4' },
+    'mcp__claude-in-chrome__computer': { bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.25)', text: '#f59e0b' },
+    'mcp__claude-in-chrome__navigate': { bg: 'rgba(59, 130, 246, 0.1)', border: 'rgba(59, 130, 246, 0.25)', text: '#3b82f6' },
+    'mcp__claude-in-chrome__read_page': { bg: 'rgba(59, 130, 246, 0.1)', border: 'rgba(59, 130, 246, 0.25)', text: '#3b82f6' },
+    'mcp__claude-in-chrome__find': { bg: 'rgba(139, 92, 246, 0.1)', border: 'rgba(139, 92, 246, 0.25)', text: '#8b5cf6' },
+    'mcp__claude-in-chrome__form_input': { bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.25)', text: '#f59e0b' },
+    'mcp__claude-in-chrome__javascript_tool': { bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.25)', text: '#f59e0b' },
+    'mcp__claude-in-chrome__update_plan': { bg: 'rgba(6, 182, 212, 0.1)', border: 'rgba(6, 182, 212, 0.25)', text: '#06b6d4' },
+    'mcp__claude-in-chrome__gif_creator': { bg: 'rgba(236, 72, 153, 0.1)', border: 'rgba(236, 72, 153, 0.25)', text: '#ec4899' },
+    'mcp__claude-in-chrome__read_console_messages': { bg: 'rgba(16, 185, 129, 0.1)', border: 'rgba(16, 185, 129, 0.25)', text: '#10b981' },
+    'mcp__claude-in-chrome__read_network_requests': { bg: 'rgba(16, 185, 129, 0.1)', border: 'rgba(16, 185, 129, 0.25)', text: '#10b981' },
+    'mcp__claude-in-chrome__get_page_text': { bg: 'rgba(59, 130, 246, 0.1)', border: 'rgba(59, 130, 246, 0.25)', text: '#3b82f6' },
   };
-  return colors[name] || { bg: 'rgba(107, 114, 128, 0.1)', border: 'rgba(107, 114, 128, 0.25)', text: '#6b7280' };
+  if (colors[name]) return colors[name];
+  if (name.startsWith('mcp__')) return { bg: 'rgba(6, 182, 212, 0.1)', border: 'rgba(6, 182, 212, 0.25)', text: '#06b6d4' };
+  return { bg: 'rgba(107, 114, 128, 0.1)', border: 'rgba(107, 114, 128, 0.25)', text: '#6b7280' };
 }
 
 function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
@@ -225,6 +334,60 @@ function TodoContent({ input }: { input: Record<string, unknown> }) {
   );
 }
 
+function McpChromeContent({ name, input }: { name: string; input: Record<string, unknown> }) {
+  const action = input?.action as string;
+  const url = input?.url as string;
+  const query = input?.query as string;
+  const text = input?.text as string;
+  const coordinate = input?.coordinate as number[];
+
+  const getLabel = () => {
+    if (name === 'mcp__claude-in-chrome__computer') {
+      if (action === 'screenshot') return 'Taking screenshot';
+      if (action === 'left_click' && coordinate) return `Clicking at (${coordinate[0]}, ${coordinate[1]})`;
+      if (action === 'type' && text) return `Typing: "${text}"`;
+      if (action === 'key' && text) return `Key press: ${text}`;
+      if (action === 'scroll') return `Scrolling ${input?.scroll_direction}`;
+      if (action === 'wait') return `Waiting ${input?.duration}s`;
+      return action ? `Action: ${action}` : 'Browser action';
+    }
+    if (name === 'mcp__claude-in-chrome__navigate' && url) {
+      return `Navigating to ${url}`;
+    }
+    if (name === 'mcp__claude-in-chrome__find' && query) {
+      return `Finding: "${query}"`;
+    }
+    if (name === 'mcp__claude-in-chrome__form_input') {
+      return `Setting ${input?.ref}: ${input?.value}`;
+    }
+    if (name === 'mcp__claude-in-chrome__javascript_tool' && text) {
+      return text.length > 100 ? text.slice(0, 97) + '...' : text;
+    }
+    if (name === 'mcp__claude-in-chrome__read_page') {
+      return input?.filter === 'interactive' ? 'Reading interactive elements' : 'Reading page content';
+    }
+    if (name === 'mcp__claude-in-chrome__update_plan') {
+      const domains = input?.domains as string[];
+      if (Array.isArray(domains)) return `Domains: ${domains.join(', ')}`;
+    }
+    return getDisplayName(name);
+  };
+
+  return (
+    <View style={contentStyles.container}>
+      <Text style={mcpStyles.label}>{getLabel()}</Text>
+      {(action || url || query) && (
+        <View style={mcpStyles.detailBox}>
+          {action && <Text style={mcpStyles.detail}>Action: {action}</Text>}
+          {url && <Text style={mcpStyles.detail} numberOfLines={2}>URL: {url}</Text>}
+          {query && <Text style={mcpStyles.detail}>Query: {query}</Text>}
+          {coordinate && <Text style={mcpStyles.detail}>Coord: ({coordinate[0]}, {coordinate[1]})</Text>}
+        </View>
+      )}
+    </View>
+  );
+}
+
 function DefaultContent({ input }: { input: Record<string, unknown> }) {
   const inputStr = JSON.stringify(input, null, 2);
   const lines = inputStr.split('\n');
@@ -264,6 +427,9 @@ export function ToolCallView({ toolCall, expanded, onToggle }: Props) {
       case 'TodoWrite':
         return <TodoContent input={input} />;
       default:
+        if (toolCall.name.startsWith('mcp__claude-in-chrome__')) {
+          return <McpChromeContent name={toolCall.name} input={input} />;
+        }
         return <DefaultContent input={input} />;
     }
   };
@@ -273,7 +439,7 @@ export function ToolCallView({ toolCall, expanded, onToggle }: Props) {
       <TouchableOpacity onPress={onToggle} style={styles.header} activeOpacity={0.7}>
         <View>
           <Text style={[styles.summary, { color: colors.text }]}>{summary}</Text>
-          <Text style={styles.toolName}>{toolCall.name}</Text>
+          <Text style={styles.toolName}>{getDisplayName(toolCall.name)}</Text>
         </View>
         <Text style={[styles.arrow, { color: colors.text }]}>{expanded ? '▼' : '▶'}</Text>
       </TouchableOpacity>
@@ -505,5 +671,24 @@ const todoStyles = StyleSheet.create({
   },
   textProgress: {
     color: '#93c5fd',
+  },
+});
+
+const mcpStyles = StyleSheet.create({
+  label: {
+    fontSize: 12,
+    color: Theme.assistantBubbleText,
+    marginBottom: 6,
+  },
+  detailBox: {
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderRadius: 4,
+    padding: 8,
+  },
+  detail: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    fontFamily: 'SpaceMono',
+    marginBottom: 2,
   },
 });

@@ -467,9 +467,12 @@ function showWelcome(): void {
   feature("◉", "Background Sync", "Sessions sync automatically as you work");
 
   console.log(`\n  ${fmt.muted("Commands")}`);
-  console.log(`     ${fmt.cmd("codecast search")} ${fmt.muted("\"query\"")}    ${fmt.muted("Search past sessions")}`);
-  console.log(`     ${fmt.cmd("codecast feed")}              ${fmt.muted("Browse recent sessions")}`);
-  console.log(`     ${fmt.cmd("codecast status")}            ${fmt.muted("Check sync status")}`);
+  console.log(`     ${fmt.cmd("codecast search")} ${fmt.muted("\"query\"")}   ${fmt.muted("Full-text search across sessions")}`);
+  console.log(`     ${fmt.cmd("codecast resume")} ${fmt.muted("\"query\"")}   ${fmt.muted("Find a session and open it in Claude")}`);
+  console.log(`     ${fmt.cmd("codecast ask")} ${fmt.muted("\"question\"")}   ${fmt.muted("Ask questions about past work")}`);
+  console.log(`     ${fmt.cmd("codecast feed")}             ${fmt.muted("Browse recent sessions")}`);
+  console.log(`     ${fmt.cmd("codecast status")}           ${fmt.muted("Check sync status")}`);
+  console.log(`\n     ${fmt.muted("Run")} ${fmt.cmd("codecast -h")} ${fmt.muted("for all commands")}`);
 
   console.log(`\n${c.dim}${"─".repeat(50)}${c.reset}\n`);
 }
@@ -1271,7 +1274,10 @@ program
     "  2. codecast start         # Start background sync daemon\n" +
     "  3. codecast status        # Check sync status"
   )
-  .version(getVersion());
+  .version(getVersion())
+  .action(() => {
+    program.outputHelp();
+  });
 
 program
   .command("auth")
@@ -1305,6 +1311,13 @@ program
   .description("Stop the background daemon")
   .action(() => {
     stopDaemon();
+  });
+
+program
+  .command("welcome", { hidden: true })
+  .description("Show welcome message")
+  .action(() => {
+    showWelcome();
   });
 
 program
@@ -4239,7 +4252,17 @@ checkForUpdates().then(async (available) => {
 });
 
 program.on("command:*", (operands) => {
-  logCliError("unknown-command", `Unknown command: ${operands.join(" ")}`);
+  if (operands.length > 0) {
+    logCliError("unknown-command", `Unknown command: ${operands.join(" ")}`);
+    console.error(`error: unknown command '${operands.join(" ")}'`);
+    process.exit(1);
+  }
 });
+
+// Show help if no command provided
+if (process.argv.length <= 2) {
+  program.outputHelp();
+  process.exit(0);
+}
 
 program.parse();

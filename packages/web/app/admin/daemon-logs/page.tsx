@@ -87,6 +87,22 @@ function AdminDaemonLogs() {
     return map;
   }, [logsResult?.users]);
 
+  const userStatus = useMemo(() => {
+    if (!users) return { online: 0, offline: 0 };
+    const now = Date.now();
+    const staleThreshold = 10 * 60 * 1000; // 10 minutes
+    let online = 0;
+    let offline = 0;
+    for (const user of users) {
+      if (user && now - user.lastLog < staleThreshold) {
+        online++;
+      } else if (user) {
+        offline++;
+      }
+    }
+    return { online, offline };
+  }, [users]);
+
   if (!logsResult?.isAdmin) {
     return (
       <div className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center">
@@ -178,7 +194,15 @@ function AdminDaemonLogs() {
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
           <div className="lg:col-span-1 bg-gray-900 rounded-lg p-4 border border-gray-800">
-            <h2 className="text-sm font-semibold text-gray-400 uppercase mb-3">Users</h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-gray-400 uppercase">Users</h2>
+              <div className="flex gap-2 text-xs">
+                <span className="text-green-400">{userStatus.online} online</span>
+                {userStatus.offline > 0 && (
+                  <span className="text-gray-500">{userStatus.offline} offline</span>
+                )}
+              </div>
+            </div>
             <div className="space-y-1">
               <button
                 onClick={() => setSelectedUserId(undefined)}
@@ -202,7 +226,18 @@ function AdminDaemonLogs() {
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="truncate">{user.email || user.name || "Unknown"}</span>
+                      <div className="flex items-center gap-2">
+                        {/* Online/offline indicator */}
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            Date.now() - user.lastLog < 10 * 60 * 1000
+                              ? "bg-green-500"
+                              : "bg-gray-600"
+                          }`}
+                          title={Date.now() - user.lastLog < 10 * 60 * 1000 ? "Online" : "Offline (>10min)"}
+                        />
+                        <span className="truncate">{user.email || user.name || "Unknown"}</span>
+                      </div>
                       <div className="flex gap-1 ml-2">
                         {user.errorCount > 0 && (
                           <span className="px-1.5 py-0.5 bg-red-600/30 text-red-400 rounded text-xs">
@@ -216,8 +251,13 @@ function AdminDaemonLogs() {
                         )}
                       </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-0.5">
+                    <div className={`text-xs mt-0.5 ${
+                      Date.now() - user.lastLog > 10 * 60 * 1000
+                        ? "text-orange-400"
+                        : "text-gray-500"
+                    }`}>
                       {formatRelativeTime(user.lastLog)}
+                      {Date.now() - user.lastLog > 10 * 60 * 1000 && " ⚠️"}
                     </div>
                   </button>
                 ) : null
@@ -298,8 +338,8 @@ function AdminDaemonLogs() {
                               {log.message}
                             </pre>
                             {log.metadata?.error_code && (
-                              <div className="mt-2 text-xs text-red-400">
-                                Error: {log.metadata.error_code}
+                              <div className={`mt-2 text-xs ${log.level === "error" ? "text-red-400" : "text-gray-500"}`}>
+                                {log.level === "error" ? "Error" : "Event"}: {log.metadata.error_code}
                               </div>
                             )}
                             {log.metadata?.session_id && (
