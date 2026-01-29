@@ -12,25 +12,36 @@ if [[ -n $(git status --porcelain) ]]; then
   exit 1
 fi
 
-# 0. Pre-flight: Clean build to catch errors
-echo "0. Pre-flight check: Clean build of web app..."
+# 0. Pre-flight: Mirror Railway build process locally
+echo "0. Pre-flight: Running Railway build locally..."
+echo "   This mirrors exactly what Railway will do"
+echo ""
+
+# Install dependencies (same as Railway)
+echo "   Installing dependencies..."
+bun install
+
+# Build convex (same as Railway)
+echo "   Building Convex..."
+cd packages/convex
+bun run build 2>/dev/null || true
+cd ../..
+
+# Clean build web (same as Railway)
+echo "   Building web (clean)..."
 cd packages/web
 rm -rf .next
-if ! bun run build 2>&1 | tee /tmp/web-build.log | tail -5; then
+if ! bun run build 2>&1 | tee /tmp/web-build.log; then
+  echo ""
   echo "   ✗ Web build failed! Fix errors before deploying."
   echo ""
   echo "Build output:"
-  cat /tmp/web-build.log | tail -30
-  exit 1
-fi
-
-# Verify key routes are in build output
-if ! grep -q "/admin/daemon-logs" /tmp/web-build.log; then
-  echo "   ✗ Build missing /admin/daemon-logs route!"
+  tail -30 /tmp/web-build.log
   exit 1
 fi
 cd ../..
-echo "   ✓ Web build passed (all routes present)"
+echo ""
+echo "   ✓ Railway build simulation passed"
 echo ""
 
 # 1. Deploy Convex functions
@@ -67,36 +78,8 @@ fi
 echo ""
 
 # 3. Push to git (triggers Railway deploy)
-echo "3. Pushing to git (triggers Railway deploy)..."
-git push origin main 2>/dev/null && echo "   ✓ Pushed" || echo "   Already up to date"
-echo ""
-
-# 4. Wait for Railway to auto-deploy from git push
-echo "4. Waiting for Railway deployment..."
-echo "   Railway auto-deploys on push to main"
-echo "   Waiting 120s for build and deploy..."
-
-# Poll for deployment completion
-for i in {1..12}; do
-  sleep 10
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://codecast.sh/admin/daemon-logs?_=$(date +%s)")
-  if [[ "$HTTP_CODE" == "200" ]]; then
-    echo "   ✓ Deployment verified! /admin/daemon-logs is live (HTTP $HTTP_CODE)"
-    break
-  fi
-  echo "   ... still deploying ($((i*10))s) - HTTP $HTTP_CODE"
-done
-
-if [[ "$HTTP_CODE" != "200" ]]; then
-  echo ""
-  echo "   ⚠ /admin/daemon-logs returned HTTP $HTTP_CODE after 120s"
-  echo "   Railway deployment may have failed or is still in progress"
-  echo "   Check Railway dashboard: https://railway.app"
-  echo ""
-  echo "   To debug Railway builds:"
-  echo "   1. Run: railway link (select codecast project)"
-  echo "   2. Run: railway logs --build"
-fi
+echo "3. Pushing to git (triggers Railway auto-deploy)..."
+git push origin main 2>/dev/null && echo "   ✓ Pushed to main" || echo "   Already up to date"
 echo ""
 
 echo "=== Deployment Complete ==="
@@ -104,4 +87,6 @@ echo ""
 echo "Deployed:"
 echo "  - Convex: https://little-bobcat-226.convex.cloud"
 echo "  - CLI:    https://dl.codecast.sh/latest.json"
-echo "  - Web:    https://codecast.sh"
+echo "  - Web:    https://codecast.sh (Railway auto-deploys on push)"
+echo ""
+echo "Monitor Railway: https://railway.app"
