@@ -18,7 +18,20 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
-  const { signInWithGitHub, signInWithEmail } = useAuth();
+  const { signInWithGitHub, signInWithApple, signInWithEmail, isAppleAuthAvailable } = useAuth();
+
+  const handleAppleSignIn = async () => {
+    setLoading(true);
+    try {
+      await signInWithApple();
+    } catch (error: any) {
+      if (error?.code !== 'ERR_REQUEST_CANCELED') {
+        Alert.alert('Error', 'Apple sign in failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleGitHubSignIn = async () => {
     setLoading(true);
@@ -69,8 +82,22 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.card}>
+          {isAppleAuthAvailable && (
+            <TouchableOpacity
+              style={[styles.appleButton, loading && styles.buttonDisabled]}
+              onPress={handleAppleSignIn}
+              disabled={loading}
+            >
+              {loading && !showEmailForm ? (
+                <ActivityIndicator color="#000" />
+              ) : (
+                <Text style={styles.appleButtonText}>Sign in with Apple</Text>
+              )}
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
-            style={[styles.githubButton, loading && styles.buttonDisabled]}
+            style={[styles.githubButton, loading && styles.buttonDisabled, isAppleAuthAvailable && { marginTop: 12 }]}
             onPress={handleGitHubSignIn}
             disabled={loading}
           >
@@ -195,6 +222,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 3,
+  },
+  appleButton: {
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  appleButtonText: {
+    color: '#000',
+    fontSize: 16,
+    fontWeight: '600',
   },
   githubButton: {
     backgroundColor: '#24292e',
