@@ -46,6 +46,8 @@ Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n
 ```
 Deploys everything: Convex functions, CLI (if changed), and pushes to git (which triggers Railway auto-deploy for web).
 
+We use dev convex instance for dev and for prod, not prod instance.
+
 ### CLI-Only Release
 ```bash
 cd packages/cli
