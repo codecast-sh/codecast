@@ -10,6 +10,7 @@ import { GlobalSearch } from "./GlobalSearch";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { TeamAvatarBar } from "./TeamAvatarBar";
+import { TeamSwitcher } from "./TeamSwitcher";
 import { Button } from "./ui/button";
 import { Logo } from "./Logo";
 import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose } from "lucide-react";
@@ -143,8 +144,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             </div>
           </div>
 
-          {/* Team avatars */}
-          <TeamAvatarBar />
+          {/* Team switcher and avatars */}
+          <div className="hidden sm:flex items-center gap-2">
+            <TeamSwitcher />
+            <TeamAvatarBar />
+          </div>
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">

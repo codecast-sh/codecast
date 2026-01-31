@@ -16,12 +16,19 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useActiveTeamStore } from "../../../store/activeTeamStore";
 
 export default function TeamPage() {
   const user = useQuery(api.users.getCurrentUser);
+  const { activeTeamId } = useActiveTeamStore();
+  const effectiveTeamId = activeTeamId || user?.team_id;
   const team = useQuery(
     api.teams.getTeam,
-    user?.team_id ? { team_id: user.team_id } : "skip"
+    effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
+  );
+  const teamContext = useQuery(
+    api.teams.getActiveTeamContext,
+    effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
   );
   const removeMember = useMutation(api.teams.removeMember);
   const renameTeam = useMutation(api.teams.renameTeam);
@@ -29,7 +36,7 @@ export default function TeamPage() {
   const syncGithubOrg = useAction(api.teams.syncGithubOrg);
   const teamMembers = useQuery(
     api.teams.getTeamMembers,
-    user?.team_id ? { team_id: user.team_id } : "skip"
+    effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
   );
 
   const [teamName, setTeamName] = useState("");
@@ -47,11 +54,11 @@ export default function TeamPage() {
   }
 
   const handleSaveTeamName = async () => {
-    if (!user._id || !user.team_id || !teamName.trim()) return;
+    if (!user._id || !effectiveTeamId || !teamName.trim()) return;
     setIsSavingTeamName(true);
     try {
       await renameTeam({
-        team_id: user.team_id,
+        team_id: effectiveTeamId,
         requesting_user_id: user._id,
         name: teamName.trim(),
       });
@@ -63,12 +70,13 @@ export default function TeamPage() {
   };
 
   const handleRemoveMember = async () => {
-    if (!memberToRemove || !user._id) return;
+    if (!memberToRemove || !user._id || !effectiveTeamId) return;
     setIsRemoving(true);
     try {
       await removeMember({
         requesting_user_id: user._id,
         member_user_id: memberToRemove,
+        team_id: effectiveTeamId,
       });
       setMemberToRemove(null);
     } finally {
@@ -77,13 +85,14 @@ export default function TeamPage() {
   };
 
   const handleRoleChange = async (memberId: Id<"users">, newRole: "member" | "admin") => {
-    if (!user._id) return;
+    if (!user._id || !effectiveTeamId) return;
     setRoleChangeInProgress(memberId);
     try {
       await setMemberRole({
         requesting_user_id: user._id,
         member_user_id: memberId,
         role: newRole,
+        team_id: effectiveTeamId,
       });
     } finally {
       setRoleChangeInProgress(null);
@@ -133,9 +142,9 @@ export default function TeamPage() {
     return { status: "offline", text: getRelativeTime(timestamp) };
   };
 
-  const isAdmin = user.role === "admin";
+  const isAdmin = teamContext?.role === "admin";
 
-  if (!user.team_id || !team) {
+  if (!effectiveTeamId || !team) {
     return (
       <div className="space-y-6">
         <Card className="p-6 bg-sol-bg border-sol-border">
@@ -258,7 +267,7 @@ export default function TeamPage() {
 
           <div className="space-y-2">
             <div className="text-xs text-sol-base1 uppercase tracking-wider">Members</div>
-            {teamMembers?.map((member) => {
+            {teamMembers?.filter((m): m is NonNullable<typeof m> => m !== null).map((member) => {
               const daemonStatus = getMemberDaemonStatus(member.daemon_last_seen);
               return (
                 <div key={member._id} className="flex items-center justify-between py-3 px-3 rounded-lg bg-sol-bg-alt">

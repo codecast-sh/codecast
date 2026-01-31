@@ -124,7 +124,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
 
   const sidebarContent = (
     <>
-      <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+      <div className="flex-1 flex flex-col min-h-0">
         {!isNarrow && (
           <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
             Conversations
@@ -320,7 +320,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   return (
     <nav
       className={`
-        h-full w-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt overflow-y-auto
+        h-full w-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt overflow-y-auto scrollbar-auto
         ${isMobileOpen ? 'shadow-xl' : 'hidden md:flex'}
       `}
     >
