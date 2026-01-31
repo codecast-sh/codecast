@@ -232,6 +232,29 @@
   }
 }
 
+@layer utilities {
+  .scrollbar-auto {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  .scrollbar-auto::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-auto::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-auto::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 3px;
+  }
+  .scrollbar-auto:hover {
+    scrollbar-color: var(--sol-border) transparent;
+  }
+  .scrollbar-auto:hover::-webkit-scrollbar-thumb {
+    background: var(--sol-border);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -3,166 +3,370 @@
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
+import { Input } from "../../../components/ui/input";
+import { Button } from "../../../components/ui/button";
 import { Label } from "../../../components/ui/label";
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { GitBranch, Folder, Check, Search, Eye, EyeOff } from "lucide-react";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useActiveTeamStore } from "../../../store/activeTeamStore";
 
 export default function SyncPage() {
   const user = useQuery(api.users.getCurrentUser);
   const syncSettings = useQuery(api.users.getSyncSettings);
+  const userTeams = useQuery(api.teams.getUserTeams);
+  const { activeTeamId } = useActiveTeamStore();
+  const projects = useQuery(api.users.getRecentProjectsWithGitInfo, { limit: 30 });
+  const directoryMappings = useQuery(api.users.getDirectoryTeamMappings);
   const updateSyncSettings = useMutation(api.users.updateSyncSettings);
-  const [editMode, setEditMode] = useState(false);
-  const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
-  const [newProject, setNewProject] = useState("");
+  const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
+  const removeDirectoryMapping = useMutation(api.users.removeDirectoryTeamMapping);
 
-  useEffect(() => {
-    if (syncSettings?.sync_projects) {
-      setSelectedProjects(syncSettings.sync_projects);
-    }
-  }, [syncSettings?.sync_projects]);
+  const [editMode, setEditMode] = useState(false);
+  const [newProject, setNewProject] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
 
   if (!user || !syncSettings) {
     return null;
   }
 
-  const handleToggleSyncMode = async () => {
-    const newMode = syncSettings.sync_mode === "all" ? "selected" : "all";
+  // Get the active team from the global switcher
+  const activeTeam = activeTeamId ? userTeams?.find(t => t?._id === activeTeamId) : null;
+  const hasActiveTeam = !!activeTeam;
+  const hasTeams = userTeams && userTeams.length > 0;
+  const syncAll = syncSettings.sync_mode === "all";
+  const syncProjects = syncSettings.sync_projects || [];
+
+  const mappingsByPath = new Map(directoryMappings?.map(m => [m.path_prefix, m]) || []);
+
+  const handleToggleSyncAll = async () => {
     await updateSyncSettings({
-      sync_mode: newMode,
-      sync_projects: newMode === "all" ? [] : selectedProjects,
+      sync_mode: syncAll ? "selected" : "all",
     });
   };
 
-  const handleRemoveProject = async (projectPath: string) => {
-    const newProjects = selectedProjects.filter(p => p !== projectPath);
-    setSelectedProjects(newProjects);
-    await updateSyncSettings({
-      sync_mode: "selected",
-      sync_projects: newProjects,
-    });
+  const isSynced = (path: string): boolean => {
+    return syncAll || syncProjects.includes(path);
+  };
+
+  const getTeamForProject = (path: string) => {
+    const mapping = mappingsByPath.get(path);
+    if (mapping?.team_id) {
+      return userTeams?.find(t => t?._id === mapping.team_id) || null;
+    }
+    return null;
+  };
+
+  const handleTeamChange = async (path: string, teamId: Id<"teams"> | null) => {
+    if (teamId) {
+      await updateDirectoryMapping({
+        path_prefix: path,
+        team_id: teamId,
+        auto_share: true,
+      });
+    } else {
+      const existingMapping = mappingsByPath.get(path);
+      if (existingMapping) {
+        await removeDirectoryMapping({ path_prefix: path });
+      }
+    }
+  };
+
+  const handleToggleProjectSync = async (path: string, shouldSync: boolean) => {
+    if (shouldSync) {
+      const newProjects = [...syncProjects, path];
+      await updateSyncSettings({ sync_projects: newProjects });
+    } else {
+      const newProjects = syncProjects.filter(p => p !== path);
+      await updateSyncSettings({ sync_projects: newProjects });
+      // Also remove team mapping when unsyncing
+      const existingMapping = mappingsByPath.get(path);
+      if (existingMapping) {
+        await removeDirectoryMapping({ path_prefix: path });
+      }
+    }
   };
 
   const handleAddProject = async () => {
     if (!newProject.trim()) return;
     const projectPath = newProject.trim();
-    if (selectedProjects.includes(projectPath)) {
-      setNewProject("");
-      return;
+
+    // When sync all is on, adding a path just creates a placeholder for team assignment
+    // When sync all is off, it adds to the sync_projects list
+    if (!syncAll) {
+      if (syncProjects.includes(projectPath)) {
+        setNewProject("");
+        return;
+      }
+      const newProjects = [...syncProjects, projectPath];
+      await updateSyncSettings({ sync_projects: newProjects });
     }
-    const newProjects = [...selectedProjects, projectPath];
-    setSelectedProjects(newProjects);
     setNewProject("");
-    await updateSyncSettings({
-      sync_mode: "selected",
-      sync_projects: newProjects,
-    });
   };
+
+  const getProjectName = (path: string) => {
+    const parts = path.split("/");
+    return parts[parts.length - 1] || path;
+  };
+
+  const getRelativeTime = (timestamp: number) => {
+    const diff = Date.now() - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(diff / 3600000);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(diff / 86400000);
+    return `${days}d ago`;
+  };
+
+  // Merge recent projects with paths from team mappings and sync_projects
+  const allProjects = (() => {
+    const projectMap = new Map<string, { path: string; is_git_repo: boolean; session_count: number; last_active: number }>();
+
+    // Add recent projects
+    projects?.forEach(p => {
+      projectMap.set(p.path, p);
+    });
+
+    // Add paths from team mappings that aren't in recent projects
+    directoryMappings?.forEach(m => {
+      if (!projectMap.has(m.path_prefix)) {
+        projectMap.set(m.path_prefix, {
+          path: m.path_prefix,
+          is_git_repo: true, // Assume git repo for mapped paths
+          session_count: 0,
+          last_active: m.created_at,
+        });
+      }
+    });
+
+    // Add paths from sync_projects that aren't already present
+    syncProjects.forEach(p => {
+      if (!projectMap.has(p)) {
+        projectMap.set(p, {
+          path: p,
+          is_git_repo: true,
+          session_count: 0,
+          last_active: 0,
+        });
+      }
+    });
+
+    return Array.from(projectMap.values()).sort((a, b) => b.last_active - a.last_active);
+  })();
+
+  const filteredProjects = allProjects.filter(p => {
+    if (!searchQuery) return true;
+    const name = getProjectName(p.path).toLowerCase();
+    const path = p.path.toLowerCase();
+    const query = searchQuery.toLowerCase();
+    return name.includes(query) || path.includes(query);
+  });
 
   return (
     <div className="space-y-6">
       <Card className="p-6 bg-sol-bg border-sol-border">
-        <h2 className="text-lg font-semibold text-sol-text mb-4">Sync Settings</h2>
-        <div className="space-y-3">
-          <div className="flex items-center justify-between py-3 border-b border-sol-border">
-            <div>
-              <Label className="text-sol-text font-medium">Sync Mode</Label>
-              <div className="text-sm text-sol-base1">
-                {syncSettings.sync_mode === "all"
-                  ? "Syncing all projects from your machine"
-                  : `Syncing ${selectedProjects.length} selected project${selectedProjects.length === 1 ? "" : "s"}`
-                }
-              </div>
+        <div className="flex items-center justify-between">
+          <div>
+            <Label className="text-sol-text font-medium">Sync All Projects</Label>
+            <div className="text-sm text-sol-base1 mt-1">
+              {syncAll
+                ? "All projects sync privately by default"
+                : `Only ${syncProjects.length} selected project${syncProjects.length === 1 ? "" : "s"} will sync`
+              }
             </div>
-            <button
-              onClick={handleToggleSyncMode}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                syncSettings.sync_mode === "all" ? "bg-sol-cyan" : "bg-sol-base02"
+          </div>
+          <button
+            onClick={handleToggleSyncAll}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              syncAll ? "bg-sol-cyan" : "bg-sol-base02"
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                syncAll ? "translate-x-6" : "translate-x-1"
               }`}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  syncSettings.sync_mode === "all" ? "translate-x-6" : "translate-x-1"
-                }`}
-              />
-            </button>
-          </div>
-          <div className="py-3">
-            <div className="flex items-center justify-between mb-2">
-              <Label className="text-sol-text font-medium">
-                {syncSettings.sync_mode === "all" ? "Sync All Projects" : "Selected Projects"}
-              </Label>
-              {syncSettings.sync_mode === "selected" && (
-                <button
-                  onClick={() => setEditMode(!editMode)}
-                  className="text-sm text-sol-cyan hover:text-sol-cyan/80"
-                >
-                  {editMode ? "Done" : "Edit"}
-                </button>
-              )}
-            </div>
-            {syncSettings.sync_mode === "all" ? (
-              <div className="text-sm text-sol-base1">
-                All Claude Code sessions from your machine are being synced to codecast.
-                Toggle off to select specific projects.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {selectedProjects.length === 0 ? (
-                  <div className="text-sm text-sol-base1">
-                    No projects selected. Add projects below or use the CLI: <code className="bg-sol-base03 px-1 rounded">codecast sync-settings</code>
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    {selectedProjects.map(projectPath => (
-                      <div key={projectPath} className="flex items-center justify-between py-1.5 px-3 bg-sol-base02 rounded border border-sol-border">
-                        <span className="text-sm text-sol-base1 font-mono truncate">{projectPath}</span>
-                        {editMode && (
-                          <button
-                            onClick={() => handleRemoveProject(projectPath)}
-                            className="text-sol-red hover:text-sol-red/80 ml-2"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {editMode && (
-                  <div className="flex gap-2 mt-3">
-                    <input
-                      type="text"
-                      value={newProject}
-                      onChange={(e) => setNewProject(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleAddProject()}
-                      placeholder="/path/to/project"
-                      className="flex-1 px-3 py-1.5 bg-sol-base03 border border-sol-border rounded text-sm text-sol-text placeholder-sol-base1"
-                    />
-                    <button
-                      onClick={handleAddProject}
-                      className="px-3 py-1.5 bg-sol-cyan text-sol-bg rounded text-sm font-medium hover:bg-sol-cyan/90"
-                    >
-                      Add
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+            />
+          </button>
         </div>
       </Card>
+
+      <Card className="p-6 bg-sol-bg border-sol-border">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-sol-text">Projects</h2>
+            <p className="text-sm text-sol-base1 mt-1">
+              {hasActiveTeam
+                ? `Share sessions with ${activeTeam.name}`
+                : "Your recent projects"
+              }
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => setEditMode(!editMode)}
+            className="border-sol-border text-sol-base1"
+          >
+            {editMode ? "Done" : "+ Add Path"}
+          </Button>
+        </div>
+
+        <div className="flex gap-2 mb-4">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sol-base1" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search projects..."
+              className="pl-9 bg-sol-bg-alt border-sol-border text-sol-text placeholder-sol-base1"
+            />
+          </div>
+        </div>
+
+        {editMode && (
+          <div className="flex gap-2 mb-4 p-3 bg-sol-base02/30 rounded-lg">
+            <Input
+              type="text"
+              value={newProject}
+              onChange={(e) => setNewProject(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAddProject()}
+              placeholder="/path/to/project"
+              className="flex-1 bg-sol-bg-alt border-sol-border text-sol-text placeholder-sol-base1"
+            />
+            <Button onClick={handleAddProject} className="bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90">
+              Add
+            </Button>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          {filteredProjects && filteredProjects.length > 0 ? (
+            filteredProjects.map((project) => {
+              const synced = isSynced(project.path);
+              const team = getTeamForProject(project.path);
+
+              return (
+                <div
+                  key={project.path}
+                  className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
+                    synced
+                      ? "bg-sol-base02/20 border-sol-border/50 hover:border-sol-border"
+                      : "bg-sol-base02/10 border-sol-border/30 opacity-60"
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    {project.is_git_repo ? (
+                      <GitBranch className={`w-5 h-5 flex-shrink-0 ${synced ? "text-sol-cyan" : "text-sol-base1"}`} />
+                    ) : (
+                      <Folder className="w-5 h-5 text-sol-base1 flex-shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <div className={`font-medium truncate ${synced ? "text-sol-text" : "text-sol-base1"}`}>
+                        {getProjectName(project.path)}
+                      </div>
+                      <div className="text-xs text-sol-base1 truncate">
+                        {project.path}
+                      </div>
+                      <div className="text-xs text-sol-base1 mt-0.5">
+                        {project.session_count} session{project.session_count !== 1 ? "s" : ""} &middot; {getRelativeTime(project.last_active)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {/* When sync all is on, show team toggle for active team */}
+                    {syncAll && hasActiveTeam && (
+                      <button
+                        onClick={() => handleTeamChange(project.path, team ? null : activeTeam._id)}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-md border transition-colors text-sm min-w-[140px] justify-center ${
+                          team
+                            ? "border-sol-green/50 bg-sol-green/10 text-sol-green"
+                            : "border-sol-border bg-sol-bg hover:bg-sol-base02/50 text-sol-base1"
+                        }`}
+                      >
+                        {team ? (
+                          <>
+                            <Eye className="w-4 h-4" />
+                            <span>{activeTeam.name}</span>
+                          </>
+                        ) : (
+                          <>
+                            <EyeOff className="w-4 h-4" />
+                            <span>Only Me</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {/* When sync all is off, show sync checkbox + team toggle */}
+                    {!syncAll && (
+                      <>
+                        {hasActiveTeam && synced && (
+                          <button
+                            onClick={() => handleTeamChange(project.path, team ? null : activeTeam._id)}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-md border transition-colors text-sm min-w-[140px] justify-center ${
+                              team
+                                ? "border-sol-green/50 bg-sol-green/10 text-sol-green"
+                                : "border-sol-border bg-sol-bg hover:bg-sol-base02/50 text-sol-base1"
+                            }`}
+                          >
+                            {team ? (
+                              <>
+                                <Eye className="w-4 h-4" />
+                                <span>{activeTeam.name}</span>
+                              </>
+                            ) : (
+                              <>
+                                <EyeOff className="w-4 h-4" />
+                                <span>Only Me</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleToggleProjectSync(project.path, !synced)}
+                          className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                            synced
+                              ? "bg-sol-cyan border-sol-cyan"
+                              : "border-sol-base1 hover:border-sol-cyan"
+                          }`}
+                        >
+                          {synced && <Check className="w-3 h-3 text-sol-bg" />}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className="text-center py-8 text-sol-base1">
+              {searchQuery ? (
+                <p>No projects matching "{searchQuery}"</p>
+              ) : (
+                <p>No recent projects found. Start a coding session to see your projects here.</p>
+              )}
+            </div>
+          )}
+        </div>
+      </Card>
+
       <Card className="p-6 bg-sol-bg border-sol-border">
         <h2 className="text-lg font-semibold text-sol-text mb-4">CLI Management</h2>
         <div className="text-sm text-sol-base1 space-y-2">
-          <p>You can also manage sync settings from the command line:</p>
+          <p>Manage sync settings from the command line:</p>
           <div className="bg-sol-base03 p-3 rounded font-mono text-sm space-y-1">
             <p><span className="text-sol-cyan">codecast sync-settings</span> - Interactive project selection</p>
-            <p><span className="text-sol-cyan">codecast sync-settings --all</span> - Sync all projects</p>
-            <p><span className="text-sol-cyan">codecast sync-settings --show</span> - View current settings</p>
+            {hasTeams && (
+              <>
+                <p><span className="text-sol-cyan">codecast teams</span> - List your teams</p>
+                <p><span className="text-sol-cyan">codecast teams map &lt;path&gt; &lt;team_id&gt;</span> - Map directory to team</p>
+                <p><span className="text-sol-cyan">codecast teams mappings</span> - List directory mappings</p>
+              </>
+            )}
           </div>
           <p className="mt-3">
-            Changes made here or in the CLI will apply to your daemon on the next sync cycle.
+            Changes sync to your daemon on the next cycle.
           </p>
         </div>
       </Card>
