@@ -377,7 +377,7 @@ async function fetchAllMessages(
   apiToken: string,
   conversationId: string,
   maxMessages: number = 500
-): Promise<FullReadResult | null> {
+): Promise<FullReadResult | { error: string }> {
   const firstResponse = await fetch(`${siteUrl}/cli/read`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -391,7 +391,7 @@ async function fetchAllMessages(
 
   const firstResult = await firstResponse.json();
   if (firstResult.error) {
-    return null;
+    return { error: firstResult.error };
   }
 
   const totalMessages = firstResult.conversation?.message_count || 0;
@@ -2290,7 +2290,8 @@ program
       const result = await response.json();
 
       if (result.error) {
-        console.error(`Error: ${result.error}`);
+        const msg = result.details ? `${result.error}: ${result.details}` : result.error;
+        console.error(`Error: ${msg}`);
         process.exit(1);
       }
 
@@ -2929,8 +2930,8 @@ program
       }
 
       const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId);
-      if (!result) {
-        console.error("Error: Could not read session");
+      if ("error" in result) {
+        console.error(`Error: ${result.error}`);
         process.exit(1);
       }
 
@@ -3003,8 +3004,8 @@ program
     try {
       const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId);
 
-      if (!result) {
-        console.error("Error: Could not read session");
+      if ("error" in result) {
+        console.error(`Error: ${result.error}`);
         process.exit(1);
       }
 
@@ -3079,8 +3080,8 @@ program
     try {
       const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId);
 
-      if (!result) {
-        console.error("Error: Could not read session");
+      if ("error" in result) {
+        console.error(`Error: ${result.error}`);
         process.exit(1);
       }
 
