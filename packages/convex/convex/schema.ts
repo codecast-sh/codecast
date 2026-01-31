@@ -13,6 +13,7 @@ export default defineSchema({
     created_at: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
+    default_team_id: v.optional(v.id("teams")),
     daemon_last_seen: v.optional(v.number()),
     theme: v.optional(v.union(v.literal("dark"), v.literal("light"))),
     github_id: v.optional(v.string()),
@@ -56,6 +57,26 @@ export default defineSchema({
     invite_code: v.string(),
     invite_code_expires_at: v.optional(v.number()),
   }).index("by_invite_code", ["invite_code"]),
+
+  team_memberships: defineTable({
+    user_id: v.id("users"),
+    team_id: v.id("teams"),
+    role: v.union(v.literal("member"), v.literal("admin")),
+    joined_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_user_team", ["user_id", "team_id"]),
+
+  directory_team_mappings: defineTable({
+    user_id: v.id("users"),
+    path_prefix: v.string(),
+    team_id: v.id("teams"),
+    auto_share: v.boolean(),
+    created_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_team", ["user_id", "team_id"]),
 
   conversations: defineTable({
     user_id: v.id("users"),
@@ -558,6 +579,7 @@ export default defineSchema({
     user_id: v.id("users"),
     context_before: v.optional(v.number()),
     context_after: v.optional(v.number()),
+    message_ids: v.optional(v.array(v.id("messages"))),
     note: v.optional(v.string()),
     created_at: v.number(),
   })
