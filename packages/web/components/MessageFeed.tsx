@@ -119,7 +119,7 @@ function MessageCard({ message }: { message: FeedMessage }) {
             )}
 
             <div className="flex items-center gap-2 text-xs text-sol-text-muted">
-              <span className="truncate max-w-[300px] font-medium group-hover:text-sol-yellow transition-colors">
+              <span className="truncate max-w-[300px] font-medium transition-colors">
                 {message.conversation_title}
               </span>
               {!message.is_own && (

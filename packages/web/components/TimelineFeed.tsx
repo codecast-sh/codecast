@@ -116,7 +116,7 @@ function SessionCard({ item }: { item: Extract<TimelineItem, { type: "session" }
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-3 mb-1">
               <div className="min-w-0 flex-1">
-                <h3 className="text-sol-text font-medium text-[15px] leading-snug group-hover:text-sol-yellow transition-colors line-clamp-2">
+                <h3 className="text-sol-text font-medium text-[15px] leading-snug transition-colors line-clamp-2">
                   {cleanedTitle}
                 </h3>
                 {item.subtitle && item.subtitle !== cleanedTitle && (
