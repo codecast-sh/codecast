@@ -52,29 +52,28 @@ cd ../..
 echo "   ✓ Convex deployed"
 echo ""
 
-# 2. Check if CLI has changes and needs release
+# 2. Check if CLI needs release (compare local version vs deployed version)
 echo "2. Checking CLI for changes..."
-CLI_CHANGED=$(git diff origin/main --name-only -- packages/cli/ | wc -l | tr -d ' ')
-if [[ "$CLI_CHANGED" -gt 0 ]]; then
-  echo "   CLI has changes - deploying..."
-  cd packages/cli
+cd packages/cli
 
-  CURRENT_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
-  echo "   Current CLI version: $CURRENT_VERSION"
+CURRENT_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+echo "   Current CLI version: $CURRENT_VERSION"
 
-  REMOTE_VERSION=$(curl -s https://dl.codecast.sh/latest.json | grep -o '"version":"[^"]*"' | cut -d'"' -f4 2>/dev/null || echo "")
+REMOTE_VERSION=$(curl -s https://dl.codecast.sh/latest.json | grep -o '"version":"[^"]*"' | cut -d'"' -f4 2>/dev/null || echo "")
+echo "   Deployed CLI version: ${REMOTE_VERSION:-unknown}"
 
-  if [[ "$CURRENT_VERSION" == "$REMOTE_VERSION" ]]; then
-    echo "   CLI v$CURRENT_VERSION already deployed - skipping"
+if [[ "$CURRENT_VERSION" != "$REMOTE_VERSION" ]]; then
+  echo "   Version mismatch - deploying..."
+  if [[ "$1" == "--force" ]]; then
+    ./scripts/deploy.sh --force
   else
-    echo "   Deploying CLI v$CURRENT_VERSION..."
     ./scripts/deploy.sh
-    echo "   ✓ CLI v$CURRENT_VERSION deployed"
   fi
-  cd ../..
+  echo "   ✓ CLI v$CURRENT_VERSION deployed"
 else
-  echo "   No CLI changes - skipping"
+  echo "   CLI v$CURRENT_VERSION already deployed - skipping"
 fi
+cd ../..
 echo ""
 
 # 3. Push to git (triggers Railway deploy)
