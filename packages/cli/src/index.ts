@@ -956,7 +956,7 @@ async function promptTeamSelection(config: Config): Promise<void> {
   console.log(`You're a member of ${teams.length} teams:\n`);
   for (const team of teams) {
     const roleLabel = team.role === "admin" ? fmt.muted("(admin)") : "";
-    console.log(`  ${fmt.bullet} ${fmt.accent(team.name)} ${roleLabel}`);
+    console.log(`  ${icons.bullet} ${fmt.accent(team.name)} ${roleLabel}`);
   }
   console.log();
 
