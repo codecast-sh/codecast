@@ -2,10 +2,12 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect, useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
+import { useActiveTeamStore } from "../store/activeTeamStore";
+import { TeamIcon } from "./TeamIcon";
 
 interface SidebarProps {
   filter?: "my" | "team";
@@ -45,6 +47,14 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
   const isFeed = pathname === "/feed" || pathname?.startsWith("/feed/");
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const { activeTeamId } = useActiveTeamStore();
+  const teams = useQuery(api.teams.getUserTeams);
+  const activeTeam = teams?.find(t => t?._id === activeTeamId);
+  const teamUnreadCount = useQuery(
+    api.conversations.getTeamUnreadCount,
+    activeTeamId ? { teamId: activeTeamId } : "skip"
+  );
+  const markTeamSeen = useMutation(api.conversations.markTeamConversationsSeen);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -58,6 +68,9 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const { conversations } = useQuery(api.conversations.listConversations, { filter: "my", limit: 100 }) ?? { conversations: [] };
 
   const handleFilterClick = (newFilter: "my" | "team") => {
+    if (newFilter === "team") {
+      markTeamSeen();
+    }
     if (!isDashboard) {
       router.push(newFilter === "team" ? "/dashboard?filter=team" : "/dashboard");
     } else {
@@ -138,12 +151,12 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
-            title="Private"
+            title="My Sessions (summaries shared with team)"
           >
             <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
             </svg>
-            {!isNarrow && <span>Private</span>}
+            {!isNarrow && <span>My Sessions</span>}
           </button>
           <button
             onClick={() => handleFilterClick("team")}
@@ -152,12 +165,25 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
-            title="Team"
+            title={activeTeam?.name || "Team"}
           >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-            </svg>
-            {!isNarrow && <span>Team</span>}
+            {activeTeam ? (
+              <TeamIcon icon={activeTeam.icon} className="w-5 h-5 flex-shrink-0" />
+            ) : (
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+              </svg>
+            )}
+            {!isNarrow && (
+              <>
+                <span>{activeTeam?.name || "Team"}</span>
+                {teamUnreadCount !== undefined && teamUnreadCount > 0 && !(isDashboard && filter === "team") && (
+                  <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-xs font-semibold bg-sol-cyan text-sol-bg rounded-full">
+                    {teamUnreadCount}
+                  </span>
+                )}
+              </>
+            )}
           </button>
           <Link
             href="/timeline"
