@@ -2025,15 +2025,12 @@ export const searchForCLI = query({
       const matchedMessages = messages.slice(0, 5);
       totalMatches += matchedMessages.length;
 
-      // Get all messages and filter out empty ones (streaming artifacts) to match read numbering
-      const allConvMessages = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .order("asc")
-        .collect();
-      const nonEmptyMessages = allConvMessages.filter(isNonEmptyMessage);
+      // For CLI search, we estimate line numbers without fetching all messages
+      // Line numbers are approximate (based on message order in matches)
       const messageIdToLine = new Map<string, number>();
-      nonEmptyMessages.forEach((m, idx) => {
+      matchedMessages.forEach((m, idx) => {
+        // Use index + 1 as approximate line number for display
+        // Exact line numbers would require fetching all messages which hits read limits
         messageIdToLine.set(m._id.toString(), idx + 1);
       });
 
