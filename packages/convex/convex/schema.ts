@@ -46,11 +46,30 @@ export default defineSchema({
     sync_projects: v.optional(v.array(v.string())),
     team_share_paths: v.optional(v.array(v.string())),
     team_conversations_last_seen: v.optional(v.number()),
+    cli_version: v.optional(v.string()),
+    cli_platform: v.optional(v.string()),
+    autostart_enabled: v.optional(v.boolean()),
+    daemon_pid: v.optional(v.number()),
+    last_heartbeat: v.optional(v.number()),
   })
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])
     .index("by_github_id", ["github_id"])
     .index("by_team_id", ["team_id"]),
+
+  daemon_commands: defineTable({
+    user_id: v.id("users"),
+    command: v.union(
+      v.literal("status"),
+      v.literal("restart"),
+      v.literal("force_update"),
+      v.literal("version")
+    ),
+    created_at: v.number(),
+    executed_at: v.optional(v.number()),
+    result: v.optional(v.string()),
+    error: v.optional(v.string()),
+  }).index("by_user_pending", ["user_id", "executed_at"]),
 
   teams: defineTable({
     name: v.string(),

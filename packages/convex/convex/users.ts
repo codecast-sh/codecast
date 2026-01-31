@@ -87,6 +87,170 @@ export const updateDaemonLastSeen = mutation({
   },
 });
 
+export const daemonHeartbeat = mutation({
+  args: {
+    api_token: v.string(),
+    version: v.string(),
+    platform: v.string(),
+    pid: v.number(),
+    autostart_enabled: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) {
+      return { error: "Unauthorized" };
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(auth.userId, {
+      daemon_last_seen: now,
+      last_heartbeat: now,
+      cli_version: args.version,
+      cli_platform: args.platform,
+      daemon_pid: args.pid,
+      autostart_enabled: args.autostart_enabled,
+    });
+
+    const pendingCommands = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q) =>
+        q.eq("user_id", auth.userId).eq("executed_at", undefined)
+      )
+      .collect();
+
+    return {
+      commands: pendingCommands.map((c) => ({
+        id: c._id,
+        command: c.command,
+      })),
+    };
+  },
+});
+
+export const reportCommandResult = mutation({
+  args: {
+    api_token: v.string(),
+    command_id: v.id("daemon_commands"),
+    result: v.optional(v.string()),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) {
+      return { error: "Unauthorized" };
+    }
+
+    const command = await ctx.db.get(args.command_id);
+    if (!command || command.user_id !== auth.userId) {
+      return { error: "Command not found" };
+    }
+
+    await ctx.db.patch(args.command_id, {
+      executed_at: Date.now(),
+      result: args.result,
+      error: args.error,
+    });
+
+    return { success: true };
+  },
+});
+
+export const sendDaemonCommand = mutation({
+  args: {
+    user_id: v.id("users"),
+    command: v.union(
+      v.literal("status"),
+      v.literal("restart"),
+      v.literal("force_update"),
+      v.literal("version")
+    ),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
+
+    const currentUser = await ctx.db.get(authUserId);
+    if (!currentUser || currentUser.email !== "ashot@almostcandid.com") {
+      throw new Error("Not authorized");
+    }
+
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: args.user_id,
+      command: args.command,
+      created_at: Date.now(),
+    });
+
+    return { command_id: commandId };
+  },
+});
+
+export const getDaemonStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return { users: [], isAdmin: false };
+    }
+
+    const currentUser = await ctx.db.get(authUserId);
+    if (!currentUser || currentUser.email !== "ashot@almostcandid.com") {
+      return { users: [], isAdmin: false };
+    }
+
+    const allUsers = await ctx.db.query("users").collect();
+    const now = Date.now();
+    const tenMinutes = 10 * 60 * 1000;
+
+    const usersWithDaemon = allUsers
+      .filter((u) => u.daemon_last_seen || u.last_heartbeat)
+      .map((u) => ({
+        _id: u._id,
+        email: u.email,
+        name: u.name,
+        cli_version: u.cli_version,
+        cli_platform: u.cli_platform,
+        autostart_enabled: u.autostart_enabled,
+        daemon_pid: u.daemon_pid,
+        last_heartbeat: u.last_heartbeat,
+        daemon_last_seen: u.daemon_last_seen,
+        is_online: u.last_heartbeat ? now - u.last_heartbeat < tenMinutes : false,
+        offline_duration: u.last_heartbeat ? now - u.last_heartbeat : null,
+      }))
+      .sort((a, b) => (b.last_heartbeat || 0) - (a.last_heartbeat || 0));
+
+    return { users: usersWithDaemon, isAdmin: true };
+  },
+});
+
+export const getPendingCommands = query({
+  args: {
+    user_id: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return [];
+    }
+
+    const currentUser = await ctx.db.get(authUserId);
+    if (!currentUser || currentUser.email !== "ashot@almostcandid.com") {
+      return [];
+    }
+
+    const query = args.user_id
+      ? ctx.db
+          .query("daemon_commands")
+          .withIndex("by_user_pending", (q) => q.eq("user_id", args.user_id!))
+      : ctx.db.query("daemon_commands");
+
+    const commands = await query.order("desc").take(100);
+
+    return commands;
+  },
+});
+
 export const storePushToken = mutation({
   args: {
     push_token: v.string(),

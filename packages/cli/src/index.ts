@@ -539,6 +539,8 @@ function showStatus(): void {
     console.log(`  ${fmt.muted(label.padEnd(14))} ${value}`);
   };
 
+  row("Version", fmt.value(`v${getVersion()}`));
+
   if (state?.authExpired) {
     row("Auth", fmt.warning("expired"));
     console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast auth")} ${fmt.muted("to re-authenticate")}`);

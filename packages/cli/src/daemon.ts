@@ -180,6 +180,166 @@ function logHealthSummary(): void {
   syncStats.lastReportTime = now;
 }
 
+function isAutostartEnabled(): boolean {
+  const home = process.env.HOME || "";
+  if (platform === "darwin") {
+    const plistPath = path.join(home, "Library", "LaunchAgents", "com.codecast.daemon.plist");
+    return fs.existsSync(plistPath);
+  } else if (platform === "linux") {
+    const servicePath = path.join(home, ".config", "systemd", "user", "codecast.service");
+    return fs.existsSync(servicePath);
+  }
+  return false;
+}
+
+async function sendHeartbeat(): Promise<void> {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.convex_url) {
+    return;
+  }
+
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const response = await fetch(`${siteUrl}/cli/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        version: daemonVersion || "unknown",
+        platform,
+        pid: process.pid,
+        autostart_enabled: isAutostartEnabled(),
+      }),
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    const data = await response.json();
+    if (data.commands && data.commands.length > 0) {
+      for (const cmd of data.commands) {
+        await executeRemoteCommand(cmd.id, cmd.command, config);
+      }
+    }
+  } catch {
+    // Silent fail - heartbeat is not critical
+  }
+}
+
+async function executeRemoteCommand(
+  commandId: string,
+  command: string,
+  config: Config
+): Promise<void> {
+  const siteUrl = config.convex_url?.replace(".cloud", ".site");
+  if (!siteUrl || !config.auth_token) return;
+
+  let result: string | undefined;
+  let error: string | undefined;
+
+  try {
+    switch (command) {
+      case "status": {
+        const state = readDaemonState();
+        result = JSON.stringify({
+          version: daemonVersion,
+          platform,
+          pid: process.pid,
+          uptime: process.uptime(),
+          autostart: isAutostartEnabled(),
+          lastSync: state?.lastSyncTime,
+          queueSize: state?.pendingQueueSize,
+          stats: {
+            messagesSynced: syncStats.messagesSynced,
+            conversationsCreated: syncStats.conversationsCreated,
+            activeSessions: syncStats.sessionsActive.size,
+          },
+        });
+        log(`[REMOTE] Status requested, responding`);
+        break;
+      }
+      case "version": {
+        result = daemonVersion || "unknown";
+        log(`[REMOTE] Version requested: ${result}`);
+        break;
+      }
+      case "restart": {
+        log(`[REMOTE] Restart requested`);
+        result = "restarting";
+        // Report result first, then restart
+        await fetch(`${siteUrl}/cli/command-result`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            command_id: commandId,
+            result,
+          }),
+        });
+        // Schedule restart
+        setTimeout(() => {
+          log("Restarting daemon per remote command...");
+          process.exit(0); // Exit, launchd/systemd will restart
+        }, 1000);
+        return;
+      }
+      case "force_update": {
+        const currentVersion = daemonVersion || "unknown";
+        logLifecycle("update_start", `Remote update requested from v${currentVersion}`);
+        result = "updating";
+        // Report result first, then update
+        await fetch(`${siteUrl}/cli/command-result`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            command_id: commandId,
+            result,
+          }),
+        });
+        // Flush logs before update
+        await flushRemoteLogs();
+        // Trigger update check
+        setTimeout(async () => {
+          const success = await performUpdate();
+          if (success) {
+            const newVersion = getVersion();
+            logLifecycle("update_complete", `Updated from v${currentVersion} to v${newVersion}`);
+            await flushRemoteLogs();
+            log("Update successful, restarting...");
+            process.exit(0);
+          } else {
+            logLifecycle("update_failed", `Update failed from v${currentVersion}`);
+            await flushRemoteLogs();
+          }
+        }, 1000);
+        return;
+      }
+      default:
+        error = `Unknown command: ${command}`;
+    }
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+  }
+
+  // Report result
+  try {
+    await fetch(`${siteUrl}/cli/command-result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        command_id: commandId,
+        result,
+        error,
+      }),
+    });
+  } catch {
+    // Ignore
+  }
+}
+
 async function flushRemoteLogs(): Promise<void> {
   if (!syncServiceRef || remoteLogQueue.length === 0) {
     return;
@@ -1804,7 +1964,11 @@ async function main(): Promise<void> {
 
   setInterval(() => {
     logHealthSummary();
+    sendHeartbeat().catch(() => {});
   }, HEALTH_REPORT_INTERVAL_MS);
+
+  // Send initial heartbeat
+  sendHeartbeat().catch(() => {});
 
   const conversationCache = readConversationCache();
   const titleCache = readTitleCache();
