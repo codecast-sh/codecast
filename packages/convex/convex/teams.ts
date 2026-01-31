@@ -12,6 +12,17 @@ function generateInviteCode(): string {
   return code;
 }
 
+export const TEAM_ICONS = [
+  "rocket", "flame", "zap", "star", "diamond", "crown",
+  "shield", "sword", "anchor", "compass", "mountain", "tree",
+  "sun", "moon", "cloud", "bolt", "atom", "dna",
+  "hexagon", "triangle", "cube", "sphere", "infinity", "omega"
+] as const;
+
+function getRandomIcon(): string {
+  return TEAM_ICONS[Math.floor(Math.random() * TEAM_ICONS.length)];
+}
+
 export const getUserTeams = query({
   args: {},
   handler: async (ctx) => {
@@ -31,6 +42,7 @@ export const getUserTeams = query({
         return {
           _id: team._id,
           name: team.name,
+          icon: team.icon,
           role: m.role,
           joined_at: m.joined_at,
         };
@@ -79,6 +91,7 @@ export const createTeam = mutation({
   args: {
     name: v.string(),
     user_id: v.id("users"),
+    icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const inviteCode = generateInviteCode();
@@ -86,6 +99,7 @@ export const createTeam = mutation({
     const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
     const teamId = await ctx.db.insert("teams", {
       name: args.name,
+      icon: args.icon || getRandomIcon(),
       created_at: now,
       invite_code: inviteCode,
       invite_code_expires_at: now + sevenDaysInMs,
