@@ -55,13 +55,15 @@ export default function TeamPage() {
     return "offline";
   };
 
-  const filteredMembers = teamMembers?.filter((member) => {
-    const searchLower = searchTerm.toLowerCase();
-    return (
-      member.name?.toLowerCase().includes(searchLower) ||
-      member.email?.toLowerCase().includes(searchLower)
-    );
-  });
+  const filteredMembers = teamMembers
+    ?.filter((m): m is NonNullable<typeof m> => m !== null)
+    .filter((member) => {
+      const searchLower = searchTerm.toLowerCase();
+      return (
+        member.name?.toLowerCase().includes(searchLower) ||
+        member.email?.toLowerCase().includes(searchLower)
+      );
+    });
 
   return (
     <div className="max-w-6xl mx-auto p-6">

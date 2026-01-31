@@ -3,6 +3,12 @@
 import { useQuery } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useActiveTeamStore } from "../store/activeTeamStore";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+
+interface TeamAvatarBarProps {
+  teamId?: Id<"teams">;
+}
 
 function getRelativeTime(timestamp: number | undefined): string {
   if (!timestamp) return "offline";
@@ -22,25 +28,28 @@ function isOnline(lastSeen: number | undefined): boolean {
   return lastSeen > fiveMinutesAgo;
 }
 
-export function TeamAvatarBar() {
+export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const router = useRouter();
-  const user = useQuery(api.users.getCurrentUser);
+  const { activeTeamId } = useActiveTeamStore();
+  const effectiveTeamId = propTeamId ?? activeTeamId;
   const teamMembers = useQuery(
     api.teams.getTeamMembers,
-    user?.team_id ? { team_id: user.team_id } : "skip"
+    effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
   );
 
-  if (!user?.team_id || !teamMembers || teamMembers.length === 0) {
+  if (!effectiveTeamId || !teamMembers || teamMembers.length === 0) {
     return null;
   }
 
-  const sortedMembers = [...teamMembers].sort((a, b) => {
-    const aOnline = isOnline(a.daemon_last_seen);
-    const bOnline = isOnline(b.daemon_last_seen);
-    if (aOnline && !bOnline) return -1;
-    if (!aOnline && bOnline) return 1;
-    return (b.daemon_last_seen || 0) - (a.daemon_last_seen || 0);
-  });
+  const sortedMembers = [...teamMembers]
+    .filter((m): m is NonNullable<typeof m> => m !== null)
+    .sort((a, b) => {
+      const aOnline = isOnline(a.daemon_last_seen);
+      const bOnline = isOnline(b.daemon_last_seen);
+      if (aOnline && !bOnline) return -1;
+      if (!aOnline && bOnline) return 1;
+      return (b.daemon_last_seen || 0) - (a.daemon_last_seen || 0);
+    });
 
   const handleMemberClick = (memberId: string) => {
     router.push(`/dashboard?filter=team&member=${memberId}`);

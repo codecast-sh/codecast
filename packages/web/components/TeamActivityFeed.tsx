@@ -270,7 +270,7 @@ export function TeamActivityFeed({ teamId }: TeamActivityFeedProps) {
               className="px-3 py-2 bg-sol-bg-alt border border-sol-border rounded-lg text-sm text-sol-text focus:outline-none focus:ring-2 focus:ring-sol-yellow/50"
             >
               <option value="all">All Members</option>
-              {teamMembers.map((member) => (
+              {teamMembers.filter((m): m is NonNullable<typeof m> => m !== null).map((member) => (
                 <option key={member._id} value={member._id}>
                   {member.name || member.email}
                 </option>
@@ -322,7 +322,7 @@ export function TeamActivityFeed({ teamId }: TeamActivityFeedProps) {
             className="px-3 py-2 bg-sol-bg-alt border border-sol-border rounded-lg text-sm text-sol-text focus:outline-none focus:ring-2 focus:ring-sol-yellow/50"
           >
             <option value="all">All Members</option>
-            {teamMembers.map((member) => (
+            {teamMembers.filter((m): m is NonNullable<typeof m> => m !== null).map((member) => (
               <option key={member._id} value={member._id}>
                 {member.name || member.email}
               </option>
