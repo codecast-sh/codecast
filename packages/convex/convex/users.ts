@@ -580,6 +580,180 @@ export const updateTeamSharePaths = mutation({
   },
 });
 
+export const getDirectoryTeamMappings = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return [];
+    }
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+
+    const mappingsWithTeams = await Promise.all(
+      mappings.map(async (m) => {
+        const team = await ctx.db.get(m.team_id);
+        return {
+          _id: m._id,
+          path_prefix: m.path_prefix,
+          team_id: m.team_id,
+          team_name: team?.name ?? "Unknown Team",
+          auto_share: m.auto_share,
+          created_at: m.created_at,
+        };
+      })
+    );
+    return mappingsWithTeams;
+  },
+});
+
+export const updateDirectoryTeamMapping = mutation({
+  args: {
+    path_prefix: v.string(),
+    team_id: v.optional(v.id("teams")),
+    auto_share: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    const existingMapping = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .filter((q) => q.eq(q.field("path_prefix"), args.path_prefix))
+      .first();
+
+    if (!args.team_id) {
+      if (existingMapping) {
+        await ctx.db.delete(existingMapping._id);
+      }
+      return { success: true, deleted: true };
+    }
+
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id!))
+      .unique();
+    if (!membership) {
+      throw new Error("Not a member of this team");
+    }
+
+    if (existingMapping) {
+      await ctx.db.patch(existingMapping._id, {
+        team_id: args.team_id,
+        auto_share: args.auto_share ?? existingMapping.auto_share,
+      });
+      return { success: true, updated: true };
+    } else {
+      await ctx.db.insert("directory_team_mappings", {
+        user_id: userId,
+        path_prefix: args.path_prefix,
+        team_id: args.team_id,
+        auto_share: args.auto_share ?? true,
+        created_at: Date.now(),
+      });
+      return { success: true, created: true };
+    }
+  },
+});
+
+export const removeDirectoryTeamMapping = mutation({
+  args: {
+    path_prefix: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    const mapping = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .filter((q) => q.eq(q.field("path_prefix"), args.path_prefix))
+      .first();
+
+    if (mapping) {
+      await ctx.db.delete(mapping._id);
+    }
+    return { success: true };
+  },
+});
+
+export const getRecentProjectsWithGitInfo = query({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return [];
+    }
+    const limit = args.limit ?? 20;
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .order("desc")
+      .take(200);
+
+    const projectMap = new Map<string, {
+      git_root: string | null;
+      project_path: string;
+      session_count: number;
+      last_active: number;
+      git_remote_url?: string;
+    }>();
+
+    for (const conv of conversations) {
+      const key = conv.git_root || conv.project_path;
+      if (!key) continue;
+
+      const existing = projectMap.get(key);
+      if (existing) {
+        existing.session_count++;
+        existing.last_active = Math.max(existing.last_active, conv.updated_at);
+      } else {
+        projectMap.set(key, {
+          git_root: conv.git_root || null,
+          project_path: conv.project_path || key,
+          session_count: 1,
+          last_active: conv.updated_at,
+          git_remote_url: conv.git_remote_url,
+        });
+      }
+    }
+
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+
+    const mappingsByPath = new Map(mappings.map(m => [m.path_prefix, m]));
+
+    const projects = Array.from(projectMap.entries())
+      .sort((a, b) => b[1].last_active - a[1].last_active)
+      .slice(0, limit)
+      .map(([path, data]) => {
+        const mapping = mappingsByPath.get(path);
+        return {
+          path,
+          is_git_repo: !!data.git_root,
+          git_remote_url: data.git_remote_url,
+          session_count: data.session_count,
+          last_active: data.last_active,
+          team_id: mapping?.team_id ?? null,
+          auto_share: mapping?.auto_share ?? false,
+        };
+      });
+
+    return projects;
+  },
+});
+
 export const getRecentProjectPaths = query({
   args: {
     limit: v.optional(v.number()),
