@@ -45,6 +45,7 @@ export default defineSchema({
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
     sync_projects: v.optional(v.array(v.string())),
     team_share_paths: v.optional(v.array(v.string())),
+    team_conversations_last_seen: v.optional(v.number()),
   })
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])
@@ -53,6 +54,7 @@ export default defineSchema({
 
   teams: defineTable({
     name: v.string(),
+    icon: v.optional(v.string()),
     created_at: v.number(),
     invite_code: v.string(),
     invite_code_expires_at: v.optional(v.number()),
