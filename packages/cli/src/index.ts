@@ -17,7 +17,7 @@ import { getLastReconciliation, performReconciliation, repairDiscrepancies } fro
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import Anthropic from "@anthropic-ai/sdk";
-import { checkbox, confirm } from "@inquirer/prompts";
+import { checkbox, confirm, select } from "@inquirer/prompts";
 
 const program = new Command();
 
@@ -834,6 +834,8 @@ async function runAuth(): Promise<void> {
 
   await promptProjectSelection(config);
 
+  await promptTeamSelection(config);
+
   if (!isDaemonRunning()) {
     console.log("Starting daemon...");
     startDaemon();
@@ -920,6 +922,143 @@ async function updateSyncSettingsOnServer(config: Config): Promise<void> {
     });
   } catch {
     // Silently fail - local config is the source of truth for daemon
+  }
+}
+
+async function promptTeamSelection(config: Config): Promise<void> {
+  const teams = await fetchTeams(config);
+
+  if (teams.length === 0) {
+    return;
+  }
+
+  console.log("--- Team Sharing ---");
+
+  if (teams.length === 1) {
+    console.log(`You're a member of ${fmt.accent(teams[0].name)}.`);
+    const shareWithTeam = await confirm({
+      message: `Share your sessions with ${teams[0].name} by default?`,
+      default: true,
+    });
+
+    if (shareWithTeam) {
+      config.team_id = teams[0]._id;
+      writeConfig(config);
+      console.log(`\nSessions will be shared with ${fmt.accent(teams[0].name)} by default.`);
+      console.log(`${fmt.muted("You can configure per-project sharing with 'codecast sync-settings'")}\n`);
+    } else {
+      console.log(`\nSessions will be private by default.`);
+      console.log(`${fmt.muted("You can share specific projects with 'codecast sync-settings'")}\n`);
+    }
+    return;
+  }
+
+  console.log(`You're a member of ${teams.length} teams:\n`);
+  for (const team of teams) {
+    const roleLabel = team.role === "admin" ? fmt.muted("(admin)") : "";
+    console.log(`  ${fmt.bullet} ${fmt.accent(team.name)} ${roleLabel}`);
+  }
+  console.log();
+
+  const configureNow = await confirm({
+    message: "Configure which projects share with which teams now?",
+    default: true,
+  });
+
+  if (configureNow) {
+    const projects = discoverProjects();
+    const serverProjects = await fetchProjectsWithTeams(config);
+
+    const projectMap = new Map<string, { sessionCount: number; teamId: string | null; teamName: string | null }>();
+    for (const p of serverProjects) {
+      projectMap.set(p.path, { sessionCount: p.session_count, teamId: p.team_id, teamName: p.team_name });
+    }
+    for (const p of projects) {
+      if (!projectMap.has(p.path)) {
+        projectMap.set(p.path, { sessionCount: p.sessionCount, teamId: null, teamName: null });
+      }
+    }
+
+    const projectList = Array.from(projectMap.entries())
+      .map(([path, data]) => ({ path, ...data }))
+      .sort((a, b) => b.sessionCount - a.sessionCount)
+      .slice(0, 15);
+
+    if (projectList.length === 0) {
+      console.log("No projects found yet. You can configure team sharing later.\n");
+      return;
+    }
+
+    const maxNameLen = Math.min(20, Math.max(...projectList.map(p => (p.path.split("/").pop() || p.path).length)));
+
+    console.log(`\n${c.bold}Your Projects${c.reset}\n`);
+    console.log(`  ${"Project".padEnd(maxNameLen)} ${"Sessions".padEnd(10)} ${"Team"}`);
+    console.log(`  ${"-".repeat(maxNameLen)} ${"-".repeat(10)} ${"-".repeat(15)}`);
+
+    for (const p of projectList) {
+      const name = (p.path.split("/").pop() || p.path).padEnd(maxNameLen);
+      const sessions = `${p.sessionCount}`.padEnd(10);
+      const team = p.teamName ? fmt.accent(p.teamName) : fmt.muted("Only Me");
+      console.log(`  ${fmt.value(name)} ${fmt.muted(sessions)} ${team}`);
+    }
+    console.log();
+
+    let continueEditing = true;
+    while (continueEditing) {
+      const projectChoices = [
+        { name: fmt.success("Done - continue setup"), value: "__done__" },
+        ...projectList.map(p => {
+          const name = p.path.split("/").pop() || p.path;
+          const team = p.teamName || "Only Me";
+          return {
+            name: `${name} ${fmt.muted(`→ ${team}`)}`,
+            value: p.path,
+          };
+        }),
+      ];
+
+      const selectedPath = await select({
+        message: "Select a project to change (or Done):",
+        choices: projectChoices,
+        pageSize: 12,
+      });
+
+      if (selectedPath === "__done__") {
+        continueEditing = false;
+        continue;
+      }
+
+      const project = projectList.find(p => p.path === selectedPath);
+      if (!project) continue;
+
+      const teamChoices = [
+        { name: `Only Me ${fmt.muted("(private)")}`, value: null as string | null },
+        ...teams.map(t => ({
+          name: `${t.name} ${t.role === "admin" ? fmt.muted("(admin)") : ""}`,
+          value: t._id,
+        })),
+      ];
+
+      const selectedTeam = await select({
+        message: `Share ${project.path.split("/").pop()} with:`,
+        choices: teamChoices,
+        default: project.teamId || null,
+      });
+
+      if (selectedTeam !== project.teamId) {
+        await updateDirectoryMapping(config, project.path, selectedTeam);
+        const teamName = selectedTeam
+          ? teams.find(t => t._id === selectedTeam)?.name || "team"
+          : "Only Me";
+        project.teamId = selectedTeam;
+        project.teamName = selectedTeam ? teamName : null;
+        console.log(`${fmt.success(icons.check)} ${project.path.split("/").pop()} → ${fmt.accent(teamName)}\n`);
+      }
+    }
+
+    console.log(`${fmt.muted("Configure more projects anytime with 'codecast sync-settings'")}\n`);
+  } else {
+    console.log(`\n${fmt.muted("Run 'codecast sync-settings' anytime to configure team sharing.")}\n`);
   }
 }
 
@@ -1687,12 +1826,111 @@ program
     console.log(`Updated ${configKey}: ${displayValue}`);
   });
 
+interface Team {
+  _id: string;
+  name: string;
+  icon: string;
+  icon_color: string;
+  role: string;
+  visibility: string;
+}
+
+interface ProjectWithTeam {
+  path: string;
+  session_count: number;
+  last_active: number;
+  team_id: string | null;
+  team_name: string | null;
+}
+
+async function fetchTeams(config: Config): Promise<Team[]> {
+  if (!config.auth_token || !config.convex_url) return [];
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const response = await fetch(`${siteUrl}/cli/teams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token }),
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.teams || [];
+  } catch {
+    return [];
+  }
+}
+
+async function fetchProjectsWithTeams(config: Config): Promise<ProjectWithTeam[]> {
+  if (!config.auth_token || !config.convex_url) return [];
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const response = await fetch(`${siteUrl}/cli/teams/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, limit: 30 }),
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.projects || [];
+  } catch {
+    return [];
+  }
+}
+
+async function updateDirectoryMapping(config: Config, pathPrefix: string, teamId: string | null): Promise<boolean> {
+  if (!config.auth_token || !config.convex_url) return false;
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const body: Record<string, unknown> = {
+      api_token: config.auth_token,
+      path_prefix: pathPrefix,
+      auto_share: true,
+    };
+    if (teamId !== null) {
+      body.team_id = teamId;
+    }
+    const response = await fetch(`${siteUrl}/cli/teams/mappings/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      if (process.env.DEBUG) {
+        console.error("Update mapping failed:", response.status, text);
+      }
+    }
+    return response.ok;
+  } catch (err) {
+    if (process.env.DEBUG) {
+      console.error("Update mapping error:", err);
+    }
+    return false;
+  }
+}
+
+function getProjectName(path: string): string {
+  const parts = path.split("/");
+  return parts[parts.length - 1] || path;
+}
+
+function getRelativeTime(timestamp: number): string {
+  if (!timestamp) return "never";
+  const diff = Date.now() - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(diff / 3600000);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(diff / 86400000);
+  return `${days}d ago`;
+}
+
 program
   .command("sync-settings")
   .description(
-    "View or modify which projects are synced\n\n" +
+    "View or modify sync and team sharing settings\n\n" +
     "Examples:\n" +
-    "  codecast sync-settings           # View current settings and select projects\n" +
+    "  codecast sync-settings           # Interactive project and team configuration\n" +
     "  codecast sync-settings --all     # Sync all projects\n" +
     "  codecast sync-settings --show    # Show current settings only"
   )
@@ -1706,25 +1944,69 @@ program
       process.exit(1);
     }
 
-    const projects = discoverProjects();
+    const teams = await fetchTeams(config);
+    const hasTeams = teams.length > 0;
+    const serverProjects = await fetchProjectsWithTeams(config);
+    const localProjects = discoverProjects();
+
+    const projectMap = new Map<string, { sessionCount: number; lastActive: number; teamId: string | null; teamName: string | null }>();
+
+    for (const p of serverProjects) {
+      projectMap.set(p.path, {
+        sessionCount: p.session_count,
+        lastActive: p.last_active,
+        teamId: p.team_id,
+        teamName: p.team_name,
+      });
+    }
+
+    for (const p of localProjects) {
+      if (!projectMap.has(p.path)) {
+        projectMap.set(p.path, {
+          sessionCount: p.sessionCount,
+          lastActive: Date.now(),
+          teamId: null,
+          teamName: null,
+        });
+      }
+    }
+
+    const projects = Array.from(projectMap.entries())
+      .map(([path, data]) => ({ path, ...data }))
+      .sort((a, b) => b.lastActive - a.lastActive);
 
     if (options.show) {
-      console.log("\nSync Settings:");
-      console.log(`  Mode: ${config.sync_mode || "all"}`);
+      console.log(`\n${c.bold}Sync Settings${c.reset}\n`);
+      const mode = config.sync_mode === "selected" ? "Selected projects only" : "All projects";
+      console.log(`  ${fmt.muted("Sync Mode:")} ${config.sync_mode === "selected" ? mode : fmt.accent(mode)}`);
       if (config.sync_mode === "selected" && config.sync_projects?.length) {
-        console.log("  Selected projects:");
-        for (const p of config.sync_projects) {
-          console.log(`    - ${p}`);
+        console.log(`  ${fmt.muted("Syncing:")} ${config.sync_projects.length} of ${projects.length} projects`);
+      }
+
+      if (hasTeams) {
+        console.log(`\n${c.bold}Teams${c.reset}`);
+        for (const team of teams) {
+          console.log(`  ${fmt.accent(team.name)} ${fmt.muted(`(${team.role})`)}`);
         }
-      } else {
-        console.log("  All projects will be synced.");
       }
-      console.log(`\n  Available projects: ${projects.length}`);
-      for (const p of projects.slice(0, 10)) {
-        console.log(`    - ${p.path} (${p.sessionCount} sessions)`);
+
+      console.log(`\n${c.bold}Projects${c.reset} (${projects.length})\n`);
+
+      const maxNameLen = Math.min(30, Math.max(12, ...projects.map(p => getProjectName(p.path).length)));
+
+      for (const p of projects.slice(0, 15)) {
+        const name = getProjectName(p.path).padEnd(maxNameLen);
+        const sessions = `${p.sessionCount} session${p.sessionCount !== 1 ? "s" : ""}`.padEnd(12);
+        const time = getRelativeTime(p.lastActive).padEnd(10);
+        if (hasTeams) {
+          const team = p.teamName ? fmt.accent(p.teamName) : fmt.muted("Only Me");
+          console.log(`  ${fmt.value(name)} ${fmt.muted(sessions)} ${fmt.muted(time)} ${team}`);
+        } else {
+          console.log(`  ${fmt.value(name)} ${fmt.muted(sessions)} ${fmt.muted(time)}`);
+        }
       }
-      if (projects.length > 10) {
-        console.log(`    ... and ${projects.length - 10} more`);
+      if (projects.length > 15) {
+        console.log(`  ${fmt.muted(`... and ${projects.length - 15} more`)}`);
       }
       return;
     }
@@ -1734,7 +2016,7 @@ program
       config.sync_projects = [];
       writeConfig(config);
       await updateSyncSettingsOnServer(config);
-      console.log("Updated: All projects will be synced.");
+      console.log(`${fmt.success(icons.check)} All projects will be synced.`);
       return;
     }
 
@@ -1743,40 +2025,300 @@ program
       return;
     }
 
-    console.log(`\nFound ${projects.length} project${projects.length === 1 ? "" : "s"}.\n`);
+    console.log(`\n${c.bold}codecast${c.reset} ${fmt.muted("Sync Settings")}\n`);
 
-    const syncAll = await confirm({
-      message: "Sync all projects?",
-      default: config.sync_mode !== "selected",
-    });
+    const displayProjects = projects.slice(0, 25);
+    const maxNameLen = Math.min(25, Math.max(12, ...displayProjects.map(p => getProjectName(p.path).length)));
 
-    if (syncAll) {
-      config.sync_mode = "all";
-      config.sync_projects = [];
-      writeConfig(config);
-      await updateSyncSettingsOnServer(config);
-      console.log("\nAll sessions will be synced.");
+    const printProjectList = () => {
+      if (hasTeams) {
+        console.log(`  ${"Project".padEnd(maxNameLen)} ${"Sessions".padEnd(10)} ${"Team"}`);
+        console.log(`  ${"-".repeat(maxNameLen)} ${"-".repeat(10)} ${"-".repeat(15)}`);
+        displayProjects.forEach((p) => {
+          const name = getProjectName(p.path).padEnd(maxNameLen);
+          const sessions = `${p.sessionCount}`.padEnd(10);
+          const team = p.teamName ? fmt.accent(p.teamName) : fmt.muted("Only Me");
+          console.log(`  ${fmt.value(name)} ${fmt.muted(sessions)} ${team}`);
+        });
+      } else {
+        console.log(`  ${"Project".padEnd(maxNameLen)} ${"Sessions"}`);
+        console.log(`  ${"-".repeat(maxNameLen)} ${"-".repeat(10)}`);
+        displayProjects.forEach((p) => {
+          const name = getProjectName(p.path).padEnd(maxNameLen);
+          const sessions = `${p.sessionCount}`;
+          console.log(`  ${fmt.value(name)} ${fmt.muted(sessions)}`);
+        });
+      }
+      if (projects.length > 25) {
+        console.log(`  ${fmt.muted(`... and ${projects.length - 25} more`)}`);
+      }
+      console.log();
+    };
+
+    const syncModeDisplay = config.sync_mode === "selected" ? "Selected projects only" : "All projects";
+    console.log(`${c.bold}Sync Mode:${c.reset} ${config.sync_mode === "selected" ? fmt.muted(syncModeDisplay) : fmt.accent(syncModeDisplay)}`);
+    if (hasTeams) {
+      console.log(`${c.bold}Teams:${c.reset} ${teams.map(t => fmt.accent(t.name)).join(", ")}`);
+    }
+    console.log(`${c.bold}Projects:${c.reset} ${projects.length}\n`);
+
+    printProjectList();
+
+    const isSyncAll = config.sync_mode !== "selected";
+    const mainChoices = [
+      { name: fmt.success("Done - save and exit"), value: "__done__" },
+      {
+        name: isSyncAll
+          ? `Sync mode: All ${fmt.muted("→ change to Selected")}`
+          : `Sync mode: Selected ${fmt.muted("→ change to All")}`,
+        value: "__toggle_sync__"
+      },
+      ...(hasTeams ? displayProjects.map(p => ({
+        name: `${getProjectName(p.path)} ${fmt.muted(`→ ${p.teamName || "Only Me"}`)}`,
+        value: p.path,
+      })) : []),
+    ];
+
+    if (!hasTeams && !isSyncAll) {
+      mainChoices.push({
+        name: `Select which projects to sync ${fmt.muted(`(${config.sync_projects?.length || 0} selected)`)}`,
+        value: "__select_projects__"
+      });
+    }
+
+    let continueEditing = true;
+    while (continueEditing) {
+      const action = await select({
+        message: hasTeams ? "Change team sharing or sync mode:" : "Change sync settings:",
+        choices: mainChoices,
+        pageSize: 15,
+      });
+
+      if (action === "__done__") {
+        continueEditing = false;
+        continue;
+      }
+
+      if (action === "__toggle_sync__") {
+        const wasAll = config.sync_mode !== "selected";
+        if (wasAll) {
+          config.sync_mode = "selected";
+          config.sync_projects = projects.map(p => p.path);
+          mainChoices[1].name = `Sync mode: Selected ${fmt.muted("→ change to All")}`;
+          if (!hasTeams) {
+            const existingSelectIdx = mainChoices.findIndex(c => c.value === "__select_projects__");
+            if (existingSelectIdx === -1) {
+              mainChoices.push({
+                name: `Select which projects to sync ${fmt.muted(`(${config.sync_projects?.length || 0} selected)`)}`,
+                value: "__select_projects__"
+              });
+            }
+          }
+        } else {
+          config.sync_mode = "all";
+          config.sync_projects = [];
+          mainChoices[1].name = `Sync mode: All ${fmt.muted("→ change to Selected")}`;
+          const selectIdx = mainChoices.findIndex(c => c.value === "__select_projects__");
+          if (selectIdx !== -1) {
+            mainChoices.splice(selectIdx, 1);
+          }
+        }
+        writeConfig(config);
+        await updateSyncSettingsOnServer(config);
+        console.log(`${fmt.success(icons.check)} Sync mode: ${config.sync_mode === "all" ? "All projects" : "Selected projects"}\n`);
+        continue;
+      }
+
+      if (action === "__select_projects__") {
+        const choices = projects.map(p => ({
+          name: `${getProjectName(p.path)} ${fmt.muted(`(${p.sessionCount} sessions)`)}`,
+          value: p.path,
+          checked: config.sync_projects?.includes(p.path) ?? true,
+        }));
+
+        const selectedProjects = await checkbox({
+          message: "Select projects to sync:",
+          choices,
+          pageSize: 15,
+        });
+
+        config.sync_projects = selectedProjects;
+        writeConfig(config);
+        await updateSyncSettingsOnServer(config);
+
+        const selectChoice = mainChoices.find(c => c.value === "__select_projects__");
+        if (selectChoice) {
+          selectChoice.name = `Select which projects to sync ${fmt.muted(`(${selectedProjects.length} selected)`)}`;
+        }
+
+        console.log(`${fmt.success(icons.check)} ${selectedProjects.length} project${selectedProjects.length === 1 ? "" : "s"} selected\n`);
+        continue;
+      }
+
+      if (hasTeams) {
+        const project = displayProjects.find(p => p.path === action);
+        if (!project) continue;
+
+        const teamChoices = [
+          { name: `Only Me ${fmt.muted("(private)")}`, value: null as string | null },
+          ...teams.map(t => ({
+            name: `${t.name} ${t.role === "admin" ? fmt.muted("(admin)") : ""}`,
+            value: t._id,
+          })),
+        ];
+
+        const selectedTeam = await select({
+          message: `Share ${getProjectName(project.path)} with:`,
+          choices: teamChoices,
+          default: project.teamId || null,
+        });
+
+        if (selectedTeam !== project.teamId) {
+          const success = await updateDirectoryMapping(config, project.path, selectedTeam);
+          if (success) {
+            const newTeamName = selectedTeam
+              ? teams.find(t => t._id === selectedTeam)?.name || "team"
+              : "Only Me";
+            project.teamId = selectedTeam;
+            project.teamName = selectedTeam ? newTeamName : null;
+
+            const choiceIdx = mainChoices.findIndex(c => c.value === project.path);
+            if (choiceIdx !== -1) {
+              mainChoices[choiceIdx].name = `${getProjectName(project.path)} ${fmt.muted(`→ ${newTeamName}`)}`;
+            }
+
+            console.log(`${fmt.success(icons.check)} ${getProjectName(project.path)} → ${fmt.accent(newTeamName)}\n`);
+          } else {
+            console.log(`${fmt.error("Failed to update")}\n`);
+          }
+        }
+      }
+    }
+
+    if (hasTeams) {
+      console.log(`${fmt.muted("Tip: Use")} codecast teams map <path> <team> ${fmt.muted("to map projects directly.")}`);
+    } else {
+      console.log(`${fmt.muted("Tip: Create or join a team at")} ${fmt.accent("codecast.sh/settings/team")}`);
+    }
+  });
+
+program
+  .command("teams")
+  .description(
+    "Manage teams and directory mappings\n\n" +
+    "Examples:\n" +
+    "  codecast teams                      # List your teams\n" +
+    "  codecast teams mappings             # Show directory-to-team mappings\n" +
+    "  codecast teams map <path> <team>    # Map a directory to a team\n" +
+    "  codecast teams unmap <path>         # Remove a directory mapping"
+  )
+  .argument("[action]", "Action: mappings, map, unmap")
+  .argument("[path]", "Directory path (for map/unmap)")
+  .argument("[team]", "Team ID or name (for map)")
+  .action(async (action, pathArg, teamArg) => {
+    const config = readConfig();
+
+    if (!config?.auth_token) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const teams = await fetchTeams(config);
+
+    if (!action) {
+      if (teams.length === 0) {
+        console.log("\nYou are not a member of any teams.");
+        console.log(`\n${fmt.muted("Create or join a team at")} ${fmt.accent("codecast.sh/settings/team")}`);
+        return;
+      }
+
+      console.log(`\n${c.bold}Your Teams${c.reset}\n`);
+      for (const team of teams) {
+        const roleLabel = team.role === "admin" ? fmt.accent("admin") : fmt.muted("member");
+        console.log(`  ${fmt.value(team.name.padEnd(20))} ${roleLabel.padEnd(12)} ${fmt.muted(team._id)}`);
+      }
+      console.log(`\n${fmt.muted("Run 'codecast teams mappings' to see which projects share with which teams.")}`);
       return;
     }
 
-    const choices = projects.map(p => ({
-      name: `${p.path} (${p.sessionCount} session${p.sessionCount === 1 ? "" : "s"})`,
-      value: p.path,
-      checked: config.sync_mode !== "selected" || (config.sync_projects?.includes(p.path) ?? true),
-    }));
+    if (action === "mappings") {
+      const projects = await fetchProjectsWithTeams(config);
 
-    const selectedProjects = await checkbox({
-      message: "Select projects to sync:",
-      choices,
-      pageSize: 15,
-    });
+      if (projects.length === 0) {
+        console.log("\nNo projects found.");
+        return;
+      }
 
-    config.sync_mode = "selected";
-    config.sync_projects = selectedProjects;
-    writeConfig(config);
-    await updateSyncSettingsOnServer(config);
+      console.log(`\n${c.bold}Directory Team Mappings${c.reset}\n`);
 
-    console.log(`\n${selectedProjects.length} project${selectedProjects.length === 1 ? "" : "s"} selected for syncing.`);
+      const mapped = projects.filter(p => p.team_name);
+      const unmapped = projects.filter(p => !p.team_name);
+
+      if (mapped.length > 0) {
+        console.log(`${fmt.muted("Shared with teams:")}`);
+        for (const p of mapped) {
+          const name = getProjectName(p.path).padEnd(25);
+          console.log(`  ${fmt.value(name)} ${fmt.accent(p.team_name || "")}`);
+        }
+        console.log();
+      }
+
+      if (unmapped.length > 0) {
+        console.log(`${fmt.muted("Private (Only Me):")}`);
+        for (const p of unmapped.slice(0, 10)) {
+          console.log(`  ${fmt.muted(getProjectName(p.path))}`);
+        }
+        if (unmapped.length > 10) {
+          console.log(`  ${fmt.muted(`... and ${unmapped.length - 10} more`)}`);
+        }
+      }
+      return;
+    }
+
+    if (action === "map") {
+      if (!pathArg || !teamArg) {
+        console.error("Usage: codecast teams map <path> <team_id_or_name>");
+        process.exit(1);
+      }
+
+      const team = teams.find(t => t._id === teamArg || t.name.toLowerCase() === teamArg.toLowerCase());
+      if (!team) {
+        console.error(`Team not found: ${teamArg}`);
+        console.error(`Available teams: ${teams.map(t => t.name).join(", ")}`);
+        process.exit(1);
+      }
+
+      const absPath = path.resolve(pathArg);
+      const success = await updateDirectoryMapping(config, absPath, team._id);
+      if (success) {
+        console.log(`${fmt.success(icons.check)} ${getProjectName(absPath)} now shares with ${fmt.accent(team.name)}`);
+      } else {
+        console.error("Failed to update mapping.");
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (action === "unmap") {
+      if (!pathArg) {
+        console.error("Usage: codecast teams unmap <path>");
+        process.exit(1);
+      }
+
+      const absPath = path.resolve(pathArg);
+      const success = await updateDirectoryMapping(config, absPath, null);
+      if (success) {
+        console.log(`${fmt.success(icons.check)} ${getProjectName(absPath)} is now private (Only Me)`);
+      } else {
+        console.error("Failed to update mapping.");
+        process.exit(1);
+      }
+      return;
+    }
+
+    console.error(`Unknown action: ${action}`);
+    console.error("Available actions: mappings, map, unmap");
+    process.exit(1);
   });
 
 program

@@ -813,13 +813,13 @@ export const adminSetTeamMemberVisibility = internalMutation({
       .unique();
     if (!user) throw new Error("User not found");
 
-    const updates: { activity_visibility: string; hide_activity?: boolean } = {
+    const updates: Record<string, unknown> = {
       activity_visibility: args.visibility,
     };
     if (args.clearHideActivity) {
       updates.hide_activity = false;
     }
-    await ctx.db.patch(user._id, updates);
+    await ctx.db.patch(user._id, updates as any);
     return { success: true, user: user.name || user.email };
   },
 });
@@ -1052,5 +1052,202 @@ export const deleteAccount = mutation({
       message: "Account permanently deleted",
       deleted: totalDeleted,
     };
+  },
+});
+
+export const getTeamsForCLI = query({
+  args: {
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) {
+      return { error: "Unauthorized" };
+    }
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
+      .collect();
+
+    const teams = await Promise.all(
+      memberships.map(async (m) => {
+        const team = await ctx.db.get(m.team_id);
+        if (!team) return null;
+        return {
+          _id: team._id,
+          name: team.name,
+          icon: team.icon,
+          icon_color: team.icon_color,
+          role: m.role,
+          visibility: m.visibility || "activity",
+        };
+      })
+    );
+    return { teams: teams.filter(Boolean) };
+  },
+});
+
+export const getDirectoryMappingsForCLI = query({
+  args: {
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) {
+      return { error: "Unauthorized" };
+    }
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
+      .collect();
+
+    const mappingsWithTeams = await Promise.all(
+      mappings.map(async (m) => {
+        const team = await ctx.db.get(m.team_id);
+        return {
+          path_prefix: m.path_prefix,
+          team_id: m.team_id,
+          team_name: team?.name ?? "Unknown",
+          auto_share: m.auto_share,
+        };
+      })
+    );
+    return { mappings: mappingsWithTeams };
+  },
+});
+
+export const updateDirectoryMappingForCLI = mutation({
+  args: {
+    api_token: v.string(),
+    path_prefix: v.string(),
+    team_id: v.optional(v.string()),
+    auto_share: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) {
+      return { error: "Unauthorized" };
+    }
+
+    const existingMapping = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
+      .filter((q) => q.eq(q.field("path_prefix"), args.path_prefix))
+      .first();
+
+    if (!args.team_id) {
+      if (existingMapping) {
+        await ctx.db.delete(existingMapping._id);
+      }
+      return { success: true, action: "removed" };
+    }
+
+    const teamId = args.team_id as any;
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", result.userId).eq("team_id", teamId))
+      .unique();
+    if (!membership) {
+      return { error: "Not a member of this team" };
+    }
+
+    if (existingMapping) {
+      await ctx.db.patch(existingMapping._id, {
+        team_id: teamId,
+        auto_share: args.auto_share ?? existingMapping.auto_share,
+      });
+      return { success: true, action: "updated" };
+    } else {
+      await ctx.db.insert("directory_team_mappings", {
+        user_id: result.userId,
+        path_prefix: args.path_prefix,
+        team_id: teamId,
+        auto_share: args.auto_share ?? true,
+        created_at: Date.now(),
+      });
+      return { success: true, action: "created" };
+    }
+  },
+});
+
+export const getProjectsWithTeamsForCLI = query({
+  args: {
+    api_token: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) {
+      return { error: "Unauthorized" };
+    }
+    const limit = args.limit ?? 30;
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
+      .order("desc")
+      .take(200);
+
+    const projectMap = new Map<string, {
+      session_count: number;
+      last_active: number;
+    }>();
+
+    for (const conv of conversations) {
+      const key = conv.git_root || conv.project_path;
+      if (!key) continue;
+
+      const existing = projectMap.get(key);
+      if (existing) {
+        existing.session_count++;
+        existing.last_active = Math.max(existing.last_active, conv.updated_at);
+      } else {
+        projectMap.set(key, {
+          session_count: 1,
+          last_active: conv.updated_at,
+        });
+      }
+    }
+
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
+      .collect();
+
+    const mappingsWithTeams = await Promise.all(
+      mappings.map(async (m) => {
+        const team = await ctx.db.get(m.team_id);
+        return {
+          path_prefix: m.path_prefix,
+          team_id: m.team_id,
+          team_name: team?.name ?? "Unknown",
+        };
+      })
+    );
+    const mappingsByPath = new Map(mappingsWithTeams.map(m => [m.path_prefix, m]));
+
+    for (const m of mappingsWithTeams) {
+      if (!projectMap.has(m.path_prefix)) {
+        projectMap.set(m.path_prefix, {
+          session_count: 0,
+          last_active: 0,
+        });
+      }
+    }
+
+    const projects = Array.from(projectMap.entries())
+      .sort((a, b) => b[1].last_active - a[1].last_active)
+      .slice(0, limit)
+      .map(([path, data]) => {
+        const mapping = mappingsByPath.get(path);
+        return {
+          path,
+          session_count: data.session_count,
+          last_active: data.last_active,
+          team_id: mapping?.team_id ?? null,
+          team_name: mapping?.team_name ?? null,
+        };
+      });
+
+    return { projects };
   },
 });
