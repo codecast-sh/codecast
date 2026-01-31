@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
@@ -198,27 +198,57 @@ export const createConversation = mutation({
     const now = Date.now();
     const startedAt = args.started_at ?? now;
 
-    // Check if this conversation should be auto-shared based on team_share_paths
     const user = await ctx.db.get(args.user_id);
+    let resolvedTeamId = args.team_id;
     let isPrivate = true;
     let autoShared = false;
-    if (user?.team_share_paths && user.team_share_paths.length > 0 && args.team_id) {
-      const conversationPath = args.git_root || args.project_path;
-      if (conversationPath) {
-        for (const sharePath of user.team_share_paths) {
-          // Prefix match: conversation path starts with share path
-          if (conversationPath === sharePath || conversationPath.startsWith(sharePath + "/")) {
-            isPrivate = false;
-            autoShared = true;
-            break;
+
+    const conversationPath = args.git_root || args.project_path;
+    if (conversationPath) {
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+        .collect();
+
+      let bestMatch: { teamId: Id<"teams">; pathLength: number; autoShare: boolean } | null = null;
+      for (const mapping of mappings) {
+        if (conversationPath === mapping.path_prefix || conversationPath.startsWith(mapping.path_prefix + "/")) {
+          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
+            bestMatch = {
+              teamId: mapping.team_id,
+              pathLength: mapping.path_prefix.length,
+              autoShare: mapping.auto_share,
+            };
           }
+        }
+      }
+
+      if (bestMatch) {
+        resolvedTeamId = bestMatch.teamId;
+        if (bestMatch.autoShare) {
+          isPrivate = false;
+          autoShared = true;
+        }
+      } else if (!resolvedTeamId && user?.default_team_id) {
+        resolvedTeamId = user.default_team_id;
+      }
+    } else if (!resolvedTeamId && user?.default_team_id) {
+      resolvedTeamId = user.default_team_id;
+    }
+
+    if (!autoShared && user?.team_share_paths && user.team_share_paths.length > 0 && resolvedTeamId && conversationPath) {
+      for (const sharePath of user.team_share_paths) {
+        if (conversationPath === sharePath || conversationPath.startsWith(sharePath + "/")) {
+          isPrivate = false;
+          autoShared = true;
+          break;
         }
       }
     }
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: args.user_id,
-      team_id: args.team_id,
+      team_id: resolvedTeamId,
       agent_type: args.agent_type,
       session_id: args.session_id,
       slug: args.slug,
@@ -251,14 +281,14 @@ export const createConversation = mutation({
       });
     }
 
-    if (args.team_id && !existing) {
+    if (resolvedTeamId && !existing) {
       await ctx.scheduler.runAfter(0, internal.notifications.notifyTeamSessionStart, {
         conversation_id: conversationId,
         user_id: args.user_id,
       });
 
       await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
-        team_id: args.team_id,
+        team_id: resolvedTeamId,
         actor_user_id: args.user_id,
         event_type: "session_started" as const,
         title: args.title || (args.slug ? formatSlugAsTitle(args.slug) : "New session"),
@@ -761,6 +791,7 @@ export const listConversations = query({
     limit: v.optional(v.number()),
     cursor: v.optional(v.string()),
     memberId: v.optional(v.id("users")),
+    activeTeamId: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -775,13 +806,31 @@ export const listConversations = query({
     const limit = args.limit ?? 50;
     const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
-    const teamUsers = user.team_id
+    // Use activeTeamId if provided, otherwise fall back to user.team_id
+    const effectiveTeamId = args.activeTeamId || user.team_id;
+
+    // Get team members for the effective team
+    const teamUsers = effectiveTeamId
       ? await ctx.db
           .query("users")
-          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id!))
+          .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
           .collect()
       : [];
-    const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
+    // Also get members via team_memberships for multi-team support
+    const teamMemberships = effectiveTeamId
+      ? await ctx.db
+          .query("team_memberships")
+          .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
+          .collect()
+      : [];
+    const membershipUserIds = new Set(teamMemberships.map(m => m.user_id.toString()));
+    const additionalUsers = await Promise.all(
+      teamMemberships
+        .filter(m => !teamUsers.some(u => u._id.toString() === m.user_id.toString()))
+        .map(m => ctx.db.get(m.user_id))
+    );
+    const allTeamUsers = [...teamUsers, ...additionalUsers.filter((u): u is NonNullable<typeof u> => u !== null)];
+    const teamUserMap = new Map(allTeamUsers.map(u => [u._id.toString(), u]));
 
     let conversations;
     if (args.filter === "my") {
@@ -825,14 +874,22 @@ export const listConversations = query({
         .take(fetchLimit);
 
       let filtered = allConversations.filter((c) => {
-        if (!user.team_id) return false;
+        if (!effectiveTeamId) return false;
+
+        // Conversation must have team_id matching the active team
+        // This ensures conversations only show in their assigned team's feed
+        const isForThisTeam = c.team_id?.toString() === effectiveTeamId.toString();
+        if (!isForThisTeam) return false;
+
+        // Owner must be a team member
         const owner = teamUserMap.get(c.user_id.toString());
         if (!owner) return false;
-        if (c.is_private === false) {
-          return true;
-        }
+
+        // Check owner's visibility setting
         const visibility = owner.activity_visibility || "detailed";
-        return visibility !== "hidden";
+        if (visibility === "hidden") return false;
+
+        return true;
       });
 
       if (cursorTimestamp) {
@@ -852,7 +909,9 @@ export const listConversations = query({
         type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
         let visibilityMode: VisibilityMode = "full";
         const isOwn = c.user_id.toString() === userId.toString();
-        if (args.filter === "team" && !isOwn) {
+        if (args.filter === "team") {
+          // In team view, apply visibility settings to ALL conversations (including own)
+          // so users can see what their teammates see
           const owner = teamUserMap.get(c.user_id.toString());
           visibilityMode = (owner?.activity_visibility as VisibilityMode) || "detailed";
         }
@@ -1442,9 +1501,20 @@ export const setPrivacy = mutation({
     if (!isOwner) {
       throw new Error("Unauthorized: can only change privacy of your own conversations");
     }
-    await ctx.db.patch(args.conversation_id, {
+
+    const updates: { is_private: boolean; team_id?: Id<"teams"> } = {
       is_private: args.is_private,
-    });
+    };
+
+    // When unlocking, ensure team_id is synced to user's current team
+    if (!args.is_private) {
+      const user = await ctx.db.get(authUserId);
+      if (user?.team_id && conversation.team_id?.toString() !== user.team_id.toString()) {
+        updates.team_id = user.team_id;
+      }
+    }
+
+    await ctx.db.patch(args.conversation_id, updates);
   },
 });
 
@@ -1560,6 +1630,110 @@ export const backfillShortIds = internalMutation({
   },
 });
 
+export const backfillTeamIds = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batchSize = args.limit ?? 100;
+
+    // Get all users with team_id to build a lookup map
+    const usersWithTeams = await ctx.db
+      .query("users")
+      .filter((q) => q.neq(q.field("team_id"), undefined))
+      .collect();
+
+    const userTeamMap = new Map<string, Id<"teams">>();
+    for (const user of usersWithTeams) {
+      if (user.team_id) {
+        userTeamMap.set(user._id.toString(), user.team_id);
+      }
+    }
+
+    // Paginate through conversations
+    const result = await ctx.db
+      .query("conversations")
+      .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
+
+    let updated = 0;
+    for (const conv of result.page) {
+      const userTeamId = userTeamMap.get(conv.user_id.toString());
+      // Update if user has team_id and conversation doesn't, or they differ
+      if (userTeamId && conv.team_id?.toString() !== userTeamId.toString()) {
+        await ctx.db.patch(conv._id, { team_id: userTeamId });
+        updated++;
+      }
+    }
+
+    return {
+      updated,
+      cursor: result.continueCursor,
+      isDone: result.isDone,
+    };
+  },
+});
+
+export const diagnoseTeamIds = internalQuery({
+  args: {
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // Get users with teams (lightweight query)
+    const usersWithTeams = await ctx.db
+      .query("users")
+      .filter((q) => q.neq(q.field("team_id"), undefined))
+      .collect();
+
+    const userTeamMap = new Map<string, string>();
+    for (const user of usersWithTeams) {
+      if (user.team_id) {
+        userTeamMap.set(user._id.toString(), user.team_id.toString());
+      }
+    }
+
+    // Paginate through conversations
+    const result = await ctx.db
+      .query("conversations")
+      .paginate({ cursor: args.cursor ?? null, numItems: 500 });
+
+    let withTeamId = 0;
+    let withoutTeamId = 0;
+    let userHasTeamButConvDoesnt = 0;
+    let mismatch = 0;
+
+    for (const conv of result.page) {
+      const convTeamId = conv.team_id?.toString();
+      const userTeamId = userTeamMap.get(conv.user_id.toString());
+
+      if (convTeamId) {
+        withTeamId++;
+      } else {
+        withoutTeamId++;
+      }
+
+      if (userTeamId && !convTeamId) {
+        userHasTeamButConvDoesnt++;
+      }
+
+      if (userTeamId && convTeamId && userTeamId !== convTeamId) {
+        mismatch++;
+      }
+    }
+
+    return {
+      pageConversations: result.page.length,
+      withTeamId,
+      withoutTeamId,
+      userHasTeamButConvDoesnt,
+      mismatch,
+      usersWithTeams: usersWithTeams.length,
+      cursor: result.continueCursor,
+      isDone: result.isDone,
+    };
+  },
+});
+
 export const getConversationBySessionId = query({
   args: {
     session_id: v.string(),
@@ -1644,6 +1818,7 @@ export const searchForCLI = query({
           .collect()
       : [];
     const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
+    const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
 
     const searchTerm = args.query.trim();
     if (!searchTerm || searchTerm.length < 2) {
@@ -1717,13 +1892,24 @@ export const searchForCLI = query({
       const conv = await ctx.db.get(messages[0].conversation_id);
       if (!conv) continue;
 
-      // Check access - user can see their own conversations, or non-private
-      // conversations from team members
+      // Check access - user can see their own conversations, or team-visible
+      // conversations from team members (based on is_private and activity_visibility)
       const isOwn = conv.user_id.toString() === authUserId.toString();
       if (!isOwn) {
-        if (conv.is_private !== false) continue;
+        // Must be a team member
         if (!teamUserIds.has(conv.user_id.toString())) {
           continue;
+        }
+        // If explicitly shared with team, include it
+        if (conv.is_private === false) {
+          // OK - explicitly shared
+        } else {
+          // Otherwise check owner's activity_visibility default
+          const owner = teamUserMap.get(conv.user_id.toString());
+          const visibility = owner?.activity_visibility || "detailed";
+          if (visibility === "hidden") {
+            continue;
+          }
         }
       }
 
@@ -2031,6 +2217,40 @@ export const updateTitle = mutation({
         daemon_last_seen: Date.now(),
       });
     }
+  },
+});
+
+export const updateProjectPath = mutation({
+  args: {
+    session_id: v.string(),
+    project_path: v.string(),
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed");
+    }
+
+    const conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
+      .filter((q) => q.eq(q.field("user_id"), authUserId))
+      .first();
+
+    if (!conversation) {
+      return { updated: false };
+    }
+
+    if (conversation.project_path === args.project_path) {
+      return { updated: false };
+    }
+
+    await ctx.db.patch(conversation._id, {
+      project_path: args.project_path,
+    });
+
+    return { updated: true, id: conversation._id };
   },
 });
 
@@ -2624,6 +2844,15 @@ export const feedForCLI = query({
     const endTime = args.end_time ?? Date.now();
     const query = args.query?.trim();
 
+    // Get team members for visibility checks
+    const teamUsers = user.team_id
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id!))
+          .collect()
+      : [];
+    const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
+
     let matchingConvIds: Set<string> | null = null;
     if (query && query.length >= 2) {
       const searchResults = await ctx.db
@@ -2633,25 +2862,40 @@ export const feedForCLI = query({
       matchingConvIds = new Set(searchResults.map((m) => m.conversation_id.toString()));
     }
 
+    // Limit conversations to avoid data limit errors
+    // We'll load messages only for the final results after filtering
     const ownConversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
       .order("desc")
-      .take(200);
+      .take(50);
 
+    // Include team conversations based on is_private and activity_visibility
     let teamConversations: typeof ownConversations = [];
     if (user.team_id) {
-      teamConversations = await ctx.db
-        .query("conversations")
-        .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id!))
-        .filter((q) =>
-          q.and(
-            q.neq(q.field("user_id"), authUserId),
-            q.eq(q.field("is_private"), false)
-          )
-        )
-        .order("desc")
-        .take(100);
+      // Query each team member's recent conversations directly
+      const visibleTeamMembers = teamUsers.filter(u =>
+        u._id.toString() !== authUserId.toString() && // Skip self
+        (u.activity_visibility || "detailed") !== "hidden" // Skip hidden users
+      );
+
+      const teamMemberConvos = await Promise.all(
+        visibleTeamMembers.map(async (member) => {
+          const convos = await ctx.db
+            .query("conversations")
+            .withIndex("by_user_id", (q) => q.eq("user_id", member._id))
+            .order("desc")
+            .take(20); // Get recent convos per member
+          // Filter by is_private - if not explicitly shared, use member's visibility
+          return convos.filter(c => {
+            if (c.is_private === false) return true;
+            const visibility = member.activity_visibility || "detailed";
+            return visibility !== "hidden";
+          });
+        })
+      );
+
+      teamConversations = teamMemberConvos.flat();
     }
 
     const allConversations = [...ownConversations, ...teamConversations]
@@ -2660,12 +2904,13 @@ export const feedForCLI = query({
         if (projectPath) {
           const convPath = c.project_path || "";
           const convGitRoot = c.git_root || "";
+          // Only check startsWith when paths are non-empty to avoid matching "/" prefix
           const isPathMatch = convPath === projectPath ||
-            convPath.startsWith(projectPath + "/") ||
-            projectPath.startsWith(convPath + "/") ||
+            (convPath && convPath.startsWith(projectPath + "/")) ||
+            (convPath && projectPath.startsWith(convPath + "/")) ||
             convGitRoot === projectPath ||
-            convGitRoot.startsWith(projectPath + "/") ||
-            projectPath.startsWith(convGitRoot + "/");
+            (convGitRoot && convGitRoot.startsWith(projectPath + "/")) ||
+            (convGitRoot && projectPath.startsWith(convGitRoot + "/"));
           if (!isPathMatch) return false;
         }
         if (startTime && c.updated_at < startTime) return false;
@@ -2693,12 +2938,13 @@ export const feedForCLI = query({
       }>;
     }> = [];
 
+    // Only load messages for conversations in the final result set
     for (const conv of allConversations) {
       const messages = await ctx.db
         .query("messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
         .order("asc")
-        .take(50);
+        .take(10);
 
       let firstUserMessage = "";
       for (const msg of messages) {

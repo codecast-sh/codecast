@@ -261,11 +261,12 @@ export const exchangeSetupToken = internalMutation({
     });
 
     const user = await ctx.db.get(tokenDoc.user_id);
+    const userDoc = user as { team_id?: string } | null;
 
     return {
       auth_token: newToken,
       user_id: tokenDoc.user_id,
-      team_id: user?.team_id,
+      team_id: userDoc?.team_id,
       convex_url: CONVEX_URL,
     };
   },

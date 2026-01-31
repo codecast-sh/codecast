@@ -172,6 +172,7 @@ export const generateMessageShareLink = mutation({
     message_id: v.id("messages"),
     context_before: v.optional(v.number()),
     context_after: v.optional(v.number()),
+    message_ids: v.optional(v.array(v.id("messages"))),
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -195,22 +196,6 @@ export const generateMessageShareLink = mutation({
       throw new Error("Unauthorized: can only share messages from your own conversations");
     }
 
-    const existing = await ctx.db
-      .query("message_shares")
-      .withIndex("by_message_id", (q) => q.eq("message_id", args.message_id))
-      .first();
-
-    if (existing) {
-      if (args.context_before !== undefined || args.context_after !== undefined || args.note !== undefined) {
-        await ctx.db.patch(existing._id, {
-          context_before: args.context_before,
-          context_after: args.context_after,
-          note: args.note,
-        });
-      }
-      return existing.share_token;
-    }
-
     const shareToken = generateShareToken();
     await ctx.db.insert("message_shares", {
       share_token: shareToken,
@@ -218,6 +203,7 @@ export const generateMessageShareLink = mutation({
       user_id: authUserId,
       context_before: args.context_before,
       context_after: args.context_after,
+      message_ids: args.message_ids,
       note: args.note,
       created_at: Date.now(),
     });
@@ -333,8 +319,13 @@ export const getSharedMessage = query({
 
     const user = await ctx.db.get(conversation.user_id);
 
-    let contextMessages: typeof message[] = [];
-    if (share.context_before || share.context_after) {
+    let sharedMessages: typeof message[] = [];
+
+    if (share.message_ids && share.message_ids.length > 0) {
+      const msgs = await Promise.all(share.message_ids.map(id => ctx.db.get(id)));
+      sharedMessages = msgs.filter((m): m is NonNullable<typeof m> => m !== null);
+      sharedMessages.sort((a, b) => a.timestamp - b.timestamp);
+    } else if (share.context_before || share.context_after) {
       const allMessages = await ctx.db
         .query("messages")
         .withIndex("by_conversation_timestamp", (q) =>
@@ -348,13 +339,13 @@ export const getSharedMessage = query({
       if (targetIndex !== -1) {
         const startIdx = Math.max(0, targetIndex - (share.context_before || 0));
         const endIdx = Math.min(sorted.length, targetIndex + (share.context_after || 0) + 1);
-        contextMessages = sorted.slice(startIdx, endIdx);
+        sharedMessages = sorted.slice(startIdx, endIdx);
       }
     }
 
     return {
       message,
-      contextMessages: contextMessages.length > 0 ? contextMessages : [message],
+      contextMessages: sharedMessages.length > 0 ? sharedMessages : [message],
       conversation: {
         _id: conversation._id,
         title: conversation.title,
