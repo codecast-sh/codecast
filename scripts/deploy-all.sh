@@ -47,7 +47,7 @@ echo ""
 # 1. Deploy Convex functions
 echo "1. Deploying Convex functions..."
 cd packages/convex
-npx convex deploy --yes
+npx convex dev --once
 cd ../..
 echo "   ✓ Convex deployed"
 echo ""
@@ -85,7 +85,7 @@ echo ""
 echo "=== Deployment Complete ==="
 echo ""
 echo "Deployed:"
-echo "  - Convex: https://little-bobcat-226.convex.cloud"
+echo "  - Convex: https://marvelous-meerkat-539.convex.cloud"
 echo "  - CLI:    https://dl.codecast.sh/latest.json"
 echo "  - Web:    https://codecast.sh (Railway auto-deploys on push)"
 echo ""
