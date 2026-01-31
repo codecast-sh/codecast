@@ -10,6 +10,7 @@ import { Button } from "../../../../components/ui/button";
 import { Label } from "../../../../components/ui/label";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import { TeamIcon, TEAM_ICONS, type TeamIconName } from "../../../../components/TeamIcon";
 
 export default function CreateTeamPage() {
   const router = useRouter();
@@ -17,6 +18,9 @@ export default function CreateTeamPage() {
   const createTeam = useMutation(api.teams.createTeam);
 
   const [teamName, setTeamName] = useState("");
+  const [selectedIcon, setSelectedIcon] = useState<TeamIconName>(
+    TEAM_ICONS[Math.floor(Math.random() * TEAM_ICONS.length)]
+  );
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
 
@@ -35,6 +39,7 @@ export default function CreateTeamPage() {
       await createTeam({
         name: teamName.trim(),
         user_id: user._id,
+        icon: selectedIcon,
       });
       router.push("/settings/team");
     } catch (err) {
@@ -61,7 +66,7 @@ export default function CreateTeamPage() {
       </div>
 
       <Card className="p-6 bg-sol-bg border-sol-border max-w-md">
-        <form onSubmit={handleCreateTeam} className="space-y-4">
+        <form onSubmit={handleCreateTeam} className="space-y-5">
           <div>
             <Label htmlFor="teamName" className="text-sol-text">Team Name</Label>
             <Input
@@ -72,6 +77,27 @@ export default function CreateTeamPage() {
               className="mt-1.5 bg-sol-bg-alt border-sol-border text-sol-text"
               autoFocus
             />
+          </div>
+
+          <div>
+            <Label className="text-sol-text mb-3 block">Team Icon</Label>
+            <div className="grid grid-cols-8 gap-2">
+              {TEAM_ICONS.map((icon) => (
+                <button
+                  key={icon}
+                  type="button"
+                  onClick={() => setSelectedIcon(icon)}
+                  className={`p-2 rounded-lg transition-all ${
+                    selectedIcon === icon
+                      ? "bg-sol-cyan/20 ring-2 ring-sol-cyan text-sol-cyan"
+                      : "bg-sol-bg-alt hover:bg-sol-base02/50 text-sol-base1 hover:text-sol-text"
+                  }`}
+                  title={icon}
+                >
+                  <TeamIcon icon={icon} className="w-5 h-5" />
+                </button>
+              ))}
+            </div>
           </div>
 
           {error && (
