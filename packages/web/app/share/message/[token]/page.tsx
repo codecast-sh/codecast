@@ -46,11 +46,80 @@ function ClaudeIcon() {
   );
 }
 
+function formatToolName(name: string): string {
+  if (name.startsWith("mcp__claude-in-chrome__")) {
+    const method = name.replace("mcp__claude-in-chrome__", "");
+    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 12);
+  }
+  if (name.startsWith("mcp__")) {
+    const parts = name.split("__");
+    const method = parts[2] || parts[1] || name;
+    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 12);
+  }
+  return name;
+}
+
+function getToolSummary(tool: any): string | null {
+  let parsedInput: Record<string, unknown> = {};
+  try {
+    parsedInput = JSON.parse(tool.input);
+  } catch {}
+
+  const truncateStr = (s: string, max: number) => s.length > max ? s.slice(0, max) + "..." : s;
+
+  if (tool.name === "Edit" || tool.name === "Read" || tool.name === "Write") {
+    const filePath = String(parsedInput.file_path || "");
+    const parts = filePath.split("/");
+    return parts.slice(-2).join("/");
+  }
+  if (tool.name === "Bash" && parsedInput.command) {
+    const cmd = String(parsedInput.command);
+    return cmd.length > 60 ? cmd.slice(0, 60) + "..." : cmd;
+  }
+  if (tool.name === "Glob" && parsedInput.pattern) return String(parsedInput.pattern);
+  if (tool.name === "Grep" && parsedInput.pattern) return String(parsedInput.pattern);
+  if (tool.name === "Task" && parsedInput.description) return truncateStr(String(parsedInput.description), 40);
+  return null;
+}
+
+const toolColors: Record<string, string> = {
+  Edit: "text-sol-orange/80",
+  Write: "text-sol-orange/80",
+  Read: "text-sol-blue/80",
+  Bash: "text-sol-green/80",
+  Glob: "text-sol-violet/80",
+  Grep: "text-sol-violet/80",
+  Task: "text-sol-cyan/80",
+  TodoWrite: "text-sol-magenta/80",
+};
+
+function ToolCallBlock({ tool }: { tool: any }) {
+  const summary = getToolSummary(tool);
+  const color = toolColors[tool.name] || (tool.name.startsWith("mcp__") ? "text-sol-cyan/80" : "text-sol-text-dim");
+
+  return (
+    <div className="my-0.5 pl-7">
+      <div className="flex items-center gap-1.5 text-xs">
+        <span className={`font-mono ${color}`}>{formatToolName(tool.name)}</span>
+        {summary && (
+          <span className="text-sol-text-muted font-mono truncate">{summary}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean }) {
   const isUser = message.role === "user";
   const hasToolResults = message.tool_results && message.tool_results.length > 0;
+  const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
+  const hasContent = message.content && message.content.trim().length > 0;
 
   if (isUser && hasToolResults) {
+    return null;
+  }
+
+  if (!isUser && !hasContent && !hasToolCalls) {
     return null;
   }
 
@@ -84,7 +153,10 @@ function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean 
               {formatRelativeTime(message.timestamp)}
             </span>
           </div>
-          {message.content && (
+          {hasToolCalls && message.tool_calls.map((tc: any) => (
+            <ToolCallBlock key={tc.id} tool={tc} />
+          ))}
+          {hasContent && (
             <div className="pl-7 prose prose-invert prose-sm max-w-none text-sol-text">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}

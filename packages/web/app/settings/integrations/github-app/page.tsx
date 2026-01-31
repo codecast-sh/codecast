@@ -34,7 +34,7 @@ export default function GitHubAppPage() {
     }
 
     const state = btoa(JSON.stringify({ team_id: user.team_id, user_id: user._id }));
-    const appSlug = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG || "codecast-app";
+    const appSlug = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG || "codecast-sh";
     const installUrl = `https://github.com/apps/${appSlug}/installations/new?state=${state}`;
     window.location.href = installUrl;
   };

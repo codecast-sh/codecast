@@ -7,20 +7,35 @@ import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Label } from "../../../components/ui/label";
 import { useState } from "react";
-import { GitBranch, Folder, Check, Search, Eye, EyeOff } from "lucide-react";
+import { GitBranch, Folder, Check, Search, Eye, EyeOff, ChevronDown } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useActiveTeamStore } from "../../../store/activeTeamStore";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../../components/ui/dropdown-menu";
+import { TeamIcon } from "../../../components/TeamIcon";
+
+type TeamVisibility = "hidden" | "activity" | "summary" | "full";
+
+const visibilityOptions: { value: TeamVisibility; label: string; description: string; example: string }[] = [
+  { value: "hidden", label: "Hidden", description: "Teammates see nothing", example: "" },
+  { value: "activity", label: "Activity", description: "Basic activity only", example: "3 sessions in codecast" },
+  { value: "summary", label: "Summary", description: "Title + bullet summary", example: "\"Fix auth bug\" - Updated login flow, added error handling" },
+  { value: "full", label: "Full", description: "Full conversations shared", example: "Complete session content visible" },
+];
 
 export default function SyncPage() {
   const user = useQuery(api.users.getCurrentUser);
   const syncSettings = useQuery(api.users.getSyncSettings);
   const userTeams = useQuery(api.teams.getUserTeams);
-  const { activeTeamId } = useActiveTeamStore();
   const projects = useQuery(api.users.getRecentProjectsWithGitInfo, { limit: 30 });
   const directoryMappings = useQuery(api.users.getDirectoryTeamMappings);
   const updateSyncSettings = useMutation(api.users.updateSyncSettings);
   const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
   const removeDirectoryMapping = useMutation(api.users.removeDirectoryTeamMapping);
+  const setTeamVisibility = useMutation(api.teams.setTeamVisibility);
 
   const [editMode, setEditMode] = useState(false);
   const [newProject, setNewProject] = useState("");
@@ -30,9 +45,6 @@ export default function SyncPage() {
     return null;
   }
 
-  // Get the active team from the global switcher
-  const activeTeam = activeTeamId ? userTeams?.find(t => t?._id === activeTeamId) : null;
-  const hasActiveTeam = !!activeTeam;
   const hasTeams = userTeams && userTeams.length > 0;
   const syncAll = syncSettings.sync_mode === "all";
   const syncProjects = syncSettings.sync_projects || [];
@@ -79,12 +91,15 @@ export default function SyncPage() {
     } else {
       const newProjects = syncProjects.filter(p => p !== path);
       await updateSyncSettings({ sync_projects: newProjects });
-      // Also remove team mapping when unsyncing
       const existingMapping = mappingsByPath.get(path);
       if (existingMapping) {
         await removeDirectoryMapping({ path_prefix: path });
       }
     }
+  };
+
+  const handleVisibilityChange = async (teamId: Id<"teams">, visibility: TeamVisibility) => {
+    await setTeamVisibility({ team_id: teamId, visibility });
   };
 
   const handleAddProject = async () => {
@@ -152,7 +167,19 @@ export default function SyncPage() {
       }
     });
 
-    return Array.from(projectMap.values()).sort((a, b) => b.last_active - a.last_active);
+    const allPaths = Array.from(projectMap.values());
+
+    // Filter out subdirectories of git repos - they should be controlled at the repo level
+    const gitRepoPaths = allPaths.filter(p => p.is_git_repo).map(p => p.path);
+    const filtered = allPaths.filter(project => {
+      if (project.is_git_repo) return true;
+      const isSubdirOfGitRepo = gitRepoPaths.some(repoPath =>
+        project.path.startsWith(repoPath + "/")
+      );
+      return !isSubdirOfGitRepo;
+    });
+
+    return filtered.sort((a, b) => b.last_active - a.last_active);
   })();
 
   const filteredProjects = allProjects.filter(p => {
@@ -168,13 +195,13 @@ export default function SyncPage() {
       <Card className="p-6 bg-sol-bg border-sol-border">
         <div className="flex items-center justify-between">
           <div>
-            <Label className="text-sol-text font-medium">Sync All Projects</Label>
-            <div className="text-sm text-sol-base1 mt-1">
+            <h2 className="text-lg font-semibold text-sol-text">Sync All Projects</h2>
+            <p className="text-sm text-sol-base1 mt-1">
               {syncAll
                 ? "All projects sync privately by default"
                 : `Only ${syncProjects.length} selected project${syncProjects.length === 1 ? "" : "s"} will sync`
               }
-            </div>
+            </p>
           </div>
           <button
             onClick={handleToggleSyncAll}
@@ -196,8 +223,8 @@ export default function SyncPage() {
           <div>
             <h2 className="text-lg font-semibold text-sol-text">Projects</h2>
             <p className="text-sm text-sol-base1 mt-1">
-              {hasActiveTeam
-                ? `Share sessions with ${activeTeam.name}`
+              {hasTeams
+                ? "Control which teams can see each project"
                 : "Your recent projects"
               }
             </p>
@@ -250,8 +277,8 @@ export default function SyncPage() {
                   key={project.path}
                   className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
                     synced
-                      ? "bg-sol-base02/20 border-sol-border/50 hover:border-sol-border"
-                      : "bg-sol-base02/10 border-sol-border/30 opacity-60"
+                      ? "bg-white border-sol-border/50 hover:border-sol-border"
+                      : "bg-white/50 border-sol-border/30 opacity-60"
                   }`}
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -274,66 +301,67 @@ export default function SyncPage() {
                   </div>
 
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {/* When sync all is on, show team toggle for active team */}
-                    {syncAll && hasActiveTeam && (
-                      <button
-                        onClick={() => handleTeamChange(project.path, team ? null : activeTeam._id)}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-md border transition-colors text-sm min-w-[140px] justify-center ${
-                          team
-                            ? "border-sol-green/50 bg-sol-green/10 text-sol-green"
-                            : "border-sol-border bg-sol-bg hover:bg-sol-base02/50 text-sol-base1"
-                        }`}
-                      >
-                        {team ? (
-                          <>
-                            <Eye className="w-4 h-4" />
-                            <span>{activeTeam.name}</span>
-                          </>
-                        ) : (
-                          <>
-                            <EyeOff className="w-4 h-4" />
-                            <span>Only Me</span>
-                          </>
-                        )}
-                      </button>
-                    )}
-
-                    {/* When sync all is off, show sync checkbox + team toggle */}
-                    {!syncAll && (
-                      <>
-                        {hasActiveTeam && synced && (
+                    {/* Team visibility dropdown - show when synced and has teams */}
+                    {synced && hasTeams && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
                           <button
-                            onClick={() => handleTeamChange(project.path, team ? null : activeTeam._id)}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-md border transition-colors text-sm min-w-[140px] justify-center ${
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-md border transition-colors text-sm min-w-[140px] justify-between ${
                               team
-                                ? "border-sol-green/50 bg-sol-green/10 text-sol-green"
-                                : "border-sol-border bg-sol-bg hover:bg-sol-base02/50 text-sol-base1"
+                                ? "border-sol-cyan bg-sol-cyan/15 text-sol-text"
+                                : "border-sol-border bg-sol-bg hover:bg-sol-base02/50 text-sol-text"
                             }`}
                           >
-                            {team ? (
-                              <>
-                                <Eye className="w-4 h-4" />
-                                <span>{activeTeam.name}</span>
-                              </>
-                            ) : (
-                              <>
-                                <EyeOff className="w-4 h-4" />
-                                <span>Only Me</span>
-                              </>
-                            )}
+                            <span className="flex items-center gap-2">
+                              {team ? (
+                                <>
+                                  <Eye className="w-4 h-4" />
+                                  <span>{team.name}</span>
+                                </>
+                              ) : (
+                                <>
+                                  <EyeOff className="w-4 h-4" />
+                                  <span>Only Me</span>
+                                </>
+                              )}
+                            </span>
+                            <ChevronDown className="w-3 h-3 opacity-50" />
                           </button>
-                        )}
-                        <button
-                          onClick={() => handleToggleProjectSync(project.path, !synced)}
-                          className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
-                            synced
-                              ? "bg-sol-cyan border-sol-cyan"
-                              : "border-sol-base1 hover:border-sol-cyan"
-                          }`}
-                        >
-                          {synced && <Check className="w-3 h-3 text-sol-bg" />}
-                        </button>
-                      </>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[140px]">
+                          <DropdownMenuItem
+                            onClick={() => handleTeamChange(project.path, null)}
+                            className={!team ? "bg-sol-base02/30" : ""}
+                          >
+                            <EyeOff className="w-4 h-4 mr-2" />
+                            Only Me
+                          </DropdownMenuItem>
+                          {userTeams?.filter(Boolean).map((t) => (
+                            <DropdownMenuItem
+                              key={t!._id}
+                              onClick={() => handleTeamChange(project.path, t!._id)}
+                              className={team?._id === t!._id ? "bg-sol-base02/30" : ""}
+                            >
+                              <Eye className="w-4 h-4 mr-2" />
+                              {t!.name}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+
+                    {/* Sync checkbox - only shown when sync_mode is "selected" */}
+                    {!syncAll && (
+                      <button
+                        onClick={() => handleToggleProjectSync(project.path, !synced)}
+                        className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                          synced
+                            ? "bg-sol-cyan border-sol-cyan"
+                            : "border-sol-base1 hover:border-sol-cyan"
+                        }`}
+                      >
+                        {synced && <Check className="w-3 h-3 text-sol-bg" />}
+                      </button>
                     )}
                   </div>
                 </div>
@@ -351,17 +379,69 @@ export default function SyncPage() {
         </div>
       </Card>
 
+      {hasTeams && (
+        <Card className="p-6 bg-sol-bg border-sol-border">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold text-sol-text">Team Visibility</h2>
+            <p className="text-sm text-sol-base1 mt-1">
+              What each team sees for your sessions by default
+            </p>
+          </div>
+          <div className="space-y-4">
+            {userTeams?.filter(Boolean).map((team) => {
+              const currentVisibility = team!.visibility || "summary";
+              const currentOption = visibilityOptions.find(o => o.value === currentVisibility);
+              return (
+                <div key={team!._id} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <TeamIcon icon={team!.icon} color={team!.icon_color} className="w-4 h-4" />
+                      <span className="font-medium text-sol-text">{team!.name}</span>
+                    </div>
+                    <div className="flex gap-1">
+                      {visibilityOptions.map((opt) => (
+                        <button
+                          key={opt.value}
+                          onClick={() => handleVisibilityChange(team!._id, opt.value)}
+                          className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors whitespace-nowrap ${
+                            currentVisibility === opt.value
+                              ? opt.value === "hidden"
+                                ? "bg-sol-orange/20 text-sol-orange border border-sol-orange/30"
+                                : opt.value === "full"
+                                  ? "bg-sol-green/20 text-sol-green border border-sol-green/30"
+                                  : "bg-sol-cyan/20 text-sol-cyan border border-sol-cyan/30"
+                              : "bg-sol-bg-alt text-sol-base1 hover:bg-sol-base02/50"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {currentOption && currentOption.example && (
+                    <div className="pl-4 py-2 text-xs border-l-2 border-sol-border/50">
+                      <span className="text-sol-base1">{currentOption.description}:</span>
+                      <span className="text-sol-text ml-1 italic">{currentOption.example}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
       <Card className="p-6 bg-sol-bg border-sol-border">
         <h2 className="text-lg font-semibold text-sol-text mb-4">CLI Management</h2>
         <div className="text-sm text-sol-base1 space-y-2">
           <p>Manage sync settings from the command line:</p>
           <div className="bg-sol-base03 p-3 rounded font-mono text-sm space-y-1">
-            <p><span className="text-sol-cyan">codecast sync-settings</span> - Interactive project selection</p>
+            <p><span className="text-sol-cyan">codecast sync-settings</span> <span className="text-sol-base1">- Interactive project selection</span></p>
             {hasTeams && (
               <>
-                <p><span className="text-sol-cyan">codecast teams</span> - List your teams</p>
-                <p><span className="text-sol-cyan">codecast teams map &lt;path&gt; &lt;team_id&gt;</span> - Map directory to team</p>
-                <p><span className="text-sol-cyan">codecast teams mappings</span> - List directory mappings</p>
+                <p><span className="text-sol-cyan">codecast teams</span> <span className="text-sol-base1">- List your teams</span></p>
+                <p><span className="text-sol-cyan">codecast teams map &lt;path&gt; &lt;team_id&gt;</span> <span className="text-sol-base1">- Map directory to team</span></p>
+                <p><span className="text-sol-cyan">codecast teams mappings</span> <span className="text-sol-base1">- List directory mappings</span></p>
               </>
             )}
           </div>

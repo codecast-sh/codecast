@@ -13,7 +13,7 @@ export default defineSchema({
     created_at: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
-    default_team_id: v.optional(v.id("teams")),
+    active_team_id: v.optional(v.id("teams")),
     daemon_last_seen: v.optional(v.number()),
     theme: v.optional(v.union(v.literal("dark"), v.literal("light"))),
     github_id: v.optional(v.string()),
@@ -55,6 +55,7 @@ export default defineSchema({
   teams: defineTable({
     name: v.string(),
     icon: v.optional(v.string()),
+    icon_color: v.optional(v.string()),
     created_at: v.number(),
     invite_code: v.string(),
     invite_code_expires_at: v.optional(v.number()),
@@ -65,6 +66,12 @@ export default defineSchema({
     team_id: v.id("teams"),
     role: v.union(v.literal("member"), v.literal("admin")),
     joined_at: v.number(),
+    visibility: v.optional(v.union(
+      v.literal("hidden"),
+      v.literal("activity"),
+      v.literal("summary"),
+      v.literal("full")
+    )),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
@@ -78,7 +85,8 @@ export default defineSchema({
     created_at: v.number(),
   })
     .index("by_user_id", ["user_id"])
-    .index("by_user_team", ["user_id", "team_id"]),
+    .index("by_user_team", ["user_id", "team_id"])
+    .index("by_team_id", ["team_id"]),
 
   conversations: defineTable({
     user_id: v.id("users"),

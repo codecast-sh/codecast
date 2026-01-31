@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -791,6 +791,36 @@ export const getRecentProjectPaths = query({
         count: stats.count,
         lastActive: stats.lastActive,
       }));
+  },
+});
+
+export const adminSetTeamMemberVisibility = internalMutation({
+  args: {
+    email: v.string(),
+    visibility: v.union(
+      v.literal("hidden"),
+      v.literal("activity"),
+      v.literal("summary"),
+      v.literal("detailed"),
+      v.literal("full")
+    ),
+    clearHideActivity: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", args.email))
+      .unique();
+    if (!user) throw new Error("User not found");
+
+    const updates: { activity_visibility: string; hide_activity?: boolean } = {
+      activity_visibility: args.visibility,
+    };
+    if (args.clearHideActivity) {
+      updates.hide_activity = false;
+    }
+    await ctx.db.patch(user._id, updates);
+    return { success: true, user: user.name || user.email };
   },
 });
 

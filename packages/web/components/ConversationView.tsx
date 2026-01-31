@@ -552,7 +552,7 @@ function formatToolName(name: string): string {
   return name;
 }
 
-function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: ToolResult; changeIndex?: number }) {
+function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean }) {
   const isEdit = tool.name === "Edit" || tool.name === "Write";
   const [expanded, setExpanded] = useState(isEdit);
   const isRead = tool.name === "Read";
@@ -736,6 +736,9 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
   );
 
   const handleClick = (e: React.MouseEvent) => {
+    if (shareSelectionMode) {
+      return;
+    }
     if (isClickable) {
       e.stopPropagation();
       if (e.metaKey || e.ctrlKey) {
@@ -929,10 +932,18 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
-function ThinkingBlock({ content }: { content: string }) {
+function ThinkingBlock({ content, showContent = true }: { content: string; showContent?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const truncated = truncateLines(content, expanded ? 50 : 2);
   const isTruncated = truncated.truncated;
+
+  if (!showContent) {
+    return (
+      <div className="my-0.5 opacity-30 text-xs text-sol-text-muted italic">
+        thinking...
+      </div>
+    );
+  }
 
   return (
     <div className="my-0.5 opacity-50">
@@ -1394,7 +1405,7 @@ function AssistantBlock({
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
         {!collapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
 
-        {!collapsed && showThinking && hasThinking && <ThinkingBlock content={thinking!} />}
+        {!collapsed && hasThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
 
         {!collapsed && hasToolCalls && toolCalls?.map((tc) => (
           tc.name === "Task" ? (
@@ -1412,6 +1423,7 @@ function AssistantBlock({
               tool={tc}
               result={toolResultMap[tc.id]}
               changeIndex={toolCallToChangeIndexMap?.[tc.id]}
+              shareSelectionMode={shareSelectionMode}
             />
           )
         ))}

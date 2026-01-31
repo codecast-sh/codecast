@@ -12,7 +12,6 @@ const tabs = [
   { name: "Accounts", path: "/settings/accounts" },
   { name: "Team", path: "/settings/team" },
   { name: "Integrations", path: "/settings/integrations/github-app" },
-  { name: "Privacy", path: "/settings/privacy" },
 ];
 
 export default function SettingsLayout({

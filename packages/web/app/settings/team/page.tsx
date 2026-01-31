@@ -17,6 +17,7 @@ import {
 } from "../../../components/ui/dialog";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useActiveTeamStore } from "../../../store/activeTeamStore";
+import { TeamIcon, TEAM_ICONS, TEAM_COLORS, colorBgClassMap } from "../../../components/TeamIcon";
 
 export default function TeamPage() {
   const user = useQuery(api.users.getCurrentUser);
@@ -34,6 +35,7 @@ export default function TeamPage() {
   const renameTeam = useMutation(api.teams.renameTeam);
   const setMemberRole = useMutation(api.teams.setMemberRole);
   const syncGithubOrg = useAction(api.teams.syncGithubOrg);
+  const updateTeamIcon = useMutation(api.teams.updateTeamIcon);
   const teamMembers = useQuery(
     api.teams.getTeamMembers,
     effectiveTeamId ? { team_id: effectiveTeamId } : "skip"
@@ -42,6 +44,7 @@ export default function TeamPage() {
   const [teamName, setTeamName] = useState("");
   const [isEditingTeamName, setIsEditingTeamName] = useState(false);
   const [isSavingTeamName, setIsSavingTeamName] = useState(false);
+  const [isSavingIcon, setIsSavingIcon] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<Id<"users"> | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [roleChangeInProgress, setRoleChangeInProgress] = useState<Id<"users"> | null>(null);
@@ -66,6 +69,32 @@ export default function TeamPage() {
       setTeamName("");
     } finally {
       setIsSavingTeamName(false);
+    }
+  };
+
+  const handleIconChange = async (icon: string) => {
+    if (!effectiveTeamId || isSavingIcon) return;
+    setIsSavingIcon(true);
+    try {
+      await updateTeamIcon({
+        team_id: effectiveTeamId,
+        icon,
+      });
+    } finally {
+      setIsSavingIcon(false);
+    }
+  };
+
+  const handleColorChange = async (color: string) => {
+    if (!effectiveTeamId || isSavingIcon) return;
+    setIsSavingIcon(true);
+    try {
+      await updateTeamIcon({
+        team_id: effectiveTeamId,
+        icon_color: color,
+      });
+    } finally {
+      setIsSavingIcon(false);
     }
   };
 
@@ -225,6 +254,57 @@ export default function TeamPage() {
               {teamMembers?.length || 0} member{(teamMembers?.length || 0) !== 1 ? "s" : ""}
             </div>
           </div>
+
+          {isAdmin && (
+            <div className="flex items-start justify-between py-2 border-b border-sol-border">
+              <div className="flex-1">
+                <div className="text-xs text-sol-base1 uppercase tracking-wider mb-2">Team Icon</div>
+                <div className="flex items-start gap-6">
+                  <div className="flex items-center justify-center w-16 h-16 rounded-xl bg-sol-bg-alt">
+                    <TeamIcon icon={team.icon} color={team.icon_color} className="w-8 h-8" />
+                  </div>
+                  <div className="flex-1 space-y-3">
+                    <div>
+                      <div className="text-xs text-sol-base1 mb-1.5">Icon</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {TEAM_ICONS.map((icon) => (
+                          <button
+                            key={icon}
+                            onClick={() => handleIconChange(icon)}
+                            disabled={isSavingIcon}
+                            className={`p-1.5 rounded-md transition-colors ${
+                              team.icon === icon
+                                ? "bg-sol-base02 ring-1 ring-sol-base01"
+                                : "hover:bg-sol-base02/50"
+                            } ${isSavingIcon ? "opacity-50" : ""}`}
+                          >
+                            <TeamIcon icon={icon} color={team.icon === icon ? team.icon_color : undefined} className={`w-4 h-4 ${team.icon !== icon ? "text-sol-base1" : ""}`} />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-sol-base1 mb-1.5">Color</div>
+                      <div className="flex gap-2">
+                        {TEAM_COLORS.map((color) => (
+                          <button
+                            key={color}
+                            onClick={() => handleColorChange(color)}
+                            disabled={isSavingIcon}
+                            className={`w-7 h-7 rounded-full transition-all ${colorBgClassMap[color]} ${
+                              team.icon_color === color
+                                ? "ring-2 ring-offset-2 ring-offset-sol-bg ring-sol-base1 scale-110"
+                                : "hover:scale-105"
+                            } ${isSavingIcon ? "opacity-50" : ""}`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {isAdmin && user.github_username && (
             <div className="flex items-start justify-between py-2 border-b border-sol-border">

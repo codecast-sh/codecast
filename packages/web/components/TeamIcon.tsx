@@ -13,7 +13,12 @@ export const TEAM_ICONS = [
   "hexagon", "triangle", "cube", "sphere", "infinity", "omega"
 ] as const;
 
+export const TEAM_COLORS = [
+  "cyan", "blue", "violet", "magenta", "green", "yellow", "orange"
+] as const;
+
 export type TeamIconName = typeof TEAM_ICONS[number];
+export type TeamColorName = typeof TEAM_COLORS[number];
 
 const iconMap: Record<TeamIconName, React.ComponentType<{ className?: string }>> = {
   rocket: Rocket,
@@ -42,14 +47,38 @@ const iconMap: Record<TeamIconName, React.ComponentType<{ className?: string }>>
   omega: Omega,
 };
 
+export const colorClassMap: Record<TeamColorName, string> = {
+  cyan: "text-sol-cyan",
+  blue: "text-sol-blue",
+  violet: "text-sol-violet",
+  magenta: "text-sol-magenta",
+  green: "text-sol-green",
+  yellow: "text-sol-yellow",
+  orange: "text-sol-orange",
+};
+
+export const colorBgClassMap: Record<TeamColorName, string> = {
+  cyan: "bg-sol-cyan",
+  blue: "bg-sol-blue",
+  violet: "bg-sol-violet",
+  magenta: "bg-sol-magenta",
+  green: "bg-sol-green",
+  yellow: "bg-sol-yellow",
+  orange: "bg-sol-orange",
+};
+
 interface TeamIconProps {
   icon?: string | null;
+  color?: string | null;
   className?: string;
 }
 
-export function TeamIcon({ icon, className }: TeamIconProps) {
+export function TeamIcon({ icon, color, className }: TeamIconProps) {
   const IconComponent = icon && icon in iconMap
     ? iconMap[icon as TeamIconName]
     : Users;
-  return <IconComponent className={className} />;
+  const colorClass = color && color in colorClassMap
+    ? colorClassMap[color as TeamColorName]
+    : "";
+  return <IconComponent className={`${colorClass} ${className || ""}`} />;
 }

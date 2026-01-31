@@ -94,29 +94,10 @@ export default function CliSettingsPage() {
 
       <div className="bg-sol-bg-alt/50 rounded-lg p-6 border border-sol-border">
         <h2 className="text-lg font-medium text-sol-text mb-4">CLI Commands</h2>
-        <div className="space-y-3 text-sm">
-          <div className="flex items-start gap-3">
-            <code className="bg-sol-bg px-3 py-1.5 rounded text-green-400 whitespace-nowrap">
-              codecast start
-            </code>
-            <span className="text-sol-text-muted pt-1">
-              Start the sync daemon
-            </span>
-          </div>
-          <div className="flex items-start gap-3">
-            <code className="bg-sol-bg px-3 py-1.5 rounded text-green-400 whitespace-nowrap">
-              codecast stop
-            </code>
-            <span className="text-sol-text-muted pt-1">
-              Stop the sync daemon
-            </span>
-          </div>
-          <div className="flex items-start gap-3">
-            <code className="bg-sol-bg px-3 py-1.5 rounded text-green-400 whitespace-nowrap">
-              codecast status
-            </code>
-            <span className="text-sol-text-muted pt-1">Check daemon status</span>
-          </div>
+        <div className="bg-sol-base03 p-3 rounded font-mono text-sm space-y-1">
+          <p><span className="text-sol-cyan">codecast start</span> <span className="text-sol-base1">- Start the sync daemon</span></p>
+          <p><span className="text-sol-cyan">codecast stop</span> <span className="text-sol-base1">- Stop the sync daemon</span></p>
+          <p><span className="text-sol-cyan">codecast status</span> <span className="text-sol-base1">- Check daemon status</span></p>
         </div>
       </div>
     </div>

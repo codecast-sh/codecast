@@ -147,7 +147,7 @@ export default function UserProfilePage() {
               )}
             </span>
             <Link
-              href="/settings/privacy"
+              href="/settings/sync"
               className="text-sol-cyan hover:underline text-xs"
             >
               Change visibility
@@ -542,7 +542,7 @@ export default function UserProfilePage() {
           {isOwnProfile && showTeammateView && (
             <div className="text-center mt-3">
               <Link
-                href="/settings/privacy"
+                href="/settings/sync"
                 className="text-sol-cyan hover:underline text-sm"
               >
                 Change visibility settings

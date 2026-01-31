@@ -248,11 +248,8 @@ export const createConversation = mutation({
           isPrivate = false;
           autoShared = true;
         }
-      } else if (!resolvedTeamId && user?.default_team_id) {
-        resolvedTeamId = user.default_team_id;
       }
-    } else if (!resolvedTeamId && user?.default_team_id) {
-      resolvedTeamId = user.default_team_id;
+      // No fallback - if no directory mapping, conversation has no team_id ("Only Me")
     }
 
     if (!autoShared && user?.team_share_paths && user.team_share_paths.length > 0 && resolvedTeamId && conversationPath) {
@@ -851,6 +848,27 @@ export const listConversations = query({
     const allTeamUsers = [...teamUsers, ...additionalUsers.filter((u): u is NonNullable<typeof u> => u !== null)];
     const teamUserMap = new Map(allTeamUsers.map(u => [u._id.toString(), u]));
 
+    // Fetch directory_team_mappings for all team members to check project visibility
+    const allMappings = args.filter === "team" && effectiveTeamId
+      ? await Promise.all(
+          allTeamUsers.map(u =>
+            ctx.db
+              .query("directory_team_mappings")
+              .withIndex("by_user_team", (q) => q.eq("user_id", u._id).eq("team_id", effectiveTeamId))
+              .collect()
+          )
+        ).then(results => results.flat())
+      : [];
+
+    // Helper to check if a project path is mapped to this team for a user
+    const isProjectMappedToTeam = (userId: string, projectPath: string | undefined): boolean => {
+      if (!projectPath) return false;
+      return allMappings.some(
+        m => m.user_id.toString() === userId &&
+             (projectPath === m.path_prefix || projectPath.startsWith(m.path_prefix + "/"))
+      );
+    };
+
     let conversations;
     if (args.filter === "my") {
       // Use by_user_updated index to sort by updated_at (most recent activity first)
@@ -884,7 +902,13 @@ export const listConversations = query({
         )
         .order("desc");
 
-      conversations = await query.take(limit + 1);
+      // Fetch extra to account for filtering, then filter by project mapping
+      const fetched = await query.take((limit + 1) * 3);
+      conversations = fetched.filter((c) => {
+        if (!effectiveTeamId) return false;
+        const projectPath = c.git_root || c.project_path;
+        return isProjectMappedToTeam(c.user_id.toString(), projectPath);
+      }).slice(0, limit + 1);
     } else {
       const fetchLimit = cursorTimestamp ? 200 : (limit + 1) * 3;
       const allConversations = await ctx.db
@@ -907,6 +931,14 @@ export const listConversations = query({
         // Check owner's visibility setting
         const visibility = owner.activity_visibility || "detailed";
         if (visibility === "hidden") return false;
+
+        // CRITICAL: Only show if project is actually mapped to this team
+        // Conversations get team_id from user's default_team even for "Only Me" projects,
+        // so we must verify the project has a directory_team_mapping for this team
+        const projectPath = c.git_root || c.project_path;
+        if (!isProjectMappedToTeam(c.user_id.toString(), projectPath)) {
+          return false;
+        }
 
         return true;
       });
@@ -1061,12 +1093,13 @@ export const listConversations = query({
         const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
 
         if (visibilityMode === "summary") {
-          const hours = Math.round(durationMs / 3600000 * 10) / 10;
-          const durationText = hours >= 1 ? `${hours}h` : `${Math.round(durationMs / 60000)}m`;
+          // Summary mode: show title + subtitle bullets, but not full message content
           return {
             _id: c._id,
             user_id: c.user_id,
             visibility_mode: visibilityMode,
+            title,
+            subtitle: c.subtitle || null,
             author_name: authorName,
             author_avatar: authorAvatar,
             is_own: c.user_id.toString() === userId.toString(),
@@ -1074,9 +1107,10 @@ export const listConversations = query({
             updated_at: c.updated_at,
             started_at: c.started_at,
             duration_ms: durationMs,
-            activity_summary: `Worked in ${projectName} for ${durationText}`,
             project_path: c.project_path || null,
             git_root: c.git_root || null,
+            tool_names: toolNames,
+            subagent_types: subagentTypes,
           };
         }
 
@@ -3165,10 +3199,24 @@ export const getTeamUnreadCount = query({
       return 0;
     }
 
-    const effectiveTeamId = args.teamId || user.default_team_id || user.team_id;
+    const effectiveTeamId = args.teamId || user.active_team_id || user.team_id;
     if (!effectiveTeamId) {
       return 0;
     }
+
+    // Get all directory mappings for this team to filter by project visibility
+    const teamMappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
+      .collect();
+
+    const isProjectMappedToTeam = (convUserId: string, projectPath: string | undefined): boolean => {
+      if (!projectPath) return false;
+      return teamMappings.some(
+        m => m.user_id.toString() === convUserId &&
+             (projectPath === m.path_prefix || projectPath.startsWith(m.path_prefix + "/"))
+      );
+    };
 
     const lastSeen = user.team_conversations_last_seen || 0;
 
@@ -3176,12 +3224,15 @@ export const getTeamUnreadCount = query({
       .query("conversations")
       .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
       .order("desc")
-      .take(50);
+      .take(100);
 
     let count = 0;
     for (const conv of recentConversations) {
       if (conv.updated_at > lastSeen && conv.user_id.toString() !== userId.toString()) {
-        count++;
+        const projectPath = conv.git_root || conv.project_path;
+        if (isProjectMappedToTeam(conv.user_id.toString(), projectPath)) {
+          count++;
+        }
       }
     }
 
@@ -3202,5 +3253,61 @@ export const markTeamConversationsSeen = mutation({
     });
 
     return { success: true };
+  },
+});
+
+export const backfillConversationTeamIds = internalMutation({
+  args: {
+    userId: v.optional(v.id("users")),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 500;
+    let updated = 0;
+
+    const users = args.userId
+      ? [await ctx.db.get(args.userId)].filter(Boolean)
+      : await ctx.db.query("users").take(100);
+
+    for (const user of users) {
+      if (!user) continue;
+
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+        .collect();
+
+      if (mappings.length === 0) continue;
+
+      const conversations = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+        .take(limit);
+
+      for (const conv of conversations) {
+        const projectPath = conv.git_root || conv.project_path;
+        if (!projectPath) continue;
+
+        let bestMatch: { teamId: Id<"teams">; pathLength: number; autoShare: boolean } | null = null;
+        for (const mapping of mappings) {
+          if (projectPath === mapping.path_prefix || projectPath.startsWith(mapping.path_prefix + "/")) {
+            if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
+              bestMatch = {
+                teamId: mapping.team_id,
+                pathLength: mapping.path_prefix.length,
+                autoShare: mapping.auto_share,
+              };
+            }
+          }
+        }
+
+        if (bestMatch && conv.team_id?.toString() !== bestMatch.teamId.toString()) {
+          await ctx.db.patch(conv._id, { team_id: bestMatch.teamId });
+          updated++;
+        }
+      }
+    }
+
+    return { updated };
   },
 });

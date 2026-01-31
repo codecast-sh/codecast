@@ -19,8 +19,16 @@ export const TEAM_ICONS = [
   "hexagon", "triangle", "cube", "sphere", "infinity", "omega"
 ] as const;
 
+export const TEAM_COLORS = [
+  "cyan", "blue", "violet", "magenta", "green", "yellow", "orange"
+] as const;
+
 function getRandomIcon(): string {
   return TEAM_ICONS[Math.floor(Math.random() * TEAM_ICONS.length)];
+}
+
+function getRandomColor(): string {
+  return TEAM_COLORS[Math.floor(Math.random() * TEAM_COLORS.length)];
 }
 
 export const getUserTeams = query({
@@ -43,8 +51,10 @@ export const getUserTeams = query({
           _id: team._id,
           name: team.name,
           icon: team.icon,
+          icon_color: team.icon_color,
           role: m.role,
           joined_at: m.joined_at,
+          visibility: m.visibility || "activity",
         };
       })
     );
@@ -100,6 +110,7 @@ export const createTeam = mutation({
     const teamId = await ctx.db.insert("teams", {
       name: args.name,
       icon: args.icon || getRandomIcon(),
+      icon_color: getRandomColor(),
       created_at: now,
       invite_code: inviteCode,
       invite_code_expires_at: now + sevenDaysInMs,
@@ -113,7 +124,7 @@ export const createTeam = mutation({
     await ctx.db.patch(args.user_id, {
       team_id: teamId,
       role: "admin",
-      default_team_id: teamId,
+      active_team_id: teamId,
     });
     return teamId;
   },
@@ -154,7 +165,7 @@ export const joinTeam = mutation({
       await ctx.db.patch(args.user_id, {
         team_id: team._id,
         role: "member",
-        default_team_id: team._id,
+        active_team_id: team._id,
       });
     }
     return team._id;
@@ -283,13 +294,13 @@ export const removeMember = mutation({
         await ctx.db.patch(args.member_user_id, {
           team_id: otherMemberships[0].team_id,
           role: otherMemberships[0].role,
-          default_team_id: otherMemberships[0].team_id,
+          active_team_id: otherMemberships[0].team_id,
         });
       } else {
         await ctx.db.patch(args.member_user_id, {
           team_id: undefined,
           role: undefined,
-          default_team_id: undefined,
+          active_team_id: undefined,
         });
       }
     }
@@ -450,13 +461,13 @@ export const removeFromTeam = mutation({
         await ctx.db.patch(args.user_id, {
           team_id: otherMemberships[0].team_id,
           role: otherMemberships[0].role,
-          default_team_id: otherMemberships[0].team_id,
+          active_team_id: otherMemberships[0].team_id,
         });
       } else {
         await ctx.db.patch(args.user_id, {
           team_id: undefined,
           role: undefined,
-          default_team_id: undefined,
+          active_team_id: undefined,
         });
       }
     }
@@ -636,7 +647,7 @@ export const createUserFromGithub = mutation({
       name: args.github_username,
       team_id: args.team_id,
       role: args.role,
-      default_team_id: args.team_id,
+      active_team_id: args.team_id,
       created_at: now,
     });
     await ctx.db.insert("team_memberships", {
@@ -675,8 +686,8 @@ export const migrateToMultiTeam = internalMutation({
           skippedCount++;
         }
 
-        if (!user.default_team_id) {
-          await ctx.db.patch(user._id, { default_team_id: user.team_id });
+        if (!user.active_team_id) {
+          await ctx.db.patch(user._id, { active_team_id: user.team_id });
         }
 
         if (user.team_share_paths && user.team_share_paths.length > 0) {
@@ -705,7 +716,7 @@ export const migrateToMultiTeam = internalMutation({
   },
 });
 
-export const setDefaultTeam = mutation({
+export const setActiveTeam = mutation({
   args: {
     team_id: v.optional(v.id("teams")),
   },
@@ -724,13 +735,13 @@ export const setDefaultTeam = mutation({
         throw new Error("Not a member of this team");
       }
       await ctx.db.patch(userId, {
-        default_team_id: args.team_id,
+        active_team_id: args.team_id,
         team_id: args.team_id,
         role: membership.role,
       });
     } else {
       await ctx.db.patch(userId, {
-        default_team_id: undefined,
+        active_team_id: undefined,
         team_id: undefined,
         role: undefined,
       });
@@ -738,3 +749,79 @@ export const setDefaultTeam = mutation({
     return { success: true };
   },
 });
+
+export const setTeamVisibility = mutation({
+  args: {
+    team_id: v.id("teams"),
+    visibility: v.union(
+      v.literal("hidden"),
+      v.literal("activity"),
+      v.literal("summary"),
+      v.literal("full")
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id))
+      .unique();
+
+    if (!membership) {
+      throw new Error("Not a member of this team");
+    }
+
+    await ctx.db.patch(membership._id, { visibility: args.visibility });
+    return { success: true };
+  },
+});
+
+export const updateTeamIcon = mutation({
+  args: {
+    team_id: v.id("teams"),
+    icon: v.optional(v.string()),
+    icon_color: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id))
+      .unique();
+
+    if (!membership || membership.role !== "admin") {
+      throw new Error("Only admins can change the team icon");
+    }
+
+    const updates: { icon?: string; icon_color?: string } = {};
+
+    if (args.icon !== undefined) {
+      if (!TEAM_ICONS.includes(args.icon as typeof TEAM_ICONS[number])) {
+        throw new Error("Invalid icon");
+      }
+      updates.icon = args.icon;
+    }
+
+    if (args.icon_color !== undefined) {
+      if (!TEAM_COLORS.includes(args.icon_color as typeof TEAM_COLORS[number])) {
+        throw new Error("Invalid color");
+      }
+      updates.icon_color = args.icon_color;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await ctx.db.patch(args.team_id, updates);
+    }
+
+    return { success: true };
+  },
+});
+

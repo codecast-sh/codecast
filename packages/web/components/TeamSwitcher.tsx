@@ -21,16 +21,16 @@ export function TeamSwitcher() {
   const router = useRouter();
   const user = useQuery(api.users.getCurrentUser);
   const teams = useQuery(api.teams.getUserTeams);
-  const setDefaultTeam = useMutation(api.teams.setDefaultTeam);
+  const saveActiveTeam = useMutation(api.teams.setActiveTeam);
   const { activeTeamId, setActiveTeam } = useActiveTeamStore();
 
   useEffect(() => {
-    if (user && !activeTeamId && user.default_team_id) {
-      setActiveTeam(user.default_team_id);
+    if (user && !activeTeamId && user.active_team_id) {
+      setActiveTeam(user.active_team_id);
     } else if (user && activeTeamId) {
       const isValidTeam = teams?.some(t => t?._id === activeTeamId);
-      if (!isValidTeam && user.default_team_id) {
-        setActiveTeam(user.default_team_id);
+      if (!isValidTeam && user.active_team_id) {
+        setActiveTeam(user.active_team_id);
       } else if (!isValidTeam && teams && teams.length > 0) {
         setActiveTeam(teams[0]?._id ?? null);
       }
@@ -47,7 +47,7 @@ export function TeamSwitcher() {
 
   const handleTeamChange = async (teamId: Id<"teams">) => {
     setActiveTeam(teamId);
-    await setDefaultTeam({ team_id: teamId });
+    await saveActiveTeam({ team_id: teamId });
   };
 
   if (!teams || teams.length === 0) {
@@ -66,7 +66,7 @@ export function TeamSwitcher() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-sol-base02/50 transition-colors text-sm">
-          <TeamIcon icon={activeTeam?.icon} className="w-4 h-4 text-sol-cyan" />
+          <TeamIcon icon={activeTeam?.icon} color={activeTeam?.icon_color} className="w-4 h-4" />
           <span className="text-sol-text font-medium max-w-[120px] truncate">
             {activeTeam?.name || "Select Team"}
           </span>
@@ -84,7 +84,7 @@ export function TeamSwitcher() {
               className="flex items-center justify-between cursor-pointer text-sol-text hover:bg-sol-base02/50"
             >
               <div className="flex items-center gap-2">
-                <TeamIcon icon={team.icon} className="w-4 h-4 text-sol-cyan" />
+                <TeamIcon icon={team.icon} color={team.icon_color} className="w-4 h-4" />
                 <span>{team.name}</span>
                 <span className="text-xs text-sol-base1">
                   {team.role === "admin" ? "Admin" : "Member"}

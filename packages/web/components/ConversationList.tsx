@@ -262,6 +262,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const listRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
   const user = useQuery(api.users.getCurrentUser);
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
@@ -283,6 +284,22 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
     }, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!loadMoreRef.current || !hasMore || isLoadingMore) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
+          loadMore();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(loadMoreRef.current);
+    return () => observer.disconnect();
+  }, [hasMore, isLoadingMore, loadMore]);
 
   const { filteredConversations, counts, directories } = useMemo(() => {
     if (!conversations || conversations.length === 0) return { filteredConversations: [], counts: { long: 0, active: 0, subagent: 0, main: 0 }, directories: [] };
@@ -600,8 +617,9 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
               const convIndex = flatConversations.findIndex(c => c._id === conv._id);
               const isFocused = convIndex === focusedIndex;
 
-              if (conv.visibility_mode === "summary" || conv.visibility_mode === "minimal") {
-                const summaryContent = (
+              // Minimal mode: just show activity line (e.g., "Worked in outreach for 4m")
+              if (conv.visibility_mode === "minimal") {
+                const minimalContent = (
                   <div className="flex items-center gap-3">
                     {conv.author_avatar ? (
                       <img
@@ -623,7 +641,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                   </div>
                 );
 
-                // Own conversations are clickable even in summary mode
+                // Own conversations are clickable even in minimal mode
                 if (conv.is_own) {
                   return (
                     <Link
@@ -633,7 +651,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                       role="listitem"
                     >
                       <div className="relative bg-blue-50/50 dark:bg-blue-950/20 border-2 border-blue-300/50 dark:border-blue-500/30 rounded-lg p-3 hover:border-blue-400 transition-colors">
-                        {summaryContent}
+                        {minimalContent}
                       </div>
                     </Link>
                   );
@@ -645,25 +663,28 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                     className="relative bg-sol-bg-alt/30 border border-sol-border/30 rounded-lg p-3"
                     role="listitem"
                   >
-                    {summaryContent}
+                    {minimalContent}
                   </div>
                 );
               }
 
-              const isOthersDetailedView = conv.visibility_mode === "detailed" && !conv.is_own;
+              // Summary mode: shows title + subtitle but not clickable for others
+              // Detailed mode: shows title + subtitle but not clickable for others
+
+              const isOthersRestrictedView = (conv.visibility_mode === "detailed" || conv.visibility_mode === "summary") && !conv.is_own;
 
               return (
                 <Link
                   key={conv._id}
-                  href={isOthersDetailedView ? "#" : `/conversation/${conv._id}`}
-                  className={`group block relative ${isOthersDetailedView ? "cursor-default" : ""}`}
+                  href={isOthersRestrictedView ? "#" : `/conversation/${conv._id}`}
+                  className={`group block relative ${isOthersRestrictedView ? "cursor-default" : ""}`}
                   role="listitem"
                   aria-label={createConversationAriaLabel(conv)}
                   aria-current={isFocused ? "true" : undefined}
-                  onClick={isOthersDetailedView ? (e) => e.preventDefault() : undefined}
+                  onClick={isOthersRestrictedView ? (e) => e.preventDefault() : undefined}
                 >
                   <div className={`relative border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 transition-all duration-200 shadow-sm dark:shadow-none ${
-                    isOthersDetailedView
+                    isOthersRestrictedView
                       ? "bg-white dark:bg-sol-bg-alt/60 border-sol-border/30 opacity-70"
                       : filter === "team" && conv.is_own && !conv.is_private
                         ? isFocused
@@ -680,7 +701,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         <div className="flex items-center gap-2 min-w-0 flex-1">
                           <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4 shrink-0" />
                           <span className={`font-medium text-base transition-colors truncate ${
-                            isOthersDetailedView
+                            isOthersRestrictedView
                               ? "text-sol-text-muted"
                               : "text-sol-text"
                           }`}>
@@ -693,62 +714,64 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             </span>
                           )}
                         </div>
-                        {filter === "team" && conv.is_own && hasTeam && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {filter === "team" && conv.is_own && hasTeam && (
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const newPrivate = !conv.is_private;
+                                setPrivacy({ conversation_id: conv._id as Id<"conversations">, is_private: newPrivate })
+                                  .then(() => toast.success(newPrivate ? "Now private" : `Shared with ${activeTeam?.name || "team"}`))
+                                  .catch(() => toast.error("Failed to update"));
+                              }}
+                              className={`group/visibility relative flex items-center gap-1 px-1.5 py-1 rounded transition-all text-xs ${
+                                conv.is_private
+                                  ? "text-sol-text-muted hover:text-sol-text hover:bg-sol-base02/50"
+                                  : "text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 hover:bg-emerald-500/10"
+                              }`}
+                            >
+                              {conv.is_private ? (
+                                <>
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+                                  </svg>
+                                  <span>Summary</span>
+                                </>
+                              ) : (
+                                <>
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+                                  </svg>
+                                  <span>Full</span>
+                                </>
+                              )}
+                              <span className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-2 py-1 text-xs whitespace-nowrap bg-sol-bg-alt border border-sol-border rounded shadow-lg opacity-0 group-hover/visibility:opacity-100 transition-opacity pointer-events-none z-50">
+                                {conv.is_private ? "Click to share with team" : "Click to make private"}
+                              </span>
+                            </button>
+                          )}
                           <button
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              const newPrivate = !conv.is_private;
-                              setPrivacy({ conversation_id: conv._id as Id<"conversations">, is_private: newPrivate })
-                                .then(() => toast.success(newPrivate ? "Now private" : `Shared with ${activeTeam?.name || "team"}`))
-                                .catch(() => toast.error("Failed to update"));
+                              toggleFavorite({ conversation_id: conv._id as Id<"conversations"> });
                             }}
-                            className={`group/visibility relative flex items-center gap-1 px-1.5 py-0.5 rounded transition-all text-xs ${
-                              conv.is_private
-                                ? "text-sol-text-muted hover:text-sol-text hover:bg-sol-base02/50"
-                                : "text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 hover:bg-emerald-500/10"
+                            className={`p-1 rounded transition-colors ${
+                              conv.is_favorite
+                                ? "text-amber-400 hover:text-amber-300"
+                                : "text-sol-text-dim/30 hover:text-amber-400 opacity-0 group-hover:opacity-100"
                             }`}
+                            title={conv.is_favorite ? "Remove from favorites" : "Add to favorites"}
                           >
-                            {conv.is_private ? (
-                              <>
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
-                                </svg>
-                                <span>Summary</span>
-                              </>
-                            ) : (
-                              <>
-                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-                                </svg>
-                                <span>Full</span>
-                              </>
-                            )}
-                            <span className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-2 py-1 text-xs whitespace-nowrap bg-sol-bg-alt border border-sol-border rounded shadow-lg opacity-0 group-hover/visibility:opacity-100 transition-opacity pointer-events-none z-50">
-                              {conv.is_private ? "Click to share with team" : "Click to make private"}
-                            </span>
+                            <svg className="w-4 h-4" fill={conv.is_favorite ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                            </svg>
                           </button>
-                        )}
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            toggleFavorite({ conversation_id: conv._id as Id<"conversations"> });
-                          }}
-                          className={`p-1 rounded transition-colors flex-shrink-0 ${
-                            conv.is_favorite
-                              ? "text-amber-400 hover:text-amber-300"
-                              : "text-sol-text-dim/30 hover:text-amber-400 opacity-0 group-hover:opacity-100"
-                          }`}
-                          title={conv.is_favorite ? "Remove from favorites" : "Add to favorites"}
-                        >
-                          <svg className="w-4 h-4" fill={conv.is_favorite ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                          </svg>
-                        </button>
-                        <span className="text-[11px] text-sol-text-dim/50 shrink-0">
-                          {getRelativeTime(conv.updated_at)}
-                        </span>
+                          <span className="text-[11px] text-sol-text-dim/50">
+                            {getRelativeTime(conv.updated_at)}
+                          </span>
+                        </div>
                       </div>
 
                       {/* Subtitle */}
@@ -818,6 +841,14 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             {conv.is_own ? (
                               <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300 font-semibold text-xs border border-blue-500/30">You</span>
                             ) : conv.author_name}
+                          </span>
+                        )}
+                        {(conv.project_path || conv.git_root) && (
+                          <span className="inline-flex items-center gap-1 text-sol-text-dim" title={conv.project_path || conv.git_root || ""}>
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                            </svg>
+                            <span className="truncate max-w-[100px]">{(conv.git_root || conv.project_path || "").split("/").pop()}</span>
                           </span>
                         )}
                         {filter === "team" && !conv.is_own && conv.is_private === false && (
@@ -938,24 +969,16 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
       ))}
 
       {hasMore && (
-        <div className="flex justify-center pt-4 pb-8">
-          <button
-            onClick={loadMore}
-            disabled={isLoadingMore}
-            className="px-6 py-2 text-sm font-medium rounded-lg bg-sol-bg-alt border border-sol-border hover:border-amber-500/40 text-sol-text-muted hover:text-sol-text transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isLoadingMore ? (
-              <span className="flex items-center gap-2">
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                Loading...
-              </span>
-            ) : (
-              "Load more"
-            )}
-          </button>
+        <div ref={loadMoreRef} className="flex justify-center pt-4 pb-8">
+          {isLoadingMore && (
+            <span className="flex items-center gap-2 text-sol-text-muted">
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              Loading...
+            </span>
+          )}
         </div>
       )}
     </div>
