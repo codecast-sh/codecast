@@ -5,7 +5,7 @@ import { execSync, exec, spawn } from "child_process";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
-import { parseSessionFile, extractSlug, extractParentUuid, extractSummaryTitle, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { markSynced, getSyncRecord, findUnsyncedFiles } from "./syncLedger.js";
@@ -106,6 +106,8 @@ const syncStats = {
   errors: 0,
   warnings: 0,
 };
+
+let lastWatcherEventTime = Date.now();
 
 const HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -483,7 +485,8 @@ async function processSessionFile(
       const slug = extractSlug(fullContent);
       const parentMessageUuid = extractParentUuid(fullContent);
       const firstMessageTimestamp = messages[0]?.timestamp;
-      const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+      const actualProjectPath = extractCwd(fullContent) || projectPath;
+      const gitInfo = actualProjectPath ? getGitInfo(actualProjectPath) : undefined;
 
       const firstUserMessage = messages.find(msg => msg.role === "user");
       const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
@@ -493,7 +496,7 @@ async function processSessionFile(
         teamId,
         sessionId,
         agentType: "claude_code",
-        projectPath,
+        projectPath: actualProjectPath,
         slug,
         title,
         startedAt: firstMessageTimestamp,
@@ -509,7 +512,7 @@ async function processSessionFile(
         (global as any).activeSessions.set(conversationId, {
           sessionId,
           conversationId,
-          projectPath: projectPath || "",
+          projectPath: actualProjectPath || "",
         });
       }
 
@@ -593,14 +596,15 @@ async function processSessionFile(
 
       const slug = extractSlug(retryFullContent);
       const firstMsgTimestamp = messages[0]?.timestamp;
-      const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+      const retryProjectPath = extractCwd(retryFullContent) || projectPath;
+      const gitInfo = retryProjectPath ? getGitInfo(retryProjectPath) : undefined;
 
       retryQueue.add("createConversation", {
         userId,
         teamId,
         sessionId,
         agentType: "claude_code",
-        projectPath,
+        projectPath: retryProjectPath,
         slug,
         startedAt: firstMsgTimestamp,
         gitInfo,
@@ -654,7 +658,8 @@ async function processSessionFile(
 
         const slug = extractSlug(recreateFullContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
-        const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+        const recreateProjectPath = extractCwd(recreateFullContent) || projectPath;
+        const gitInfo = recreateProjectPath ? getGitInfo(recreateProjectPath) : undefined;
 
         try {
           const firstUserMessage = messages.find(msg => msg.role === "user");
@@ -665,7 +670,7 @@ async function processSessionFile(
             teamId,
             sessionId,
             agentType: "claude_code",
-            projectPath,
+            projectPath: recreateProjectPath,
             slug,
             title,
             startedAt: firstMessageTimestamp,
@@ -1385,6 +1390,51 @@ function isSyncPaused(): boolean {
   return process.env.CODE_CHAT_SYNC_PAUSED === "1" || process.env.CODECAST_PAUSED === "1";
 }
 
+async function repairProjectPaths(syncService: SyncService): Promise<void> {
+  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+  if (!fs.existsSync(claudeProjectsDir)) return;
+
+  log("Checking for project paths that need repair...");
+
+  const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => d.name);
+
+  let repaired = 0;
+  let checked = 0;
+
+  for (const dir of projectDirs) {
+    const dirPath = path.join(claudeProjectsDir, dir);
+    const sessionFiles = fs.readdirSync(dirPath)
+      .filter(f => f.endsWith(".jsonl") && f !== "sessions-index.json");
+
+    for (const file of sessionFiles) {
+      const sessionId = file.replace(".jsonl", "");
+      const filePath = path.join(dirPath, file);
+
+      try {
+        const content = fs.readFileSync(filePath, "utf-8");
+        const actualCwd = extractCwd(content);
+        if (!actualCwd) continue;
+
+        checked++;
+
+        const result = await syncService.updateProjectPath(sessionId, actualCwd);
+        if (result?.updated) {
+          repaired++;
+          log(`Repaired path for ${sessionId.slice(0, 8)}: ${actualCwd}`);
+        }
+      } catch {
+        // Skip files we can't read or sessions that don't exist in Convex
+      }
+    }
+  }
+
+  if (repaired > 0) {
+    log(`Repaired ${repaired} project paths (checked ${checked})`);
+  }
+}
+
 async function waitForConfig(): Promise<{ config: Config; convexUrl: string }> {
   const checkInterval = 30000;
 
@@ -1630,6 +1680,12 @@ function startWatchdog(
       return;
     }
 
+    // Check for watcher staleness (informational - no events is normal when user isn't working)
+    const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);
+    if (watcherIdleMinutes >= 30) {
+      logWarn(`Watcher idle for ${watcherIdleMinutes}min`);
+    }
+
     // Use sync ledger to find files that need syncing (modified after their last sync)
     const staleFiles = findStaleSessionFiles();
     if (staleFiles.length === 0) {
@@ -1736,6 +1792,11 @@ async function main(): Promise<void> {
     userId: config.user_id,
   });
   syncServiceRef = syncService;
+
+  // Repair any project paths that were stored incorrectly (one-time on startup)
+  repairProjectPaths(syncService).catch(err => {
+    log(`Failed to repair project paths: ${err instanceof Error ? err.message : String(err)}`);
+  });
 
   setInterval(() => {
     flushRemoteLogs().catch(() => {});
@@ -1848,11 +1909,12 @@ async function main(): Promise<void> {
   const fileSyncs = new Map<string, InvalidateSync>();
 
   watcher.on("ready", () => {
-    log("Session watcher ready");
+    log("Session watcher ready (depth=2)");
   });
 
   watcher.on("session", (event: SessionEvent) => {
     const filePath = event.filePath;
+    lastWatcherEventTime = Date.now();
 
     const state = readDaemonState();
     if (state?.authExpired) {

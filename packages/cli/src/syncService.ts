@@ -322,6 +322,19 @@ export class SyncService {
     }
   }
 
+  async updateProjectPath(sessionId: string, projectPath: string): Promise<{ updated: boolean } | null> {
+    try {
+      const result = await this.client.mutation("conversations:updateProjectPath" as any, {
+        session_id: sessionId,
+        project_path: projectPath,
+        api_token: this.apiToken,
+      });
+      return result as { updated: boolean } | null;
+    } catch {
+      return null;
+    }
+  }
+
   async updateMessageStatus(params: {
     messageId: string;
     status: "pending" | "delivered" | "failed";

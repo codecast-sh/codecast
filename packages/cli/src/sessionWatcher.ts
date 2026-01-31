@@ -53,7 +53,7 @@ export class SessionWatcher extends EventEmitter {
     this.watcher = watch(this.projectsPath, {
       persistent: true,
       ignoreInitial: true, // We handle initial files ourselves for sorting
-      depth: 4, // Increased to catch subagent files in session/subagents/ folders
+      depth: 2, // Main sessions only (projects/<hash>/<session>.jsonl) - subagents not needed
       awaitWriteFinish: {
         stabilityThreshold: 100,
         pollInterval: 50,
@@ -87,9 +87,9 @@ export class SessionWatcher extends EventEmitter {
     const RECENT_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
     const now = Date.now();
 
-    // Recursively scan for .jsonl files up to depth 4
+    // Recursively scan for .jsonl files up to depth 2 (main sessions only)
     const scanDir = (dir: string, depth: number) => {
-      if (depth > 4) return;
+      if (depth > 2) return;
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {

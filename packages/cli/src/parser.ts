@@ -14,6 +14,7 @@ export interface ClaudeSessionEntry {
   slug?: string;
   timestamp?: string;
   content?: string;
+  cwd?: string;
   message?: string | {
     role: "user" | "assistant";
     content: string | ContentBlock[];
@@ -198,6 +199,17 @@ export function extractSummaryTitle(content: string): string | undefined {
     const entry = parseSessionLine(line);
     if (entry?.type === "summary" && entry?.summary) {
       return entry.summary;
+    }
+  }
+  return undefined;
+}
+
+export function extractCwd(content: string): string | undefined {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const entry = parseSessionLine(line);
+    if (entry?.cwd) {
+      return entry.cwd;
     }
   }
   return undefined;

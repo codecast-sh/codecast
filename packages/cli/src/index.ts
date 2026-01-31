@@ -565,6 +565,13 @@ function showStatus(): void {
 
     const queueSize = state?.pendingQueueSize ?? 0;
     row("Queue", queueSize > 0 ? fmt.number(queueSize) + fmt.muted(" items") : fmt.muted("empty"));
+
+    try {
+      const fdCount = execSync(`lsof -p ${pid} 2>/dev/null | wc -l`, { encoding: "utf-8" }).trim();
+      row("File handles", fmt.number(parseInt(fdCount, 10) || 0));
+    } catch {
+      row("File handles", fmt.muted("unavailable"));
+    }
   } else {
     row("Daemon", fmt.muted(icons.cross + " stopped"));
     if (config?.auth_token) {
@@ -1328,6 +1335,91 @@ program
   });
 
 program
+  .command("repair")
+  .description("Repair project paths that were stored incorrectly")
+  .option("--dry-run", "Show what would be repaired without making changes")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+    if (!fs.existsSync(claudeProjectsDir)) {
+      console.log("No Claude projects directory found");
+      process.exit(0);
+    }
+
+    const { extractCwd } = await import("./parser.js");
+
+    console.log("Scanning local session files...\n");
+
+    const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
+      .filter((d: any) => d.isDirectory())
+      .map((d: any) => d.name);
+
+    const fixes: Array<{ sessionId: string; actualPath: string }> = [];
+
+    for (const dir of projectDirs) {
+      const dirPath = path.join(claudeProjectsDir, dir);
+      const sessionFiles = fs.readdirSync(dirPath)
+        .filter((f: string) => f.endsWith(".jsonl") && f !== "sessions-index.json");
+
+      for (const file of sessionFiles) {
+        const sessionId = file.replace(".jsonl", "");
+        const filePath = path.join(dirPath, file);
+
+        try {
+          const content = fs.readFileSync(filePath, "utf-8");
+          const actualCwd = extractCwd(content);
+          if (actualCwd) {
+            fixes.push({ sessionId, actualPath: actualCwd });
+          }
+        } catch {
+          // Skip unreadable files
+        }
+      }
+    }
+
+    console.log(`Found ${fixes.length} sessions to check\n`);
+
+    if (options.dryRun) {
+      console.log("Dry run - no changes will be made\n");
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    let repaired = 0;
+
+    for (const fix of fixes) {
+      try {
+        const response = await fetch(`${siteUrl}/api/mutation`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            path: "conversations:updateProjectPath",
+            args: {
+              session_id: fix.sessionId,
+              project_path: fix.actualPath,
+              api_token: config.auth_token,
+            },
+          }),
+        });
+
+        const result = await response.json();
+        if (result.value?.updated) {
+          console.log(`${fix.sessionId.slice(0, 8)} -> ${fix.actualPath}`);
+          repaired++;
+        }
+      } catch {
+        // Skip errors
+      }
+    }
+
+    console.log(`\nRepaired ${repaired} project paths`);
+  });
+
+program
   .command("health")
   .description("Show detailed sync health information including dropped operations and pending files")
   .option("--clear-dropped", "Clear the dropped operations log")
@@ -1962,6 +2054,7 @@ program
   .option("-g, --global", "Search all sessions (not just current project)")
   .option("-n, --limit <n>", "Max results to show (use -n 10 for more)", "4")
   .option("--dry-run", "Show matches without opening Claude")
+  .option("--here", "Open session in current directory (don't switch to session's project)")
   .option("--claude-args <args>", "Additional args to pass to claude (overrides config)")
   .action(async (queryWords: string[], options) => {
     const config = readConfig();
@@ -2049,7 +2142,7 @@ program
         }
         console.log(`Opening: ${conv.title}`);
         const claudeArgs = options.claudeArgs || config.claude_args;
-        launchClaude(sessionId, claudeArgs, !claudeArgs);
+        launchClaude(sessionId, claudeArgs, !claudeArgs, options.here ? undefined : conv.project_path);
         return;
       }
 
@@ -2091,7 +2184,7 @@ program
           }
           console.log(`\nOpening: ${conv.title}`);
           const claudeArgs = options.claudeArgs || config.claude_args;
-          launchClaude(sessionId, claudeArgs, !claudeArgs);
+          launchClaude(sessionId, claudeArgs, !claudeArgs, options.here ? undefined : conv.project_path);
         });
       };
 
@@ -2102,7 +2195,7 @@ program
     }
   });
 
-function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean): void {
+function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
   const args = ["--resume", sessionId];
 
   if (extraArgs) {
@@ -2113,11 +2206,23 @@ function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: bool
     console.log(`\nTip: Set default claude args with: codecast config claude_args -- "--dangerously-skip-permissions"`);
   }
 
+  let cwd = process.cwd();
+  if (projectPath && projectPath !== process.cwd()) {
+    if (fs.existsSync(projectPath)) {
+      cwd = projectPath;
+      console.log(`Switching to: ${projectPath}`);
+    } else {
+      console.log(`Warning: Session path not found: ${projectPath}`);
+      console.log(`Using current directory instead`);
+    }
+  }
+
   console.log("");
 
   const claude = spawn("claude", args, {
     stdio: "inherit",
     shell: true,
+    cwd,
   });
 
   claude.on("error", (err) => {
