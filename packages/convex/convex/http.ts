@@ -480,7 +480,7 @@ http.route({
         });
       }
 
-      const result = await ctx.runMutation(api.conversations.readConversationMessages, {
+      const result = await ctx.runQuery(api.conversations.readConversationMessages, {
         api_token,
         conversation_id,
         start_line,

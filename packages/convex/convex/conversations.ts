@@ -25,6 +25,25 @@ async function getAuthenticatedUserId(
   return null;
 }
 
+async function getAuthenticatedUserIdReadOnly(
+  ctx: { db: any },
+  apiToken?: string
+): Promise<Id<"users"> | null> {
+  const sessionUserId = await getAuthUserId(ctx as any);
+  if (sessionUserId) {
+    return sessionUserId;
+  }
+
+  if (apiToken) {
+    const result = await verifyApiToken(ctx, apiToken, false);
+    if (result) {
+      return result.userId;
+    }
+  }
+
+  return null;
+}
+
 function generateShareToken(): string {
   return crypto.randomUUID();
 }
@@ -907,14 +926,22 @@ export const listConversations = query({
         const conversationUser = await ctx.db.get(c.user_id);
 
         type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
-        let visibilityMode: VisibilityMode = "full";
         const isOwn = c.user_id.toString() === userId.toString();
-        if (args.filter === "team") {
-          // In team view, apply visibility settings to ALL conversations (including own)
-          // so users can see what their teammates see
-          const owner = teamUserMap.get(c.user_id.toString());
-          visibilityMode = (owner?.activity_visibility as VisibilityMode) || "detailed";
+
+        // Team view: show exactly what team members see
+        // - Shared (is_private=false): team sees full content
+        // - Private (is_private=true): team sees reduced based on owner's activity_visibility
+        function getTeamVisibility(): VisibilityMode {
+          if (args.filter !== "team") return "full";
+
+          const owner = isOwn ? user : teamUserMap.get(c.user_id.toString());
+          const ownerVisibility = (owner?.activity_visibility as VisibilityMode) || "detailed";
+
+          // Shared = full visibility, Private = owner's activity_visibility setting
+          return c.is_private === false ? "full" : ownerVisibility;
         }
+
+        const visibilityMode = getTeamVisibility();
 
         const firstMessages = await ctx.db
           .query("messages")
@@ -2013,7 +2040,7 @@ export const searchForCLI = query({
       const proximityScore = calculateProximityScore(messages, terms);
 
       results.push({
-        id: conv._id,
+        id: conv.short_id || conv._id.toString().slice(0, 7),
         title,
         project_path: conv.project_path || null,
         updated_at: new Date(conv.updated_at).toISOString(),
@@ -2040,7 +2067,7 @@ export const searchForCLI = query({
   },
 });
 
-export const readConversationMessages = mutation({
+export const readConversationMessages = query({
   args: {
     api_token: v.string(),
     conversation_id: v.string(),
@@ -2048,7 +2075,7 @@ export const readConversationMessages = mutation({
     end_line: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
     if (!authUserId) {
       return { error: "Unauthorized" };
     }
@@ -3121,5 +3148,59 @@ export const getMessageCountsForReconciliation = query({
     }
 
     return results;
+  },
+});
+
+export const getTeamUnreadCount = query({
+  args: {
+    teamId: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return 0;
+    }
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      return 0;
+    }
+
+    const effectiveTeamId = args.teamId || user.default_team_id || user.team_id;
+    if (!effectiveTeamId) {
+      return 0;
+    }
+
+    const lastSeen = user.team_conversations_last_seen || 0;
+
+    const recentConversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
+      .order("desc")
+      .take(50);
+
+    let count = 0;
+    for (const conv of recentConversations) {
+      if (conv.updated_at > lastSeen && conv.user_id.toString() !== userId.toString()) {
+        count++;
+      }
+    }
+
+    return count;
+  },
+});
+
+export const markTeamConversationsSeen = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    await ctx.db.patch(userId, {
+      team_conversations_last_seen: Date.now(),
+    });
+
+    return { success: true };
   },
 });
