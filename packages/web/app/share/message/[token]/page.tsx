@@ -55,7 +55,7 @@ function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean 
   }
 
   return (
-    <div className={`relative ${isTarget ? "ring-2 ring-sol-yellow/50 rounded-lg p-4 -m-2 bg-sol-yellow/5" : ""}`}>
+    <div className={`relative ${isTarget ? "bg-sol-yellow/5 rounded-lg" : ""}`}>
       {isUser ? (
         <div className="bg-sol-blue/15 border border-sol-blue/40 rounded-lg p-4 mb-4">
           <div className="flex items-center gap-2 mb-2">

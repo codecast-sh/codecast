@@ -28,6 +28,8 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { CommentPanel } from "./CommentPanel";
 import { PermissionCard } from "./PermissionCard";
 import { copyToClipboard } from "../lib/utils";
+import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "./tools/MarkdownRenderer";
+import { MessageSharePopover } from "./MessageSharePopover";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -351,9 +353,11 @@ function ConversationMetadata({
   return (
     <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 text-[10px] sm:text-xs text-sol-text-dim flex-wrap">
       {agentType && (
-        <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
+        <div
+          className="flex items-center flex-shrink-0 cursor-default"
+          title={formatAgentType(agentType)}
+        >
           <AgentTypeIcon agentType={agentType} />
-          <span className="hidden sm:inline">{formatAgentType(agentType)}</span>
         </div>
       )}
       {model && (
@@ -567,6 +571,12 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
   const relativePath = getRelativePath(filePath);
   const language = getFileExtension(filePath);
 
+  // Markdown file detection
+  const isMarkdown = isMarkdownFile(filePath);
+  const content = isRead ? (result?.content || "") : String(parsedInput.content || "");
+  const isPlan = isMarkdown && isPlanFile(filePath, content);
+  const [viewMode, setViewMode] = useState<'raw' | 'rendered'>(isPlan ? 'rendered' : 'raw');
+
   const truncateStr = (s: string, max: number) => s.length > max ? s.slice(0, max) + "..." : s;
   const shortenUrl = (url: string) => {
     try {
@@ -769,6 +779,41 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
 
       {expanded && (
         <div className="mt-1 rounded overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
+          {/* Markdown toggle header */}
+          {isMarkdown && (isRead || (tool.name === "Write" && parsedInput.content)) && (
+            <div className="flex items-center justify-between px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/30">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-sol-text-dim">{language}</span>
+                {isPlan && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-sol-bg-highlight text-sol-text-muted font-medium">
+                    PLAN
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1 text-[10px]">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setViewMode('raw'); }}
+                  className={`px-1.5 py-0.5 rounded transition-colors ${
+                    viewMode === 'raw'
+                      ? 'bg-sol-bg-highlight text-sol-text'
+                      : 'text-sol-text-dim hover:text-sol-text-muted'
+                  }`}
+                >
+                  Raw
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setViewMode('rendered'); }}
+                  className={`px-1.5 py-0.5 rounded transition-colors ${
+                    viewMode === 'rendered'
+                      ? 'bg-sol-bg-highlight text-sol-text'
+                      : 'text-sol-text-dim hover:text-sol-text-muted'
+                  }`}
+                >
+                  Rendered
+                </button>
+              </div>
+            </div>
+          )}
           {isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
             <DiffView
               oldStr={String(parsedInput.old_string)}
@@ -777,12 +822,18 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
               language={language}
             />
           ) : tool.name === "Write" && !!parsedInput.content ? (
-            <DiffView
-              oldStr=""
-              newStr={String(parsedInput.content)}
-              startLine={1}
-              language={language}
-            />
+            isMarkdown && viewMode === 'rendered' ? (
+              <div className="max-h-96 overflow-auto p-3">
+                <MarkdownRenderer content={String(parsedInput.content)} filePath={filePath} />
+              </div>
+            ) : (
+              <DiffView
+                oldStr=""
+                newStr={String(parsedInput.content)}
+                startLine={1}
+                language={language}
+              />
+            )
           ) : isBash && parsedInput.command ? (
             <div className="max-h-80 overflow-auto">
               <div className="px-2 py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
@@ -800,14 +851,20 @@ function ToolBlock({ tool, result, changeIndex }: { tool: ToolCall; result?: Too
             </div>
           ) : processedContent && processedContent.trim() ? (
             <div className="max-h-80 overflow-auto">
-              {language && (
+              {!isMarkdown && language && (
                 <div className="text-[10px] px-2 py-1 border-b border-sol-border/20 text-sol-text-dim">
                   {language}
                 </div>
               )}
-              <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
-                {processedContent}
-              </pre>
+              {isMarkdown && viewMode === 'rendered' ? (
+                <div className="p-3">
+                  <MarkdownRenderer content={processedContent} filePath={filePath} />
+                </div>
+              ) : (
+                <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
+                  {processedContent}
+                </pre>
+              )}
             </div>
           ) : (
             <div className="p-2 text-xs text-sol-text-dim">No output</div>
@@ -959,7 +1016,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean }) {
+function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -984,20 +1041,6 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
     messageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
-  const generateShareLink = useMutation(api.messages.generateMessageShareLink);
-
-  const handleShare = async () => {
-    try {
-      const token = await generateShareLink({
-        message_id: messageId as Id<"messages">,
-      });
-      const url = `${window.location.origin}/share/message/${token}`;
-      await copyToClipboard(url);
-      toast.success("Share link copied!");
-    } catch (err) {
-      toast.error("Failed to create share link");
-    }
-  };
 
   const handleCopy = async () => {
     try {
@@ -1036,18 +1079,25 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group bg-sol-blue/15 border border-sol-blue/40 rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""}`}>
-      <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-        <button
-          onClick={handleShare}
-          className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
-          title="Share message"
-          aria-label="Share message"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-          </svg>
-        </button>
+    <div id={`msg-${messageId}`} className={`group rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all border ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "border-sol-cyan bg-sol-cyan/20" : "bg-sol-blue/15 border-sol-blue/40"}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
+      <div className={`absolute top-3 right-3 transition-opacity flex gap-1 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+        {onStartShareSelection && (
+          <MessageSharePopover
+            messageId={messageId}
+            onStartShareSelection={onStartShareSelection}
+            trigger={
+              <span
+                className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue cursor-pointer"
+                title="Share message"
+                aria-label="Share message"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                </svg>
+              </span>
+            }
+          />
+        )}
         <button
           onClick={handleCopyLink}
           className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
@@ -1133,6 +1183,7 @@ function AssistantBlock({
   content,
   timestamp,
   thinking,
+  showThinking,
   toolCalls,
   toolResults,
   images,
@@ -1148,10 +1199,16 @@ function AssistantBlock({
   onToggleCollapsed,
   isSequenceExpanded,
   showCollapseButton,
+  runMessageIds,
+  shareSelectionMode,
+  isSelectedForShare,
+  onToggleShareSelection,
+  onStartShareSelection,
 }: {
   content?: string;
   timestamp: number;
   thinking?: string;
+  showThinking?: boolean;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   images?: ImageData[];
@@ -1167,6 +1224,11 @@ function AssistantBlock({
   onToggleCollapsed?: () => void;
   isSequenceExpanded?: boolean;
   showCollapseButton?: boolean;
+  runMessageIds?: string[];
+  shareSelectionMode?: boolean;
+  isSelectedForShare?: boolean;
+  onToggleShareSelection?: () => void;
+  onStartShareSelection?: (messageId: string) => void;
 }) {
   const COLLAPSED_LINES = 2;
 
@@ -1184,20 +1246,6 @@ function AssistantBlock({
     messageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
-  const generateShareLink = useMutation(api.messages.generateMessageShareLink);
-
-  const handleShare = async () => {
-    try {
-      const token = await generateShareLink({
-        message_id: messageId as Id<"messages">,
-      });
-      const url = `${window.location.origin}/share/message/${token}`;
-      await copyToClipboard(url);
-      toast.success("Share link copied!");
-    } catch (err) {
-      toast.error("Failed to create share link");
-    }
-  };
 
   const toolResultMap = useMemo(() => {
     const map: Record<string, ToolResult> = {};
@@ -1263,19 +1311,26 @@ function AssistantBlock({
   }
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""}`}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
       {hasContent && (
-        <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5">
-          <button
-            onClick={handleShare}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-            title="Share message"
-            aria-label="Share message"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-            </svg>
-          </button>
+        <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+          {onStartShareSelection && (
+            <MessageSharePopover
+              messageId={messageId}
+              onStartShareSelection={onStartShareSelection}
+              trigger={
+                <span
+                  className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary cursor-pointer"
+                  title="Share message"
+                  aria-label="Share message"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                  </svg>
+                </span>
+              }
+            />
+          )}
           <button
             onClick={handleCopyLink}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
@@ -1339,7 +1394,7 @@ function AssistantBlock({
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
         {!collapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
 
-        {!collapsed && hasThinking && <ThinkingBlock content={thinking!} />}
+        {!collapsed && showThinking && hasThinking && <ThinkingBlock content={thinking!} />}
 
         {!collapsed && hasToolCalls && toolCalls?.map((tc) => (
           tc.name === "Task" ? (
@@ -1719,6 +1774,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
   const [diffExpanded, setDiffExpanded] = useState(false);
   const [commentMessageId, setCommentMessageId] = useState<Id<"messages"> | null>(null);
@@ -1730,8 +1786,65 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const prevTimelineLengthRef = useRef<number>(0);
   const isNearBottomRef = useRef(true);
   const hasScrolledToTarget = useRef(false);
+  const [shareSelectionMode, setShareSelectionMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
+
+  const generateShareLink = useMutation(api.messages.generateMessageShareLink);
 
   const messages = conversation?.messages || [];
+
+  const handleStartShareSelection = useCallback((messageId: string) => {
+    setShareSelectionMode(true);
+    setSelectedMessageIds(new Set([messageId]));
+  }, []);
+
+  const handleToggleMessageSelection = useCallback((messageId: string) => {
+    setSelectedMessageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleCancelShareSelection = useCallback(() => {
+    setShareSelectionMode(false);
+    setSelectedMessageIds(new Set());
+  }, []);
+
+  const handleConfirmShare = useCallback(async () => {
+    if (selectedMessageIds.size === 0) return;
+
+    setIsCreatingShareLink(true);
+    try {
+      const sortedIds = Array.from(selectedMessageIds).sort((a, b) => {
+        const msgA = messages.find(m => m._id === a);
+        const msgB = messages.find(m => m._id === b);
+        return (msgA?.timestamp || 0) - (msgB?.timestamp || 0);
+      });
+
+      const token = await generateShareLink({
+        message_id: sortedIds[0] as Id<"messages">,
+        context_before: 0,
+        context_after: 0,
+        message_ids: sortedIds as Id<"messages">[],
+      });
+
+      const url = `${window.location.origin}/share/message/${token}`;
+      await copyToClipboard(url);
+      toast.success("Share link copied!");
+      setShareSelectionMode(false);
+      setSelectedMessageIds(new Set());
+    } catch (err) {
+      toast.error("Failed to create share link");
+    } finally {
+      setIsCreatingShareLink(false);
+    }
+  }, [selectedMessageIds, messages, generateShareLink]);
 
   const toolCallToChangeIndexMap = useMemo(() => {
     const fileChanges = extractFileChanges(messages as any);
@@ -2008,7 +2121,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
       if (msg.role === "assistant") {
         const toolCount = msg.tool_calls?.length || 0;
-        const hasThinking = msg.thinking && msg.thinking.trim().length > 0;
+        const hasThinking = showThinking && msg.thinking && msg.thinking.trim().length > 0;
         const contentLines = (msg.content || "").split("\n").length;
         return Math.max(120, toolCount * 150 + (hasThinking ? 100 : 0) + contentLines * 20 + 60);
       }
@@ -2284,7 +2397,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <CompactionSummaryBlock key={msg._id} content={msg.content} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} />;
+        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} />;
       }
       return null;
     }
@@ -2328,6 +2441,31 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       const isSequenceExpanded = expandedSequences.has(sequenceStartId);
 
+      // Compute all message IDs in the current run (for sharing)
+      const runMessageIds: string[] = [];
+      for (let i = index; i >= 0; i--) {
+        const checkItem = timeline[i];
+        if (checkItem.type !== 'message') continue;
+        const checkMsg = checkItem.data as Message;
+        if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
+          break;
+        }
+        if (checkMsg.role === "assistant") {
+          runMessageIds.unshift(checkMsg._id);
+        }
+      }
+      for (let i = index + 1; i < timeline.length; i++) {
+        const checkItem = timeline[i];
+        if (checkItem.type !== 'message') continue;
+        const checkMsg = checkItem.data as Message;
+        if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
+          break;
+        }
+        if (checkMsg.role === "assistant") {
+          runMessageIds.push(checkMsg._id);
+        }
+      }
+
       // In collapsed mode, only render messages if sequence is expanded OR this is the first with text
       if (collapsed && !isSequenceExpanded) {
         const hasTextContent = msg.content && msg.content.trim().length > 0;
@@ -2366,6 +2504,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           content={msg.content}
           timestamp={msg.timestamp}
           thinking={msg.thinking}
+          showThinking={showThinking}
           toolCalls={msg.tool_calls}
           toolResults={relevantToolResults}
           images={msg.images}
@@ -2379,6 +2518,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           toolCallToChangeIndexMap={toolCallToChangeIndexMap}
           isHighlighted={highlightedMessageId === msg._id}
           isSequenceExpanded={isSequenceExpanded}
+          runMessageIds={runMessageIds}
           onToggleCollapsed={collapsed ? () => {
             setExpandedSequences(prev => {
               const next = new Set(prev);
@@ -2391,6 +2531,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             });
           } : undefined}
           showCollapseButton={collapsed && isSequenceExpanded && isFirstInSequence}
+          shareSelectionMode={shareSelectionMode}
+          isSelectedForShare={selectedMessageIds.has(msg._id)}
+          onToggleShareSelection={() => handleToggleMessageSelection(msg._id)}
+          onStartShareSelection={handleStartShareSelection}
         />
       );
     }
@@ -2535,6 +2679,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <DropdownMenuItem onClick={() => setCollapsed((c) => !c)}>
                       {collapsed ? "Expand messages" : "Collapse messages"}
                       <span className="ml-auto text-[10px] text-sol-text-dim">Cmd+Shift+C</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>
+                      {showThinking ? "Hide thinking" : "Show thinking"}
                     </DropdownMenuItem>
                     {conversation.git_branch && (
                       <DropdownMenuItem onClick={() => setDiffExpanded(!diffExpanded)}>
@@ -2763,6 +2910,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           messageId={commentMessageId}
           onClose={() => setCommentMessageId(null)}
         />
+      )}
+
+      {shareSelectionMode && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-sol-bg-alt border border-sol-border rounded-lg shadow-xl px-4 py-3">
+          <span className="text-sm text-sol-text-secondary">
+            {selectedMessageIds.size} message{selectedMessageIds.size !== 1 ? "s" : ""} selected
+          </span>
+          <button
+            onClick={handleCancelShareSelection}
+            className="px-3 py-1.5 text-sm text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirmShare}
+            disabled={selectedMessageIds.size === 0 || isCreatingShareLink}
+            className="px-4 py-1.5 text-sm bg-sol-cyan hover:bg-sol-cyan/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isCreatingShareLink ? "Creating..." : "Copy share link"}
+          </button>
+        </div>
       )}
     </main>
   );
