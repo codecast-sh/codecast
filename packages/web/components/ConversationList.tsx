@@ -275,6 +275,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   const userTeams = useQuery(api.teams.getUserTeams);
   const activeTeam = activeTeamId ? userTeams?.find(t => t?._id === activeTeamId) : null;
   const hasTeammates = teamMembers && teamMembers.length > 1;
+  const hasTeam = !!effectiveTeamId;
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -600,51 +601,77 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
               const isFocused = convIndex === focusedIndex;
 
               if (conv.visibility_mode === "summary" || conv.visibility_mode === "minimal") {
+                const summaryContent = (
+                  <div className="flex items-center gap-3">
+                    {conv.author_avatar ? (
+                      <img
+                        src={conv.author_avatar}
+                        alt={conv.author_name}
+                        className="w-6 h-6 rounded-full shrink-0"
+                      />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-sol-base02 flex items-center justify-center shrink-0">
+                        <span className="text-xs text-sol-text-muted">{conv.author_name?.charAt(0).toUpperCase()}</span>
+                      </div>
+                    )}
+                    <span className="font-medium text-sol-text text-sm">{conv.author_name}</span>
+                    {conv.is_active && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    )}
+                    <span className="text-sol-text-muted text-sm flex-1">{conv.activity_summary}</span>
+                    <span className="text-sol-text-dim text-xs">{getRelativeTime(conv.updated_at)}</span>
+                  </div>
+                );
+
+                // Own conversations are clickable even in summary mode
+                if (conv.is_own) {
+                  return (
+                    <Link
+                      key={conv._id}
+                      href={`/conversation/${conv._id}`}
+                      className="group block relative"
+                      role="listitem"
+                    >
+                      <div className="relative bg-blue-50/50 dark:bg-blue-950/20 border-2 border-blue-300/50 dark:border-blue-500/30 rounded-lg p-3 hover:border-blue-400 transition-colors">
+                        {summaryContent}
+                      </div>
+                    </Link>
+                  );
+                }
+
                 return (
                   <div
                     key={conv._id}
                     className="relative bg-sol-bg-alt/30 border border-sol-border/30 rounded-lg p-3"
                     role="listitem"
                   >
-                    <div className="flex items-center gap-3">
-                      {conv.author_avatar ? (
-                        <img
-                          src={conv.author_avatar}
-                          alt={conv.author_name}
-                          className="w-6 h-6 rounded-full shrink-0"
-                        />
-                      ) : (
-                        <div className="w-6 h-6 rounded-full bg-sol-base02 flex items-center justify-center shrink-0">
-                          <span className="text-xs text-sol-text-muted">{conv.author_name?.charAt(0).toUpperCase()}</span>
-                        </div>
-                      )}
-                      <span className="font-medium text-sol-text text-sm">{conv.author_name}</span>
-                      {conv.is_active && (
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                      )}
-                      <span className="text-sol-text-muted text-sm">{conv.activity_summary}</span>
-                      <span className="text-sol-text-dim text-xs ml-auto">{getRelativeTime(conv.updated_at)}</span>
-                    </div>
+                    {summaryContent}
                   </div>
                 );
               }
 
+              const isOthersDetailedView = conv.visibility_mode === "detailed" && !conv.is_own;
+
               return (
                 <Link
                   key={conv._id}
-                  href={conv.visibility_mode === "detailed" ? "#" : `/conversation/${conv._id}`}
-                  className={`group block relative ${conv.visibility_mode === "detailed" ? "cursor-default" : ""}`}
+                  href={isOthersDetailedView ? "#" : `/conversation/${conv._id}`}
+                  className={`group block relative ${isOthersDetailedView ? "cursor-default" : ""}`}
                   role="listitem"
                   aria-label={createConversationAriaLabel(conv)}
                   aria-current={isFocused ? "true" : undefined}
-                  onClick={conv.visibility_mode === "detailed" ? (e) => e.preventDefault() : undefined}
+                  onClick={isOthersDetailedView ? (e) => e.preventDefault() : undefined}
                 >
-                  <div className={`relative bg-white dark:bg-sol-bg-alt/60 border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 transition-all duration-200 shadow-sm dark:shadow-none ${
-                    conv.visibility_mode === "detailed"
-                      ? "border-sol-border/30 opacity-80"
-                      : isFocused
-                        ? "ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
-                        : "border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
+                  <div className={`relative border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 transition-all duration-200 shadow-sm dark:shadow-none ${
+                    isOthersDetailedView
+                      ? "bg-white dark:bg-sol-bg-alt/60 border-sol-border/30 opacity-70"
+                      : filter === "team" && conv.is_own && !conv.is_private
+                        ? isFocused
+                          ? "bg-[#fcfffc] dark:bg-[#0d1f15] ring-2 ring-sol-yellow border-2 border-emerald-400/40 hover:border-emerald-400/60 hover:shadow-md"
+                          : "bg-[#fcfffc] dark:bg-[#0d1f15] border-2 border-emerald-400/35 hover:border-emerald-400/50 hover:shadow-md"
+                        : isFocused
+                          ? "bg-white dark:bg-sol-bg-alt/60 ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
+                          : "bg-white dark:bg-sol-bg-alt/60 border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
                   }`}>
                   <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4 overflow-hidden">
                     <div className="flex-1 min-w-0">
@@ -653,9 +680,9 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         <div className="flex items-center gap-2 min-w-0 flex-1">
                           <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4 shrink-0" />
                           <span className={`font-medium text-base transition-colors truncate ${
-                            conv.visibility_mode === "detailed"
+                            isOthersDetailedView
                               ? "text-sol-text-muted"
-                              : "text-sol-text group-hover:text-sol-yellow"
+                              : "text-sol-text"
                           }`}>
                             {cleanTitle(conv.title || "Untitled")}
                           </span>
@@ -666,46 +693,40 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             </span>
                           )}
                         </div>
-                        {conv.is_own && hasTeammates && (
+                        {filter === "team" && conv.is_own && hasTeam && (
                           <button
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
-                              const newIsPrivate = !conv.is_private;
-                              setPrivacy({ conversation_id: conv._id as Id<"conversations">, is_private: newIsPrivate })
-                                .then(() => {
-                                  const teamName = activeTeam?.name || "team";
-                                  if (newIsPrivate) {
-                                    toast.success("Session is now private", {
-                                      description: "Only you can see this session",
-                                    });
-                                  } else {
-                                    toast.success(`Shared with ${teamName}`, {
-                                      description: "Team members can now see this session",
-                                    });
-                                  }
-                                })
-                                .catch(() => {
-                                  toast.error("Failed to update sharing");
-                                });
+                              const newPrivate = !conv.is_private;
+                              setPrivacy({ conversation_id: conv._id as Id<"conversations">, is_private: newPrivate })
+                                .then(() => toast.success(newPrivate ? "Now private" : `Shared with ${activeTeam?.name || "team"}`))
+                                .catch(() => toast.error("Failed to update"));
                             }}
-                            className={`p-1 rounded transition-colors flex-shrink-0 ${
-                              !conv.is_private
-                                ? "text-emerald-400 hover:text-emerald-300"
-                                : "text-sol-text-dim/40 hover:text-sol-text-muted opacity-0 group-hover:opacity-100"
+                            className={`group/visibility relative flex items-center gap-1 px-1.5 py-0.5 rounded transition-all text-xs ${
+                              conv.is_private
+                                ? "text-sol-text-muted hover:text-sol-text hover:bg-sol-base02/50"
+                                : "text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 hover:bg-emerald-500/10"
                             }`}
-                            title={conv.is_private ? `Share with ${activeTeam?.name || "team"}` : "Make private"}
                           >
                             {conv.is_private ? (
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
-                              </svg>
+                              <>
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+                                </svg>
+                                <span>Summary</span>
+                              </>
                             ) : (
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                              </svg>
+                              <>
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+                                </svg>
+                                <span>Full</span>
+                              </>
                             )}
+                            <span className="absolute top-full left-1/2 -translate-x-1/2 mt-1 px-2 py-1 text-xs whitespace-nowrap bg-sol-bg-alt border border-sol-border rounded shadow-lg opacity-0 group-hover/visibility:opacity-100 transition-opacity pointer-events-none z-50">
+                              {conv.is_private ? "Click to share with team" : "Click to make private"}
+                            </span>
                           </button>
                         )}
                         <button
@@ -794,7 +815,18 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                                 {conv.author_name?.charAt(0).toUpperCase()}
                               </span>
                             )}
-                            {conv.author_name}
+                            {conv.is_own ? (
+                              <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300 font-semibold text-xs border border-blue-500/30">You</span>
+                            ) : conv.author_name}
+                          </span>
+                        )}
+                        {filter === "team" && !conv.is_own && conv.is_private === false && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30 text-[10px] font-medium">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                            Shared
                           </span>
                         )}
                         {conv.duration_ms > 60000 && (
