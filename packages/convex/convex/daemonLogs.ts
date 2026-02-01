@@ -219,6 +219,11 @@ export const adminGetUsers = query({
           errorCount,
           warnCount,
           lastLog: Math.max(...userLogs.map((l) => l.timestamp)),
+          cli_version: user.cli_version,
+          cli_platform: user.cli_platform,
+          daemon_pid: user.daemon_pid,
+          autostart_enabled: user.autostart_enabled,
+          last_heartbeat: user.last_heartbeat,
         };
       })
     );

@@ -127,7 +127,18 @@ export async function checkForUpdates(force = false): Promise<string | null> {
   }
 }
 
+export function isDevMode(): boolean {
+  const exe = process.execPath.toLowerCase();
+  return exe.includes("bun") || !exe.includes("codecast");
+}
+
 export async function performUpdate(): Promise<boolean> {
+  if (isDevMode()) {
+    console.error("Cannot self-update in dev mode (running via bun)");
+    console.error("Install the binary version: curl -fsSL codecast.sh/install | sh");
+    return false;
+  }
+
   const platformKey = getPlatformKey();
 
   try {

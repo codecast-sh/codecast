@@ -213,17 +213,20 @@ async function sendHeartbeat(): Promise<void> {
     });
 
     if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      log(`Heartbeat failed: ${response.status} ${text}`);
       return;
     }
 
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
+      log(`Received ${data.commands.length} remote command(s)`);
       for (const cmd of data.commands) {
         await executeRemoteCommand(cmd.id, cmd.command, config);
       }
     }
-  } catch {
-    // Silent fail - heartbeat is not critical
+  } catch (err) {
+    log(`Heartbeat error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -1903,9 +1906,8 @@ async function main(): Promise<void> {
 
   process.on("uncaughtException", async (err) => {
     logError("Uncaught exception", err);
-    // Flush logs immediately before crash
     if (syncServiceRef) {
-      await flushRemoteLogs(syncServiceRef).catch(() => {});
+      await flushRemoteLogs().catch(() => {});
     }
     process.exit(1);
   });
@@ -1913,9 +1915,8 @@ async function main(): Promise<void> {
   process.on("unhandledRejection", async (reason) => {
     const err = reason instanceof Error ? reason : new Error(String(reason));
     logError("Unhandled rejection", err);
-    // Flush logs immediately before crash
     if (syncServiceRef) {
-      await flushRemoteLogs(syncServiceRef).catch(() => {});
+      await flushRemoteLogs().catch(() => {});
     }
   });
 

@@ -259,6 +259,13 @@ function AdminDaemonLogs() {
                       {formatRelativeTime(user.lastLog)}
                       {Date.now() - user.lastLog > 10 * 60 * 1000 && " ⚠️"}
                     </div>
+                    {user.cli_version && (
+                      <div className="text-xs text-gray-600 mt-0.5">
+                        v{user.cli_version} {user.cli_platform}
+                        {user.autostart_enabled === true && " (autostart)"}
+                        {user.autostart_enabled === false && " (manual)"}
+                      </div>
+                    )}
                   </button>
                 ) : null
               )}
