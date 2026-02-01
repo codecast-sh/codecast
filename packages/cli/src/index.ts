@@ -4938,11 +4938,14 @@ if (process.argv.length <= 2) {
 }
 
 // Log all CLI commands
-program.hook('preAction', (thisCommand) => {
-  const cmdName = thisCommand.name();
-  const args = thisCommand.args?.join(' ') || '';
+program.hook('preAction', (thisCommand, actionCommand) => {
+  const cmdName = actionCommand.name();
+  const args = actionCommand.args?.join(' ') || '';
+  if (process.env.DEBUG_CLI) {
+    console.error(`[DEBUG] preAction hook: cmd=${cmdName} args=${args}`);
+  }
   // Skip logging for daemon-internal commands
-  if (!['start', 'stop', 'daemon'].includes(cmdName)) {
+  if (!['start', 'stop', 'daemon', 'codecast'].includes(cmdName)) {
     logCliCommand(cmdName, args);
   }
 });

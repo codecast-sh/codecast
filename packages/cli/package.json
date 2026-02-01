@@ -1,6 +1,6 @@
 {
   "name": "@codecast/cli",
-  "version": "1.0.28",
+  "version": "1.0.29",
   "description": "Sync coding agent conversations to a shared Convex database",
   "type": "module",
   "bin": {

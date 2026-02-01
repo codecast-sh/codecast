@@ -25,6 +25,9 @@ export const insertBatch = mutation({
             session_id: v.optional(v.string()),
             error_code: v.optional(v.string()),
             stack: v.optional(v.string()),
+            command: v.optional(v.string()),
+            args: v.optional(v.string()),
+            error: v.optional(v.string()),
           })
         ),
         daemon_version: v.optional(v.string()),
