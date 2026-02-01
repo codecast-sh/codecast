@@ -328,6 +328,27 @@ function writeConfig(config: Config): void {
   fs.chmodSync(CONFIG_FILE, 0o600);
 }
 
+function logCliCommand(command: string, args?: string): void {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.convex_url) return;
+
+  const siteUrl = config.convex_url.replace(".cloud", ".site");
+  const message = args ? `[CLI] ${command}: ${args}` : `[CLI] ${command}`;
+
+  fetch(`${siteUrl}/cli/log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_token: config.auth_token,
+      level: "info",
+      message,
+      metadata: { command, args },
+      cli_version: getVersion(),
+      platform: process.platform,
+    }),
+  }).catch(() => {});
+}
+
 function logCliError(command: string, error: string): void {
   const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
   const timestamp = new Date().toISOString();
@@ -347,6 +368,7 @@ function logCliError(command: string, error: string): void {
         api_token: config.auth_token,
         level: "error",
         message: `[CLI] ${command}: ${error}`,
+        metadata: { command, error },
         cli_version: getVersion(),
         platform: process.platform,
       }),
@@ -4914,5 +4936,15 @@ if (process.argv.length <= 2) {
   program.outputHelp();
   process.exit(0);
 }
+
+// Log all CLI commands
+program.hook('preAction', (thisCommand) => {
+  const cmdName = thisCommand.name();
+  const args = thisCommand.args?.join(' ') || '';
+  // Skip logging for daemon-internal commands
+  if (!['start', 'stop', 'daemon'].includes(cmdName)) {
+    logCliCommand(cmdName, args);
+  }
+});
 
 program.parse();

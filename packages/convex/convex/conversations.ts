@@ -847,6 +847,7 @@ export const listConversations = query({
     );
     const allTeamUsers = [...teamUsers, ...additionalUsers.filter((u): u is NonNullable<typeof u> => u !== null)];
     const teamUserMap = new Map(allTeamUsers.map(u => [u._id.toString(), u]));
+    const membershipVisibilityMap = new Map(teamMemberships.map(m => [m.user_id.toString(), m.visibility || "activity"]));
 
     // Fetch directory_team_mappings for all team members to check project visibility
     const allMappings = args.filter === "team" && effectiveTeamId
@@ -888,7 +889,7 @@ export const listConversations = query({
       if (!targetMember) {
         return { conversations: [], nextCursor: null };
       }
-      const visibility = targetMember.activity_visibility || "detailed";
+      const visibility = membershipVisibilityMap.get(args.memberId.toString()) || "activity";
       if (visibility === "hidden") {
         return { conversations: [], nextCursor: null };
       }
@@ -928,8 +929,8 @@ export const listConversations = query({
         const owner = teamUserMap.get(c.user_id.toString());
         if (!owner) return false;
 
-        // Check owner's visibility setting
-        const visibility = owner.activity_visibility || "detailed";
+        // Check owner's team membership visibility setting
+        const visibility = membershipVisibilityMap.get(c.user_id.toString()) || "activity";
         if (visibility === "hidden") return false;
 
         // CRITICAL: Only show if project is actually mapped to this team
@@ -960,17 +961,33 @@ export const listConversations = query({
         type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
         const isOwn = c.user_id.toString() === userId.toString();
 
-        // Team view: show exactly what team members see
-        // - Shared (is_private=false): team sees full content
-        // - Private (is_private=true): team sees reduced based on owner's activity_visibility
+        // Team view: show what team members see based on owner's visibility setting
+        // The visibility setting controls how much detail teammates see, regardless of is_private
+        // is_private only controls WHETHER the session appears in team feed (handled by filter)
         function getTeamVisibility(): VisibilityMode {
           if (args.filter !== "team") return "full";
 
-          const owner = isOwn ? user : teamUserMap.get(c.user_id.toString());
-          const ownerVisibility = (owner?.activity_visibility as VisibilityMode) || "detailed";
+          // Own sessions always show full content to the owner
+          if (isOwn) return "full";
 
-          // Shared = full visibility, Private = owner's activity_visibility setting
-          return c.is_private === false ? "full" : ownerVisibility;
+          // Get the owner's visibility setting for this team from their membership
+          const ownerVisibility = membershipVisibilityMap.get(c.user_id.toString()) || "activity";
+
+          // Map team visibility levels to conversation visibility modes
+          // "hidden" -> don't show at all (handled earlier in filter)
+          // "activity" -> minimal (just activity line)
+          // "summary" -> summary (title + bullet summary)
+          // "full" -> full (complete conversation visible)
+          const visibilityMapping: Record<string, VisibilityMode> = {
+            "hidden": "minimal",
+            "activity": "minimal",
+            "summary": "summary",
+            "full": "full",
+            "detailed": "detailed", // legacy support
+            "minimal": "minimal", // legacy support
+          };
+
+          return visibilityMapping[ownerVisibility] || "detailed";
         }
 
         const visibilityMode = getTeamVisibility();
