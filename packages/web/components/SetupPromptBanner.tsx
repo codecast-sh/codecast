@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { useQuery } from "convex/react";
-import { useSearchParams } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { X, Terminal, ArrowRight } from "lucide-react";
@@ -26,8 +25,6 @@ function dismiss(): void {
 export function SetupPromptBanner() {
   const [dismissed, setDismissed] = useState(true);
   const [mounted, setMounted] = useState(false);
-  const searchParams = useSearchParams();
-  const forceShow = searchParams.get("showSetupBanner") === "true";
 
   const user = useQuery(api.users.getCurrentUser);
   const conversationsResult = useQuery(
@@ -45,14 +42,13 @@ export function SetupPromptBanner() {
     setDismissed(true);
   };
 
-  if (!mounted) return null;
-  if (!forceShow && dismissed) return null;
+  if (!mounted || dismissed) return null;
   if (user === undefined || conversationsResult === undefined) return null;
 
   const hasCliInstalled = !!user?.cli_version;
   const hasSessions = conversationsResult?.conversations && conversationsResult.conversations.length > 0;
 
-  if (!forceShow && hasCliInstalled && hasSessions) return null;
+  if (hasCliInstalled && hasSessions) return null;
 
   const message = !hasCliInstalled
     ? "Install the CLI to start syncing your Claude Code sessions"
