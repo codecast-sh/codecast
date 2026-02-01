@@ -15,6 +15,7 @@ import { Button } from "./ui/button";
 import { Logo } from "./Logo";
 import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose } from "lucide-react";
 import { useDiffViewerStore } from "../store/diffViewerStore";
+import { SetupPromptBanner } from "./SetupPromptBanner";
 
 const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
@@ -185,6 +186,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
           </div>
         </div>
       </header>
+
+      <SetupPromptBanner />
 
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">

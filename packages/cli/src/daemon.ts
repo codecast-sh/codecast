@@ -183,7 +183,7 @@ function logHealthSummary(): void {
 function isAutostartEnabled(): boolean {
   const home = process.env.HOME || "";
   if (platform === "darwin") {
-    const plistPath = path.join(home, "Library", "LaunchAgents", "com.codecast.daemon.plist");
+    const plistPath = path.join(home, "Library", "LaunchAgents", "sh.codecast.daemon.plist");
     return fs.existsSync(plistPath);
   } else if (platform === "linux") {
     const servicePath = path.join(home, ".config", "systemd", "user", "codecast.service");
