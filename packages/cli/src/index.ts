@@ -21,6 +21,12 @@ import { checkbox, confirm, select } from "@inquirer/prompts";
 
 const program = new Command();
 
+// Get the real cwd - CODECAST_CWD is set by the dev wrapper script
+// to preserve the original directory when running via bun run
+function getRealCwd(): string {
+  return process.env.CODECAST_CWD || process.cwd();
+}
+
 /**
  * Finds the session ID for the current Claude Code process by:
  * 1. Walking up process tree to find parent Claude process
@@ -457,9 +463,14 @@ Run this command to get codecast links for the current session:
 codecast links
 \`\`\`
 
-Display the Dashboard and Share URLs from the output.
+The output shows:
+- **Session**: Title or identifier of the found session
+- **Dashboard**: URL to view the session on codecast.sh
+- **Share**: URL to share with others
 
-Note: If the session hasn't been synced yet, this command will automatically sync it first before returning the links.
+IMPORTANT: Verify the "Session:" line matches this conversation's topic. If it shows a different/old session, tell the user to try \`codecast links -s <session-id>\` with the correct session ID from \`ls ~/.claude/projects/*/\`.
+
+Note: If the session hasn't been synced yet, this command will automatically sync it first.
 `;
 
 function installSlashCommand(): void {
@@ -1117,17 +1128,43 @@ Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n
 ${MEMORY_SNIPPET_END}
 `;
 
-function installMemorySnippet(update = false): { installed: boolean; updated: boolean } {
-  const claudeMdPath = path.join(os.homedir(), ".claude", "CLAUDE.md");
-  const claudeDir = path.join(os.homedir(), ".claude");
+interface SnippetTarget {
+  filePath: string;
+  dirPath: string;
+  label: string;
+}
 
-  if (!fs.existsSync(claudeDir)) {
-    fs.mkdirSync(claudeDir, { recursive: true });
+function getSnippetTargets(): SnippetTarget[] {
+  const home = os.homedir();
+  const targets: SnippetTarget[] = [
+    { filePath: path.join(home, ".claude", "CLAUDE.md"), dirPath: path.join(home, ".claude"), label: "~/.claude/CLAUDE.md" },
+  ];
+
+  const codexDir = path.join(home, ".codex");
+  if (fs.existsSync(codexDir)) {
+    targets.push({ filePath: path.join(codexDir, "AGENTS.md"), dirPath: codexDir, label: "~/.codex/AGENTS.md" });
+  }
+
+  const cursorDir = path.join(home, ".cursor");
+  if (fs.existsSync(cursorDir)) {
+    const rulesDir = path.join(cursorDir, "rules");
+    if (!fs.existsSync(rulesDir)) {
+      fs.mkdirSync(rulesDir, { recursive: true });
+    }
+    targets.push({ filePath: path.join(rulesDir, "codecast.mdc"), dirPath: rulesDir, label: "~/.cursor/rules/codecast.mdc" });
+  }
+
+  return targets;
+}
+
+function installSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
   }
 
   let existing = "";
-  if (fs.existsSync(claudeMdPath)) {
-    existing = fs.readFileSync(claudeMdPath, "utf-8");
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, "utf-8");
   }
 
   const hasMemory = existing.includes("## Memory") && existing.includes("codecast search");
@@ -1153,12 +1190,26 @@ function installMemorySnippet(update = false): { installed: boolean; updated: bo
     const before = existing.slice(0, memoryStart);
     const after = existing.slice(memoryEnd);
     existing = before + after;
-    fs.writeFileSync(claudeMdPath, existing.trimEnd() + "\n" + MEMORY_SNIPPET, { mode: 0o600 });
+    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + MEMORY_SNIPPET, { mode: 0o600 });
     return { installed: true, updated: true };
   }
 
-  fs.writeFileSync(claudeMdPath, existing + MEMORY_SNIPPET, { mode: 0o600 });
+  fs.writeFileSync(filePath, existing + MEMORY_SNIPPET, { mode: 0o600 });
   return { installed: true, updated: false };
+}
+
+function installMemorySnippet(update = false): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    const result = installSnippetToFile(target.filePath, target.dirPath, update);
+    if (result.installed) anyInstalled = true;
+    if (result.updated) anyUpdated = true;
+  }
+
+  return { installed: anyInstalled, updated: anyUpdated };
 }
 
 async function promptMemoryEnablement(): Promise<void> {
@@ -1176,7 +1227,8 @@ async function promptMemoryEnablement(): Promise<void> {
     config.memory_version = getMemoryVersion();
     writeConfig(config);
     if (result.updated) {
-      console.log("Memory snippet updated to latest version.");
+      const targets = getSnippetTargets();
+      console.log(`Memory snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
     return;
   }
@@ -1188,6 +1240,7 @@ async function promptMemoryEnablement(): Promise<void> {
       config.memory_enabled = true;
       config.memory_version = getMemoryVersion();
       writeConfig(config);
+      installMemorySnippet(false);
       return;
     }
   }
@@ -1200,8 +1253,8 @@ async function promptMemoryEnablement(): Promise<void> {
 
   const answer = await new Promise<string>((resolve) => {
     console.log("\n--- Agent Memory ---");
-    console.log("Would you like to enable memory for Claude Code?");
-    console.log("This lets your agent search past conversations for context.\n");
+    console.log("Would you like to enable memory for your coding agents?");
+    console.log("This lets your agents search past conversations for context.\n");
     rl.question("Enable agent memory? [Y/n] ", (ans) => {
       rl.close();
       resolve(ans.trim().toLowerCase());
@@ -1211,8 +1264,10 @@ async function promptMemoryEnablement(): Promise<void> {
   if (answer === "" || answer === "y" || answer === "yes") {
     const result = installMemorySnippet(false);
     if (result.installed) {
-      console.log(`\nMemory enabled. Added to ~/.claude/CLAUDE.md`);
-      console.log("Your agent can now use: codecast search \"query\"");
+      const targets = getSnippetTargets();
+      console.log(`\nMemory enabled. Added to:`);
+      for (const t of targets) { console.log(`  ${t.label}`); }
+      console.log("Your agents can now use: codecast search \"query\"");
     }
     config.memory_enabled = true;
     config.memory_version = getMemoryVersion();
@@ -2450,7 +2505,7 @@ program
     const limit = parseInt(options.limit);
     const page = parseInt(options.page);
     const offset = (page - 1) * limit;
-    const projectPath = options.global ? undefined : process.cwd();
+    const projectPath = options.global ? undefined : getRealCwd();
     const userOnly = options.userOnly ?? false;
 
     let startTime: number | undefined;
@@ -2549,7 +2604,7 @@ program
     const limit = parseInt(options.limit);
     const page = parseInt(options.page);
     const offset = (page - 1) * limit;
-    const projectPath = options.global ? undefined : process.cwd();
+    const projectPath = options.global ? undefined : getRealCwd();
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     let startTime: number | undefined;
@@ -2631,7 +2686,7 @@ program
 
     const query = queryWords.join(" ");
     const limit = parseInt(options.limit);
-    const projectPath = options.global ? undefined : process.cwd();
+    const projectPath = options.global ? undefined : getRealCwd();
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
@@ -2675,10 +2730,17 @@ program
         return firstUser?.content;
       };
 
+      const extractPreviewText = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
+        if (!preview || preview.length === 0) return undefined;
+        const firstNonEmpty = preview.find((m) => m.content && m.content.trim().length > 0);
+        return firstNonEmpty?.content;
+      };
+
       const queryWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length > 1);
 
       const rawConversations = (result.conversations || []).map((conv) => ({
         ...conv,
+        preview: extractPreviewText(conv.preview),
         goal: extractGoalFromPreview(conv.preview),
       }));
 
@@ -3329,9 +3391,61 @@ program
       if (activeSessions.length === 1) {
         sessionId = path.basename(activeSessions[0].name, ".jsonl");
       } else if (activeSessions.length > 1) {
-        // Multiple active sessions - pick most recent but warn
-        sessionId = path.basename(activeSessions[0].name, ".jsonl");
-        console.error(`Note: ${activeSessions.length} active sessions found. Using most recent. Use -s <id> to specify.`);
+        // Multiple active sessions - try self-validation: find session with most recent codecast command
+        interface SessionWithCodecast {
+          session: typeof activeSessions[0];
+          timestamp: number;
+        }
+        const candidatesWithCodecast: SessionWithCodecast[] = [];
+        const RECENT_THRESHOLD = 30000; // 30 seconds
+
+        for (const session of activeSessions) {
+          try {
+            const content = fs.readFileSync(session.path, "utf-8");
+            const lines = content.split("\n").slice(-100); // check last 100 lines
+            for (let i = lines.length - 1; i >= 0; i--) {
+              const line = lines[i];
+              // Look for codecast links command (production or dev)
+              const isCodecastCommand = (line.includes("codecast links") || line.includes("index.ts links")) && line.includes("Bash");
+              if (isCodecastCommand) {
+                try {
+                  const entry = JSON.parse(line);
+                  // Timestamp can be ISO string or number
+                  let ts = 0;
+                  if (typeof entry.timestamp === "string") {
+                    ts = new Date(entry.timestamp).getTime();
+                  } else if (typeof entry.timestamp === "number") {
+                    ts = entry.timestamp;
+                  }
+                  if (ts > 0 && Date.now() - ts < RECENT_THRESHOLD) {
+                    candidatesWithCodecast.push({ session, timestamp: ts });
+                  }
+                } catch {
+                  // use mtime as fallback timestamp
+                  if (Date.now() - session.mtime < RECENT_THRESHOLD) {
+                    candidatesWithCodecast.push({ session, timestamp: session.mtime });
+                  }
+                }
+                break;
+              }
+            }
+          } catch {
+            // ignore read errors
+          }
+        }
+
+        if (candidatesWithCodecast.length > 0) {
+          // Pick the one with the most recent codecast command
+          candidatesWithCodecast.sort((a, b) => b.timestamp - a.timestamp);
+          sessionId = path.basename(candidatesWithCodecast[0].session.name, ".jsonl");
+          if (process.env.DEBUG) {
+            console.error(`[DEBUG] Self-validated session: ${sessionId.slice(0, 8)} (${candidatesWithCodecast.length} candidates)`);
+          }
+        } else {
+          // Fall back to most recent mtime
+          sessionId = path.basename(activeSessions[0].name, ".jsonl");
+          console.error(`Note: ${activeSessions.length} active sessions found. Using most recent. Use -s <id> to specify.`);
+        }
       } else {
         // No active sessions - use most recent overall
         sessionId = path.basename(files[0].name, ".jsonl");
@@ -3340,7 +3454,7 @@ program
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    const getLinks = async (): Promise<{ dashboard_url: string; share_url: string } | null> => {
+    const getLinks = async (): Promise<{ dashboard_url: string; share_url: string; title?: string; slug?: string; started_at?: number } | null> => {
       const response = await fetch(`${siteUrl}/cli/session-links`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3376,8 +3490,9 @@ program
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
       } else {
-        console.log(`\nDashboard: ${result.dashboard_url}`);
-        console.log(`Share: ${result.share_url}\n`);
+        const context = result.title || result.slug || sessionId.slice(0, 8);
+        console.log(`\nSession: ${context}`);
+        console.log(`Share Link: ${result.dashboard_url}`);
       }
     } catch (error) {
       console.error("Failed to get links:", error instanceof Error ? error.message : error);
@@ -3444,13 +3559,15 @@ program
 
       for (const conv of feedResult.conversations) {
         const result = await fetchAllMessages(siteUrl, config.auth_token, conv.id, 200);
-        if (result && result.messages) {
-          allSessions.push({
-            id: conv.id,
-            title: conv.title,
-            messages: result.messages,
-          });
+        if ("error" in result) {
+          console.error(`Error: ${result.error}`);
+          continue;
         }
+        allSessions.push({
+          id: conv.id,
+          title: conv.title,
+          messages: result.messages,
+        });
       }
 
       const { formatDiffResults } = await import("./formatter.js");
@@ -3679,10 +3796,12 @@ program
     config.memory_version = getMemoryVersion();
     writeConfig(config);
 
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
     if (result.updated) {
-      console.log("Memory snippet updated in ~/.claude/CLAUDE.md");
+      console.log(`Memory snippet updated in ${targetList}`);
     } else if (result.installed) {
-      console.log("Memory snippet installed in ~/.claude/CLAUDE.md");
+      console.log(`Memory snippet installed in ${targetList}`);
     } else {
       console.log("Memory snippet is up to date.");
     }
@@ -4474,7 +4593,7 @@ Question: ${query}`,
     const searchQuery = searchTerms.slice(0, 8).join(" ");
     const baseQuery = baseSearchTerms.slice(0, 8).join(" ");
 
-    const projectPath = (options.global || suggestedGlobal) ? undefined : process.cwd();
+    const projectPath = (options.global || suggestedGlobal) ? undefined : getRealCwd();
 
     const startHint = options.start ?? suggestedStart;
     if (startHint) {
@@ -4690,7 +4809,7 @@ program
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
-    const projectPath = options.global ? undefined : process.cwd();
+    const projectPath = options.global ? undefined : getRealCwd();
     const limit = parseInt(options.limit);
 
     let searchQuery = query;
