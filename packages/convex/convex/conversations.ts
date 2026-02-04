@@ -847,7 +847,7 @@ export const listConversations = query({
     );
     const allTeamUsers = [...teamUsers, ...additionalUsers.filter((u): u is NonNullable<typeof u> => u !== null)];
     const teamUserMap = new Map(allTeamUsers.map(u => [u._id.toString(), u]));
-    const membershipVisibilityMap = new Map(teamMemberships.map(m => [m.user_id.toString(), m.visibility || "activity"]));
+    const membershipVisibilityMap = new Map(teamMemberships.map(m => [m.user_id.toString(), m.visibility || "summary"]));
 
     // Fetch directory_team_mappings for all team members to check project visibility
     const allMappings = args.filter === "team" && effectiveTeamId
@@ -861,8 +861,22 @@ export const listConversations = query({
         ).then(results => results.flat())
       : [];
 
-    // Helper to check if a project path is mapped to this team for a user
-    const isProjectMappedToTeam = (userId: string, projectPath: string | undefined): boolean => {
+    // Build a map of users who have explicit directory mappings
+    const userHasMappings = new Map<string, boolean>();
+    for (const m of allMappings) {
+      userHasMappings.set(m.user_id.toString(), true);
+    }
+
+    // Helper to check if a project should show in team feed
+    // - If user has no mappings: show all their conversations (permissive default)
+    // - If user has mappings: only show conversations from mapped paths
+    const isProjectVisibleToTeam = (userId: string, projectPath: string | undefined): boolean => {
+      const hasMappings = userHasMappings.get(userId);
+      if (!hasMappings) {
+        // No mappings configured - show all conversations from this user
+        return true;
+      }
+      // User has mappings - check if this project is mapped
       if (!projectPath) return false;
       return allMappings.some(
         m => m.user_id.toString() === userId &&
@@ -889,7 +903,7 @@ export const listConversations = query({
       if (!targetMember) {
         return { conversations: [], nextCursor: null };
       }
-      const visibility = membershipVisibilityMap.get(args.memberId.toString()) || "activity";
+      const visibility = membershipVisibilityMap.get(args.memberId.toString()) || "summary";
       if (visibility === "hidden") {
         return { conversations: [], nextCursor: null };
       }
@@ -903,12 +917,16 @@ export const listConversations = query({
         )
         .order("desc");
 
-      // Fetch extra to account for filtering, then filter by project mapping
+      // Fetch extra to account for filtering, then filter by team, privacy, and project visibility
       const fetched = await query.take((limit + 1) * 3);
       conversations = fetched.filter((c) => {
         if (!effectiveTeamId) return false;
+        // Only show conversations explicitly shared with team (is_private === false)
+        if (c.is_private !== false) return false;
+        // Conversation must belong to this team
+        if (c.team_id?.toString() !== effectiveTeamId.toString()) return false;
         const projectPath = c.git_root || c.project_path;
-        return isProjectMappedToTeam(c.user_id.toString(), projectPath);
+        return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
       }).slice(0, limit + 1);
     } else {
       const fetchLimit = cursorTimestamp ? 200 : (limit + 1) * 3;
@@ -920,6 +938,10 @@ export const listConversations = query({
       let filtered = allConversations.filter((c) => {
         if (!effectiveTeamId) return false;
 
+        // Only show conversations explicitly shared with team (is_private === false)
+        // Conversations with is_private: true, undefined, or null should not appear
+        if (c.is_private !== false) return false;
+
         // Conversation must have team_id matching the active team
         // This ensures conversations only show in their assigned team's feed
         const isForThisTeam = c.team_id?.toString() === effectiveTeamId.toString();
@@ -930,14 +952,14 @@ export const listConversations = query({
         if (!owner) return false;
 
         // Check owner's team membership visibility setting
-        const visibility = membershipVisibilityMap.get(c.user_id.toString()) || "activity";
+        const visibility = membershipVisibilityMap.get(c.user_id.toString()) || "summary";
         if (visibility === "hidden") return false;
 
-        // CRITICAL: Only show if project is actually mapped to this team
-        // Conversations get team_id from user's default_team even for "Only Me" projects,
-        // so we must verify the project has a directory_team_mapping for this team
+        // Check project visibility
+        // If user has no directory mappings, show all their conversations (permissive)
+        // If user has mappings, only show conversations from mapped paths
         const projectPath = c.git_root || c.project_path;
-        if (!isProjectMappedToTeam(c.user_id.toString(), projectPath)) {
+        if (!isProjectVisibleToTeam(c.user_id.toString(), projectPath)) {
           return false;
         }
 
@@ -961,16 +983,18 @@ export const listConversations = query({
         type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
         const isOwn = c.user_id.toString() === userId.toString();
 
-        // Team view: show what team members see based on owner's visibility setting
-        // The visibility setting controls how much detail teammates see, regardless of is_private
-        // is_private only controls WHETHER the session appears in team feed (handled by filter)
+        // Team view: show content based on owner's visibility setting
+        // IMPORTANT: Same rendering for everyone (including owner) so team feed is consistent
+        // The `is_own` flag is returned separately for UI badges, but content rendering is uniform
         function getTeamVisibility(): VisibilityMode {
           if (args.filter !== "team") return "full";
 
-          // Own sessions always show full content to the owner
-          if (isOwn) return "full";
+          // Check for per-conversation visibility override first
+          if (c.team_visibility) {
+            return c.team_visibility as VisibilityMode;
+          }
 
-          // Get the owner's visibility setting for this team from their membership
+          // Fall back to owner's team membership visibility setting
           const ownerVisibility = membershipVisibilityMap.get(c.user_id.toString()) || "activity";
 
           // Map team visibility levels to conversation visibility modes
@@ -983,8 +1007,8 @@ export const listConversations = query({
             "activity": "minimal",
             "summary": "summary",
             "full": "full",
-            "detailed": "detailed", // legacy support
-            "minimal": "minimal", // legacy support
+            "detailed": "detailed",
+            "minimal": "minimal",
           };
 
           return visibilityMapping[ownerVisibility] || "detailed";
@@ -1184,6 +1208,7 @@ export const listConversations = query({
           fork_count: c.fork_count || 0,
           forked_from: c.forked_from || null,
           is_private: c.is_private,
+          team_visibility: c.team_visibility || null,
           auto_shared: c.auto_shared || false,
         };
       })
@@ -1596,6 +1621,32 @@ export const setPrivacy = mutation({
   },
 });
 
+export const setTeamVisibility = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    team_visibility: v.union(v.literal("summary"), v.literal("full"), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Unauthorized: must be logged in");
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    if (!isOwner) {
+      throw new Error("Unauthorized: can only change visibility of your own conversations");
+    }
+
+    await ctx.db.patch(args.conversation_id, {
+      team_visibility: args.team_visibility ?? undefined,
+      is_private: false,
+    });
+  },
+});
+
 export const setPrivacyBySessionId = mutation({
   args: {
     session_id: v.string(),
@@ -1862,6 +1913,9 @@ export const getSessionLinks = mutation({
     return {
       conversation_id: conversation._id,
       share_token: shareToken,
+      title: conversation.title,
+      slug: conversation.slug,
+      started_at: conversation.started_at,
     };
   },
 });
@@ -1991,17 +2045,15 @@ export const searchForCLI = query({
         }
       }
 
-      // Match on project_path using prefix matching or git_root for better local search
+      // Match sessions at or under the search path (not parent directories)
       if (projectPath) {
         const convPath = conv.project_path || "";
         const convGitRoot = conv.git_root || "";
-        // Match if: exact path, path starts with search path, search path starts with path, or git_root matches
+        // Match: exact path, or session is in a subdirectory of search path
         const isPathMatch = convPath === projectPath ||
           convPath.startsWith(projectPath + "/") ||
-          projectPath.startsWith(convPath + "/") ||
           convGitRoot === projectPath ||
-          convGitRoot.startsWith(projectPath + "/") ||
-          projectPath.startsWith(convGitRoot + "/");
+          convGitRoot.startsWith(projectPath + "/");
         if (!isPathMatch) {
           continue;
         }
@@ -2929,21 +2981,45 @@ export const feedForCLI = query({
     const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
 
     let matchingConvIds: Set<string> | null = null;
+    let queryMatchedConversations: typeof ownConversations = [];
     if (query && query.length >= 2) {
       const searchResults = await ctx.db
         .query("messages")
         .withSearchIndex("search_content", (q) => q.search("content", query))
         .take(100);
       matchingConvIds = new Set(searchResults.map((m) => m.conversation_id.toString()));
+
+      // Fetch the actual matching conversations to ensure we find older matches
+      const matchedConvs = await Promise.all(
+        Array.from(matchingConvIds).slice(0, 50).map(async (convId) => {
+          try {
+            return await ctx.db.get(convId as Id<"conversations">);
+          } catch {
+            return null;
+          }
+        })
+      );
+      queryMatchedConversations = matchedConvs.filter((c): c is NonNullable<typeof c> =>
+        c !== null && c.user_id.toString() === authUserId.toString()
+      );
     }
 
     // Limit conversations to avoid data limit errors
     // We'll load messages only for the final results after filtering
-    const ownConversations = await ctx.db
+    // When filtering by project_path, fetch more since we need to filter down
+    const fetchLimit = projectPath ? 200 : 50;
+    let ownConversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
       .order("desc")
-      .take(50);
+      .take(fetchLimit);
+
+    // Merge in query-matched conversations that might be older
+    if (queryMatchedConversations.length > 0) {
+      const existingIds = new Set(ownConversations.map(c => c._id.toString()));
+      const additionalConvs = queryMatchedConversations.filter(c => !existingIds.has(c._id.toString()));
+      ownConversations = [...ownConversations, ...additionalConvs];
+    }
 
     // Include team conversations based on is_private and activity_visibility
     let teamConversations: typeof ownConversations = [];
@@ -2975,17 +3051,15 @@ export const feedForCLI = query({
 
     const allConversations = [...ownConversations, ...teamConversations]
       .filter((c) => {
-        // Use prefix matching for project_path (same as search)
+        // Match sessions at or under the search path (not parent directories)
         if (projectPath) {
           const convPath = c.project_path || "";
           const convGitRoot = c.git_root || "";
-          // Only check startsWith when paths are non-empty to avoid matching "/" prefix
+          // Match: exact path, or session is in a subdirectory of search path
           const isPathMatch = convPath === projectPath ||
             (convPath && convPath.startsWith(projectPath + "/")) ||
-            (convPath && projectPath.startsWith(convPath + "/")) ||
             convGitRoot === projectPath ||
-            (convGitRoot && convGitRoot.startsWith(projectPath + "/")) ||
-            (convGitRoot && projectPath.startsWith(convGitRoot + "/"));
+            (convGitRoot && convGitRoot.startsWith(projectPath + "/"));
           if (!isPathMatch) return false;
         }
         if (startTime && c.updated_at < startTime) return false;
@@ -3224,7 +3298,16 @@ export const getTeamUnreadCount = query({
       .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
       .collect();
 
-    const isProjectMappedToTeam = (convUserId: string, projectPath: string | undefined): boolean => {
+    // Track which users have configured mappings
+    const userHasMappings = new Map<string, boolean>();
+    for (const m of teamMappings) {
+      userHasMappings.set(m.user_id.toString(), true);
+    }
+
+    const isProjectVisibleToTeam = (convUserId: string, projectPath: string | undefined): boolean => {
+      if (!userHasMappings.get(convUserId)) {
+        return true; // No mappings = show all conversations
+      }
       if (!projectPath) return false;
       return teamMappings.some(
         m => m.user_id.toString() === convUserId &&
@@ -3244,7 +3327,7 @@ export const getTeamUnreadCount = query({
     for (const conv of recentConversations) {
       if (conv.updated_at > lastSeen && conv.user_id.toString() !== userId.toString()) {
         const projectPath = conv.git_root || conv.project_path;
-        if (isProjectMappedToTeam(conv.user_id.toString(), projectPath)) {
+        if (isProjectVisibleToTeam(conv.user_id.toString(), projectPath)) {
           count++;
         }
       }
@@ -3323,5 +3406,85 @@ export const backfillConversationTeamIds = internalMutation({
     }
 
     return { updated };
+  },
+});
+
+// Debug function to investigate why a conversation isn't showing in team feed
+export const debugConversationVisibility = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { error: "Not authenticated" };
+
+    const user = await ctx.db.get(userId);
+    if (!user) return { error: "User not found" };
+
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return { error: "Conversation not found" };
+
+    const convOwner = await ctx.db.get(conversation.user_id);
+
+    // Get the team this conversation belongs to
+    const convTeam = conversation.team_id ? await ctx.db.get(conversation.team_id) : null;
+
+    // Get the user's active team
+    const userTeamId = user.team_id;
+    const userTeam = userTeamId ? await ctx.db.get(userTeamId) : null;
+
+    // Check team membership for conversation owner
+    const ownerTeamMembership = convOwner && userTeamId
+      ? await ctx.db
+          .query("team_memberships")
+          .withIndex("by_user_team", (q) => q.eq("user_id", conversation.user_id).eq("team_id", userTeamId))
+          .first()
+      : null;
+
+    // Check directory mappings for the owner
+    const ownerMappings = userTeamId
+      ? await ctx.db
+          .query("directory_team_mappings")
+          .withIndex("by_user_team", (q) => q.eq("user_id", conversation.user_id).eq("team_id", userTeamId))
+          .collect()
+      : [];
+
+    const projectPath = conversation.git_root || conversation.project_path;
+    const isProjectMapped = ownerMappings.some(
+      m => projectPath && (projectPath === m.path_prefix || projectPath.startsWith(m.path_prefix + "/"))
+    );
+
+    return {
+      conversation: {
+        _id: conversation._id,
+        title: conversation.title,
+        team_id: conversation.team_id,
+        user_id: conversation.user_id,
+        is_private: conversation.is_private,
+        project_path: conversation.project_path,
+        git_root: conversation.git_root,
+      },
+      convOwner: convOwner ? {
+        _id: convOwner._id,
+        name: convOwner.name,
+        email: convOwner.email,
+        team_id: convOwner.team_id,
+      } : null,
+      convTeam: convTeam ? { _id: convTeam._id, name: convTeam.name } : null,
+      currentUser: {
+        _id: user._id,
+        team_id: user.team_id,
+      },
+      userTeam: userTeam ? { _id: userTeam._id, name: userTeam.name } : null,
+      checks: {
+        teamsMatch: conversation.team_id?.toString() === user.team_id?.toString(),
+        ownerInTeam: !!ownerTeamMembership,
+        ownerVisibility: ownerTeamMembership?.visibility || "no membership",
+        ownerHasMappings: ownerMappings.length > 0,
+        projectPath,
+        isProjectMapped,
+        wouldShowWithPermissiveDefault: ownerMappings.length === 0 || isProjectMapped,
+      },
+    };
   },
 });

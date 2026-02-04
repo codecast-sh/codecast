@@ -149,6 +149,24 @@ export const deleteConversationsByType = mutation({
   },
 });
 
+export const deleteConversationBySessionId = mutation({
+  args: { session_id: v.string() },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
+      .first();
+    if (!conv) return { found: false, deleted: 0 };
+    const msgs = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+      .take(500);
+    for (const m of msgs) await ctx.db.delete(m._id);
+    await ctx.db.delete(conv._id);
+    return { found: true, deleted: msgs.length };
+  },
+});
+
 // Delete all Cursor conversations and their messages (uses auth)
 export const deleteCursorConversationsWithMessages = mutation({
   args: {},

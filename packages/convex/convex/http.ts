@@ -361,6 +361,9 @@ http.route({
         conversation_id: result.conversation_id,
         dashboard_url: `https://codecast.sh/conversation/${result.conversation_id}`,
         share_url: `https://codecast.sh/conversation/${result.conversation_id}`,
+        title: result.title,
+        slug: result.slug,
+        started_at: result.started_at,
       }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
