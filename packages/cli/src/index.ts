@@ -207,6 +207,7 @@ interface Config {
   memory_enabled?: boolean;
   memory_version?: string;
   claude_args?: string;
+  codex_args?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];
   created_at?: string;
@@ -1868,6 +1869,7 @@ program
         console.log(`  web_url: ${config.web_url || WEB_URL}`);
         if (config.excluded_paths) console.log(`  excluded_paths: ${config.excluded_paths}`);
         if (config.claude_args) console.log(`  claude_args: ${config.claude_args}`);
+        if (config.codex_args) console.log(`  codex_args: ${config.codex_args}`);
         if (config.created_at) console.log(`  created_at: ${config.created_at}`);
         if (config.updated_at) console.log(`  updated_at: ${config.updated_at}`);
       } else {
@@ -1876,7 +1878,7 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args"] as const;
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args"] as const;
     const sensitiveKeys = ["auth_token"];
     type SettableKey = (typeof settableKeys)[number];
 
@@ -2658,13 +2660,16 @@ program
 program
   .command("resume")
   .description(
-    "Resume a Claude Code session by searching with natural language\n\n" +
-    "Searches your session history and opens the matching session in Claude.\n" +
+    "Resume a session by searching with natural language\n\n" +
+    "Searches your session history and opens the matching session in the\n" +
+    "appropriate tool (Claude Code, Codex). Cursor sessions cannot be\n" +
+    "resumed from CLI.\n" +
     "If multiple matches are found, shows a selection to choose from.\n\n" +
     "Multiple words are AND-ed (all must match).\n" +
     "Use \"quotes\" for exact phrase matching.\n\n" +
-    "Configure default Claude args:\n" +
-    "  codecast config claude_args \"--dangerously-skip-permissions\"\n\n" +
+    "Configure default args:\n" +
+    "  codecast config claude_args \"--dangerously-skip-permissions\"\n" +
+    "  codecast config codex_args \"--dangerously-bypass-approvals-and-sandbox\"\n\n" +
     "Examples:\n" +
     "  codecast resume logo design             # matches both 'logo' AND 'design'\n" +
     "  codecast resume \"logo design\"           # matches exact phrase\n" +
@@ -2710,7 +2715,7 @@ program
       }
 
       const responseText = await response.text();
-      let result: { error?: string; conversations?: Array<{ id: string; title: string; subtitle?: string | null; project_path: string | null; updated_at: string; message_count: number; session_id?: string; preview?: Array<{ role: string; content: string }> }> };
+      let result: { error?: string; conversations?: Array<{ id: string; title: string; subtitle?: string | null; project_path: string | null; updated_at: string; message_count: number; session_id?: string; agent_type?: string; preview?: Array<{ role: string; content: string }> }> };
       try {
         result = JSON.parse(responseText);
       } catch {
@@ -2769,8 +2774,8 @@ program
           process.exit(1);
         }
         console.log(`Opening: ${conv.title}`);
-        const claudeArgs = options.claudeArgs || config.claude_args;
-        launchClaude(sessionId, claudeArgs, !claudeArgs, options.here ? undefined : conv.project_path);
+        const extraArgs = resolveAgentArgs(conv.agent_type, options.claudeArgs, config);
+        launchSession(sessionId, conv.agent_type, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
         return;
       }
 
@@ -2811,8 +2816,8 @@ program
             process.exit(1);
           }
           console.log(`\nOpening: ${conv.title}`);
-          const claudeArgs = options.claudeArgs || config.claude_args;
-          launchClaude(sessionId, claudeArgs, !claudeArgs, options.here ? undefined : conv.project_path);
+          const extraArgs = resolveAgentArgs(conv.agent_type, options.claudeArgs, config);
+          launchSession(sessionId, conv.agent_type, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
         });
       };
 
@@ -2822,6 +2827,66 @@ program
       process.exit(1);
     }
   });
+
+function resolveAgentArgs(agentType: string | undefined, cliOverride: string | undefined, config: Config): string | undefined {
+  if (cliOverride) return cliOverride;
+  if (agentType === "codex") return config.codex_args;
+  return config.claude_args;
+}
+
+function launchSession(sessionId: string, agentType?: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
+  if (agentType === "codex") {
+    launchCodex(sessionId, extraArgs, showArgsHint, projectPath);
+  } else if (agentType === "cursor") {
+    console.error("Cursor sessions cannot be resumed from the command line.");
+    console.log("Open Cursor IDE to continue this session.");
+    process.exit(1);
+  } else {
+    launchClaude(sessionId, extraArgs, showArgsHint, projectPath);
+  }
+}
+
+function launchCodex(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
+  const args = ["resume", sessionId];
+
+  if (extraArgs) {
+    const parsedArgs = extraArgs.split(/\s+/).filter((a) => a.length > 0);
+    args.push(...parsedArgs);
+    console.log(`Using: codex ${args.join(" ")}`);
+  } else if (showArgsHint) {
+    console.log(`\nTip: Set default codex args with: codecast config codex_args -- "--dangerously-bypass-approvals-and-sandbox"`);
+  }
+
+  let cwd = process.cwd();
+  if (projectPath && projectPath !== process.cwd()) {
+    if (fs.existsSync(projectPath)) {
+      cwd = projectPath;
+      console.log(`Switching to: ${projectPath}`);
+    } else {
+      console.log(`Warning: Session path not found: ${projectPath}`);
+      console.log(`Using current directory instead`);
+    }
+  }
+
+  console.log("");
+
+  const codex = spawn("codex", args, {
+    stdio: "inherit",
+    shell: true,
+    cwd,
+  });
+
+  codex.on("error", (err) => {
+    console.error("Failed to launch Codex:", err.message);
+    console.log("\nMake sure Codex CLI is installed:");
+    console.log("  npm install -g @openai/codex");
+    process.exit(1);
+  });
+
+  codex.on("close", (code) => {
+    process.exit(code ?? 0);
+  });
+}
 
 function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
   const args = ["--resume", sessionId];

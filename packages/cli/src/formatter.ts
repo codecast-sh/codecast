@@ -1524,6 +1524,7 @@ interface ResumeConversation {
   project_path: string | null;
   updated_at: string;
   message_count: number;
+  agent_type?: string;
   preview?: string;
   goal?: string;
 }
@@ -1561,6 +1562,10 @@ export function formatResumeResults(result: ResumeResult): string {
       `${c.dim}${relTime}${c.reset}`,
       `${c.dim}${conv.message_count} msgs${c.reset}`,
     ];
+    if (conv.agent_type && conv.agent_type !== "claude_code") {
+      const label = conv.agent_type === "codex" ? "Codex" : conv.agent_type === "cursor" ? "Cursor" : conv.agent_type;
+      meta.push(`${c.yellow}${label}${c.reset}`);
+    }
     if (conv.project_path) {
       meta.push(`${c.dim}${truncatePath(conv.project_path)}${c.reset}`);
     }
