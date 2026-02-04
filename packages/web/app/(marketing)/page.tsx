@@ -8,6 +8,30 @@ import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
 import { Logo, LogoIcon } from "@/components/Logo";
 
+function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" }) {
+  const colors = {
+    amber: "bg-amber-200/60",
+    green: "bg-emerald-200/60",
+    blue: "bg-sky-200/60",
+  };
+  return (
+    <span className="relative inline-block">
+      <span
+        className={`absolute inset-0 ${colors[color]} rounded-sm`}
+        style={{
+          transform: `rotate(${color === "amber" ? -0.7 : color === "green" ? 0.5 : -0.3}deg)`,
+          top: "0.05em",
+          bottom: "0.05em",
+          left: "-0.15em",
+          right: "-0.15em",
+          borderRadius: "0.2em 0.3em 0.25em 0.35em",
+        }}
+      />
+      <span className="relative">{children}</span>
+    </span>
+  );
+}
+
 const TYPING_PHRASES = [
   "watching your agent debug a 500 error",
   "sharing how you built that feature",
@@ -234,7 +258,7 @@ export default function LandingPage() {
           </h1>
 
           <p className="text-xl text-stone-600 leading-relaxed mb-4 max-w-2xl mx-auto">
-            Real-time sync for Claude Code, Codex, and Cursor. Watch your agent work from any device,
+            Real-time sync for <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, and <Highlight color="blue">Cursor</Highlight>. Watch your agent work from any device,
             share sessions with your team, and give it memory across every session.
           </p>
 
@@ -435,7 +459,7 @@ export default function LandingPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-lg mb-1">Persistent global agent memory</h3>
-                    <p className="text-stone-400">Memory that spans every tool and session. Your Claude Code agent recalls what you built in Cursor last week.</p>
+                    <p className="text-stone-400">Team-wide memory across every tool and session. Your agent recalls what you or your teammates built, regardless of which tool was used.</p>
                   </div>
                 </div>
 
