@@ -268,6 +268,150 @@ export function parseCodexLines(content: string): CodexMessage[] {
     .filter((m): m is CodexMessage => m !== null);
 }
 
+interface CodexSessionEntry {
+  timestamp: string;
+  type: "session_meta" | "response_item" | "event_msg" | "turn_context";
+  payload: {
+    id?: string;
+    cwd?: string;
+    type?: string;
+    role?: "developer" | "user" | "assistant" | "system";
+    content?: Array<{ type: string; text?: string }> | string;
+    summary?: string;
+    name?: string;
+    call_id?: string;
+    arguments?: string;
+    output?: string;
+  };
+}
+
+export function parseCodexSessionFile(content: string): ParsedMessage[] {
+  const lines = content.split("\n");
+  const messages: ParsedMessage[] = [];
+  let currentAssistantContent = "";
+  let currentAssistantThinking = "";
+  let currentToolCalls: ToolCall[] = [];
+  let currentToolResults: ToolResult[] = [];
+  let lastTimestamp = Date.now();
+
+  const flushAssistantMessage = () => {
+    if (currentAssistantContent || currentAssistantThinking || currentToolCalls.length > 0) {
+      messages.push({
+        role: "assistant",
+        content: currentAssistantContent.trim(),
+        timestamp: lastTimestamp,
+        thinking: currentAssistantThinking.trim() || undefined,
+        toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : undefined,
+        toolResults: currentToolResults.length > 0 ? [...currentToolResults] : undefined,
+      });
+      currentAssistantContent = "";
+      currentAssistantThinking = "";
+      currentToolCalls = [];
+      currentToolResults = [];
+    }
+  };
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let entry: CodexSessionEntry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (entry.type !== "response_item") continue;
+
+    const payload = entry.payload;
+    const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
+    lastTimestamp = timestamp;
+
+    if (payload.type === "message") {
+      const role = payload.role;
+      if (role === "developer" || role === "system") continue;
+
+      const contentArray = Array.isArray(payload.content) ? payload.content : [];
+      const textContent = contentArray
+        .filter((c) => c.type === "input_text" || c.type === "output_text")
+        .map((c) => c.text || "")
+        .join("\n");
+
+      if (role === "user") {
+        flushAssistantMessage();
+        const trimmed = textContent.trim();
+        const isSystemContext =
+          trimmed.startsWith("<environment_context>") ||
+          trimmed.startsWith("<INSTRUCTIONS>") ||
+          trimmed.startsWith("# AGENTS.md instructions") ||
+          trimmed.startsWith("<permissions") ||
+          trimmed.startsWith("<collaboration_mode>") ||
+          trimmed.startsWith("<app-context>");
+        if (textContent && !isSystemContext) {
+          messages.push({
+            role: "user",
+            content: textContent,
+            timestamp,
+          });
+        }
+      } else if (role === "assistant") {
+        currentAssistantContent += (currentAssistantContent ? "\n" : "") + textContent;
+      }
+    } else if (payload.type === "reasoning") {
+      const contentArray = Array.isArray(payload.content) ? payload.content : [];
+      const thinkingText = contentArray
+        .map((c) => c.text || "")
+        .join("\n");
+      currentAssistantThinking += (currentAssistantThinking ? "\n" : "") + thinkingText;
+    } else if (payload.type === "function_call") {
+      let args: Record<string, unknown> = {};
+      try {
+        args = payload.arguments ? JSON.parse(payload.arguments) : {};
+      } catch {}
+      currentToolCalls.push({
+        id: payload.call_id || "",
+        name: payload.name || "",
+        input: args,
+      });
+    } else if (payload.type === "function_call_output") {
+      currentToolResults.push({
+        toolUseId: payload.call_id || "",
+        content: payload.output || "",
+      });
+    }
+  }
+
+  flushAssistantMessage();
+  return messages;
+}
+
+export function extractCodexCwd(content: string): string | undefined {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "session_meta" && entry.payload?.cwd) {
+        return entry.payload.cwd;
+      }
+    } catch {}
+  }
+  return undefined;
+}
+
+export function extractCodexSessionId(content: string): string | undefined {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "session_meta" && entry.payload?.id) {
+        return entry.payload.id;
+      }
+    } catch {}
+  }
+  return undefined;
+}
+
 export interface CursorPrompt {
   id: string;
   timestamp: number;
@@ -333,4 +477,69 @@ export function parseCursorPrompts(dbValue: string): ParsedMessage[] {
   } catch {
     return [];
   }
+}
+
+export function parseCursorTranscriptFile(content: string): ParsedMessage[] {
+  const messages: ParsedMessage[] = [];
+  const lines = content.split("\n");
+  let currentRole: "user" | "assistant" | "system" | null = null;
+  let buffer: string[] = [];
+
+  const flush = () => {
+    if (!currentRole) {
+      buffer = [];
+      return;
+    }
+    const raw = buffer.join("\n").trim();
+    buffer = [];
+    if (!raw) {
+      return;
+    }
+
+    let contentText = raw;
+    let thinking: string | undefined;
+
+    if (currentRole === "user") {
+      const match = raw.match(/<user_query>([\s\S]*?)<\/user_query>/i);
+      if (match) {
+        contentText = match[1].trim();
+      }
+    }
+
+    if (currentRole === "assistant") {
+      const thinkMatches = raw.match(/<think>([\s\S]*?)<\/think>/gi);
+      if (thinkMatches) {
+        const extracted = thinkMatches
+          .map((m) => m.replace(/<\/?think>/gi, "").trim())
+          .filter(Boolean)
+          .join("\n");
+        thinking = extracted || undefined;
+        contentText = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+      }
+    }
+
+    if (!contentText) {
+      return;
+    }
+
+    messages.push({
+      role: currentRole,
+      content: contentText,
+      thinking,
+      timestamp: Date.now(),
+    });
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim().toLowerCase();
+    if (trimmed === "user:" || trimmed === "assistant:" || trimmed === "system:") {
+      flush();
+      currentRole = trimmed.slice(0, -1) as "user" | "assistant" | "system";
+      continue;
+    }
+    buffer.push(line);
+  }
+
+  flush();
+  return messages;
 }

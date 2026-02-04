@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import * as fs from "fs";
 import * as path from "path";
+import { Database } from "bun:sqlite";
 import { execSync, exec, spawn } from "child_process";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
+import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
-import { parseSessionFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseCodexSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { markSynced, getSyncRecord, findUnsyncedFiles } from "./syncLedger.js";
@@ -953,11 +955,11 @@ async function processCursorSession(
   pendingMessages: PendingMessages,
   updateStateCallback: () => void
 ): Promise<void> {
-  const lastRowId = getPosition(dbPath);
+  const syncedCount = getPosition(dbPath);
 
-  let result: { messages: ParsedMessage[]; maxRowId: number };
+  let result: { messages: ParsedMessage[]; maxRowId: number; totalCount: number };
   try {
-    result = extractMessagesFromCursorDb(dbPath, lastRowId);
+    result = extractMessagesFromCursorDb(dbPath, syncedCount);
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${dbPath}. Will retry when permissions are restored.`);
@@ -968,12 +970,9 @@ async function processCursorSession(
     return;
   }
 
-  const { messages, maxRowId } = result;
+  const { messages, totalCount } = result;
 
   if (messages.length === 0) {
-    if (maxRowId > lastRowId) {
-      setPosition(dbPath, maxRowId);
-    }
     return;
   }
 
@@ -1036,7 +1035,7 @@ async function processCursorSession(
       if (err instanceof AuthExpiredError) {
         if (handleAuthFailure()) {
           log("⚠️  Authentication expired - sync paused");
-          setPosition(dbPath, maxRowId);
+          setPosition(dbPath, totalCount);
           return;
         }
         // Let it fall through to retry queue
@@ -1055,7 +1054,7 @@ async function processCursorSession(
           content: redactSecrets(msg.content),
           timestamp: msg.timestamp,
           filePath: dbPath,
-          fileSize: maxRowId,
+          fileSize: totalCount,
           thinking: msg.thinking,
           toolCalls: msg.toolCalls,
           toolResults: msg.toolResults,
@@ -1075,7 +1074,7 @@ async function processCursorSession(
         startedAt: firstMsgTimestamp,
       }, errMsg);
 
-      setPosition(dbPath, maxRowId);
+      setPosition(dbPath, totalCount);
       return;
     }
   }
@@ -1162,12 +1161,274 @@ async function processCursorSession(
     }
   }
 
-  setPosition(dbPath, maxRowId);
+  setPosition(dbPath, totalCount);
   log(`Synced ${messages.length} Cursor messages for session ${sessionId}`);
   syncStats.messagesSynced += messages.length;
   syncStats.sessionsActive.add(sessionId);
 
   updateStateCallback();
+}
+
+async function processCursorTranscriptFile(
+  filePath: string,
+  sessionId: string,
+  syncService: SyncService,
+  userId: string,
+  teamId: string | undefined,
+  conversationCache: ConversationCache,
+  retryQueue: RetryQueue,
+  pendingMessages: PendingMessages,
+  updateStateCallback: () => void
+): Promise<void> {
+  let lastPosition = getPosition(filePath);
+  let stats;
+
+  try {
+    stats = fs.statSync(filePath);
+  } catch (err: any) {
+    if (err.code === "EACCES" || err.code === "EPERM") {
+      log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
+      return;
+    }
+    throw err;
+  }
+
+  if (stats.size < lastPosition) {
+    log(`File rotation detected for ${filePath}: size=${stats.size} < position=${lastPosition}. Resetting to start.`);
+    setPosition(filePath, 0);
+    lastPosition = 0;
+  }
+
+  if (stats.size <= lastPosition) {
+    return;
+  }
+
+  let fd;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(stats.size - lastPosition);
+    fs.readSync(fd, buffer, 0, buffer.length, lastPosition);
+    fs.closeSync(fd);
+
+    const newContent = buffer.toString("utf-8");
+    const messages = parseCursorTranscriptFile(newContent);
+
+    let conversationId = conversationCache[sessionId];
+
+    if (messages.length === 0) {
+      setPosition(filePath, stats.size);
+      return;
+    }
+
+    if (!conversationId) {
+      let projectPath: string | undefined;
+      try {
+        projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
+      } catch {
+        projectPath = undefined;
+      }
+
+      const firstMessageTimestamp = messages[0]?.timestamp;
+      const firstUserMessage = messages.find(msg => msg.role === "user");
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+
+      try {
+        conversationId = await syncService.createConversation({
+          userId,
+          teamId,
+          sessionId,
+          agentType: "cursor",
+          projectPath,
+          slug: undefined,
+          title,
+          startedAt: firstMessageTimestamp,
+          parentMessageUuid: undefined,
+          gitInfo,
+        });
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        log(`Created conversation ${conversationId} for Cursor transcript ${sessionId}`);
+        syncStats.conversationsCreated++;
+
+        if (pendingMessages[sessionId]) {
+          for (const msg of pendingMessages[sessionId]) {
+            try {
+              await syncService.addMessage({
+                conversationId,
+                messageUuid: msg.uuid,
+                role: msg.role,
+                content: msg.content,
+                timestamp: msg.timestamp,
+                thinking: msg.thinking,
+                toolCalls: msg.toolCalls,
+                toolResults: msg.toolResults,
+                images: msg.images,
+                subtype: msg.subtype,
+              });
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              log(`Failed to add pending message, queueing for retry: ${errMsg}`);
+              retryQueue.add("addMessage", {
+                conversationId,
+                messageUuid: msg.uuid,
+                role: msg.role,
+                content: msg.content,
+                timestamp: msg.timestamp,
+                thinking: msg.thinking,
+                toolCalls: msg.toolCalls,
+                toolResults: msg.toolResults,
+                images: msg.images,
+                subtype: msg.subtype,
+              }, errMsg);
+            }
+          }
+          delete pendingMessages[sessionId];
+        }
+      } catch (err) {
+        if (err instanceof AuthExpiredError) {
+          if (handleAuthFailure()) {
+            log("⚠️  Authentication expired - sync paused");
+            setPosition(filePath, stats.size);
+            return;
+          }
+        }
+
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log(`Failed to create Cursor conversation, queueing for retry: ${errMsg}`);
+
+        if (!pendingMessages[sessionId]) {
+          pendingMessages[sessionId] = [];
+        }
+        for (const msg of messages) {
+          pendingMessages[sessionId].push({
+            uuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            filePath,
+            fileSize: stats.size,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+          });
+        }
+
+        retryQueue.add("createConversation", {
+          userId,
+          teamId,
+          sessionId,
+          agentType: "cursor",
+          projectPath,
+          title,
+          startedAt: firstMessageTimestamp,
+          gitInfo,
+        }, errMsg);
+
+        setPosition(filePath, stats.size);
+        return;
+      }
+    }
+
+    for (const msg of messages) {
+      try {
+        await syncService.addMessage({
+          conversationId,
+          messageUuid: msg.uuid,
+          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+          content: redactSecrets(msg.content),
+          timestamp: msg.timestamp,
+          thinking: msg.thinking,
+          toolCalls: msg.toolCalls,
+          toolResults: msg.toolResults,
+          images: msg.images,
+          subtype: msg.subtype,
+        });
+        resetAuthFailureCount();
+      } catch (err) {
+        if (err instanceof AuthExpiredError) {
+          if (handleAuthFailure()) {
+            log("⚠️  Authentication expired - sync paused");
+            return;
+          }
+        }
+
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes("Conversation not found")) {
+          log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+          delete conversationCache[sessionId];
+          saveConversationCache(conversationCache);
+
+          try {
+            const projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
+            const firstMessageTimestamp = messages[0]?.timestamp;
+            const firstUserMessage = messages.find(m => m.role === "user");
+            const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+            const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+
+            conversationId = await syncService.createConversation({
+              userId,
+              teamId,
+              sessionId,
+              agentType: "cursor",
+              projectPath,
+              slug: undefined,
+              title,
+              startedAt: firstMessageTimestamp,
+              parentMessageUuid: undefined,
+              gitInfo,
+            });
+            conversationCache[sessionId] = conversationId;
+            saveConversationCache(conversationCache);
+            log(`Recreated conversation ${conversationId} for Cursor transcript ${sessionId}`);
+
+            await syncService.addMessage({
+              conversationId,
+              messageUuid: msg.uuid,
+              role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+              content: redactSecrets(msg.content),
+              timestamp: msg.timestamp,
+              thinking: msg.thinking,
+              toolCalls: msg.toolCalls,
+              toolResults: msg.toolResults,
+              images: msg.images,
+              subtype: msg.subtype,
+            });
+          } catch (retryErr) {
+            const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            log(`Failed to recreate Cursor conversation and add message: ${retryErrMsg}`);
+          }
+        } else {
+          log(`Failed to add message, queueing for retry: ${errMsg}`);
+          retryQueue.add("addMessage", {
+            conversationId,
+            messageUuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+          }, errMsg);
+        }
+      }
+    }
+
+    setPosition(filePath, stats.size);
+    markSynced(filePath, stats.size, messages.length, conversationId);
+    log(`Synced ${messages.length} Cursor transcript messages for session ${sessionId}`);
+    syncStats.messagesSynced += messages.length;
+    syncStats.sessionsActive.add(sessionId);
+
+    updateStateCallback();
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log(`Error processing Cursor transcript file ${filePath}: ${errMsg}`);
+  }
 }
 
 async function processCodexSession(
@@ -1213,7 +1474,7 @@ async function processCodexSession(
     fs.closeSync(fd);
 
     const newContent = buffer.toString("utf-8");
-    const messages = parseSessionFile(newContent);
+    const messages = parseCodexSessionFile(newContent);
 
     let conversationId = conversationCache[sessionId];
 
@@ -1261,8 +1522,7 @@ async function processCodexSession(
       }
 
       try {
-        const slug = extractSlug(fullContent);
-        const parentMessageUuid = extractParentUuid(fullContent);
+        const projectPath = extractCodexCwd(fullContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
 
         const firstUserMessage = messages.find(msg => msg.role === "user");
@@ -1273,11 +1533,11 @@ async function processCodexSession(
           teamId,
           sessionId,
           agentType: "codex",
-          projectPath: undefined,
-          slug,
+          projectPath,
+          slug: undefined,
           title,
           startedAt: firstMessageTimestamp,
-          parentMessageUuid,
+          parentMessageUuid: undefined,
           gitInfo: undefined,
         });
         conversationCache[sessionId] = conversationId;
@@ -1458,6 +1718,7 @@ async function processCodexSession(
     }
 
     setPosition(filePath, stats.size);
+    markSynced(filePath, stats.size, messages.length, conversationId);
     log(`Synced ${messages.length} Codex messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
@@ -1692,6 +1953,293 @@ function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): stri
   return staleFiles;
 }
 
+function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
+  const codexSessionsDir = path.join(process.env.HOME || "", ".codex", "sessions");
+  const staleFiles: string[] = [];
+  const now = Date.now();
+
+  if (!fs.existsSync(codexSessionsDir)) {
+    return staleFiles;
+  }
+
+  const scanDir = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scanDir(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        try {
+          const fileStat = fs.statSync(fullPath);
+          const fileAge = now - fileStat.mtimeMs;
+          if (fileAge > maxAgeMs) continue;
+
+          const lastPosition = getPosition(fullPath);
+          if (fileStat.size !== lastPosition) {
+            staleFiles.push(fullPath);
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+  };
+
+  scanDir(codexSessionsDir);
+  return staleFiles;
+}
+
+function detectCursorPath(): string {
+  const platform = process.platform;
+  const home = process.env.HOME || "";
+
+  if (platform === "darwin") {
+    return path.join(home, "Library", "Application Support", "Cursor");
+  } else if (platform === "linux") {
+    return path.join(home, ".config", "Cursor");
+  } else if (platform === "win32") {
+    return path.join(process.env.APPDATA || "", "Cursor");
+  }
+
+  return path.join(home, ".cursor");
+}
+
+function getCursorWorkspaceStoragePath(): string | null {
+  const cursorPath = detectCursorPath();
+  const workspaceStoragePath = path.join(cursorPath, "User", "workspaceStorage");
+  if (!fs.existsSync(workspaceStoragePath)) {
+    return null;
+  }
+  return workspaceStoragePath;
+}
+
+function getCursorWorkspaceFolderPath(workspaceStorageDir: string): string | null {
+  const workspaceJsonPath = path.join(workspaceStorageDir, "workspace.json");
+  try {
+    if (!fs.existsSync(workspaceJsonPath)) {
+      return null;
+    }
+    const content = fs.readFileSync(workspaceJsonPath, "utf-8");
+    const data = JSON.parse(content);
+
+    const folderUri = data.folder || data.workspace;
+    if (!folderUri) {
+      return null;
+    }
+
+    if (folderUri.startsWith("file://")) {
+      const decoded = decodeURIComponent(folderUri.slice(7));
+      if (process.platform === "win32" && decoded.match(/^\/[A-Z]:/i)) {
+        return decoded.slice(1);
+      }
+      return decoded;
+    }
+
+    return folderUri;
+  } catch {
+    return null;
+  }
+}
+
+function getCursorMaxRowId(dbPath: string): number {
+  let db: Database | null = null;
+  try {
+    db = new Database(dbPath, { readonly: true });
+
+    const tableExists = db
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='ItemTable'"
+      )
+      .get();
+
+    if (!tableExists) {
+      return 0;
+    }
+
+    const maxRowIdResult = db
+      .query<{ maxRowId: number | null }, []>(
+        "SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata'"
+      )
+      .get();
+
+    return maxRowIdResult?.maxRowId ?? 0;
+  } catch {
+    return 0;
+  } finally {
+    if (db) {
+      db.close();
+    }
+  }
+}
+
+interface CursorComposerData {
+  allComposers?: Array<{
+    composerId?: string;
+  }>;
+}
+
+function getCursorComposerData(dbPath: string): CursorComposerData | null {
+  let db: Database | null = null;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    const row = db
+      .query<{ value: string }, []>(
+        "SELECT value FROM ItemTable WHERE key = 'composer.composerData' LIMIT 1"
+      )
+      .get();
+    if (!row?.value) {
+      return null;
+    }
+    return JSON.parse(row.value) as CursorComposerData;
+  } catch {
+    return null;
+  } finally {
+    if (db) {
+      db.close();
+    }
+  }
+}
+
+function findWorkspacePathForCursorConversation(sessionId: string): string | null {
+  const workspaceStoragePath = getCursorWorkspaceStoragePath();
+  if (!workspaceStoragePath) {
+    return null;
+  }
+
+  let workspaceDirs: string[];
+  try {
+    workspaceDirs = fs.readdirSync(workspaceStoragePath);
+  } catch {
+    return null;
+  }
+
+  for (const workspaceHash of workspaceDirs) {
+    const dbPath = path.join(workspaceStoragePath, workspaceHash, "state.vscdb");
+    if (!fs.existsSync(dbPath)) {
+      continue;
+    }
+
+    const composerData = getCursorComposerData(dbPath);
+    const composers = composerData?.allComposers || [];
+    if (!composers.some(c => c.composerId === sessionId)) {
+      continue;
+    }
+
+    const workspaceStorageDir = path.dirname(dbPath);
+    return getCursorWorkspaceFolderPath(workspaceStorageDir);
+  }
+
+  return null;
+}
+
+interface StaleCursorSession {
+  sessionId: string;
+  workspacePath: string;
+  dbPath: string;
+}
+
+function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): StaleCursorSession[] {
+  const workspaceStoragePath = getCursorWorkspaceStoragePath();
+  const staleSessions: StaleCursorSession[] = [];
+  const now = Date.now();
+
+  if (!workspaceStoragePath) {
+    return staleSessions;
+  }
+
+  let workspaceDirs: string[];
+  try {
+    workspaceDirs = fs.readdirSync(workspaceStoragePath);
+  } catch {
+    return staleSessions;
+  }
+
+  for (const workspaceHash of workspaceDirs) {
+    const dbPath = path.join(workspaceStoragePath, workspaceHash, "state.vscdb");
+    if (!fs.existsSync(dbPath)) {
+      continue;
+    }
+
+    try {
+      const stat = fs.statSync(dbPath);
+      const fileAge = now - stat.mtimeMs;
+      if (fileAge > maxAgeMs) continue;
+
+      const maxRowId = getCursorMaxRowId(dbPath);
+      if (maxRowId <= 0) continue;
+
+      const lastRowId = getPosition(dbPath);
+      if (maxRowId <= lastRowId) continue;
+
+      const workspaceStorageDir = path.dirname(dbPath);
+      const workspacePath = getCursorWorkspaceFolderPath(workspaceStorageDir) || workspaceHash;
+
+      staleSessions.push({
+        sessionId: workspaceHash,
+        workspacePath,
+        dbPath,
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return staleSessions;
+}
+
+function findStaleCursorTranscriptFiles(
+  maxAgeMs: number = 7 * 24 * 60 * 60 * 1000
+): string[] {
+  const cursorProjectsDir = path.join(process.env.HOME || "", ".cursor", "projects");
+  const staleFiles: string[] = [];
+  const now = Date.now();
+
+  if (!fs.existsSync(cursorProjectsDir)) {
+    return staleFiles;
+  }
+
+  const scanDir = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scanDir(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".txt")) {
+        if (!fullPath.includes(`${path.sep}agent-transcripts${path.sep}`)) {
+          continue;
+        }
+        try {
+          const fileStat = fs.statSync(fullPath);
+          const fileAge = now - fileStat.mtimeMs;
+          if (fileAge > maxAgeMs) continue;
+
+          const lastPosition = getPosition(fullPath);
+          if (fileStat.size !== lastPosition) {
+            staleFiles.push(fullPath);
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+  };
+
+  scanDir(cursorProjectsDir);
+  return staleFiles;
+}
+
 interface WatchdogDependencies {
   config: Config;
   syncService: SyncService;
@@ -1849,18 +2397,26 @@ function startWatchdog(
       logWarn(`Watcher idle for ${watcherIdleMinutes}min`);
     }
 
-    // Use sync ledger to find files that need syncing (modified after their last sync)
-    const staleFiles = findStaleSessionFiles();
-    if (staleFiles.length === 0) {
+    const staleClaudeFiles = findStaleSessionFiles();
+    const staleCodexFiles = findStaleCodexSessionFiles();
+    const staleCursorSessions = findStaleCursorSessions();
+    const staleCursorTranscriptFiles = findStaleCursorTranscriptFiles();
+    const totalStale =
+      staleClaudeFiles.length +
+      staleCodexFiles.length +
+      staleCursorSessions.length +
+      staleCursorTranscriptFiles.length;
+
+    if (totalStale === 0) {
       return;
     }
 
-    log(`Watchdog: Detected ${staleFiles.length} files needing sync`);
+    log(`Watchdog: Detected ${totalStale} files needing sync`);
 
     const currentRestarts = state?.watchdogRestarts || 0;
     saveDaemonState({ watchdogRestarts: currentRestarts + 1 });
 
-    for (const filePath of staleFiles) {
+    for (const filePath of staleClaudeFiles) {
       const parts = filePath.split(path.sep);
       const sessionId = parts[parts.length - 1].replace(".jsonl", "");
       const projectDirName = parts[parts.length - 2];
@@ -1891,7 +2447,86 @@ function startWatchdog(
       );
     }
 
-    log(`Watchdog: Sync completed for ${staleFiles.length} files`);
+    for (const filePath of staleCodexFiles) {
+      const filename = path.basename(filePath, ".jsonl");
+      const match = filename.match(
+        /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+      );
+      const sessionId = match ? match[1] : filename;
+
+      log(`Watchdog: Syncing stale Codex session ${sessionId}`);
+
+      await processCodexSession(
+        filePath,
+        sessionId,
+        deps.syncService,
+        deps.config.user_id!,
+        deps.config.team_id,
+        deps.conversationCache,
+        deps.retryQueue,
+        deps.pendingMessages,
+        deps.titleCache,
+        deps.updateState
+      );
+    }
+
+    for (const cursorSession of staleCursorSessions) {
+      if (deps.config.excluded_paths && isPathExcluded(cursorSession.workspacePath, deps.config.excluded_paths)) {
+        continue;
+      }
+
+      if (!isProjectAllowedToSync(cursorSession.workspacePath, deps.config)) {
+        continue;
+      }
+
+      log(`Watchdog: Syncing stale Cursor session ${cursorSession.sessionId}`);
+
+      await processCursorSession(
+        cursorSession.dbPath,
+        cursorSession.sessionId,
+        cursorSession.workspacePath,
+        deps.syncService,
+        deps.config.user_id!,
+        deps.config.team_id,
+        deps.conversationCache,
+        deps.retryQueue,
+        deps.pendingMessages,
+        deps.updateState
+      );
+    }
+
+    for (const filePath of staleCursorTranscriptFiles) {
+      const sessionId = path.basename(filePath, ".txt");
+      const workspacePath = findWorkspacePathForCursorConversation(sessionId);
+
+      if (workspacePath) {
+        if (deps.config.excluded_paths && isPathExcluded(workspacePath, deps.config.excluded_paths)) {
+          continue;
+        }
+
+        if (!isProjectAllowedToSync(workspacePath, deps.config)) {
+          continue;
+        }
+      } else if (deps.config.sync_mode === "selected") {
+        continue;
+      }
+
+      log(`Watchdog: Syncing stale Cursor transcript ${sessionId}`);
+
+      await processCursorTranscriptFile(
+        filePath,
+        sessionId,
+        deps.syncService,
+        deps.config.user_id!,
+        deps.config.team_id,
+        deps.conversationCache,
+        deps.retryQueue,
+        deps.pendingMessages,
+        deps.updateState
+      );
+    }
+
+    log(`Watchdog: Sync completed for ${totalStale} files`);
   }, WATCHDOG_INTERVAL_MS);
 }
 
@@ -2265,6 +2900,70 @@ async function main(): Promise<void> {
 
   cursorWatcher.start();
 
+  const cursorTranscriptWatcher = new CursorTranscriptWatcher();
+  const cursorTranscriptSyncs = new Map<string, InvalidateSync>();
+
+  cursorTranscriptWatcher.on("ready", () => {
+    log("Cursor transcript watcher ready");
+  });
+
+  cursorTranscriptWatcher.on("session", (event: CursorTranscriptEvent) => {
+    const filePath = event.filePath;
+    lastWatcherEventTime = Date.now();
+
+    const state = readDaemonState();
+    if (state?.authExpired) {
+      return;
+    }
+
+    if (isSyncPaused()) {
+      log(`Sync paused, skipping Cursor transcript: ${event.sessionId}`);
+      return;
+    }
+
+    const workspacePath = findWorkspacePathForCursorConversation(event.sessionId);
+    if (workspacePath) {
+      if (isPathExcluded(workspacePath, config.excluded_paths)) {
+        log(`Skipping sync for excluded path: ${workspacePath}`);
+        return;
+      }
+
+      if (!isProjectAllowedToSync(workspacePath, config)) {
+        log(`Skipping sync for non-selected project: ${workspacePath}`);
+        return;
+      }
+    } else if (config.sync_mode === "selected") {
+      log(`Skipping Cursor transcript with unknown workspace path: ${event.sessionId}`);
+      return;
+    }
+
+    let sync = cursorTranscriptSyncs.get(filePath);
+    if (!sync) {
+      sync = new InvalidateSync(async () => {
+        await processCursorTranscriptFile(
+          filePath,
+          event.sessionId,
+          syncService,
+          config.user_id!,
+          config.team_id,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          updateState
+        );
+      });
+      cursorTranscriptSyncs.set(filePath, sync);
+    }
+
+    sync.invalidate();
+  });
+
+  cursorTranscriptWatcher.on("error", (error: Error) => {
+    logError("Cursor transcript watcher error", error);
+  });
+
+  cursorTranscriptWatcher.start();
+
   const codexWatcher = new CodexWatcher();
   const codexSyncs = new Map<string, InvalidateSync>();
 
@@ -2521,6 +3220,7 @@ async function main(): Promise<void> {
 
     watcher.stop();
     cursorWatcher.stop();
+    cursorTranscriptWatcher.stop();
 
     const pendingOps = retryQueue.getQueueSize();
     if (pendingOps > 0) {
@@ -2538,6 +3238,9 @@ async function main(): Promise<void> {
       sync.stop();
     }
     for (const sync of cursorSyncs.values()) {
+      sync.stop();
+    }
+    for (const sync of cursorTranscriptSyncs.values()) {
       sync.stop();
     }
 
