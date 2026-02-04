@@ -163,6 +163,133 @@ export const addMessage = mutation({
   },
 });
 
+const MAX_BATCH_SIZE = 25;
+
+const messageValidator = v.object({
+  message_uuid: v.optional(v.string()),
+  role: v.union(
+    v.literal("user"),
+    v.literal("assistant"),
+    v.literal("system"),
+    v.literal("tool")
+  ),
+  content: v.optional(v.string()),
+  thinking: v.optional(v.string()),
+  tool_calls: v.optional(v.array(v.object({
+    id: v.string(),
+    name: v.string(),
+    input: v.string(),
+  }))),
+  tool_results: v.optional(v.array(v.object({
+    tool_use_id: v.string(),
+    content: v.string(),
+    is_error: v.optional(v.boolean()),
+  }))),
+  images: v.optional(v.array(v.object({
+    media_type: v.string(),
+    data: v.optional(v.string()),
+    storage_id: v.optional(v.id("_storage")),
+  }))),
+  subtype: v.optional(v.string()),
+  timestamp: v.optional(v.number()),
+});
+
+export const addMessages = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    messages: v.array(messageValidator),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (args.messages.length === 0) {
+      return { inserted: 0, ids: [] };
+    }
+    if (args.messages.length > MAX_BATCH_SIZE) {
+      throw new Error(`Batch size ${args.messages.length} exceeds maximum of ${MAX_BATCH_SIZE}`);
+    }
+
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Unauthorized: can only add messages to your own conversations");
+    }
+
+    await checkRateLimit(ctx, conversation.user_id, "addMessage", MESSAGE_LIMIT, args.messages.length);
+
+    const ids: Id<"messages">[] = [];
+    let insertedCount = 0;
+    let maxTimestamp = conversation.updated_at;
+
+    for (const msg of args.messages) {
+      const msgTimestamp = msg.timestamp || Date.now();
+      if (msgTimestamp > maxTimestamp) {
+        maxTimestamp = msgTimestamp;
+      }
+
+      if (msg.message_uuid) {
+        const existing = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_uuid", (q) =>
+            q.eq("conversation_id", args.conversation_id).eq("message_uuid", msg.message_uuid)
+          )
+          .first();
+
+        if (existing) {
+          if (msg.images && msg.images.length > 0 && (!existing.images || existing.images.length === 0)) {
+            await ctx.db.patch(existing._id, { images: msg.images });
+          }
+          ids.push(existing._id);
+          continue;
+        }
+      }
+
+      const messageId = await ctx.db.insert("messages", {
+        conversation_id: args.conversation_id,
+        message_uuid: msg.message_uuid,
+        role: msg.role,
+        content: msg.content,
+        thinking: msg.thinking,
+        tool_calls: msg.tool_calls,
+        tool_results: msg.tool_results,
+        images: msg.images,
+        subtype: msg.subtype,
+        timestamp: msgTimestamp,
+      });
+      ids.push(messageId);
+      insertedCount++;
+    }
+
+    if (insertedCount > 0) {
+      const newMessageCount = conversation.message_count + insertedCount;
+      await ctx.db.patch(args.conversation_id, {
+        message_count: newMessageCount,
+        updated_at: maxTimestamp,
+      });
+
+      if (args.api_token) {
+        await ctx.db.patch(conversation.user_id, {
+          daemon_last_seen: Date.now(),
+        });
+      }
+
+      if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount) && !shouldGenerateTitle(conversation.message_count)) {
+        await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
+          conversation_id: args.conversation_id,
+        });
+      }
+    }
+
+    return { inserted: insertedCount, ids };
+  },
+});
+
 function generateShareToken(): string {
   return crypto.randomUUID();
 }
@@ -193,7 +320,17 @@ export const generateMessageShareLink = mutation({
 
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      throw new Error("Unauthorized: can only share messages from your own conversations");
+      if (conversation.is_private !== false) {
+        throw new Error("Unauthorized: can only share messages from your own conversations");
+      }
+      const authUser = await ctx.db.get(authUserId);
+      if (
+        !authUser ||
+        !authUser.team_id ||
+        authUser.team_id.toString() !== conversation.team_id?.toString()
+      ) {
+        throw new Error("Unauthorized: can only share messages from your own conversations");
+      }
     }
 
     const shareToken = generateShareToken();

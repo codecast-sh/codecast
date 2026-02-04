@@ -261,6 +261,101 @@ export class SyncService {
     }
   }
 
+  async addMessages(params: {
+    conversationId: string;
+    messages: Array<{
+      messageUuid?: string;
+      role: "human" | "assistant" | "system";
+      content: string;
+      timestamp: number;
+      thinking?: string;
+      toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+      toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
+      images?: Array<{ mediaType: string; data: string }>;
+      subtype?: string;
+    }>;
+  }): Promise<{ inserted: number; ids: string[] }> {
+    if (params.messages.length === 0) {
+      return { inserted: 0, ids: [] };
+    }
+
+    const roleMap: Record<string, "user" | "assistant" | "system" | "tool"> = {
+      human: "user",
+      assistant: "assistant",
+      system: "system",
+    };
+
+    const preparedMessages: Array<any> = [];
+    for (const msg of params.messages) {
+      const redactedContent = truncate(redactSecrets(msg.content), MAX_CONTENT_SIZE);
+      const redactedThinking = msg.thinking
+        ? truncate(redactSecrets(msg.thinking), MAX_CONTENT_SIZE)
+        : undefined;
+      const toolCalls = msg.toolCalls?.map(tc => ({
+        id: tc.id,
+        name: tc.name,
+        input: truncate(redactSecrets(JSON.stringify(tc.input)), MAX_TOOL_RESULT_SIZE),
+      }));
+      const toolResults = msg.toolResults?.map(tr => ({
+        tool_use_id: tr.toolUseId,
+        content: truncate(redactSecrets(tr.content), MAX_TOOL_RESULT_SIZE),
+        is_error: tr.isError,
+      }));
+
+      const images: Array<{ media_type: string; storage_id?: string; data?: string }> = [];
+      if (msg.images && msg.images.length > 0) {
+        const imagesToProcess = msg.images.slice(0, MAX_IMAGES_PER_MESSAGE);
+        for (const img of imagesToProcess) {
+          const storageId = await this.uploadImage(img.data, img.mediaType);
+          if (storageId) {
+            images.push({ media_type: img.mediaType, storage_id: storageId });
+          }
+        }
+      }
+
+      preparedMessages.push({
+        message_uuid: msg.messageUuid,
+        role: roleMap[msg.role],
+        content: redactedContent,
+        thinking: redactedThinking,
+        tool_calls: toolCalls,
+        tool_results: toolResults,
+        images: images.length > 0 ? images : undefined,
+        subtype: msg.subtype,
+        timestamp: msg.timestamp,
+      });
+    }
+
+    const BATCH_SIZE = 25;
+    let totalInserted = 0;
+    const allIds: string[] = [];
+
+    for (let i = 0; i < preparedMessages.length; i += BATCH_SIZE) {
+      const batch = preparedMessages.slice(i, i + BATCH_SIZE);
+      await this.throttle();
+      try {
+        const result = await this.client.mutation(
+          "messages:addMessages" as any,
+          {
+            conversation_id: params.conversationId,
+            messages: batch,
+            api_token: this.apiToken,
+          }
+        );
+        const typed = result as { inserted: number; ids: string[] };
+        totalInserted += typed.inserted;
+        allIds.push(...typed.ids);
+      } catch (error) {
+        if (isAuthError(error)) {
+          throw new AuthExpiredError();
+        }
+        throw error;
+      }
+    }
+
+    return { inserted: totalInserted, ids: allIds };
+  }
+
   async updateSyncCursor(params: {
     filePath: string;
     byteOffset: number;

@@ -16,7 +16,8 @@ export async function checkRateLimit(
   ctx: MutationCtx,
   userId: Id<"users">,
   endpoint: string,
-  limit: number = WRITE_LIMIT
+  limit: number = WRITE_LIMIT,
+  count: number = 1
 ): Promise<void> {
   const now = Date.now();
   const windowStart = now - WINDOW_MS;
@@ -33,7 +34,7 @@ export async function checkRateLimit(
       user_id: userId,
       endpoint,
       window_start: now,
-      request_count: 1,
+      request_count: count,
     });
     return;
   }
@@ -41,12 +42,12 @@ export async function checkRateLimit(
   if (existing.window_start < windowStart) {
     await ctx.db.patch(existing._id, {
       window_start: now,
-      request_count: 1,
+      request_count: count,
     });
     return;
   }
 
-  if (existing.request_count >= limit) {
+  if (existing.request_count + count - 1 >= limit) {
     const secondsRemaining = Math.ceil((existing.window_start + WINDOW_MS - now) / 1000);
     throw new RateLimitError(
       `Rate limit exceeded. Please wait ${secondsRemaining} seconds before retrying.`
@@ -54,6 +55,6 @@ export async function checkRateLimit(
   }
 
   await ctx.db.patch(existing._id, {
-    request_count: existing.request_count + 1,
+    request_count: existing.request_count + count,
   });
 }

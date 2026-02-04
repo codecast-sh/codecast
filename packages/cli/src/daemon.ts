@@ -551,6 +551,104 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
   };
 }
 
+async function flushPendingMessagesBatch(
+  pendingMsgs: Array<{ uuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string }>,
+  conversationId: string,
+  syncService: SyncService,
+  retryQueue: RetryQueue,
+): Promise<void> {
+  try {
+    await syncService.addMessages({
+      conversationId,
+      messages: pendingMsgs.map(msg => ({
+        messageUuid: msg.uuid,
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        thinking: msg.thinking,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        images: msg.images,
+        subtype: msg.subtype,
+      })),
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log(`Batch pending flush failed, queueing individually: ${errMsg}`);
+    for (const msg of pendingMsgs) {
+      retryQueue.add("addMessage", {
+        conversationId,
+        messageUuid: msg.uuid,
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        thinking: msg.thinking,
+        toolCalls: msg.toolCalls,
+        toolResults: msg.toolResults,
+        images: msg.images,
+        subtype: msg.subtype,
+      }, errMsg);
+    }
+  }
+}
+
+type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string };
+
+function mapRole(role: string): "human" | "assistant" | "system" {
+  return role === "user" ? "human" : role === "system" ? "system" : "assistant";
+}
+
+function prepMessageForSync(msg: RawMessage): { messageUuid?: string; role: "human" | "assistant" | "system"; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string } {
+  return {
+    messageUuid: msg.uuid,
+    role: mapRole(msg.role),
+    content: redactSecrets(msg.content),
+    timestamp: msg.timestamp,
+    thinking: msg.thinking,
+    toolCalls: msg.toolCalls,
+    toolResults: msg.toolResults,
+    images: msg.images,
+    subtype: msg.subtype,
+  };
+}
+
+async function syncMessagesBatch(
+  messages: RawMessage[],
+  conversationId: string,
+  syncService: SyncService,
+  retryQueue: RetryQueue,
+): Promise<{ authExpired: boolean; conversationNotFound: boolean }> {
+  try {
+    await syncService.addMessages({
+      conversationId,
+      messages: messages.map(prepMessageForSync),
+    });
+    resetAuthFailureCount();
+    return { authExpired: false, conversationNotFound: false };
+  } catch (err) {
+    if (err instanceof AuthExpiredError) {
+      if (handleAuthFailure()) {
+        return { authExpired: true, conversationNotFound: false };
+      }
+    }
+
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes("Conversation not found")) {
+      return { authExpired: false, conversationNotFound: true };
+    }
+
+    log(`Batch sync failed, queueing individually: ${errMsg}`);
+    for (const msg of messages) {
+      const prepped = prepMessageForSync(msg);
+      retryQueue.add("addMessage", {
+        conversationId,
+        ...prepped,
+      }, errMsg);
+    }
+    return { authExpired: false, conversationNotFound: false };
+  }
+}
+
 async function processSessionFile(
   filePath: string,
   sessionId: string,
@@ -682,37 +780,7 @@ async function processSessionFile(
       }
 
       if (pendingMessages[sessionId]) {
-        for (const msg of pendingMessages[sessionId]) {
-          try {
-            await syncService.addMessage({
-              conversationId,
-              messageUuid: msg.uuid,
-              role: msg.role,
-              content: msg.content,
-              timestamp: msg.timestamp,
-              thinking: msg.thinking,
-              toolCalls: msg.toolCalls,
-              toolResults: msg.toolResults,
-              images: msg.images,
-              subtype: msg.subtype,
-            });
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log(`Failed to add pending message, queueing for retry: ${errMsg}`);
-            retryQueue.add("addMessage", {
-              conversationId,
-              messageUuid: msg.uuid,
-              role: msg.role,
-              content: msg.content,
-              timestamp: msg.timestamp,
-              thinking: msg.thinking,
-              toolCalls: msg.toolCalls,
-              toolResults: msg.toolResults,
-              images: msg.images,
-              subtype: msg.subtype,
-            }, errMsg);
-          }
-        }
+        await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
         delete pendingMessages[sessionId];
       }
     } catch (err) {
@@ -780,102 +848,59 @@ async function processSessionFile(
     }
   }
 
-  for (const msg of messages) {
+  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+  if (batchResult.authExpired) {
+    log("⚠️  Authentication expired - sync paused");
+    return;
+  }
+  if (batchResult.conversationNotFound) {
+    log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+    delete conversationCache[sessionId];
+    saveConversationCache(conversationCache);
+
+    let recreateFullContent;
     try {
-      await syncService.addMessage({
-        conversationId,
-        messageUuid: msg.uuid,
-        role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-        content: redactSecrets(msg.content),
-        timestamp: msg.timestamp,
-        thinking: msg.thinking,
-        toolCalls: msg.toolCalls,
-        toolResults: msg.toolResults,
-        images: msg.images,
-        subtype: msg.subtype,
+      recreateFullContent = fs.readFileSync(filePath, "utf-8");
+    } catch (readErr: any) {
+      if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
+        log(`Warning: Permission denied reading ${filePath} for conversation recreation. Skipping.`);
+        setPosition(filePath, stats.size);
+        return;
+      }
+      throw readErr;
+    }
+
+    const slug = extractSlug(recreateFullContent);
+    const firstMessageTimestamp = messages[0]?.timestamp;
+    const recreateProjectPath = extractCwd(recreateFullContent) || projectPath;
+    const gitInfo = recreateProjectPath ? getGitInfo(recreateProjectPath) : undefined;
+
+    try {
+      const firstUserMessage = messages.find(msg => msg.role === "user");
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
+      conversationId = await syncService.createConversation({
+        userId,
+        teamId,
+        sessionId,
+        agentType: "claude_code",
+        projectPath: recreateProjectPath,
+        slug,
+        title,
+        startedAt: firstMessageTimestamp,
+        gitInfo,
       });
-      resetAuthFailureCount();
-    } catch (err) {
-      if (err instanceof AuthExpiredError) {
-        if (handleAuthFailure()) {
-          log("⚠️  Authentication expired - sync paused");
-          return;
-        }
-        // Continue to error handling - will retry
-      }
+      conversationCache[sessionId] = conversationId;
+      saveConversationCache(conversationCache);
+      log(`Recreated conversation ${conversationId} for session ${sessionId}`);
 
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes("Conversation not found")) {
-        log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
-        delete conversationCache[sessionId];
-        saveConversationCache(conversationCache);
-
-        let recreateFullContent;
-        try {
-          recreateFullContent = fs.readFileSync(filePath, "utf-8");
-        } catch (readErr: any) {
-          if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
-            log(`Warning: Permission denied reading ${filePath} for conversation recreation. Skipping.`);
-            continue;
-          }
-          throw readErr;
-        }
-
-        const slug = extractSlug(recreateFullContent);
-        const firstMessageTimestamp = messages[0]?.timestamp;
-        const recreateProjectPath = extractCwd(recreateFullContent) || projectPath;
-        const gitInfo = recreateProjectPath ? getGitInfo(recreateProjectPath) : undefined;
-
-        try {
-          const firstUserMessage = messages.find(msg => msg.role === "user");
-          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-
-          conversationId = await syncService.createConversation({
-            userId,
-            teamId,
-            sessionId,
-            agentType: "claude_code",
-            projectPath: recreateProjectPath,
-            slug,
-            title,
-            startedAt: firstMessageTimestamp,
-            gitInfo,
-          });
-          conversationCache[sessionId] = conversationId;
-          saveConversationCache(conversationCache);
-          log(`Recreated conversation ${conversationId} for session ${sessionId}`);
-
-          await syncService.addMessage({
-            conversationId,
-            messageUuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: redactSecrets(msg.content),
-            timestamp: msg.timestamp,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            subtype: msg.subtype,
-          });
-        } catch (retryErr) {
-          const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          log(`Failed to recreate conversation and add message: ${retryErrMsg}`);
-        }
-      } else {
-        log(`Failed to add message, queueing for retry: ${errMsg}`);
-        retryQueue.add("addMessage", {
-          conversationId,
-          messageUuid: msg.uuid,
-          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-          content: redactSecrets(msg.content),
-          timestamp: msg.timestamp,
-          thinking: msg.thinking,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          images: msg.images,
-          subtype: msg.subtype,
-        }, errMsg);
-      }
+      await syncService.addMessages({
+        conversationId,
+        messages: messages.map(prepMessageForSync),
+      });
+    } catch (retryErr) {
+      const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      log(`Failed to recreate conversation and add messages: ${retryErrMsg}`);
     }
   }
 
@@ -998,37 +1023,7 @@ async function processCursorSession(
       log(`Created conversation ${conversationId} for Cursor session ${sessionId}`);
 
       if (pendingMessages[sessionId]) {
-        for (const msg of pendingMessages[sessionId]) {
-          try {
-            await syncService.addMessage({
-              conversationId,
-              messageUuid: msg.uuid,
-              role: msg.role,
-              content: msg.content,
-              timestamp: msg.timestamp,
-              thinking: msg.thinking,
-              toolCalls: msg.toolCalls,
-              toolResults: msg.toolResults,
-              images: msg.images,
-              subtype: msg.subtype,
-            });
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log(`Failed to add pending message, queueing for retry: ${errMsg}`);
-            retryQueue.add("addMessage", {
-              conversationId,
-              messageUuid: msg.uuid,
-              role: msg.role,
-              content: msg.content,
-              timestamp: msg.timestamp,
-              thinking: msg.thinking,
-              toolCalls: msg.toolCalls,
-              toolResults: msg.toolResults,
-              images: msg.images,
-              subtype: msg.subtype,
-            }, errMsg);
-          }
-        }
+        await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
         delete pendingMessages[sessionId];
       }
     } catch (err) {
@@ -1079,85 +1074,41 @@ async function processCursorSession(
     }
   }
 
-  for (const msg of messages) {
+  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+  if (batchResult.authExpired) {
+    log("⚠️  Authentication expired - sync paused");
+    return;
+  }
+  if (batchResult.conversationNotFound) {
+    log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+    delete conversationCache[sessionId];
+    saveConversationCache(conversationCache);
+
+    const firstMessageTimestamp = messages[0]?.timestamp;
+    const firstUserMessage = messages.find(msg => msg.role === "user");
+    const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
     try {
-      await syncService.addMessage({
-        conversationId,
-        messageUuid: msg.uuid,
-        role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-        content: redactSecrets(msg.content),
-        timestamp: msg.timestamp,
-        thinking: msg.thinking,
-        toolCalls: msg.toolCalls,
-        toolResults: msg.toolResults,
-        images: msg.images,
-        subtype: msg.subtype,
+      conversationId = await syncService.createConversation({
+        userId,
+        teamId,
+        sessionId,
+        agentType: "cursor",
+        projectPath: workspacePath,
+        title,
+        startedAt: firstMessageTimestamp,
       });
-      resetAuthFailureCount();
-    } catch (err) {
-      if (err instanceof AuthExpiredError) {
-        if (handleAuthFailure()) {
-          log("⚠️  Authentication expired - sync paused");
-          return;
-        }
-        // Continue to error handling - will retry
-      }
+      conversationCache[sessionId] = conversationId;
+      saveConversationCache(conversationCache);
+      log(`Recreated conversation ${conversationId} for Cursor session ${sessionId}`);
 
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (errMsg.includes("Conversation not found")) {
-        log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
-        delete conversationCache[sessionId];
-        saveConversationCache(conversationCache);
-
-        const firstMessageTimestamp = messages[0]?.timestamp;
-        const firstUserMessage = messages.find(msg => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-
-        try {
-          conversationId = await syncService.createConversation({
-            userId,
-            teamId,
-            sessionId,
-            agentType: "cursor",
-            projectPath: workspacePath,
-            title,
-            startedAt: firstMessageTimestamp,
-          });
-          conversationCache[sessionId] = conversationId;
-          saveConversationCache(conversationCache);
-          log(`Recreated conversation ${conversationId} for Cursor session ${sessionId}`);
-
-          await syncService.addMessage({
-            conversationId,
-            messageUuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: redactSecrets(msg.content),
-            timestamp: msg.timestamp,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            subtype: msg.subtype,
-          });
-        } catch (retryErr) {
-          const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-          log(`Failed to recreate conversation and add message: ${retryErrMsg}`);
-        }
-      } else {
-        log(`Failed to add message, queueing for retry: ${errMsg}`);
-        retryQueue.add("addMessage", {
-          conversationId,
-          messageUuid: msg.uuid,
-          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-          content: redactSecrets(msg.content),
-          timestamp: msg.timestamp,
-          thinking: msg.thinking,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          images: msg.images,
-          subtype: msg.subtype,
-        }, errMsg);
-      }
+      await syncService.addMessages({
+        conversationId,
+        messages: messages.map(prepMessageForSync),
+      });
+    } catch (retryErr) {
+      const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      log(`Failed to recreate conversation and add messages: ${retryErrMsg}`);
     }
   }
 
@@ -1252,37 +1203,7 @@ async function processCursorTranscriptFile(
         syncStats.conversationsCreated++;
 
         if (pendingMessages[sessionId]) {
-          for (const msg of pendingMessages[sessionId]) {
-            try {
-              await syncService.addMessage({
-                conversationId,
-                messageUuid: msg.uuid,
-                role: msg.role,
-                content: msg.content,
-                timestamp: msg.timestamp,
-                thinking: msg.thinking,
-                toolCalls: msg.toolCalls,
-                toolResults: msg.toolResults,
-                images: msg.images,
-                subtype: msg.subtype,
-              });
-            } catch (err) {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              log(`Failed to add pending message, queueing for retry: ${errMsg}`);
-              retryQueue.add("addMessage", {
-                conversationId,
-                messageUuid: msg.uuid,
-                role: msg.role,
-                content: msg.content,
-                timestamp: msg.timestamp,
-                thinking: msg.thinking,
-                toolCalls: msg.toolCalls,
-                toolResults: msg.toolResults,
-                images: msg.images,
-                subtype: msg.subtype,
-              }, errMsg);
-            }
-          }
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
           delete pendingMessages[sessionId];
         }
       } catch (err) {
@@ -1332,89 +1253,46 @@ async function processCursorTranscriptFile(
       }
     }
 
-    for (const msg of messages) {
+    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+    if (batchResult.authExpired) {
+      log("⚠️  Authentication expired - sync paused");
+      return;
+    }
+    if (batchResult.conversationNotFound) {
+      log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+      delete conversationCache[sessionId];
+      saveConversationCache(conversationCache);
+
       try {
-        await syncService.addMessage({
-          conversationId,
-          messageUuid: msg.uuid,
-          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-          content: redactSecrets(msg.content),
-          timestamp: msg.timestamp,
-          thinking: msg.thinking,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          images: msg.images,
-          subtype: msg.subtype,
+        const projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
+        const firstMessageTimestamp = messages[0]?.timestamp;
+        const firstUserMessage = messages.find(m => m.role === "user");
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+
+        conversationId = await syncService.createConversation({
+          userId,
+          teamId,
+          sessionId,
+          agentType: "cursor",
+          projectPath,
+          slug: undefined,
+          title,
+          startedAt: firstMessageTimestamp,
+          parentMessageUuid: undefined,
+          gitInfo,
         });
-        resetAuthFailureCount();
-      } catch (err) {
-        if (err instanceof AuthExpiredError) {
-          if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
-            return;
-          }
-        }
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        log(`Recreated conversation ${conversationId} for Cursor transcript ${sessionId}`);
 
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes("Conversation not found")) {
-          log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
-          delete conversationCache[sessionId];
-          saveConversationCache(conversationCache);
-
-          try {
-            const projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
-            const firstMessageTimestamp = messages[0]?.timestamp;
-            const firstUserMessage = messages.find(m => m.role === "user");
-            const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-            const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
-
-            conversationId = await syncService.createConversation({
-              userId,
-              teamId,
-              sessionId,
-              agentType: "cursor",
-              projectPath,
-              slug: undefined,
-              title,
-              startedAt: firstMessageTimestamp,
-              parentMessageUuid: undefined,
-              gitInfo,
-            });
-            conversationCache[sessionId] = conversationId;
-            saveConversationCache(conversationCache);
-            log(`Recreated conversation ${conversationId} for Cursor transcript ${sessionId}`);
-
-            await syncService.addMessage({
-              conversationId,
-              messageUuid: msg.uuid,
-              role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-              content: redactSecrets(msg.content),
-              timestamp: msg.timestamp,
-              thinking: msg.thinking,
-              toolCalls: msg.toolCalls,
-              toolResults: msg.toolResults,
-              images: msg.images,
-              subtype: msg.subtype,
-            });
-          } catch (retryErr) {
-            const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-            log(`Failed to recreate Cursor conversation and add message: ${retryErrMsg}`);
-          }
-        } else {
-          log(`Failed to add message, queueing for retry: ${errMsg}`);
-          retryQueue.add("addMessage", {
-            conversationId,
-            messageUuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: redactSecrets(msg.content),
-            timestamp: msg.timestamp,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            subtype: msg.subtype,
-          }, errMsg);
-        }
+        await syncService.addMessages({
+          conversationId,
+          messages: messages.map(prepMessageForSync),
+        });
+      } catch (retryErr) {
+        const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        log(`Failed to recreate Cursor conversation and add messages: ${retryErrMsg}`);
       }
     }
 
@@ -1553,37 +1431,7 @@ async function processCodexSession(
         }
 
         if (pendingMessages[sessionId]) {
-          for (const msg of pendingMessages[sessionId]) {
-            try {
-              await syncService.addMessage({
-                conversationId,
-                messageUuid: msg.uuid,
-                role: msg.role,
-                content: msg.content,
-                timestamp: msg.timestamp,
-                thinking: msg.thinking,
-                toolCalls: msg.toolCalls,
-                toolResults: msg.toolResults,
-                images: msg.images,
-                subtype: msg.subtype,
-              });
-            } catch (err) {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              log(`Failed to add pending message, queueing for retry: ${errMsg}`);
-              retryQueue.add("addMessage", {
-                conversationId,
-                messageUuid: msg.uuid,
-                role: msg.role,
-                content: msg.content,
-                timestamp: msg.timestamp,
-                thinking: msg.thinking,
-                toolCalls: msg.toolCalls,
-                toolResults: msg.toolResults,
-                images: msg.images,
-                subtype: msg.subtype,
-              }, errMsg);
-            }
-          }
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
           delete pendingMessages[sessionId];
         }
       } catch (err) {
@@ -1636,84 +1484,40 @@ async function processCodexSession(
       }
     }
 
-    for (const msg of messages) {
+    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+    if (batchResult.authExpired) {
+      log("⚠️  Authentication expired - sync paused");
+      return;
+    }
+    if (batchResult.conversationNotFound) {
+      log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+      delete conversationCache[sessionId];
+      saveConversationCache(conversationCache);
+
+      const firstMsgTimestamp = messages[0]?.timestamp;
+      const firstUserMessage = messages.find(msg => msg.role === "user");
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
       try {
-        await syncService.addMessage({
-          conversationId,
-          messageUuid: msg.uuid,
-          role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-          content: redactSecrets(msg.content),
-          timestamp: msg.timestamp,
-          thinking: msg.thinking,
-          toolCalls: msg.toolCalls,
-          toolResults: msg.toolResults,
-          images: msg.images,
-          subtype: msg.subtype,
+        conversationId = await syncService.createConversation({
+          userId,
+          teamId,
+          sessionId,
+          agentType: "codex",
+          title,
+          startedAt: firstMsgTimestamp,
         });
-        resetAuthFailureCount();
-      } catch (err) {
-        if (err instanceof AuthExpiredError) {
-          if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
-            return;
-          }
-          // Continue to error handling - will retry
-        }
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        log(`Recreated conversation ${conversationId} for Codex session ${sessionId}`);
 
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes("Conversation not found")) {
-          log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
-          delete conversationCache[sessionId];
-          saveConversationCache(conversationCache);
-
-          const firstMsgTimestamp = messages[0]?.timestamp;
-          const firstUserMessage = messages.find(msg => msg.role === "user");
-          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-
-          try {
-            conversationId = await syncService.createConversation({
-              userId,
-              teamId,
-              sessionId,
-              agentType: "codex",
-              title,
-              startedAt: firstMsgTimestamp,
-            });
-            conversationCache[sessionId] = conversationId;
-            saveConversationCache(conversationCache);
-            log(`Recreated conversation ${conversationId} for Codex session ${sessionId}`);
-
-            await syncService.addMessage({
-              conversationId,
-              messageUuid: msg.uuid,
-              role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-              content: redactSecrets(msg.content),
-              timestamp: msg.timestamp,
-              thinking: msg.thinking,
-              toolCalls: msg.toolCalls,
-              toolResults: msg.toolResults,
-              images: msg.images,
-              subtype: msg.subtype,
-            });
-          } catch (retryErr) {
-            const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-            log(`Failed to recreate Codex conversation and add message: ${retryErrMsg}`);
-          }
-        } else {
-          log(`Failed to add message, queueing for retry: ${errMsg}`);
-          retryQueue.add("addMessage", {
-            conversationId,
-            messageUuid: msg.uuid,
-            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
-            content: redactSecrets(msg.content),
-            timestamp: msg.timestamp,
-            thinking: msg.thinking,
-            toolCalls: msg.toolCalls,
-            toolResults: msg.toolResults,
-            images: msg.images,
-            subtype: msg.subtype,
-          }, errMsg);
-        }
+        await syncService.addMessages({
+          conversationId,
+          messages: messages.map(prepMessageForSync),
+        });
+      } catch (retryErr) {
+        const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        log(`Failed to recreate Codex conversation and add messages: ${retryErrMsg}`);
       }
     }
 
@@ -2645,37 +2449,7 @@ async function main(): Promise<void> {
       log(`Retry: Created conversation ${conversationId} for session ${params.sessionId}`);
 
       if (pendingMessages[params.sessionId]) {
-        for (const msg of pendingMessages[params.sessionId]) {
-          try {
-            await syncService.addMessage({
-              conversationId,
-              messageUuid: msg.uuid,
-              role: msg.role,
-              content: msg.content,
-              timestamp: msg.timestamp,
-              thinking: msg.thinking,
-              toolCalls: msg.toolCalls,
-              toolResults: msg.toolResults,
-              images: msg.images,
-              subtype: msg.subtype,
-            });
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log(`Failed to add pending message during retry: ${errMsg}`);
-            retryQueue.add("addMessage", {
-              conversationId,
-              messageUuid: msg.uuid,
-              role: msg.role,
-              content: msg.content,
-              timestamp: msg.timestamp,
-              thinking: msg.thinking,
-              toolCalls: msg.toolCalls,
-              toolResults: msg.toolResults,
-              images: msg.images,
-              subtype: msg.subtype,
-            }, errMsg);
-          }
-        }
+        await flushPendingMessagesBatch(pendingMessages[params.sessionId], conversationId, syncService, retryQueue);
         delete pendingMessages[params.sessionId];
       }
       updateState();
