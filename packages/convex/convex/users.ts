@@ -1243,7 +1243,7 @@ export const getTeamsForCLI = query({
           icon: team.icon,
           icon_color: team.icon_color,
           role: m.role,
-          visibility: m.visibility || "activity",
+          visibility: m.visibility || "summary",
         };
       })
     );

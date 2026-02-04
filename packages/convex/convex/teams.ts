@@ -54,7 +54,7 @@ export const getUserTeams = query({
           icon_color: team.icon_color,
           role: m.role,
           joined_at: m.joined_at,
-          visibility: m.visibility || "activity",
+          visibility: m.visibility || "summary",
         };
       })
     );
