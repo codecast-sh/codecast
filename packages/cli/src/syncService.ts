@@ -8,7 +8,7 @@ const MAX_TOTAL_MESSAGE_SIZE = 900_000;
 const MAX_IMAGE_SIZE = 5_000_000;
 const MAX_IMAGES_PER_MESSAGE = 10;
 
-const MIN_REQUEST_INTERVAL_MS = 250;
+const MIN_REQUEST_INTERVAL_MS = 100;
 
 export class AuthExpiredError extends Error {
   constructor(message: string = "Authentication token expired") {

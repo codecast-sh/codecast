@@ -34,7 +34,7 @@ export class CodexWatcher extends EventEmitter {
     super();
     this.historyPath =
       historyPath ||
-      path.join(process.env.HOME || "", ".codex", "history");
+      path.join(process.env.HOME || "", ".codex", "sessions");
   }
 
   start(): void {
@@ -126,6 +126,10 @@ export class CodexWatcher extends EventEmitter {
   }
 
   private extractSessionId(filePath: string): string {
-    return path.basename(path.dirname(filePath));
+    const filename = path.basename(filePath, ".jsonl");
+    const match = filename.match(
+      /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+    );
+    return match ? match[1] : filename;
   }
 }

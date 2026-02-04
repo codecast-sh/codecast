@@ -109,8 +109,8 @@ function parseCursorChatData(jsonStr: string): ParsedMessage[] {
 
 export function extractMessagesFromCursorDb(
   dbPath: string,
-  _lastRowId: number = 0
-): { messages: ParsedMessage[]; maxRowId: number } {
+  skipCount: number = 0
+): { messages: ParsedMessage[]; maxRowId: number; totalCount: number } {
   let db: Database | null = null;
   try {
     db = new Database(dbPath, { readonly: true });
@@ -122,11 +122,12 @@ export function extractMessagesFromCursorDb(
       .get();
 
     if (!row) {
-      return { messages: [], maxRowId: 0 };
+      return { messages: [], maxRowId: 0, totalCount: 0 };
     }
 
-    const messages = parseCursorChatData(row.value);
-    return { messages, maxRowId: row.rowid };
+    const allMessages = parseCursorChatData(row.value);
+    const newMessages = allMessages.slice(skipCount);
+    return { messages: newMessages, maxRowId: row.rowid, totalCount: allMessages.length };
   } finally {
     if (db) {
       db.close();
