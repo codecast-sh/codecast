@@ -3,6 +3,8 @@ import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as AppleAuthentication from 'expo-apple-authentication';
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
 import { useAuthActions } from '@convex-dev/auth/react';
 import { useConvexAuth } from 'convex/react';
 
@@ -58,25 +60,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsBiometricEnabled(enabled === 'true');
   };
 
+  const handleOAuthSignIn = async (provider: string) => {
+    const redirectUrl = Linking.createURL('auth/callback');
+    const result = await signIn(provider, { redirectTo: redirectUrl });
+    if (result.redirect) {
+      const browserResult = await WebBrowser.openAuthSessionAsync(
+        result.redirect.toString(),
+        redirectUrl,
+      );
+      if (browserResult.type === 'success' && browserResult.url) {
+        const url = new URL(browserResult.url);
+        const code = url.searchParams.get('code');
+        if (code) {
+          await signIn(provider, { code });
+        }
+      }
+    }
+  };
+
   const signInWithGitHub = async () => {
-    await signIn('github');
+    await handleOAuthSignIn('github');
   };
 
   const signInWithApple = async () => {
-    if (Platform.OS !== 'ios') {
-      throw new Error('Apple Sign In is only available on iOS');
-    }
-    const credential = await AppleAuthentication.signInAsync({
-      requestedScopes: [
-        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
-        AppleAuthentication.AppleAuthenticationScope.EMAIL,
-      ],
-    });
-    if (credential.identityToken) {
-      await signIn('apple', { idToken: credential.identityToken });
-    } else {
-      throw new Error('No identity token received from Apple');
-    }
+    await handleOAuthSignIn('apple');
   };
 
   const signInWithEmail = async (email: string, password: string) => {
