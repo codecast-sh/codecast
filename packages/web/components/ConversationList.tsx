@@ -13,6 +13,205 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useActiveTeamStore } from "../store/activeTeamStore";
 
+function VisibilityDropdown({
+  conversationId,
+  isPrivate,
+  visibilityMode,
+  teamVisibility,
+}: {
+  conversationId: string;
+  isPrivate: boolean;
+  visibilityMode?: string;
+  teamVisibility?: string | null;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [optimisticState, setOptimisticState] = useState<{ isPrivate?: boolean; teamVisibility?: string | null } | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const setPrivacy = useMutation(api.conversations.setPrivacy);
+  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
+
+  const effectivePrivate = optimisticState?.isPrivate !== undefined ? optimisticState.isPrivate : isPrivate;
+  const effectiveTeamVisibility = optimisticState?.teamVisibility !== undefined ? optimisticState.teamVisibility : teamVisibility;
+  const effectiveMode = effectivePrivate ? "private" : (effectiveTeamVisibility || visibilityMode || "summary");
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [isOpen]);
+
+  const handleSetPrivate = async () => {
+    setOptimisticState({ isPrivate: true });
+    setIsOpen(false);
+    try {
+      await setPrivacy({ conversation_id: conversationId as Id<"conversations">, is_private: true });
+    } catch {
+      setOptimisticState(null);
+      toast.error("Failed to update visibility");
+    }
+  };
+
+  const handleSetTeamVisibility = async (mode: "summary" | "full") => {
+    setOptimisticState({ isPrivate: false, teamVisibility: mode });
+    setIsOpen(false);
+    try {
+      await setTeamVisibility({ conversation_id: conversationId as Id<"conversations">, team_visibility: mode });
+    } catch {
+      setOptimisticState(null);
+      toast.error("Failed to update visibility");
+    }
+  };
+
+  const getLabel = () => {
+    if (effectiveMode === "private") return "Private";
+    if (effectiveMode === "full") return "Full";
+    return "Summary";
+  };
+
+  const PrivateIcon = () => (
+    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+    </svg>
+  );
+
+  const SummaryIcon = () => (
+    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+    </svg>
+  );
+
+  const FullIcon = () => (
+    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+
+  return (
+    <div ref={dropdownRef} className="relative">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
+        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+          effectiveMode === "private"
+            ? "bg-sol-base02/30 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/50"
+            : effectiveMode === "full"
+              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:border-emerald-500/50"
+              : "bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/30 hover:border-teal-500/50"
+        }`}
+      >
+        {effectiveMode === "private" && <PrivateIcon />}
+        {effectiveMode === "summary" && <SummaryIcon />}
+        {effectiveMode === "full" && <FullIcon />}
+        {getLabel()}
+        <svg className="w-2.5 h-2.5 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {isOpen && (
+        <div className="absolute right-0 top-full mt-1 z-50 bg-white dark:bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 min-w-[150px]">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleSetPrivate();
+            }}
+            className={`w-full px-3 py-1.5 text-left text-xs flex items-center gap-2 hover:bg-sol-bg-alt transition-colors ${effectiveMode === "private" ? "text-sol-text font-medium" : "text-sol-text-muted"}`}
+          >
+            <PrivateIcon />
+            <div>
+              <div>Private</div>
+              <div className="text-[10px] text-sol-text-dim">Hidden from team</div>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleSetTeamVisibility("summary");
+            }}
+            className={`w-full px-3 py-1.5 text-left text-xs flex items-center gap-2 hover:bg-sol-bg-alt transition-colors ${effectiveMode === "summary" ? "text-teal-600 dark:text-teal-400 font-medium" : "text-sol-text-muted"}`}
+          >
+            <SummaryIcon />
+            <div>
+              <div>Summary</div>
+              <div className="text-[10px] text-sol-text-dim">Title + activity</div>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleSetTeamVisibility("full");
+            }}
+            className={`w-full px-3 py-1.5 text-left text-xs flex items-center gap-2 hover:bg-sol-bg-alt transition-colors ${effectiveMode === "full" ? "text-emerald-600 dark:text-emerald-400 font-medium" : "text-sol-text-muted"}`}
+          >
+            <FullIcon />
+            <div>
+              <div>Full</div>
+              <div className="text-[10px] text-sol-text-dim">Complete conversation</div>
+            </div>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FavoriteButton({
+  conversationId,
+  isFavorite,
+}: {
+  conversationId: string;
+  isFavorite: boolean;
+}) {
+  const [optimisticFavorite, setOptimisticFavorite] = useState<boolean | null>(null);
+  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
+
+  const effectiveFavorite = optimisticFavorite !== null ? optimisticFavorite : isFavorite;
+
+  const handleClick = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setOptimisticFavorite(!effectiveFavorite);
+    try {
+      await toggleFavorite({ conversation_id: conversationId as Id<"conversations"> });
+    } catch {
+      setOptimisticFavorite(null);
+      toast.error("Failed to update favorite");
+    }
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      className={`p-1 rounded transition-colors ${
+        effectiveFavorite
+          ? "text-amber-400 hover:text-amber-300"
+          : "text-sol-text-dim/30 hover:text-amber-400 opacity-0 group-hover:opacity-100"
+      }`}
+      title={effectiveFavorite ? "Remove from favorites" : "Add to favorites"}
+    >
+      <svg className="w-4 h-4" fill={effectiveFavorite ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+      </svg>
+    </button>
+  );
+}
+
 type Conversation = {
   _id: string;
   user_id: string;
@@ -159,14 +358,35 @@ function OpenAIIcon({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
-function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; className?: string }) {
-  if (agentType === "claude_code") {
-    return <ClaudeIcon className={`${className} text-amber-400`} />;
-  } else if (agentType === "codex_cli") {
-    return <OpenAIIcon className={`${className} text-emerald-400`} />;
-  }
-  return null;
+function CursorIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 4l16 6-8 2-2 8z"/>
+    </svg>
+  );
 }
+
+function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; className?: string }) {
+  if (agentType === "codex" || agentType === "codex_cli") {
+    return (
+      <span className={`${className} rounded bg-[#0f0f0f] flex items-center justify-center shrink-0`}>
+        <OpenAIIcon className="w-2.5 h-2.5 text-white" />
+      </span>
+    );
+  } else if (agentType === "cursor") {
+    return (
+      <span className={`${className} rounded bg-[#1a1a2e] flex items-center justify-center shrink-0`}>
+        <CursorIcon className="w-2.5 h-2.5 text-white" />
+      </span>
+    );
+  }
+  return (
+    <span className={`${className} rounded bg-sol-yellow flex items-center justify-center shrink-0`}>
+      <ClaudeIcon className="w-2.5 h-2.5 text-sol-bg" />
+    </span>
+  );
+}
+
 
 type TimeGroup = {
   label: string;
@@ -232,7 +452,8 @@ function groupByTime(conversations: Conversation[]): TimeGroup[] {
 
 function getAgentTypeLabel(agentType: string): string {
   if (agentType === "claude_code") return "Claude Code";
-  if (agentType === "codex_cli") return "Codex CLI";
+  if (agentType === "codex" || agentType === "codex_cli") return "Codex";
+  if (agentType === "cursor") return "Cursor";
   return agentType;
 }
 
@@ -265,8 +486,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
   const user = useQuery(api.users.getCurrentUser);
-  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
-  const setPrivacy = useMutation(api.conversations.setPrivacy);
   const { activeTeamId } = useActiveTeamStore();
   const effectiveTeamId = activeTeamId || user?.team_id;
   const teamMembers = useQuery(
@@ -694,7 +913,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                           ? "bg-white dark:bg-sol-bg-alt/60 ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
                           : "bg-white dark:bg-sol-bg-alt/60 border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
                   }`}>
-                  <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4 overflow-hidden">
+                  <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4">
                     <div className="flex-1 min-w-0">
                       {/* Header row: title + timestamp */}
                       <div className="flex items-start justify-between gap-3 mb-1">
@@ -714,62 +933,54 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          {filter === "team" && hasTeam && (() => {
-                            // For own sessions, show what teammates see based on your team visibility setting
-                            // For others' sessions, show the visibility_mode returned by the backend
-                            const displayMode = conv.is_own
-                              ? (activeTeam?.visibility || "activity")
-                              : conv.visibility_mode;
-                            if (!displayMode) return null;
-                            return (
-                              <span
-                                className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                  displayMode === "full" ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30" :
-                                  displayMode === "summary" ? "bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30" :
-                                  "bg-sol-base02/50 text-sol-text-muted border border-sol-border/40"
-                                }`}
-                                title={conv.is_own ? `Team sees: ${displayMode}` : undefined}
-                              >
-                                {conv.is_own && <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                        <div
+                          className="flex items-center gap-1.5 shrink-0"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {filter === "team" && hasTeam && conv.is_own && (
+                            <VisibilityDropdown
+                              conversationId={conv._id}
+                              isPrivate={conv.is_private ?? false}
+                              visibilityMode={conv.visibility_mode}
+                              teamVisibility={conv.team_visibility}
+                            />
+                          )}
+                          {filter === "team" && hasTeam && !conv.is_own && conv.visibility_mode && (
+                            <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                              conv.visibility_mode === "full" ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30" :
+                              conv.visibility_mode === "summary" ? "bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/30" :
+                              "bg-sol-base02/50 text-sol-text-muted border border-sol-border/40"
+                            }`}>
+                              {(conv.visibility_mode === "full" || conv.visibility_mode === "summary") && (
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-                                </svg>}
-                                {displayMode === "full" ? "Full" :
-                                 displayMode === "summary" ? "Summary" :
-                                 displayMode === "minimal" || displayMode === "activity" ? "Activity" :
-                                 displayMode}
-                              </span>
-                            );
-                          })()}
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              toggleFavorite({ conversation_id: conv._id as Id<"conversations"> });
-                            }}
-                            className={`p-1 rounded transition-colors ${
-                              conv.is_favorite
-                                ? "text-amber-400 hover:text-amber-300"
-                                : "text-sol-text-dim/30 hover:text-amber-400 opacity-0 group-hover:opacity-100"
-                            }`}
-                            title={conv.is_favorite ? "Remove from favorites" : "Add to favorites"}
-                          >
-                            <svg className="w-4 h-4" fill={conv.is_favorite ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                            </svg>
-                          </button>
+                                </svg>
+                              )}
+                              {conv.visibility_mode === "full" ? "Full" :
+                               conv.visibility_mode === "summary" ? "Summary" :
+                               conv.visibility_mode === "minimal" ? "Activity" :
+                               conv.visibility_mode}
+                            </span>
+                          )}
+                          <FavoriteButton
+                            conversationId={conv._id}
+                            isFavorite={conv.is_favorite ?? false}
+                          />
                           <span className="text-[11px] text-sol-text-dim/50">
                             {getRelativeTime(conv.updated_at)}
                           </span>
                         </div>
                       </div>
 
-                      {/* Subtitle */}
-                      {conv.subtitle && (
+                      {/* Subtitle - shown for full/detailed/summary modes */}
+                      {conv.subtitle && conv.visibility_mode !== "minimal" && (
                         <p className="text-sm text-sol-text-muted mb-2 line-clamp-4 whitespace-pre-line">{conv.subtitle}</p>
                       )}
 
                       {(() => {
+                        // Trust backend's visibility_mode - no frontend re-computation
+                        if (conv.visibility_mode && conv.visibility_mode !== "full") return null;
+
                         const alternates = conv.message_alternates || [];
                         if (alternates.length === 0) return null;
 
@@ -788,8 +999,8 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         const renderMessage = (m: typeof processed[0], key: string) => (
                           <div key={key} className="flex items-start gap-2 min-w-0">
                             {m.role === "assistant" ? (
-                              <span className="flex-shrink-0 w-4 h-4 rounded bg-sol-yellow flex items-center justify-center mt-0.5">
-                                <ClaudeIcon className="w-2.5 h-2.5 text-sol-bg" />
+                              <span className="flex-shrink-0 mt-0.5">
+                                <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4" />
                               </span>
                             ) : (
                               <span className="flex-shrink-0 w-4 h-4 rounded-full bg-sol-violet/60 flex items-center justify-center mt-0.5 text-[8px] font-medium text-white">

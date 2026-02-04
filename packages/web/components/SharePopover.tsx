@@ -2,29 +2,37 @@
 
 import { useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { Switch } from "./ui/switch";
 import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
 
 interface SharePopoverProps {
   isPrivate: boolean;
+  teamVisibility?: string | null;
   hasShareToken: boolean;
-  onToggleTeamShare: () => Promise<void>;
+  onSetPrivate: () => Promise<void>;
+  onSetTeamVisibility: (mode: "summary" | "full") => Promise<void>;
   onGenerateShareLink: () => Promise<void>;
   shareUrl: string | null;
 }
 
-function getShareStatus(isPrivate: boolean, hasShareToken: boolean): {
+type VisibilityMode = "private" | "summary" | "full";
+
+function getShareStatus(isPrivate: boolean, teamVisibility: string | null | undefined, hasShareToken: boolean): {
   label: string;
   color: string;
 } {
-  if (isPrivate && !hasShareToken) {
+  const mode = isPrivate ? "private" : (teamVisibility || "summary");
+
+  if (mode === "private" && !hasShareToken) {
     return { label: "Private", color: "text-sol-text-dim" };
   }
-  if (!isPrivate && !hasShareToken) {
-    return { label: "Team", color: "text-sol-green" };
+  if (mode === "summary" && !hasShareToken) {
+    return { label: "Team", color: "text-teal-500" };
   }
-  if (isPrivate && hasShareToken) {
+  if (mode === "full" && !hasShareToken) {
+    return { label: "Team", color: "text-emerald-500" };
+  }
+  if (mode === "private" && hasShareToken) {
     return { label: "Link", color: "text-sol-cyan" };
   }
   return { label: "Team + Link", color: "text-sol-cyan" };
@@ -32,25 +40,33 @@ function getShareStatus(isPrivate: boolean, hasShareToken: boolean): {
 
 export function SharePopover({
   isPrivate,
+  teamVisibility,
   hasShareToken,
-  onToggleTeamShare,
+  onSetPrivate,
+  onSetTeamVisibility,
   onGenerateShareLink,
   shareUrl,
 }: SharePopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [isTogglingTeam, setIsTogglingTeam] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
   const [copied, setCopied] = useState(false);
   const [alsoShareWithTeam, setAlsoShareWithTeam] = useState(true);
 
-  const status = getShareStatus(isPrivate, hasShareToken);
+  const currentMode: VisibilityMode = isPrivate ? "private" : (teamVisibility as VisibilityMode || "summary");
+  const status = getShareStatus(isPrivate, teamVisibility, hasShareToken);
 
-  const handleToggleTeam = async () => {
-    setIsTogglingTeam(true);
+  const handleSetMode = async (mode: VisibilityMode) => {
+    if (mode === currentMode) return;
+    setIsUpdating(true);
     try {
-      await onToggleTeamShare();
+      if (mode === "private") {
+        await onSetPrivate();
+      } else {
+        await onSetTeamVisibility(mode);
+      }
     } finally {
-      setIsTogglingTeam(false);
+      setIsUpdating(false);
     }
   };
 
@@ -75,9 +91,9 @@ export function SharePopover({
     setIsGeneratingLink(true);
     try {
       await onGenerateShareLink();
-      // Also enable team sharing if checkbox is checked and not already shared
+      // Also set team visibility to "full" if checkbox is checked and currently private
       if (alsoShareWithTeam && isPrivate) {
-        await onToggleTeamShare();
+        await onSetTeamVisibility("full");
       }
       toast.success("Share link created");
     } finally {
@@ -107,22 +123,57 @@ export function SharePopover({
         </div>
 
         <div className="p-3 space-y-4">
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-sol-green" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          <div className="space-y-3">
+            <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">Team visibility</span>
+            <div className="flex rounded-lg border border-sol-border overflow-hidden">
+              <button
+                onClick={() => handleSetMode("private")}
+                disabled={isUpdating}
+                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                  currentMode === "private"
+                    ? "bg-sol-base02/50 text-sol-text"
+                    : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
                 </svg>
-                <span className="text-sm text-sol-text">Team access</span>
-              </div>
-              <Switch
-                checked={!isPrivate}
-                onCheckedChange={handleToggleTeam}
-                disabled={isTogglingTeam}
-              />
+                Private
+              </button>
+              <button
+                onClick={() => handleSetMode("summary")}
+                disabled={isUpdating}
+                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors border-l border-r border-sol-border flex items-center justify-center gap-1.5 ${
+                  currentMode === "summary"
+                    ? "bg-teal-500/15 text-teal-600 dark:text-teal-400"
+                    : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                </svg>
+                Summary
+              </button>
+              <button
+                onClick={() => handleSetMode("full")}
+                disabled={isUpdating}
+                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                  currentMode === "full"
+                    ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                    : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Full
+              </button>
             </div>
-            <p className="text-xs text-sol-text-dim pl-6">
-              Team members can view this in their feed
+            <p className="text-[11px] text-sol-text-dim">
+              {currentMode === "private" && "Only you can see this conversation"}
+              {currentMode === "summary" && "Team sees title and activity summary"}
+              {currentMode === "full" && "Team can view the complete conversation"}
             </p>
           </div>
 

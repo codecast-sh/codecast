@@ -26,6 +26,9 @@ export default function DashboardPage() {
     const params = new URLSearchParams(searchParams.toString());
     if (newFilter === "team") {
       params.set("filter", "team");
+      // Clear member filter when switching to team view
+      params.delete("member");
+      setMemberFilter(null);
     } else {
       params.delete("filter");
     }

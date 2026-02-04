@@ -97,16 +97,21 @@ function OwnerView({
   });
 
   const setPrivacy = useMutation(api.conversations.setPrivacy);
+  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
 
   const shareUrl = conversation?.share_token
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/conversation/${id}`
     : null;
 
-  const handleToggleTeamShare = async () => {
-    const newPrivacy = !conversation?.is_private;
-    await setPrivacy({ conversation_id: id as Id<"conversations">, is_private: newPrivacy });
-    toast.success(newPrivacy ? "Made private" : "Shared with team");
+  const handleSetPrivate = async () => {
+    await setPrivacy({ conversation_id: id as Id<"conversations">, is_private: true });
+    toast.success("Made private");
+  };
+
+  const handleSetTeamVisibility = async (mode: "summary" | "full") => {
+    await setTeamVisibility({ conversation_id: id as Id<"conversations">, team_visibility: mode });
+    toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team");
   };
 
   const handleGenerateShareLink = async () => {
@@ -132,8 +137,10 @@ function OwnerView({
   const shareControls = conversation ? (
     <SharePopover
       isPrivate={conversation.is_private !== false}
+      teamVisibility={conversation.team_visibility}
       hasShareToken={!!conversation.share_token}
-      onToggleTeamShare={handleToggleTeamShare}
+      onSetPrivate={handleSetPrivate}
+      onSetTeamVisibility={handleSetTeamVisibility}
       onGenerateShareLink={handleGenerateShareLink}
       shareUrl={shareUrl}
     />

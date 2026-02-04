@@ -291,6 +291,38 @@ function ClaudeIcon() {
   );
 }
 
+function CodexIcon() {
+  return (
+    <div className="w-6 h-6 rounded bg-[#0f0f0f] flex items-center justify-center shrink-0">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729z" fill="white"/>
+      </svg>
+    </div>
+  );
+}
+
+function CursorIcon() {
+  return (
+    <div className="w-6 h-6 rounded bg-[#1a1a2e] flex items-center justify-center shrink-0">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" xmlns="http://www.w3.org/2000/svg">
+        <path d="M4 4l16 6-8 2-2 8z"/>
+      </svg>
+    </div>
+  );
+}
+
+function AssistantIcon({ agentType }: { agentType?: string }) {
+  if (agentType === "codex") return <CodexIcon />;
+  if (agentType === "cursor") return <CursorIcon />;
+  return <ClaudeIcon />;
+}
+
+function assistantLabel(agentType?: string): string {
+  if (agentType === "codex") return "Codex";
+  if (agentType === "cursor") return "Cursor";
+  return "Claude";
+}
+
 function AgentTypeIcon({ agentType }: { agentType: string }) {
   if (agentType === "claude_code") {
     return (
@@ -542,14 +574,26 @@ const mcpToolNames: Record<string, string> = {
   "mcp__claude-in-chrome__shortcuts_execute": "Shortcut",
 };
 
+const codexToolNames: Record<string, string> = {
+  shell_command: "Shell",
+  file_read: "Read",
+  file_write: "Write",
+  file_edit: "Edit",
+  web_search: "Search",
+  web_fetch: "Fetch",
+  code_search: "Search",
+  code_analysis: "Analyze",
+};
+
 function formatToolName(name: string): string {
   if (mcpToolNames[name]) return mcpToolNames[name];
+  if (codexToolNames[name]) return codexToolNames[name];
   if (name.startsWith("mcp__")) {
     const parts = name.split("__");
     const method = parts[2] || parts[1] || "MCP";
     return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 12);
   }
-  return name;
+  return name.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean }) {
@@ -598,6 +642,14 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: To
     }
     if (isGlob && parsedInput.pattern) return String(parsedInput.pattern);
     if (isGrep && parsedInput.pattern) return String(parsedInput.pattern);
+
+    if (tool.name === "shell_command" || tool.name === "shell") {
+      const cmd = String(parsedInput.command || parsedInput.cmd || "");
+      return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd || null;
+    }
+    if (tool.name === "file_read" || tool.name === "file_write" || tool.name === "file_edit") {
+      return getRelativePath(String(parsedInput.file_path || parsedInput.path || ""));
+    }
 
     if (tool.name === "mcp__claude-in-chrome__computer") {
       const action = String(parsedInput.action || "");
@@ -722,7 +774,18 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: To
     "mcp__claude-in-chrome__get_page_text": "text-sol-blue/80",
   };
 
+  const codexToolColors: Record<string, string> = {
+    shell_command: "text-sol-green/80",
+    file_read: "text-sol-blue/80",
+    file_write: "text-sol-orange/80",
+    file_edit: "text-sol-orange/80",
+    web_search: "text-sol-violet/80",
+    web_fetch: "text-sol-cyan/80",
+    code_search: "text-sol-violet/80",
+  };
+
   const getMcpColor = (name: string) => {
+    if (codexToolColors[name]) return codexToolColors[name];
     if (name.startsWith("mcp__")) return "text-sol-cyan/80";
     return "text-sol-text-dim";
   };
@@ -1215,6 +1278,7 @@ function AssistantBlock({
   isSelectedForShare,
   onToggleShareSelection,
   onStartShareSelection,
+  agentType,
 }: {
   content?: string;
   timestamp: number;
@@ -1240,6 +1304,7 @@ function AssistantBlock({
   isSelectedForShare?: boolean;
   onToggleShareSelection?: () => void;
   onStartShareSelection?: (messageId: string) => void;
+  agentType?: string;
 }) {
   const COLLAPSED_LINES = 2;
 
@@ -1313,8 +1378,15 @@ function AssistantBlock({
   };
 
   // Only show Claude header for first message in sequence and messages with actual content
-  const shouldShowHeader = showHeader && (hasContent || hasThinking);
-  const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
+  const visibleThinking = hasThinking && showThinking;
+  const shouldShowHeader = showHeader && (hasContent || visibleThinking);
+  const onlyToolCalls = hasToolCalls && !hasContent && !visibleThinking;
+  const hasVisibleContent = hasContent || visibleThinking || hasToolCalls || hasImages;
+
+  // When nothing visible, hide completely
+  if (!hasVisibleContent) {
+    return null;
+  }
 
   // When collapsed and only tool calls (no text content), hide completely
   if (collapsed && onlyToolCalls) {
@@ -1390,8 +1462,8 @@ function AssistantBlock({
 
       {shouldShowHeader && (
         <div className="flex items-center gap-2 mb-2">
-          <ClaudeIcon />
-          <span className="text-sol-text-secondary text-xs font-medium">Claude</span>
+          <AssistantIcon agentType={agentType} />
+          <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
@@ -1405,7 +1477,7 @@ function AssistantBlock({
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
         {!collapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
 
-        {!collapsed && hasThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
+        {!collapsed && hasThinking && showThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
 
         {!collapsed && hasToolCalls && toolCalls?.map((tc) => (
           tc.name === "Task" ? (
@@ -2547,6 +2619,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           isSelectedForShare={selectedMessageIds.has(msg._id)}
           onToggleShareSelection={() => handleToggleMessageSelection(msg._id)}
           onStartShareSelection={handleStartShareSelection}
+          agentType={conversation?.agent_type}
         />
       );
     }
