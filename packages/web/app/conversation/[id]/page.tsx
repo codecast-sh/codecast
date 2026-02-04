@@ -80,11 +80,13 @@ function OwnerView({
   highlightQuery,
   onClearHighlight,
   targetMessageId,
+  isOwner,
 }: {
   id: string;
   highlightQuery?: string;
   onClearHighlight: () => void;
   targetMessageId?: string;
+  isOwner: boolean;
 }) {
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
@@ -134,7 +136,7 @@ function OwnerView({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [toggleDiffPanel]);
 
-  const shareControls = conversation ? (
+  const shareControls = conversation && isOwner ? (
     <SharePopover
       isPrivate={conversation.is_private !== false}
       teamVisibility={conversation.team_visibility}
@@ -402,6 +404,7 @@ export default function ConversationPage() {
         highlightQuery={highlightQuery}
         onClearHighlight={handleClearHighlight}
         targetMessageId={targetMessageId}
+        isOwner={publicData.access_level === "owner"}
       />
     );
   }
