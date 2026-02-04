@@ -70,7 +70,7 @@ function CodeBlock({ children, title }: { children: string; title?: string }) {
 const FEATURE_CATEGORIES = [
   {
     title: "Agent Memory",
-    problem: "Every Claude session starts fresh",
+    problem: "Every AI session starts fresh",
     description: "Give your AI agent persistent memory. It searches past sessions automatically when starting new work, recalls decisions, and learns from its own history.",
     icon: BrainIcon,
     color: "purple",
@@ -181,7 +181,7 @@ const COMMAND_REFERENCE = [
       { cmd: "search <query>", desc: "Full-text search with -s/-e time filters" },
       { cmd: "feed", desc: "Browse recent sessions (-g for global)" },
       { cmd: "read <id> [range]", desc: "Read messages (e.g., 10:20)" },
-      { cmd: "resume <query>", desc: "Search and open session in Claude" },
+      { cmd: "resume <query>", desc: "Search and resume a session" },
     ],
   },
   {

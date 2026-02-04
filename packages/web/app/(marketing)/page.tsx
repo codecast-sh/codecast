@@ -224,7 +224,7 @@ export default function LandingPage() {
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
               </svg>
-              Global Agent Memory
+              Cross-Agent Memory
             </Link>
           </div>
 
@@ -234,7 +234,7 @@ export default function LandingPage() {
           </h1>
 
           <p className="text-xl text-stone-600 leading-relaxed mb-4 max-w-2xl mx-auto">
-            Real-time sync for Claude Code. Watch your agent work from any device,
+            Real-time sync for Claude Code, Codex, and Cursor. Watch your agent work from any device,
             share sessions with your team, and give it memory across every session.
           </p>
 
@@ -285,7 +285,7 @@ export default function LandingPage() {
             Three steps to team-wide visibility
           </h2>
           <p className="text-lg text-stone-500 max-w-2xl mx-auto">
-            Install the CLI, start coding with Claude, and watch your sessions sync automatically.
+            Install the CLI, start coding, and watch your sessions sync automatically.
           </p>
         </div>
 
@@ -304,10 +304,10 @@ export default function LandingPage() {
           <div className="relative">
             <div className="absolute -left-4 -top-4 w-12 h-12 rounded-full bg-stone-900 text-white flex items-center justify-center font-mono font-bold text-lg">2</div>
             <div className="bg-white rounded-xl border border-stone-200 p-6 pt-10 h-full">
-              <div className="font-mono text-sm text-stone-400 mb-2">$ claude</div>
-              <h3 className="text-xl font-semibold text-stone-900 mb-2">Code with Claude</h3>
+              <div className="font-mono text-sm text-stone-400 mb-2">$ claude / codex / cursor</div>
+              <h3 className="text-xl font-semibold text-stone-900 mb-2">Code with your AI</h3>
               <p className="text-stone-500">
-                Use Claude Code as normal. Every conversation syncs in real-time to your dashboard.
+                Use Claude Code, Codex, or Cursor as normal. Every session syncs in real-time to your dashboard.
               </p>
             </div>
           </div>
@@ -332,14 +332,14 @@ export default function LandingPage() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
             </svg>
-            Global Agent Memory
+            Cross-Agent Memory
           </div>
           <h2 className="text-3xl font-bold text-stone-900 mb-4">
-            Your agent finally remembers
+            One memory across every tool
           </h2>
           <p className="text-lg text-stone-500 max-w-2xl mx-auto">
             Every AI session starts fresh. Codecast changes that by giving your agent
-            searchable access to all your past conversations.
+            searchable access to all past sessions -- across Claude Code, Codex, and Cursor.
           </p>
         </div>
 
@@ -381,7 +381,7 @@ export default function LandingPage() {
               </div>
               <div className="bg-white rounded-lg p-3 border border-purple-200">
                 <p className="text-purple-400 text-xs mb-1">Agent with memory:</p>
-                <p className="text-stone-700">&quot;I see from your session 3 days ago you use NextAuth with Convex. I&apos;ll add a reset flow that matches your existing patterns...&quot;</p>
+                <p className="text-stone-700">&quot;I see from a Codex session 3 days ago you use NextAuth with Convex. I&apos;ll add a reset flow that matches your existing patterns...&quot;</p>
               </div>
             </div>
           </div>
@@ -389,7 +389,7 @@ export default function LandingPage() {
 
         <div className="text-center mt-8">
           <p className="text-sm text-stone-500">
-            Works automatically. Your agent can search past sessions using <code className="bg-stone-100 px-1.5 py-0.5 rounded text-stone-700">codecast search</code> and <code className="bg-stone-100 px-1.5 py-0.5 rounded text-stone-700">codecast ask</code>.
+            Memory works across all agents. A Claude Code session can recall what you built in Cursor, and vice versa.
           </p>
         </div>
       </section>
@@ -403,18 +403,15 @@ export default function LandingPage() {
                 Built for developers who ship fast
               </h2>
               <div className="space-y-6">
-                <div className="flex gap-4 bg-purple-500/10 -mx-4 px-4 py-4 rounded-xl border border-purple-500/20">
-                  <div className="w-10 h-10 rounded-lg bg-purple-500/30 flex items-center justify-center shrink-0">
-                    <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                <div className="flex gap-4 bg-green-500/10 -mx-4 px-4 py-4 rounded-xl border border-green-500/20">
+                  <div className="w-10 h-10 rounded-lg bg-green-500/30 flex items-center justify-center shrink-0">
+                    <svg className="w-5 h-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
                     </svg>
                   </div>
                   <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-semibold text-lg">Global agent memory</h3>
-                      <span className="text-[10px] font-bold uppercase tracking-wider bg-purple-500 text-white px-1.5 py-0.5 rounded">Core</span>
-                    </div>
-                    <p className="text-stone-300">Give your AI agent persistent memory across sessions. It searches past conversations to recall context, decisions, and how you built things.</p>
+                    <h3 className="font-semibold text-lg mb-1">Team visibility</h3>
+                    <p className="text-stone-300">See what your teammates are building across Claude Code, Codex, and Cursor. Share sessions, pick up where they left off, learn from their debugging.</p>
                   </div>
                 </div>
 
@@ -431,14 +428,14 @@ export default function LandingPage() {
                 </div>
 
                 <div className="flex gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center shrink-0">
-                    <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0">
+                    <svg className="w-5 h-5 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                     </svg>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-lg mb-1">Team collaboration</h3>
-                    <p className="text-stone-400">See what your teammates are building. Pick up where they left off. Learn from their debugging sessions.</p>
+                    <h3 className="font-semibold text-lg mb-1">Cross-agent memory</h3>
+                    <p className="text-stone-400">Persistent memory that spans every tool. Your Claude Code agent recalls what you built in Cursor last week.</p>
                   </div>
                 </div>
 
@@ -463,25 +460,29 @@ export default function LandingPage() {
                   <span className="text-green-400">●</span>
                   <span className="text-[#93a1a1]">sarah</span>
                   <span className="text-[#586e75]">implementing OAuth flow</span>
-                  <span className="text-[#586e75] ml-auto">2m ago</span>
+                  <span className="text-[#268bd2] ml-auto text-xs">claude</span>
+                  <span className="text-[#586e75]">2m ago</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-green-400">●</span>
                   <span className="text-[#93a1a1]">mike</span>
                   <span className="text-[#586e75]">debugging payment webhook</span>
-                  <span className="text-[#586e75] ml-auto">5m ago</span>
+                  <span className="text-[#859900] ml-auto text-xs">codex</span>
+                  <span className="text-[#586e75]">5m ago</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-[#586e75]">○</span>
                   <span className="text-[#93a1a1]">alex</span>
                   <span className="text-[#586e75]">added rate limiting middleware</span>
-                  <span className="text-[#586e75] ml-auto">1h ago</span>
+                  <span className="text-[#b58900] ml-auto text-xs">cursor</span>
+                  <span className="text-[#586e75]">1h ago</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-[#586e75]">○</span>
                   <span className="text-[#93a1a1]">you</span>
                   <span className="text-[#586e75]">refactored user service</span>
-                  <span className="text-[#586e75] ml-auto">3h ago</span>
+                  <span className="text-[#268bd2] ml-auto text-xs">claude</span>
+                  <span className="text-[#586e75]">3h ago</span>
                 </div>
               </div>
             </div>
@@ -854,7 +855,7 @@ export default function LandingPage() {
             <div>
               <Logo size="md" className="text-stone-900 mb-4" />
               <p className="text-sm text-stone-500">
-                Real-time sync for AI coding sessions.
+                Real-time sync for Claude Code, Codex, and Cursor.
               </p>
             </div>
             <div>
