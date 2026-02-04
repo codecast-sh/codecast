@@ -3078,6 +3078,7 @@ export const feedForCLI = query({
       project_path: string | null;
       updated_at: string;
       message_count: number;
+      agent_type?: string;
       preview: Array<{
         line: number;
         role: string;
@@ -3157,6 +3158,7 @@ export const feedForCLI = query({
         project_path: conv.project_path || null,
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
+        agent_type: conv.agent_type,
         preview: preview.slice(0, 4),
       });
     }
