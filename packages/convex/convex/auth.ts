@@ -42,6 +42,21 @@ const ResendOTPPasswordReset = Email({
 });
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
+  callbacks: {
+    async redirect({ redirectTo }) {
+      if (redirectTo.startsWith("codecast://") || redirectTo.startsWith("exp+codecast://")) {
+        return redirectTo;
+      }
+      const siteUrl = process.env.SITE_URL?.replace(/\/$/, "") ?? "";
+      if (redirectTo.startsWith("?") || redirectTo.startsWith("/")) {
+        return `${siteUrl}${redirectTo}`;
+      }
+      if (redirectTo.startsWith(siteUrl)) {
+        return redirectTo;
+      }
+      throw new Error(`Invalid redirectTo: ${redirectTo}`);
+    },
+  },
   providers: [
     GitHub({
       authorization: {
