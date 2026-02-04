@@ -224,7 +224,7 @@ export default function LandingPage() {
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
               </svg>
-              Cross-Agent Memory
+              Global Agent Memory
             </Link>
           </div>
 
@@ -332,10 +332,10 @@ export default function LandingPage() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
             </svg>
-            Cross-Agent Memory
+            Global Agent Memory
           </div>
           <h2 className="text-3xl font-bold text-stone-900 mb-4">
-            One memory across every tool
+            Your agent finally remembers
           </h2>
           <p className="text-lg text-stone-500 max-w-2xl mx-auto">
             Every AI session starts fresh. Codecast changes that by giving your agent
@@ -434,8 +434,8 @@ export default function LandingPage() {
                     </svg>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-lg mb-1">Cross-agent memory</h3>
-                    <p className="text-stone-400">Persistent memory that spans every tool. Your Claude Code agent recalls what you built in Cursor last week.</p>
+                    <h3 className="font-semibold text-lg mb-1">Persistent global agent memory</h3>
+                    <p className="text-stone-400">Memory that spans every tool and session. Your Claude Code agent recalls what you built in Cursor last week.</p>
                   </div>
                 </div>
 
