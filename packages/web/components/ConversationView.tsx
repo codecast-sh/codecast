@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -1153,7 +1154,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all border ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "border-sol-cyan bg-sol-cyan/20" : "bg-sol-blue/15 border-sol-blue/40"}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
+    <div id={`msg-${messageId}`} className={`group rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all border ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "border-2 border-sol-cyan bg-sol-cyan/20 ring-2 ring-sol-cyan/30" : "bg-sol-blue/15 border-sol-blue/40"}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
       <div className={`absolute top-3 right-3 transition-opacity flex gap-1 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
         {onStartShareSelection && (
           <MessageSharePopover
@@ -1307,6 +1308,12 @@ function AssistantBlock({
   agentType?: string;
 }) {
   const COLLAPSED_LINES = 2;
+  const CONTENT_MAX_HEIGHT = 400;
+
+  const [contentExpanded, setContentExpanded] = useState(false);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const hasContent = content && content.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
@@ -1332,6 +1339,24 @@ function AssistantBlock({
     }
     return map;
   }, [toolResults]);
+
+  useEffect(() => {
+    if (!contentRef.current || collapsed) return;
+    const el = contentRef.current;
+    const check = () => setIsOverflowing(el.scrollHeight > CONTENT_MAX_HEIGHT);
+    check();
+    const obs = new ResizeObserver(check);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [content, collapsed]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
+    document.addEventListener('keydown', handleKey);
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
+  }, [fullscreen]);
 
   if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
     return null;
@@ -1394,7 +1419,7 @@ function AssistantBlock({
   }
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
       {hasContent && (
         <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {onStartShareSelection && (
@@ -1501,37 +1526,107 @@ function AssistantBlock({
         ))}
 
         {hasContent && (
-          <div className={`text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap break-words" : "prose prose-invert prose-sm max-w-none"}`}>
-            {collapsed ? (
-              <>
-                <span>{truncatedContent}</span>
-                {lines.length > COLLAPSED_LINES && <span className="text-sol-text-dim">...</span>}
-              </>
-            ) : (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeHighlight]}
-                components={{
-                  pre: ({ node, children, ...props }) => {
-                    const codeElement = node?.children?.[0];
-                    if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                      const className = codeElement.properties?.className as string[] | undefined;
-                      const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                      const codeContent = codeElement.children?.[0];
-                      const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+          <>
+            <div className={`text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap break-words" : "prose prose-invert prose-sm max-w-none"}`}>
+              {collapsed ? (
+                <>
+                  <span>{truncatedContent}</span>
+                  {lines.length > COLLAPSED_LINES && <span className="text-sol-text-dim">...</span>}
+                </>
+              ) : (
+                <div
+                  ref={contentRef}
+                  className="relative"
+                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflow: 'hidden' } : undefined}
+                >
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeHighlight]}
+                    components={{
+                      pre: ({ node, children, ...props }) => {
+                        const codeElement = node?.children?.[0];
+                        if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                          const className = codeElement.properties?.className as string[] | undefined;
+                          const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                          const codeContent = codeElement.children?.[0];
+                          const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
 
-                      if (code) {
-                        return <CodeBlock code={code} language={language} />;
-                      }
-                    }
-                    return <pre {...props}>{children}</pre>;
-                  },
-                }}
-              >
-                {content}
-              </ReactMarkdown>
+                          if (code) {
+                            return <CodeBlock code={code} language={language} />;
+                          }
+                        }
+                        return <pre {...props}>{children}</pre>;
+                      },
+                    }}
+                  >
+                    {content}
+                  </ReactMarkdown>
+                  {!contentExpanded && isOverflowing && (
+                    <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-sol-bg to-transparent pointer-events-none" />
+                  )}
+                </div>
+              )}
+            </div>
+            {!collapsed && (isOverflowing || contentExpanded) && (
+              <div className="flex items-center gap-3 mt-1">
+                <button
+                  onClick={() => setContentExpanded(e => !e)}
+                  className="text-xs text-sol-text-dim hover:text-sol-text-muted transition-colors"
+                >
+                  {contentExpanded ? "Collapse" : "Expand"}
+                </button>
+                <button
+                  onClick={() => setFullscreen(true)}
+                  className="text-xs text-sol-text-dim hover:text-sol-text-muted transition-colors"
+                >
+                  Fullscreen
+                </button>
+              </div>
             )}
-          </div>
+          </>
+        )}
+
+        {fullscreen && createPortal(
+          <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
+            <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-6">
+                <span className="text-sol-text-secondary text-sm font-medium">Message</span>
+                <button
+                  onClick={() => setFullscreen(false)}
+                  className="text-sol-text-dim hover:text-sol-text-muted transition-colors p-1"
+                  title="Close"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="prose prose-invert prose-sm max-w-none text-sol-text">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeHighlight]}
+                  components={{
+                    pre: ({ node, children, ...props }) => {
+                      const codeElement = node?.children?.[0];
+                      if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                        const className = codeElement.properties?.className as string[] | undefined;
+                        const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                        const codeContent = codeElement.children?.[0];
+                        const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                        if (code) {
+                          return <CodeBlock code={code} language={language} />;
+                        }
+                      }
+                      return <pre {...props}>{children}</pre>;
+                    },
+                  }}
+                >
+                  {content}
+                </ReactMarkdown>
+              </div>
+            </div>
+          </div>,
+          document.body
         )}
 
         {collapsed && onToggleCollapsed && (
