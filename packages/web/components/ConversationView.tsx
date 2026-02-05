@@ -172,8 +172,11 @@ type ConversationViewProps = {
   backLabel?: string;
   headerExtra?: React.ReactNode;
   hasMoreAbove?: boolean;
+  hasMoreBelow?: boolean;
   isLoadingOlder?: boolean;
+  isLoadingNewer?: boolean;
   onLoadOlder?: () => void;
+  onLoadNewer?: () => void;
   highlightQuery?: string;
   onClearHighlight?: () => void;
   embedded?: boolean;
@@ -1948,7 +1951,7 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, isLoadingOlder, onLoadOlder, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -2354,11 +2357,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         shouldRestoreScrollRef.current = true;
         onLoadOlder();
       }
+
+      // Load newer messages when near bottom (within 300px)
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+      if (distanceFromBottom < 300 && hasMoreBelow && !isLoadingNewer && onLoadNewer) {
+        onLoadNewer();
+      }
     };
 
     scrollContainer.addEventListener("scroll", handleScroll);
     return () => scrollContainer.removeEventListener("scroll", handleScroll);
-  }, [embedded, hasMoreAbove, isLoadingOlder, onLoadOlder]);
+  }, [embedded, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer]);
 
   // Restore scroll position after loading older messages
   useEffect(() => {
@@ -3008,6 +3017,29 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </div>
               );
             })}
+            {/* Loading indicator at bottom */}
+            {isLoadingNewer && (
+              <div className="sticky bottom-0 z-10 flex justify-center py-2">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs">
+                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Loading newer messages...
+                </div>
+              </div>
+            )}
+            {/* Later messages indicator at bottom */}
+            {hasMoreBelow && !isLoadingNewer && (
+              <div className="sticky bottom-0 z-10 flex justify-center py-2">
+                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-xs shadow-sm">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                  Scroll down to load more
+                </div>
+              </div>
+            )}
           </div>
         )}
 

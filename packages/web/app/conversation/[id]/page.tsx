@@ -90,7 +90,7 @@ function OwnerView({
 }) {
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
-  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
+  const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
   const commits = useQuery(api.commits.getCommitsForConversation, {
     conversation_id: id as Id<"conversations">,
   });
@@ -169,8 +169,11 @@ function OwnerView({
         pullRequests={pullRequests || []}
         headerExtra={shareControls}
         hasMoreAbove={hasMoreAbove}
+        hasMoreBelow={hasMoreBelow}
         isLoadingOlder={isLoadingOlder}
+        isLoadingNewer={isLoadingNewer}
         onLoadOlder={loadOlder}
+        onLoadNewer={loadNewer}
         highlightQuery={highlightQuery}
         onClearHighlight={onClearHighlight}
         embedded

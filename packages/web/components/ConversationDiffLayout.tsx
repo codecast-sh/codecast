@@ -37,8 +37,11 @@ interface ConversationDiffLayoutProps {
   commits?: any[];
   pullRequests?: any[];
   hasMoreAbove?: boolean;
+  hasMoreBelow?: boolean;
   isLoadingOlder?: boolean;
+  isLoadingNewer?: boolean;
   onLoadOlder?: () => void;
+  onLoadNewer?: () => void;
   highlightQuery?: string;
   onClearHighlight?: () => void;
   targetMessageId?: string;
@@ -51,8 +54,11 @@ export function ConversationDiffLayout({
   commits,
   pullRequests,
   hasMoreAbove,
+  hasMoreBelow,
   isLoadingOlder,
+  isLoadingNewer,
   onLoadOlder,
+  onLoadNewer,
   highlightQuery,
   targetMessageId,
   onClearHighlight,
@@ -145,8 +151,11 @@ export function ConversationDiffLayout({
     commits: commits || [],
     pullRequests: pullRequests || [],
     hasMoreAbove,
+    hasMoreBelow,
     isLoadingOlder,
+    isLoadingNewer,
     onLoadOlder,
+    onLoadNewer,
     highlightQuery,
     onClearHighlight,
     embedded,

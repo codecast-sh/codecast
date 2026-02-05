@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -76,8 +77,11 @@ export function GlobalSearch() {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [userOnly, setUserOnly] = useState(false);
+  const [selectedTeamId, setSelectedTeamId] = useState<Id<"teams"> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
+
+  const userTeams = useQuery(api.teams.getUserTeams);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -88,7 +92,9 @@ export function GlobalSearch() {
 
   const searchResults = useQuery(
     api.conversations.searchConversations,
-    debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 30, userOnly } : "skip"
+    debouncedQuery.length >= 2
+      ? { query: debouncedQuery, limit: 30, userOnly, activeTeamId: selectedTeamId ?? undefined }
+      : "skip"
   );
 
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
@@ -313,6 +319,23 @@ export function GlobalSearch() {
                   />
                   user only
                 </label>
+                {userTeams && userTeams.length > 1 && (
+                  <>
+                    <span className="text-sol-border">|</span>
+                    <select
+                      value={selectedTeamId ?? ""}
+                      onChange={(e) => setSelectedTeamId(e.target.value ? e.target.value as Id<"teams"> : null)}
+                      className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+                    >
+                      <option value="">All teams</option>
+                      {userTeams.map((team) => (
+                        <option key={team?._id} value={team?._id}>
+                          {team?.name}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
                 <span className="text-sol-border">|</span>
                 <span className="flex items-center gap-1">
                   <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8593;</kbd>
