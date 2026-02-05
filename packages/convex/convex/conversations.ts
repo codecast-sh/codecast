@@ -168,6 +168,38 @@ function isNonEmptyMessage(m: MessageLike): boolean {
   return !!(hasContent || hasToolCalls || hasToolResults);
 }
 
+export const resolveTeamFromDirectory = query({
+  args: {
+    api_token: v.string(),
+    project_path: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      return null;
+    }
+
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .collect();
+
+    let bestMatch: { teamId: Id<"teams">; pathLength: number } | null = null;
+    for (const mapping of mappings) {
+      if (args.project_path === mapping.path_prefix || args.project_path.startsWith(mapping.path_prefix + "/")) {
+        if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
+          bestMatch = {
+            teamId: mapping.team_id,
+            pathLength: mapping.path_prefix.length,
+          };
+        }
+      }
+    }
+
+    return bestMatch?.teamId || null;
+  },
+});
+
 export const createConversation = mutation({
   args: {
     user_id: v.id("users"),
@@ -923,53 +955,45 @@ export const listConversations = query({
         if (!effectiveTeamId) return false;
         // Only show conversations explicitly shared with team (is_private === false)
         if (c.is_private !== false) return false;
-        // Conversation must belong to this team
-        if (c.team_id?.toString() !== effectiveTeamId.toString()) return false;
+        // Owner must be a team member (don't rely on conversation.team_id)
+        if (!teamUserMap.has(c.user_id.toString())) return false;
         const projectPath = c.git_root || c.project_path;
         return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
       }).slice(0, limit + 1);
     } else {
-      const fetchLimit = cursorTimestamp ? 200 : (limit + 1) * 3;
-      const allConversations = await ctx.db
-        .query("conversations")
-        .order("desc")
-        .take(fetchLimit);
-
-      let filtered = allConversations.filter((c) => {
-        if (!effectiveTeamId) return false;
-
-        // Only show conversations explicitly shared with team (is_private === false)
-        // Conversations with is_private: true, undefined, or null should not appear
-        if (c.is_private !== false) return false;
-
-        // Conversation must have team_id matching the active team
-        // This ensures conversations only show in their assigned team's feed
-        const isForThisTeam = c.team_id?.toString() === effectiveTeamId.toString();
-        if (!isForThisTeam) return false;
-
-        // Owner must be a team member
-        const owner = teamUserMap.get(c.user_id.toString());
-        if (!owner) return false;
-
-        // Check owner's team membership visibility setting
-        const visibility = membershipVisibilityMap.get(c.user_id.toString()) || "summary";
-        if (visibility === "hidden") return false;
-
-        // Check project visibility
-        // If user has no directory mappings, show all their conversations (permissive)
-        // If user has mappings, only show conversations from mapped paths
-        const projectPath = c.git_root || c.project_path;
-        if (!isProjectVisibleToTeam(c.user_id.toString(), projectPath)) {
-          return false;
-        }
-
-        return true;
+      // Query recent conversations from each visible team member and merge
+      // This ensures all team members' conversations appear regardless of activity level
+      const visibleMembers = teamMemberships.filter(m => {
+        const visibility = m.visibility || "summary";
+        return visibility !== "hidden";
       });
 
-      if (cursorTimestamp) {
-        filtered = filtered.filter(c => c.updated_at < cursorTimestamp);
-      }
-      conversations = filtered.slice(0, limit + 1);
+      const perMemberLimit = Math.max(10, Math.ceil((limit + 1) * 2 / Math.max(visibleMembers.length, 1)));
+
+      const memberConversations = await Promise.all(
+        visibleMembers.map(async (member) => {
+          const query = ctx.db
+            .query("conversations")
+            .withIndex("by_user_updated", (q) =>
+              cursorTimestamp
+                ? q.eq("user_id", member.user_id).lt("updated_at", cursorTimestamp)
+                : q.eq("user_id", member.user_id)
+            )
+            .order("desc");
+
+          const convs = await query.take(perMemberLimit * 3);
+          return convs.filter((c) => {
+            if (c.is_private !== false) return false;
+            const projectPath = c.git_root || c.project_path;
+            return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
+          }).slice(0, perMemberLimit);
+        })
+      );
+
+      // Merge and sort by updated_at descending
+      const allFiltered = memberConversations.flat();
+      allFiltered.sort((a, b) => b.updated_at - a.updated_at);
+      conversations = allFiltered.slice(0, limit + 1);
     }
 
     const hasMore = conversations.length > limit;
@@ -1402,6 +1426,7 @@ export const searchConversations = query({
     query: v.string(),
     limit: v.optional(v.number()),
     userOnly: v.optional(v.boolean()),
+    activeTeamId: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1413,12 +1438,27 @@ export const searchConversations = query({
       return [];
     }
 
-    const teamUsers = user.team_id
-      ? await ctx.db
-          .query("users")
-          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id!))
-          .collect()
-      : [];
+    const userMemberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const userTeamIds = userMemberships.map(m => m.team_id);
+
+    const effectiveTeamIds = args.activeTeamId ? [args.activeTeamId] : userTeamIds;
+
+    type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
+    const allTeamUsers: UserDoc[] = [];
+    for (const teamId of effectiveTeamIds) {
+      const teamMemberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+        .collect();
+      const memberUsers = await Promise.all(
+        teamMemberships.map(m => ctx.db.get(m.user_id))
+      );
+      allTeamUsers.push(...memberUsers.filter((u): u is UserDoc => u !== null));
+    }
+    const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
     const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
 
     const searchTerm = args.query.trim();
@@ -1932,6 +1972,7 @@ export const searchForCLI = query({
     context_after: v.optional(v.number()),
     project_path: v.optional(v.string()),
     user_only: v.optional(v.boolean()),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -1943,12 +1984,31 @@ export const searchForCLI = query({
       return { error: "User not found" };
     }
 
-    const teamUsers = user.team_id
-      ? await ctx.db
-          .query("users")
-          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id!))
-          .collect()
-      : [];
+    const userMemberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .collect();
+    const userTeamIds = userMemberships.map(m => m.team_id);
+
+    const effectiveTeamIds = args.team_id
+      ? [args.team_id]
+      : args.project_path
+        ? []
+        : userTeamIds;
+
+    type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
+    const allTeamUsers: UserDoc[] = [];
+    for (const teamId of effectiveTeamIds) {
+      const teamMemberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+        .collect();
+      const memberUsers = await Promise.all(
+        teamMemberships.map(m => ctx.db.get(m.user_id))
+      );
+      allTeamUsers.push(...memberUsers.filter((u): u is UserDoc => u !== null));
+    }
+    const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
     const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
     const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
 
@@ -2953,6 +3013,7 @@ export const feedForCLI = query({
     end_time: v.optional(v.number()),
     query: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -2971,13 +3032,31 @@ export const feedForCLI = query({
     const endTime = args.end_time ?? Date.now();
     const query = args.query?.trim();
 
-    // Get team members for visibility checks
-    const teamUsers = user.team_id
-      ? await ctx.db
-          .query("users")
-          .withIndex("by_team_id", (q) => q.eq("team_id", user.team_id!))
-          .collect()
-      : [];
+    const userMemberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .collect();
+    const userTeamIds = userMemberships.map(m => m.team_id);
+
+    const effectiveTeamIds = args.team_id
+      ? [args.team_id]
+      : args.project_path
+        ? []
+        : userTeamIds;
+
+    type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
+    const allTeamUsers: UserDoc[] = [];
+    for (const teamId of effectiveTeamIds) {
+      const teamMemberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+        .collect();
+      const memberUsers = await Promise.all(
+        teamMemberships.map(m => ctx.db.get(m.user_id))
+      );
+      allTeamUsers.push(...memberUsers.filter((u): u is UserDoc => u !== null));
+    }
+    const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
     const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
 
     let matchingConvIds: Set<string> | null = null;
@@ -3023,11 +3102,10 @@ export const feedForCLI = query({
 
     // Include team conversations based on is_private and activity_visibility
     let teamConversations: typeof ownConversations = [];
-    if (user.team_id) {
-      // Query each team member's recent conversations directly
+    if (effectiveTeamIds.length > 0) {
       const visibleTeamMembers = teamUsers.filter(u =>
-        u._id.toString() !== authUserId.toString() && // Skip self
-        (u.activity_visibility || "detailed") !== "hidden" // Skip hidden users
+        u._id.toString() !== authUserId.toString() &&
+        (u.activity_visibility || "detailed") !== "hidden"
       );
 
       const teamMemberConvos = await Promise.all(
@@ -3036,8 +3114,7 @@ export const feedForCLI = query({
             .query("conversations")
             .withIndex("by_user_id", (q) => q.eq("user_id", member._id))
             .order("desc")
-            .take(20); // Get recent convos per member
-          // Filter by is_private - if not explicitly shared, use member's visibility
+            .take(20);
           return convos.filter(c => {
             if (c.is_private === false) return true;
             const visibility = member.activity_visibility || "detailed";
