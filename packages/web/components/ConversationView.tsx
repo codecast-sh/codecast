@@ -2388,11 +2388,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     prevTimelineLengthRef.current = timeline.length;
 
     // Only auto-scroll when new messages arrive and user is near bottom
-    if (hasNewMessages && timeline.length > 0 && !highlightQuery && isNearBottomRef.current) {
+    // Skip when targeting a specific message (deep link or search highlight)
+    if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && isNearBottomRef.current) {
       virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
       setUserScrolled(false);
     }
-  }, [timeline.length, virtualizer, highlightQuery]);
+  }, [timeline.length, virtualizer, highlightQuery, targetMessageId]);
 
   const hasInitialScrolled = useRef(false);
   useEffect(() => {
@@ -2405,7 +2406,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [timeline.length, virtualizer, highlightQuery]);
 
   useEffect(() => {
-    if (timeline.length && window.location.hash) {
+    if (timeline.length && window.location.hash && !targetMessageId) {
       const targetId = window.location.hash.slice(1);
       const itemIndex = timeline.findIndex(item => {
         if (item.type === 'message') {
@@ -2420,7 +2421,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         setTimeout(() => virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" }), 100);
       }
     }
-  }, [timeline.length, virtualizer]);
+  }, [timeline.length, virtualizer, targetMessageId]);
 
   // Scroll to highlighted message from search
   useEffect(() => {
@@ -2454,11 +2455,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (itemIndex >= 0) {
       hasScrolledToTarget.current = true;
       setUserScrolled(true);
+      // First jump instantly to get close (estimates may be off)
+      virtualizer.scrollToIndex(itemIndex, { align: "center" });
+      // After virtualizer measures nearby items, scroll again precisely
       setTimeout(() => {
-        virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" });
+        virtualizer.scrollToIndex(itemIndex, { align: "center" });
         setHighlightedMessageId(targetMessageId);
         setTimeout(() => setHighlightedMessageId(null), 3000);
-      }, 200);
+      }, 300);
     }
   }, [targetMessageId, timeline, virtualizer]);
 
