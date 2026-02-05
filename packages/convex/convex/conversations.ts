@@ -583,6 +583,105 @@ export const getAllMessages = query({
   },
 });
 
+export const getMessagesAroundTimestamp = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    center_timestamp: v.number(),
+    limit_before: v.optional(v.number()),
+    limit_after: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isShared = !!conversation.share_token;
+    let isTeamMember = false;
+
+    if (authUserId && !isOwner && conversation.is_private === false) {
+      const authUser = await ctx.db.get(authUserId);
+      if (authUser?.team_id && authUser.team_id.toString() === conversation.team_id?.toString()) {
+        isTeamMember = true;
+      }
+    }
+
+    if (!isOwner && !isTeamMember && !isShared) {
+      return null;
+    }
+
+    const limitBefore = Math.min(args.limit_before ?? 50, 100);
+    const limitAfter = Math.min(args.limit_after ?? 50, 100);
+
+    const messagesBefore = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .filter((q) => q.lt(q.field("timestamp"), args.center_timestamp))
+      .order("desc")
+      .take(limitBefore + 1);
+
+    const hasMoreAbove = messagesBefore.length > limitBefore;
+    if (hasMoreAbove) {
+      messagesBefore.pop();
+    }
+    messagesBefore.reverse();
+
+    const messagesAfter = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .filter((q) => q.gte(q.field("timestamp"), args.center_timestamp))
+      .order("asc")
+      .take(limitAfter + 1);
+
+    const hasMoreBelow = messagesAfter.length > limitAfter;
+    if (hasMoreBelow) {
+      messagesAfter.pop();
+    }
+
+    const messages = [...messagesBefore, ...messagesAfter];
+
+    const user = await ctx.db.get(conversation.user_id);
+
+    let firstUserMessage = "";
+    for (const msg of messages) {
+      const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+      if (msg.role === "user" && !hasToolResults) {
+        const text = msg.content?.trim();
+        if (text) {
+          firstUserMessage = text.slice(0, 120);
+          if (text.length > 120) firstUserMessage += "...";
+          break;
+        }
+      }
+    }
+
+    const title = conversation.title
+      || firstUserMessage
+      || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
+      || `Session ${conversation.session_id.slice(0, 8)}`;
+
+    const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
+    const newestTimestamp = messages.length > 0 ? messages[messages.length - 1].timestamp : null;
+
+    return {
+      ...conversation,
+      title,
+      messages,
+      user: user ? { name: user.name, email: user.email } : null,
+      last_timestamp: newestTimestamp,
+      oldest_timestamp: oldestTimestamp,
+      has_more_above: hasMoreAbove,
+      has_more_below: hasMoreBelow,
+    };
+  },
+});
+
 export const getNewMessages = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -1973,6 +2072,7 @@ export const searchForCLI = query({
     project_path: v.optional(v.string()),
     user_only: v.optional(v.boolean()),
     team_id: v.optional(v.id("teams")),
+    member_name: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -2011,6 +2111,20 @@ export const searchForCLI = query({
     const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
     const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
     const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
+
+    let filterUserId: string | null = null;
+    if (args.member_name) {
+      const memberNameLower = args.member_name.toLowerCase();
+      const matchingMember = teamUsers.find(u => {
+        const name = u.name?.toLowerCase() || "";
+        const email = u.email?.toLowerCase() || "";
+        return name.includes(memberNameLower) || email.includes(memberNameLower);
+      });
+      if (!matchingMember) {
+        return { error: `No team member found matching "${args.member_name}"` };
+      }
+      filterUserId = matchingMember._id.toString();
+    }
 
     const searchTerm = args.query.trim();
     if (!searchTerm || searchTerm.length < 2) {
@@ -2062,6 +2176,7 @@ export const searchForCLI = query({
       updated_at: string;
       message_count: number;
       proximityScore: number;
+      user?: { name: string | null; email: string | null };
       matches: Array<{
         line: number;
         role: string;
@@ -2103,6 +2218,11 @@ export const searchForCLI = query({
             continue;
           }
         }
+      }
+
+      // Filter by specific member if requested
+      if (filterUserId && conv.user_id.toString() !== filterUserId) {
+        continue;
       }
 
       // Match sessions at or under the search path (not parent directories)
@@ -2199,6 +2319,9 @@ export const searchForCLI = query({
 
       const proximityScore = calculateProximityScore(messages, terms);
 
+      const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
+      const isOwnConv = conv.user_id.toString() === authUserId.toString();
+
       results.push({
         id: conv.short_id || conv._id.toString().slice(0, 7),
         title,
@@ -2206,6 +2329,7 @@ export const searchForCLI = query({
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
         proximityScore,
+        user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         matches: formattedMatches,
         context: [],
       });
@@ -3014,6 +3138,7 @@ export const feedForCLI = query({
     query: v.optional(v.string()),
     project_path: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
+    member_name: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -3058,6 +3183,20 @@ export const feedForCLI = query({
     }
     const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
     const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
+
+    let filterUserId: string | null = null;
+    if (args.member_name) {
+      const memberNameLower = args.member_name.toLowerCase();
+      const matchingMember = teamUsers.find(u => {
+        const name = u.name?.toLowerCase() || "";
+        const email = u.email?.toLowerCase() || "";
+        return name.includes(memberNameLower) || email.includes(memberNameLower);
+      });
+      if (!matchingMember) {
+        return { error: `No team member found matching "${args.member_name}"` };
+      }
+      filterUserId = matchingMember._id.toString();
+    }
 
     let matchingConvIds: Set<string> | null = null;
     let queryMatchedConversations: typeof ownConversations = [];
@@ -3128,6 +3267,8 @@ export const feedForCLI = query({
 
     const allConversations = [...ownConversations, ...teamConversations]
       .filter((c) => {
+        // Filter by specific member if requested
+        if (filterUserId && c.user_id.toString() !== filterUserId) return false;
         // Match sessions at or under the search path (not parent directories)
         if (projectPath) {
           const convPath = c.project_path || "";
@@ -3156,6 +3297,7 @@ export const feedForCLI = query({
       updated_at: string;
       message_count: number;
       agent_type?: string;
+      user?: { name: string | null; email: string | null };
       preview: Array<{
         line: number;
         role: string;
@@ -3227,6 +3369,9 @@ export const feedForCLI = query({
         }
       }
 
+      const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
+      const isOwnConv = conv.user_id.toString() === authUserId.toString();
+
       results.push({
         id: conv._id,
         session_id: conv.session_id,
@@ -3236,6 +3381,7 @@ export const feedForCLI = query({
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
         agent_type: conv.agent_type,
+        user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         preview: preview.slice(0, 4),
       });
     }

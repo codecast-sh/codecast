@@ -404,13 +404,21 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only } = body;
+      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name } = body;
 
       if (!api_token || !query) {
         return new Response(JSON.stringify({ error: "Missing api_token or query" }), {
           status: 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
+      }
+
+      let team_id = undefined;
+      if (project_path) {
+        team_id = await ctx.runQuery(api.conversations.resolveTeamFromDirectory, {
+          api_token,
+          project_path,
+        }) ?? undefined;
       }
 
       const result = await ctx.runQuery(api.conversations.searchForCLI, {
@@ -424,6 +432,8 @@ http.route({
         context_after,
         project_path,
         user_only,
+        team_id,
+        member_name,
       });
 
       if (result.error) {
@@ -539,13 +549,21 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, limit, offset, start_time, end_time, query, project_path } = body;
+      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
           status: 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
+      }
+
+      let team_id = undefined;
+      if (project_path) {
+        team_id = await ctx.runQuery(api.conversations.resolveTeamFromDirectory, {
+          api_token,
+          project_path,
+        }) ?? undefined;
       }
 
       const result = await ctx.runQuery(api.conversations.feedForCLI, {
@@ -556,6 +574,8 @@ http.route({
         end_time,
         query,
         project_path,
+        team_id,
+        member_name,
       });
 
       if (result.error) {
@@ -1937,5 +1957,6 @@ http.route({
     });
   }),
 });
+
 
 export default http;

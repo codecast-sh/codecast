@@ -23,6 +23,7 @@ interface SearchConversation {
   project_path: string | null;
   updated_at: string;
   message_count: number;
+  user?: { name: string | null; email: string | null };
   matches: SearchMatch[];
   context: ContextMessage[];
 }
@@ -186,11 +187,13 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
     const padding = "─".repeat(Math.max(0, 60 - conv.title.length - 4));
     lines.push(header + padding);
 
+    const userDisplay = conv.user?.name || conv.user?.email;
     const meta = [
       `${c.cyan}${truncateId(conv.id)}${c.reset}`,
       `${c.dim}${formatDate(conv.updated_at)}${c.reset}`,
       `${c.dim}${conv.message_count} msgs${c.reset}`,
       truncatePath(conv.project_path) ? `${c.dim}${truncatePath(conv.project_path)}${c.reset}` : "",
+      userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
     ].filter(Boolean).join(" | ");
     lines.push(meta);
     lines.push("");
@@ -315,6 +318,7 @@ interface FeedConversation {
   project_path: string | null;
   updated_at: string;
   message_count: number;
+  user?: { name: string | null; email: string | null };
   preview: FeedPreviewMessage[];
 }
 
@@ -574,11 +578,13 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     const padding = "─".repeat(Math.max(0, 60 - header.length));
     lines.push(header + padding);
 
+    const userDisplay = conv.user?.name || conv.user?.email;
     const meta = [
       truncateId(conv.id),
       formatDate(conv.updated_at),
       `${conv.message_count} msgs`,
       truncatePath(conv.project_path),
+      userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
     ].filter(Boolean).join(" | ");
     lines.push(`   ${meta}\n`);
 

@@ -2486,6 +2486,7 @@ program
   .argument("<query>", "Search query (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
   .option("-g, --global", "Search all sessions (not just current project)")
+  .option("-m, --member <name>", "Filter by team member name or email")
   .option("--keyword", "Use keyword-only search (no semantic matching)")
   .option("--semantic", "Use semantic-only search (no keyword matching)")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
@@ -2557,6 +2558,7 @@ program
           project_path: projectPath,
           user_only: userOnly,
           mode,
+          member_name: options.member,
         }),
       });
 
@@ -2592,6 +2594,7 @@ program
   )
   .option("-g, --global", "Show all sessions (not just current project)")
   .option("-q, --query <text>", "Filter by keyword (keeps recency order)")
+  .option("-m, --member <name>", "Filter by team member name or email")
   .option("-n, --limit <n>", "Number of conversations per page", "10")
   .option("-p, --page <n>", "Page number (1-indexed)", "1")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday, 2024-01-15)")
@@ -2639,6 +2642,7 @@ program
           end_time: endTime,
           query: options.query,
           project_path: projectPath,
+          member_name: options.member,
         }),
       });
 
