@@ -17,6 +17,19 @@ const fraunces = Fraunces({
 export const metadata: Metadata = {
   title: "codecast",
   description: "Sync coding agent conversations to a shared database",
+  metadataBase: new URL("https://codecast.sh"),
+  openGraph: {
+    title: "codecast",
+    description: "Sync coding agent conversations to a shared database",
+    siteName: "codecast",
+    type: "website",
+    url: "https://codecast.sh",
+  },
+  twitter: {
+    card: "summary",
+    title: "codecast",
+    description: "Sync coding agent conversations to a shared database",
+  },
 };
 
 const themeScript = `

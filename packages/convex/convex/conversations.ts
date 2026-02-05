@@ -2090,11 +2090,25 @@ export const searchForCLI = query({
       .collect();
     const userTeamIds = userMemberships.map(m => m.team_id);
 
-    const effectiveTeamIds = args.team_id
-      ? [args.team_id]
-      : args.project_path
-        ? []
-        : userTeamIds;
+    let resolvedTeamId: Id<"teams"> | undefined;
+    if (args.team_id) {
+      resolvedTeamId = args.team_id;
+    } else if (args.project_path) {
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+        .collect();
+      let bestMatch: { teamId: Id<"teams">; pathLength: number } | null = null;
+      for (const mapping of mappings) {
+        if (args.project_path === mapping.path_prefix || args.project_path.startsWith(mapping.path_prefix + "/")) {
+          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
+            bestMatch = { teamId: mapping.team_id, pathLength: mapping.path_prefix.length };
+          }
+        }
+      }
+      resolvedTeamId = bestMatch?.teamId;
+    }
+    const effectiveTeamIds = resolvedTeamId ? [resolvedTeamId] : userTeamIds;
 
     type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
     const allTeamUsers: UserDoc[] = [];
@@ -3163,11 +3177,25 @@ export const feedForCLI = query({
       .collect();
     const userTeamIds = userMemberships.map(m => m.team_id);
 
-    const effectiveTeamIds = args.team_id
-      ? [args.team_id]
-      : args.project_path
-        ? []
-        : userTeamIds;
+    let resolvedTeamId: Id<"teams"> | undefined;
+    if (args.team_id) {
+      resolvedTeamId = args.team_id;
+    } else if (args.project_path) {
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+        .collect();
+      let bestMatch: { teamId: Id<"teams">; pathLength: number } | null = null;
+      for (const mapping of mappings) {
+        if (args.project_path === mapping.path_prefix || args.project_path.startsWith(mapping.path_prefix + "/")) {
+          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
+            bestMatch = { teamId: mapping.team_id, pathLength: mapping.path_prefix.length };
+          }
+        }
+      }
+      resolvedTeamId = bestMatch?.teamId;
+    }
+    const effectiveTeamIds = resolvedTeamId ? [resolvedTeamId] : userTeamIds;
 
     type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
     const allTeamUsers: UserDoc[] = [];
@@ -3710,6 +3738,60 @@ export const debugConversationVisibility = query({
         isProjectMapped,
         wouldShowWithPermissiveDefault: ownerMappings.length === 0 || isProjectMapped,
       },
+    };
+  },
+});
+
+export const getConversationMeta = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+
+    if (!conversation.share_token) {
+      const authUserId = await getAuthUserId(ctx);
+      if (!authUserId || conversation.user_id.toString() !== authUserId.toString()) {
+        return null;
+      }
+    }
+
+    const user = await ctx.db.get(conversation.user_id);
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("asc")
+      .take(10);
+
+    let firstUserMessage = "";
+    for (const msg of messages) {
+      const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+      if (msg.role === "user" && !hasToolResults) {
+        const text = msg.content?.trim();
+        if (text) {
+          firstUserMessage = text.slice(0, 200);
+          if (text.length > 200) firstUserMessage += "...";
+          break;
+        }
+      }
+    }
+
+    const title = conversation.title
+      || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
+      || `Session ${conversation.session_id.slice(0, 8)}`;
+
+    return {
+      title,
+      description: firstUserMessage || conversation.subtitle || null,
+      author: user?.name || null,
+      message_count: conversation.message_count || 0,
+      project_path: conversation.project_path || null,
     };
   },
 });
