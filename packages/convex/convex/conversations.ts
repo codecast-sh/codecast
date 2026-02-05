@@ -2240,7 +2240,8 @@ export const searchForCLI = query({
       }
 
       // Match sessions at or under the search path (not parent directories)
-      if (projectPath) {
+      // Skip path filter for other team members since absolute paths differ per user
+      if (projectPath && !filterUserId) {
         const convPath = conv.project_path || "";
         const convGitRoot = conv.git_root || "";
         // Match: exact path, or session is in a subdirectory of search path
@@ -3298,7 +3299,8 @@ export const feedForCLI = query({
         // Filter by specific member if requested
         if (filterUserId && c.user_id.toString() !== filterUserId) return false;
         // Match sessions at or under the search path (not parent directories)
-        if (projectPath) {
+        // Skip path filter for other team members since absolute paths differ per user
+        if (projectPath && !filterUserId) {
           const convPath = c.project_path || "";
           const convGitRoot = c.git_root || "";
           // Match: exact path, or session is in a subdirectory of search path
@@ -3385,11 +3387,12 @@ export const feedForCLI = query({
           }
         } else if (msg.role === "assistant" && preview.length > 0) {
           let content = msg.content?.trim() || "";
+          if (!content) continue;
           if (content.length > 60) content = content.slice(0, 60) + "...";
           preview.push({
             line: lineNum,
             role: "assistant",
-            content: content || "(tools only)",
+            content,
             tool_calls_count: msg.tool_calls?.length,
             tool_results_count: msg.tool_results?.length,
           });
