@@ -275,6 +275,7 @@ interface CodexSessionEntry {
     id?: string;
     cwd?: string;
     type?: string;
+    status?: string;
     role?: "developer" | "user" | "assistant" | "system";
     content?: Array<{ type: string; text?: string }> | string;
     summary?: string;
@@ -282,6 +283,7 @@ interface CodexSessionEntry {
     call_id?: string;
     arguments?: string;
     output?: string;
+    input?: string;
   };
 }
 
@@ -358,10 +360,13 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
       }
     } else if (payload.type === "reasoning") {
       const contentArray = Array.isArray(payload.content) ? payload.content : [];
-      const thinkingText = contentArray
-        .map((c) => c.text || "")
-        .join("\n");
-      currentAssistantThinking += (currentAssistantThinking ? "\n" : "") + thinkingText;
+      const summaryArray = Array.isArray(payload.summary) ? payload.summary : [];
+      const thinkingText = contentArray.length > 0
+        ? contentArray.map((c) => c.text || "").join("\n")
+        : summaryArray.map((c) => c.text || "").join("\n");
+      if (thinkingText) {
+        currentAssistantThinking += (currentAssistantThinking ? "\n" : "") + thinkingText;
+      }
     } else if (payload.type === "function_call") {
       let args: Record<string, unknown> = {};
       try {
@@ -373,6 +378,17 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
         input: args,
       });
     } else if (payload.type === "function_call_output") {
+      currentToolResults.push({
+        toolUseId: payload.call_id || "",
+        content: payload.output || "",
+      });
+    } else if (payload.type === "custom_tool_call") {
+      currentToolCalls.push({
+        id: payload.call_id || "",
+        name: payload.name || "",
+        input: payload.input ? { input: payload.input } : {},
+      });
+    } else if (payload.type === "custom_tool_call_output") {
       currentToolResults.push({
         toolUseId: payload.call_id || "",
         content: payload.output || "",
