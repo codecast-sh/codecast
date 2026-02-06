@@ -20,6 +20,9 @@ export function isPlanFile(filePath: string, content: string): boolean {
   if (fileName.includes('plan') || fileName === 'plan.md') {
     return true;
   }
+  if (filePath.includes('.claude/plans/')) {
+    return true;
+  }
   const planPatterns = [
     /^#\s*(implementation\s+)?plan/im,
     /^##\s*(goals?|objectives?|overview)/im,

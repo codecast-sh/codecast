@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { ToolViewProps } from "@/lib/toolRegistry";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "./MarkdownRenderer";
 
@@ -83,7 +84,26 @@ export function EditToolView({ input, output }: ToolViewProps) {
 
   const isMarkdown = isMarkdownFile(filePath);
   const isPlan = isMarkdown && isPlanFile(filePath, content);
-  const [viewMode, setViewMode] = useState<'raw' | 'rendered'>(isPlan ? 'rendered' : 'raw');
+  const [viewMode, setViewMode] = useState<'raw' | 'rendered'>(isMarkdown ? 'rendered' : 'raw');
+  const [mdExpanded, setMdExpanded] = useState(false);
+  const [mdFullscreen, setMdFullscreen] = useState(false);
+  const mdRef = useRef<HTMLDivElement>(null);
+  const [mdOverflowing, setMdOverflowing] = useState(false);
+  const MD_MAX_HEIGHT = 1500;
+
+  useEffect(() => {
+    if (mdRef.current && !mdExpanded && viewMode === 'rendered') {
+      setMdOverflowing(mdRef.current.scrollHeight > MD_MAX_HEIGHT);
+    }
+  }, [content, mdExpanded, viewMode]);
+
+  useEffect(() => {
+    if (!mdFullscreen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMdFullscreen(false); };
+    document.addEventListener('keydown', handleKey);
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
+  }, [mdFullscreen]);
 
   if (input?.old_string && input?.new_string) {
     return (
@@ -139,9 +159,53 @@ export function EditToolView({ input, output }: ToolViewProps) {
         <div className="text-xs text-emerald-500 mb-1 font-semibold">+ Created</div>
 
         {viewMode === 'rendered' && isMarkdown ? (
-          <div className="rounded border overflow-hidden p-4 bg-emerald-500/10 border-emerald-500/20">
-            <MarkdownRenderer content={content} filePath={filePath} />
-          </div>
+          <>
+            <div className="rounded border overflow-hidden bg-emerald-500/10 border-emerald-500/20">
+              <div
+                ref={mdRef}
+                className="relative p-4"
+                style={!mdExpanded && mdOverflowing ? { maxHeight: MD_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
+              >
+                <MarkdownRenderer content={content} filePath={filePath} />
+              </div>
+            </div>
+            {(mdOverflowing || mdExpanded) && (
+              <div className="flex items-center gap-3 mt-1">
+                <button
+                  onClick={() => setMdExpanded(e => !e)}
+                  className="text-xs font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                >
+                  {mdExpanded ? "Collapse" : "Expand"}
+                </button>
+                <button
+                  onClick={() => setMdFullscreen(true)}
+                  className="text-xs font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                >
+                  Fullscreen
+                </button>
+              </div>
+            )}
+            {mdFullscreen && createPortal(
+              <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setMdFullscreen(false)}>
+                <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-6">
+                    <span className="text-sol-text-secondary text-sm font-medium">{fileName}</span>
+                    <button
+                      onClick={() => setMdFullscreen(false)}
+                      className="text-sol-text-dim hover:text-sol-text-muted transition-colors p-1"
+                      title="Close (Esc)"
+                    >
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <MarkdownRenderer content={content} filePath={filePath} />
+                </div>
+              </div>,
+              document.body
+            )}
+          </>
         ) : (
           <div className="bg-emerald-500/10 border border-emerald-500/20 rounded overflow-hidden max-h-64">
             <div className="overflow-auto">
