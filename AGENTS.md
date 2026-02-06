@@ -68,6 +68,19 @@ The web app auto-deploys on push to main via Railway. No manual deploy needed.
 - Production: https://codecast.sh
 - Railway dashboard: https://railway.app
 
+## Logs
+
+```bash
+./scripts/logs.sh              # Stream Railway + Convex
+./scripts/logs.sh -e           # Errors/warnings only
+./scripts/logs.sh -r           # Railway only
+./scripts/logs.sh -c           # Convex only
+./scripts/logs.sh -r -n 50    # Last 50 Railway lines
+./scripts/logs.sh -s 30m      # Railway logs from last 30 min
+```
+
+`deploy-all.sh` automatically tails Railway logs after deploy completes.
+
 ## Debugging Lessons
 
 ### Convex Auth Issues
