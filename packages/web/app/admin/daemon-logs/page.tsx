@@ -94,16 +94,26 @@ function AdminDaemonLogs() {
     let online = 0;
     let offline = 0;
     for (const user of users) {
-      if (user && now - user.lastLog < staleThreshold) {
+      if (!user) continue;
+      const lastSeen = user.last_heartbeat ?? user.lastLog;
+      if (now - lastSeen < staleThreshold) {
         online++;
-      } else if (user) {
+      } else {
         offline++;
       }
     }
     return { online, offline };
   }, [users]);
 
-  if (!logsResult?.isAdmin) {
+  if (logsResult === undefined) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center">
+        <div className="text-center text-gray-400">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!logsResult.isAdmin) {
     return (
       <div className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center">
         <div className="text-center">
@@ -230,11 +240,11 @@ function AdminDaemonLogs() {
                         {/* Online/offline indicator */}
                         <span
                           className={`w-2 h-2 rounded-full ${
-                            Date.now() - user.lastLog < 10 * 60 * 1000
+                            Date.now() - (user.last_heartbeat ?? user.lastLog) < 10 * 60 * 1000
                               ? "bg-green-500"
                               : "bg-gray-600"
                           }`}
-                          title={Date.now() - user.lastLog < 10 * 60 * 1000 ? "Online" : "Offline (>10min)"}
+                          title={Date.now() - (user.last_heartbeat ?? user.lastLog) < 10 * 60 * 1000 ? "Online" : "Offline (>10min)"}
                         />
                         <span className="truncate">{user.email || user.name || "Unknown"}</span>
                       </div>
@@ -252,12 +262,12 @@ function AdminDaemonLogs() {
                       </div>
                     </div>
                     <div className={`text-xs mt-0.5 ${
-                      Date.now() - user.lastLog > 10 * 60 * 1000
+                      Date.now() - (user.last_heartbeat ?? user.lastLog) > 10 * 60 * 1000
                         ? "text-orange-400"
                         : "text-gray-500"
                     }`}>
-                      {formatRelativeTime(user.lastLog)}
-                      {Date.now() - user.lastLog > 10 * 60 * 1000 && " ⚠️"}
+                      {formatRelativeTime(user.last_heartbeat ?? user.lastLog)}
+                      {Date.now() - (user.last_heartbeat ?? user.lastLog) > 10 * 60 * 1000 && " ⚠️"}
                     </div>
                     {user.cli_version && (
                       <div className="text-xs text-gray-600 mt-0.5">

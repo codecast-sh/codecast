@@ -42,6 +42,8 @@ interface ConversationDiffLayoutProps {
   isLoadingNewer?: boolean;
   onLoadOlder?: () => void;
   onLoadNewer?: () => void;
+  onJumpToStart?: () => void;
+  onJumpToEnd?: () => void;
   highlightQuery?: string;
   onClearHighlight?: () => void;
   targetMessageId?: string;
@@ -59,6 +61,8 @@ export function ConversationDiffLayout({
   isLoadingNewer,
   onLoadOlder,
   onLoadNewer,
+  onJumpToStart,
+  onJumpToEnd,
   highlightQuery,
   targetMessageId,
   onClearHighlight,
@@ -156,6 +160,8 @@ export function ConversationDiffLayout({
     isLoadingNewer,
     onLoadOlder,
     onLoadNewer,
+    onJumpToStart,
+    onJumpToEnd,
     highlightQuery,
     onClearHighlight,
     embedded,

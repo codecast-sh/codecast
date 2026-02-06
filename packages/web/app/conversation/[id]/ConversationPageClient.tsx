@@ -90,7 +90,7 @@ function OwnerView({
 }) {
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
 
-  const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
+  const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
   const commits = useQuery(api.commits.getCommitsForConversation, {
     conversation_id: id as Id<"conversations">,
   });
@@ -174,6 +174,8 @@ function OwnerView({
         isLoadingNewer={isLoadingNewer}
         onLoadOlder={loadOlder}
         onLoadNewer={loadNewer}
+        onJumpToStart={jumpToStart}
+        onJumpToEnd={jumpToEnd}
         highlightQuery={highlightQuery}
         onClearHighlight={onClearHighlight}
         embedded
@@ -188,7 +190,7 @@ function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; high
   const [isForking, setIsForking] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
 
-  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder, isSearchingForTarget } = useSharedConversationMessages(id, highlightQuery);
+  const { conversation, hasMoreAbove, isLoadingOlder, loadOlder, jumpToStart, isSearchingForTarget } = useSharedConversationMessages(id, highlightQuery);
 
   const forkConversation = useMutation(api.conversations.forkConversation);
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -239,6 +241,7 @@ function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; high
         hasMoreAbove={hasMoreAbove}
         isLoadingOlder={isLoadingOlder}
         onLoadOlder={loadOlder}
+        onJumpToStart={jumpToStart}
         highlightQuery={highlightQuery}
         onClearHighlight={onClearHighlight}
         headerExtra={

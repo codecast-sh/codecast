@@ -7,6 +7,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useActiveTeamStore } from "../store/activeTeamStore";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
 
 interface SidebarProps {
@@ -46,6 +47,9 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
   const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
   const isFeed = pathname === "/feed" || pathname?.startsWith("/feed/");
+  const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
+  const { user: currentUser } = useCurrentUser();
+  const isAdmin = currentUser?.email === "ashot@almostcandid.com";
   const [currentTime, setCurrentTime] = useState(Date.now());
   const { activeTeamId } = useActiveTeamStore();
   const teams = useQuery(api.teams.getUserTeams);
@@ -213,6 +217,22 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
             </svg>
             {!isNarrow && <span>Feed</span>}
           </Link>
+          {isAdmin && (
+            <Link
+              href="/admin/daemon-logs"
+              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+                isAdminLogs
+                  ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                  : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+              }`}
+              title="Daemon Logs"
+            >
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              {!isNarrow && <span>Logs</span>}
+            </Link>
+          )}
         </div>
 
         {!isNarrow && favorites && favorites.length > 0 && (
