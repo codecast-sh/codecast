@@ -773,6 +773,54 @@ export const getDirectoryTeamMappings = query({
   },
 });
 
+async function retroactivelyShareConversations(
+  ctx: any,
+  userId: any,
+  pathPrefix: string,
+  teamId: any,
+) {
+  const privateConvs = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_private", (q: any) => q.eq("user_id", userId).eq("is_private", true))
+    .take(500);
+
+  let updated = 0;
+  for (const conv of privateConvs) {
+    const projectPath = conv.git_root || conv.project_path;
+    if (projectPath && (projectPath === pathPrefix || projectPath.startsWith(pathPrefix + "/"))) {
+      await ctx.db.patch(conv._id, { is_private: false, team_id: teamId });
+      updated++;
+    }
+  }
+  return updated;
+}
+
+export const backfillAutoShareConversations = internalMutation({
+  args: {
+    userId: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    let mappings;
+    if (args.userId) {
+      mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", args.userId!))
+        .collect();
+    } else {
+      mappings = await ctx.db.query("directory_team_mappings").take(50);
+    }
+    const autoShareMappings = mappings.filter(m => m.auto_share);
+    let totalUpdated = 0;
+    for (const mapping of autoShareMappings) {
+      const count = await retroactivelyShareConversations(
+        ctx, mapping.user_id, mapping.path_prefix, mapping.team_id
+      );
+      totalUpdated += count;
+    }
+    return { totalUpdated, mappingsProcessed: autoShareMappings.length };
+  },
+});
+
 export const updateDirectoryTeamMapping = mutation({
   args: {
     path_prefix: v.string(),
@@ -806,22 +854,29 @@ export const updateDirectoryTeamMapping = mutation({
       throw new Error("Not a member of this team");
     }
 
+    const autoShare = args.auto_share ?? (existingMapping ? existingMapping.auto_share : true);
+
     if (existingMapping) {
       await ctx.db.patch(existingMapping._id, {
         team_id: args.team_id,
-        auto_share: args.auto_share ?? existingMapping.auto_share,
+        auto_share: autoShare,
       });
-      return { success: true, updated: true };
     } else {
       await ctx.db.insert("directory_team_mappings", {
         user_id: userId,
         path_prefix: args.path_prefix,
         team_id: args.team_id,
-        auto_share: args.auto_share ?? true,
+        auto_share: autoShare,
         created_at: Date.now(),
       });
-      return { success: true, created: true };
     }
+
+    let retroactiveCount = 0;
+    if (autoShare) {
+      retroactiveCount = await retroactivelyShareConversations(ctx, userId, args.path_prefix, args.team_id);
+    }
+
+    return { success: true, updated: !!existingMapping, created: !existingMapping, retroactivelyShared: retroactiveCount };
   },
 });
 
@@ -1339,22 +1394,29 @@ export const updateDirectoryMappingForCLI = mutation({
       return { error: "Not a member of this team" };
     }
 
+    const autoShare = args.auto_share ?? (existingMapping ? existingMapping.auto_share : true);
+
     if (existingMapping) {
       await ctx.db.patch(existingMapping._id, {
         team_id: teamId,
-        auto_share: args.auto_share ?? existingMapping.auto_share,
+        auto_share: autoShare,
       });
-      return { success: true, action: "updated" };
     } else {
       await ctx.db.insert("directory_team_mappings", {
         user_id: result.userId,
         path_prefix: args.path_prefix,
         team_id: teamId,
-        auto_share: args.auto_share ?? true,
+        auto_share: autoShare,
         created_at: Date.now(),
       });
-      return { success: true, action: "created" };
     }
+
+    let retroactiveCount = 0;
+    if (autoShare) {
+      retroactiveCount = await retroactivelyShareConversations(ctx, result.userId, args.path_prefix, teamId);
+    }
+
+    return { success: true, action: existingMapping ? "updated" : "created", retroactivelyShared: retroactiveCount };
   },
 });
 
