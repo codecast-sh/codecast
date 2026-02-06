@@ -286,10 +286,11 @@ async function executeRemoteCommand(
             result,
           }),
         });
-        // Schedule restart
         setTimeout(() => {
           log("Restarting daemon per remote command...");
-          process.exit(0); // Exit, launchd/systemd will restart
+          skipRespawn = true;
+          spawnReplacement();
+          setTimeout(() => process.exit(0), 500);
         }, 1000);
         return;
       }
@@ -309,7 +310,6 @@ async function executeRemoteCommand(
         });
         // Flush logs before update
         await flushRemoteLogs();
-        // Trigger update check
         setTimeout(async () => {
           const success = await performUpdate();
           if (success) {
@@ -317,7 +317,9 @@ async function executeRemoteCommand(
             logLifecycle("update_complete", `Updated from v${currentVersion} to v${newVersion}`);
             await flushRemoteLogs();
             log("Update successful, restarting...");
-            process.exit(0);
+            skipRespawn = true;
+            spawnReplacement();
+            setTimeout(() => process.exit(0), 500);
           } else {
             logLifecycle("update_failed", `Update failed from v${currentVersion}`);
             await flushRemoteLogs();
@@ -1692,6 +1694,46 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+let skipRespawn = false;
+
+function spawnReplacement(): boolean {
+  try {
+    const child = spawn(process.execPath, process.argv.slice(1), {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, CODECAST_RESTART: "1" },
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const CRASH_FILE = path.join(CONFIG_DIR, "crash-count.json");
+
+function recordCrashAndShouldRespawn(): boolean {
+  try {
+    let crashes: { count: number; firstCrash: number } = { count: 0, firstCrash: Date.now() };
+    if (fs.existsSync(CRASH_FILE)) {
+      crashes = JSON.parse(fs.readFileSync(CRASH_FILE, "utf-8"));
+    }
+    const windowMs = 5 * 60 * 1000;
+    if (Date.now() - crashes.firstCrash > windowMs) {
+      crashes = { count: 0, firstCrash: Date.now() };
+    }
+    crashes.count++;
+    fs.writeFileSync(CRASH_FILE, JSON.stringify(crashes));
+    return crashes.count <= 5;
+  } catch {
+    return true;
+  }
+}
+
+function clearCrashCount(): void {
+  try { if (fs.existsSync(CRASH_FILE)) fs.unlinkSync(CRASH_FILE); } catch {}
+}
+
 function acquireLock(): boolean {
   if (fs.existsSync(PID_FILE)) {
     try {
@@ -2082,14 +2124,8 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
       const success = await performUpdate();
       if (success) {
         log("Update successful, restarting daemon...");
-        // Spawn new daemon before exiting (don't rely on launchd/systemd)
-        const child = spawn(process.execPath, process.argv.slice(1), {
-          detached: true,
-          stdio: "ignore",
-          env: { ...process.env, CODECAST_RESTART: "1" },
-        });
-        child.unref();
-        // Give it a moment to start
+        skipRespawn = true;
+        spawnReplacement();
         await new Promise(resolve => setTimeout(resolve, 500));
         process.exit(0);
       } else {
@@ -2346,6 +2382,27 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Exit guard: always respawn unless explicitly skipped or crash looping
+  process.on("exit", (code) => {
+    if (skipRespawn) return;
+    if (code !== 0) {
+      if (!recordCrashAndShouldRespawn()) {
+        try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] FATAL: Crash loop detected (5 crashes in 5min), NOT respawning. Manual restart required.\n`); } catch {}
+        return;
+      }
+    } else {
+      clearCrashCount();
+    }
+    try {
+      const child = spawn(process.execPath, process.argv.slice(1), {
+        detached: true,
+        stdio: "ignore",
+        env: { ...process.env, CODECAST_RESTART: "1" },
+      });
+      child.unref();
+    } catch {}
+  });
+
   process.on("uncaughtException", async (err) => {
     logError("Uncaught exception", err);
     if (syncServiceRef) {
@@ -2367,6 +2424,8 @@ async function main(): Promise<void> {
   } catch {
     daemonVersion = "unknown";
   }
+
+  clearCrashCount(); // If we got this far, startup succeeded
 
   const isRestart = process.env.CODECAST_RESTART === "1";
   logLifecycle("daemon_start", `v${daemonVersion} PID=${process.pid}${isRestart ? " (restart after update)" : ""}`);
@@ -3025,6 +3084,7 @@ async function main(): Promise<void> {
   setupCommandSubscription();
 
   const shutdown = async () => {
+    skipRespawn = true;
     log("Shutting down gracefully");
 
     saveDaemonState({ connected: false });
