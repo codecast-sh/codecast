@@ -88,4 +88,6 @@ echo "  - Convex: https://marvelous-meerkat-539.convex.cloud"
 echo "  - CLI:    https://dl.codecast.sh/latest.json"
 echo "  - Web:    https://codecast.sh (Railway auto-deploys on push)"
 echo ""
-echo "Monitor Railway: https://railway.app"
+echo "Tailing Railway build logs (Ctrl+C to stop)..."
+echo ""
+exec railway logs --build --latest
