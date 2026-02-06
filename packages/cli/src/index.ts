@@ -16,6 +16,7 @@ import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
+import { fetchExport, generateClaudeCodeJsonl, generateCodexJsonl, writeClaudeCodeSession, writeCodexSession } from "./jsonlGenerator.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { checkbox, confirm, select } from "@inquirer/prompts";
 
@@ -2678,18 +2679,26 @@ program
     "  codecast resume logo design             # matches both 'logo' AND 'design'\n" +
     "  codecast resume \"logo design\"           # matches exact phrase\n" +
     "  codecast resume auth token -g           # search globally\n" +
-    "  codecast resume refactor -n 10          # show up to 10 results"
+    "  codecast resume refactor -n 10          # show up to 10 results\n" +
+    "  codecast resume auth --as codex         # resume Claude session in Codex\n" +
+    "  codecast resume auth --as claude        # resume Codex session in Claude"
   )
   .argument("<query...>", "Search terms (AND-ed, use quotes for exact phrase)")
   .option("-g, --global", "Search all sessions (not just current project)")
   .option("-n, --limit <n>", "Max results to show (use -n 10 for more)", "4")
   .option("--dry-run", "Show matches without opening Claude")
   .option("--here", "Open session in current directory (don't switch to session's project)")
+  .option("--as <agent>", "Resume in a different agent (claude or codex)")
   .option("--claude-args <args>", "Additional args to pass to claude (overrides config)")
   .action(async (queryWords: string[], options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    if (options.as && !["claude", "codex"].includes(options.as.toLowerCase())) {
+      console.error(`Invalid --as value: "${options.as}". Use "claude" or "codex".`);
       process.exit(1);
     }
 
@@ -2719,7 +2728,7 @@ program
       }
 
       const responseText = await response.text();
-      let result: { error?: string; conversations?: Array<{ id: string; title: string; subtitle?: string | null; project_path: string | null; updated_at: string; message_count: number; session_id?: string; agent_type?: string; preview?: Array<{ role: string; content: string }> }> };
+      let result: { error?: string; conversations?: Array<{ id: string; title: string; subtitle?: string | null; project_path: string | null; updated_at: string; message_count: number; session_id?: string; agent_type?: string; user?: { name: string | null; email: string | null }; preview?: Array<{ role: string; content: string }> }> };
       try {
         result = JSON.parse(responseText);
       } catch {
@@ -2778,8 +2787,16 @@ program
           process.exit(1);
         }
         console.log(`Opening: ${conv.title}`);
-        const extraArgs = resolveAgentArgs(conv.agent_type, options.claudeArgs, config);
-        launchSession(sessionId, conv.agent_type, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
+        const targetAgent = options.as?.toLowerCase();
+        const sourceAgent = conv.agent_type || "claude_code";
+        const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
+        if (targetAgent && targetAgent !== normalizedSource) {
+          await convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, false, options.here ? undefined : conv.project_path);
+        } else {
+          const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
+          const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
+          launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
+        }
         return;
       }
 
@@ -2820,8 +2837,16 @@ program
             process.exit(1);
           }
           console.log(`\nOpening: ${conv.title}`);
-          const extraArgs = resolveAgentArgs(conv.agent_type, options.claudeArgs, config);
-          launchSession(sessionId, conv.agent_type, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
+          const targetAgent = options.as?.toLowerCase();
+          const sourceAgent = conv.agent_type || "claude_code";
+          const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
+          if (targetAgent && targetAgent !== normalizedSource) {
+            convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, false, options.here ? undefined : conv.project_path);
+          } else {
+            const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
+            const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
+            launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
+          }
         });
       };
 
@@ -2836,6 +2861,35 @@ function resolveAgentArgs(agentType: string | undefined, cliOverride: string | u
   if (cliOverride) return cliOverride;
   if (agentType === "codex") return config.codex_args;
   return config.claude_args;
+}
+
+async function convertAndLaunch(
+  conversationId: string,
+  sourceAgent: string,
+  targetAgent: string,
+  config: Config,
+  extraArgs?: string,
+  showArgsHint?: boolean,
+  projectPath?: string | null,
+): Promise<void> {
+  const siteUrl = config.convex_url!.replace(".cloud", ".site");
+  console.log(`Converting ${sourceAgent} session to ${targetAgent} format...`);
+  const data = await fetchExport(siteUrl, config.auth_token!, conversationId);
+  console.log(`  ${data.messages.length} messages exported`);
+
+  if (targetAgent === "codex") {
+    const { jsonl, sessionId } = generateCodexJsonl(data);
+    writeCodexSession(jsonl, sessionId, "cc-import");
+    console.log(`  Written Codex session: ${sessionId}`);
+    const resolvedArgs = extraArgs ?? config.codex_args;
+    launchCodex(sessionId, resolvedArgs, showArgsHint, projectPath);
+  } else {
+    const { jsonl, sessionId } = generateClaudeCodeJsonl(data);
+    writeClaudeCodeSession(jsonl, sessionId, projectPath || undefined);
+    console.log(`  Written Claude Code session: ${sessionId}`);
+    const resolvedArgs = extraArgs ?? config.claude_args;
+    launchClaude(sessionId, resolvedArgs, showArgsHint, projectPath);
+  }
 }
 
 function launchSession(sessionId: string, agentType?: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
