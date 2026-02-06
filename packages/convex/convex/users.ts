@@ -1219,6 +1219,30 @@ export const deleteAccount = mutation({
   },
 });
 
+export const getMyPendingCommands = query({
+  args: {
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) {
+      return [];
+    }
+
+    const commands = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q) =>
+        q.eq("user_id", auth.userId).eq("executed_at", undefined)
+      )
+      .collect();
+
+    return commands.map((c) => ({
+      id: c._id,
+      command: c.command,
+    }));
+  },
+});
+
 export const getTeamsForCLI = query({
   args: {
     api_token: v.string(),
