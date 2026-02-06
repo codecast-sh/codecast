@@ -529,6 +529,23 @@ export const getAllMessages = query({
     const childConversations: Array<{ _id: string; title: string }> = [];
     const childConversationMap: Record<string, string> = {};
 
+    if (messages.length > 0) {
+      const childConvs = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
+        .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
+        .take(100);
+
+      const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
+      for (const conv of childConvs) {
+        if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
+          const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+          childConversations.push({ _id: conv._id, title: childTitle });
+          childConversationMap[conv.parent_message_uuid] = conv._id;
+        }
+      }
+    }
+
     let forkedFromDetails = null;
     if (conversation.forked_from) {
       const originalConv = await ctx.db.get(conversation.forked_from);
@@ -543,6 +560,17 @@ export const getAllMessages = query({
     }
 
     const compactionCount = messages.filter(m => m.subtype === "compact_boundary").length;
+
+    let parentConversationId: string | null = null;
+    if (conversation.parent_message_uuid) {
+      const parentMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
+        .first();
+      if (parentMsg) {
+        parentConversationId = parentMsg.conversation_id;
+      }
+    }
 
     const forkChildren = await ctx.db
       .query("conversations")
@@ -579,6 +607,7 @@ export const getAllMessages = query({
       forked_from_details: forkedFromDetails,
       compaction_count: compactionCount,
       fork_children: forkChildrenDetails,
+      parent_conversation_id: parentConversationId,
     };
   },
 });
@@ -669,6 +698,37 @@ export const getMessagesAroundTimestamp = query({
     const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
     const newestTimestamp = messages.length > 0 ? messages[messages.length - 1].timestamp : null;
 
+    let parentConversationId: string | null = null;
+    if (conversation.parent_message_uuid) {
+      const parentMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
+        .first();
+      if (parentMsg) {
+        parentConversationId = parentMsg.conversation_id;
+      }
+    }
+
+    const childConversations: Array<{ _id: string; title: string }> = [];
+    const childConversationMap: Record<string, string> = {};
+
+    if (messages.length > 0) {
+      const childConvs = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
+        .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
+        .take(100);
+
+      const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
+      for (const conv of childConvs) {
+        if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
+          const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+          childConversations.push({ _id: conv._id, title: childTitle });
+          childConversationMap[conv.parent_message_uuid] = conv._id;
+        }
+      }
+    }
+
     return {
       ...conversation,
       title,
@@ -678,6 +738,9 @@ export const getMessagesAroundTimestamp = query({
       oldest_timestamp: oldestTimestamp,
       has_more_above: hasMoreAbove,
       has_more_below: hasMoreBelow,
+      parent_conversation_id: parentConversationId,
+      child_conversations: childConversations,
+      child_conversation_map: childConversationMap,
     };
   },
 });
@@ -1504,6 +1567,17 @@ export const getConversationPublic = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || `Session ${conversation.session_id.slice(0, 8)}`;
 
+    let parentConversationId: string | null = null;
+    if (conversation.parent_message_uuid) {
+      const parentMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
+        .first();
+      if (parentMsg) {
+        parentConversationId = parentMsg.conversation_id;
+      }
+    }
+
     return {
       access_level: accessLevel,
       conversation: {
@@ -1515,6 +1589,7 @@ export const getConversationPublic = query({
         oldest_timestamp: oldestTimestamp,
         fork_count: conversation.fork_count,
         forked_from: conversation.forked_from,
+        parent_conversation_id: parentConversationId,
       },
     };
   },
@@ -2504,6 +2579,84 @@ export const readConversationMessages = query({
   },
 });
 
+export const exportConversationMessages = query({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
+    if (!authUserId) {
+      return { error: "Unauthorized" };
+    }
+    const user = await ctx.db.get(authUserId);
+    if (!user) {
+      return { error: "User not found" };
+    }
+
+    let conv = null;
+    try {
+      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
+    } catch {
+      // ID format invalid, try prefix search
+    }
+    if (!conv) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
+        .first();
+    }
+    if (!conv) {
+      return { error: "Conversation not found" };
+    }
+
+    const isOwn = conv.user_id.toString() === authUserId.toString();
+    if (!isOwn) {
+      if (conv.is_private !== false) {
+        return { error: "Access denied" };
+      }
+      if (!user.team_id) {
+        return { error: "Access denied" };
+      }
+      const convOwner = await ctx.db.get(conv.user_id);
+      if (!convOwner || convOwner.team_id?.toString() !== user.team_id.toString()) {
+        return { error: "Access denied" };
+      }
+    }
+
+    const allMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+      .order("asc")
+      .collect();
+
+    const nonEmptyMessages = allMessages.filter(isNonEmptyMessage);
+
+    return {
+      conversation: {
+        id: conv._id,
+        title: conv.title || `Session ${conv.session_id.slice(0, 8)}`,
+        session_id: conv.session_id,
+        agent_type: conv.agent_type,
+        project_path: conv.project_path || null,
+        model: conv.model || null,
+        message_count: nonEmptyMessages.length,
+        started_at: new Date(conv.started_at).toISOString(),
+        updated_at: new Date(conv.updated_at).toISOString(),
+      },
+      messages: nonEmptyMessages.map((m) => ({
+        role: m.role,
+        content: m.content || "",
+        thinking: m.thinking || undefined,
+        timestamp: new Date(m.timestamp).toISOString(),
+        message_uuid: m.message_uuid || undefined,
+        tool_calls: m.tool_calls,
+        tool_results: m.tool_results,
+      })),
+    };
+  },
+});
+
 export const updateTitle = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -3228,7 +3381,8 @@ export const feedForCLI = query({
     }
 
     let matchingConvIds: Set<string> | null = null;
-    let queryMatchedConversations: typeof ownConversations = [];
+    let queryMatchedOwnConversations: typeof ownConversations = [];
+    let queryMatchedTeamConversations: typeof ownConversations = [];
     if (query && query.length >= 2) {
       const searchResults = await ctx.db
         .query("messages")
@@ -3236,7 +3390,6 @@ export const feedForCLI = query({
         .take(100);
       matchingConvIds = new Set(searchResults.map((m) => m.conversation_id.toString()));
 
-      // Fetch the actual matching conversations to ensure we find older matches
       const matchedConvs = await Promise.all(
         Array.from(matchingConvIds).slice(0, 50).map(async (convId) => {
           try {
@@ -3246,25 +3399,24 @@ export const feedForCLI = query({
           }
         })
       );
-      queryMatchedConversations = matchedConvs.filter((c): c is NonNullable<typeof c> =>
-        c !== null && c.user_id.toString() === authUserId.toString()
-      );
+      const validConvs = matchedConvs.filter((c): c is NonNullable<typeof c> => c !== null);
+      queryMatchedOwnConversations = validConvs.filter(c => c.user_id.toString() === authUserId.toString());
+      const teamUserIdSet = new Set(teamUsers.filter(u => u._id.toString() !== authUserId.toString()).map(u => u._id.toString()));
+      queryMatchedTeamConversations = validConvs.filter(c => teamUserIdSet.has(c.user_id.toString()));
     }
 
-    // Limit conversations to avoid data limit errors
-    // We'll load messages only for the final results after filtering
-    // When filtering by project_path, fetch more since we need to filter down
-    const fetchLimit = projectPath ? 200 : 50;
+    // Use by_user_updated index for proper recency ordering
+    const fetchLimit = projectPath ? 300 : Math.min(offset + limit + 50, 300);
     let ownConversations = await ctx.db
       .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .withIndex("by_user_updated", (q) => q.eq("user_id", authUserId))
       .order("desc")
       .take(fetchLimit);
 
     // Merge in query-matched conversations that might be older
-    if (queryMatchedConversations.length > 0) {
+    if (queryMatchedOwnConversations.length > 0) {
       const existingIds = new Set(ownConversations.map(c => c._id.toString()));
-      const additionalConvs = queryMatchedConversations.filter(c => !existingIds.has(c._id.toString()));
+      const additionalConvs = queryMatchedOwnConversations.filter(c => !existingIds.has(c._id.toString()));
       ownConversations = [...ownConversations, ...additionalConvs];
     }
 
@@ -3280,7 +3432,7 @@ export const feedForCLI = query({
         visibleTeamMembers.map(async (member) => {
           const convos = await ctx.db
             .query("conversations")
-            .withIndex("by_user_id", (q) => q.eq("user_id", member._id))
+            .withIndex("by_user_updated", (q) => q.eq("user_id", member._id))
             .order("desc")
             .take(20);
           return convos.filter(c => {
@@ -3292,18 +3444,24 @@ export const feedForCLI = query({
       );
 
       teamConversations = teamMemberConvos.flat();
+
+      // Merge in query-matched team conversations that might be older than top-20
+      if (queryMatchedTeamConversations.length > 0) {
+        const existingTeamIds = new Set(teamConversations.map(c => c._id.toString()));
+        const additionalTeam = queryMatchedTeamConversations.filter(c => !existingTeamIds.has(c._id.toString()));
+        teamConversations = [...teamConversations, ...additionalTeam];
+      }
     }
+
+    const isOwnConversation = (c: { user_id: Id<"users"> }) => c.user_id.toString() === authUserId.toString();
 
     const allConversations = [...ownConversations, ...teamConversations]
       .filter((c) => {
-        // Filter by specific member if requested
         if (filterUserId && c.user_id.toString() !== filterUserId) return false;
-        // Match sessions at or under the search path (not parent directories)
-        // Skip path filter for other team members since absolute paths differ per user
-        if (projectPath && !filterUserId) {
+        // Path filter only for own conversations - team members have different absolute paths
+        if (projectPath && !filterUserId && isOwnConversation(c)) {
           const convPath = c.project_path || "";
           const convGitRoot = c.git_root || "";
-          // Match: exact path, or session is in a subdirectory of search path
           const isPathMatch = convPath === projectPath ||
             (convPath && convPath.startsWith(projectPath + "/")) ||
             convGitRoot === projectPath ||
@@ -3312,11 +3470,18 @@ export const feedForCLI = query({
         }
         if (startTime && c.updated_at < startTime) return false;
         if (endTime && c.updated_at > endTime) return false;
-        if (matchingConvIds && !matchingConvIds.has(c._id.toString())) return false;
+        if (matchingConvIds && !matchingConvIds.has(c._id.toString())) {
+          // Also match on conversation title/subtitle
+          const titleText = [c.title, c.subtitle].filter(Boolean).join(" ").toLowerCase();
+          const queryLower = query?.toLowerCase() || "";
+          const queryTerms = queryLower.split(/\s+/).filter(w => w.length > 1);
+          const titleMatch = queryTerms.length > 0 && queryTerms.every(w => titleText.includes(w));
+          if (!titleMatch) return false;
+        }
         return true;
       })
       .sort((a, b) => b.updated_at - a.updated_at)
-      .slice(offset, offset + limit);
+      .slice(offset, offset + Math.min(limit, 100));
 
     const results: Array<{
       id: string;
@@ -3798,3 +3963,4 @@ export const getConversationMeta = query({
     };
   },
 });
+
