@@ -1533,6 +1533,7 @@ interface ResumeConversation {
   agent_type?: string;
   preview?: string;
   goal?: string;
+  user?: { name: string | null; email: string | null };
 }
 
 interface ResumeResult {
@@ -1553,12 +1554,14 @@ export function formatResumeResults(result: ResumeResult): string {
     return lines.join("\n");
   }
 
+  const ownConvs = conversations.filter(cv => !cv.user);
+  const teamConvs = conversations.filter(cv => cv.user);
+
   lines.push(`${c.dim}Found ${conversations.length} session${conversations.length === 1 ? "" : "s"} matching "${query}"${c.reset}`);
   lines.push("");
 
-  for (let i = 0; i < conversations.length; i++) {
-    const conv = conversations[i];
-    const num = `${c.bold}${c.cyan}[${i + 1}]${c.reset}`;
+  const formatConv = (conv: ResumeConversation, idx: number) => {
+    const num = `${c.bold}${c.cyan}[${idx + 1}]${c.reset}`;
     const title = conv.title || "Untitled";
     const relTime = formatRelativeTime(conv.updated_at);
 
@@ -1568,6 +1571,10 @@ export function formatResumeResults(result: ResumeResult): string {
       `${c.dim}${relTime}${c.reset}`,
       `${c.dim}${conv.message_count} msgs${c.reset}`,
     ];
+    if (conv.user) {
+      const name = conv.user.name || conv.user.email || "team member";
+      meta.push(`${c.magenta}${name}${c.reset}`);
+    }
     if (conv.agent_type && conv.agent_type !== "claude_code") {
       const label = conv.agent_type === "codex" ? "Codex" : conv.agent_type === "cursor" ? "Cursor" : conv.agent_type;
       meta.push(`${c.yellow}${label}${c.reset}`);
@@ -1607,6 +1614,18 @@ export function formatResumeResults(result: ResumeResult): string {
     }
 
     lines.push("");
+  };
+
+  for (let i = 0; i < ownConvs.length; i++) {
+    formatConv(ownConvs[i], i);
+  }
+
+  if (teamConvs.length > 0) {
+    lines.push(`${c.dim}── Team ──${c.reset}`);
+    lines.push("");
+    for (let i = 0; i < teamConvs.length; i++) {
+      formatConv(teamConvs[i], ownConvs.length + i);
+    }
   }
 
   lines.push(`${c.dim}Enter number to open, or q to quit${c.reset}`);
