@@ -10,4 +10,10 @@ crons.interval(
   { limit: 50 }
 );
 
+crons.interval(
+  "check daemon health",
+  { minutes: 10 },
+  internal.daemonLogs.checkDaemonHealth,
+);
+
 export default crons;

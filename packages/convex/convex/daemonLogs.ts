@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -205,15 +205,29 @@ export const adminGetUsers = query({
     }
 
     const logs = await ctx.db.query("daemon_logs").take(5000);
-    const userIds = [...new Set(logs.map((l) => l.user_id))];
+    const logUserIds = new Set(logs.map((l) => l.user_id));
+
+    const allUsers = await ctx.db.query("users").collect();
+    const heartbeatUserIds = new Set(
+      allUsers
+        .filter((u) => u.last_heartbeat)
+        .map((u) => u._id)
+    );
+
+    const userIds = [...new Set([...logUserIds, ...heartbeatUserIds])];
 
     const users = await Promise.all(
       userIds.map(async (id) => {
-        const user = await ctx.db.get(id);
+        const user = logUserIds.has(id)
+          ? allUsers.find((u) => u._id === id)
+          : await ctx.db.get(id);
         if (!user) return null;
         const userLogs = logs.filter((l) => l.user_id === id);
         const errorCount = userLogs.filter((l) => l.level === "error").length;
         const warnCount = userLogs.filter((l) => l.level === "warn").length;
+        const lastLog = userLogs.length > 0
+          ? Math.max(...userLogs.map((l) => l.timestamp))
+          : 0;
         return {
           _id: id,
           email: user.email,
@@ -221,7 +235,7 @@ export const adminGetUsers = query({
           logCount: userLogs.length,
           errorCount,
           warnCount,
-          lastLog: Math.max(...userLogs.map((l) => l.timestamp)),
+          lastLog,
           cli_version: user.cli_version,
           cli_platform: user.cli_platform,
           daemon_pid: user.daemon_pid,
@@ -233,7 +247,7 @@ export const adminGetUsers = query({
 
     return users
       .filter(Boolean)
-      .sort((a, b) => (b?.lastLog ?? 0) - (a?.lastLog ?? 0));
+      .sort((a, b) => (b?.last_heartbeat ?? b?.lastLog ?? 0) - (a?.last_heartbeat ?? a?.lastLog ?? 0));
   },
 });
 
@@ -302,5 +316,56 @@ export const adminGetStats = query({
       },
       topErrors: topErrorsList,
     };
+  },
+});
+
+const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes without heartbeat = offline
+
+export const checkDaemonHealth = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const allUsers = await ctx.db.query("users").collect();
+
+    const daemonUsers = allUsers.filter(
+      (u) => u.last_heartbeat && u.cli_version
+    );
+
+    let alertsCreated = 0;
+
+    for (const user of daemonUsers) {
+      const heartbeatAge = now - (user.last_heartbeat ?? 0);
+      if (heartbeatAge < STALE_THRESHOLD_MS) continue;
+
+      // Check if we already created an offline alert recently (within last 30 min)
+      const recentAlerts = await ctx.db
+        .query("daemon_logs")
+        .withIndex("by_user_timestamp", (q) =>
+          q.eq("user_id", user._id).gt("timestamp", now - 30 * 60 * 1000)
+        )
+        .collect();
+
+      const hasRecentOfflineAlert = recentAlerts.some(
+        (l) => l.message.startsWith("DAEMON OFFLINE")
+      );
+
+      if (hasRecentOfflineAlert) continue;
+
+      const offlineMinutes = Math.round(heartbeatAge / 60000);
+      await ctx.db.insert("daemon_logs", {
+        user_id: user._id,
+        level: "error",
+        message: `DAEMON OFFLINE: No heartbeat for ${offlineMinutes}min (v${user.cli_version || "?"}, ${user.cli_platform || "?"})`,
+        metadata: {
+          error_code: "daemon_offline",
+        },
+        daemon_version: user.cli_version,
+        platform: user.cli_platform,
+        timestamp: now,
+      });
+      alertsCreated++;
+    }
+
+    return { checked: daemonUsers.length, alertsCreated };
   },
 });
