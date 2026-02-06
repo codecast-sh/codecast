@@ -1712,21 +1712,22 @@ function spawnReplacement(): boolean {
 
 const CRASH_FILE = path.join(CONFIG_DIR, "crash-count.json");
 
-function recordCrashAndShouldRespawn(): boolean {
+function recordCrash(): { count: number; backoffMinutes: number } {
   try {
     let crashes: { count: number; firstCrash: number } = { count: 0, firstCrash: Date.now() };
     if (fs.existsSync(CRASH_FILE)) {
       crashes = JSON.parse(fs.readFileSync(CRASH_FILE, "utf-8"));
     }
-    const windowMs = 5 * 60 * 1000;
+    const windowMs = 30 * 60 * 1000;
     if (Date.now() - crashes.firstCrash > windowMs) {
       crashes = { count: 0, firstCrash: Date.now() };
     }
     crashes.count++;
     fs.writeFileSync(CRASH_FILE, JSON.stringify(crashes));
-    return crashes.count <= 5;
+    const backoffMinutes = crashes.count <= 3 ? 0 : Math.min(crashes.count * 2, 30);
+    return { count: crashes.count, backoffMinutes };
   } catch {
-    return true;
+    return { count: 1, backoffMinutes: 0 };
   }
 }
 
@@ -2382,24 +2383,31 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // Exit guard: always respawn unless explicitly skipped or crash looping
+  // Exit guard: always respawn, with backoff if crash looping
   process.on("exit", (code) => {
     if (skipRespawn) return;
     if (code !== 0) {
-      if (!recordCrashAndShouldRespawn()) {
-        try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] FATAL: Crash loop detected (5 crashes in 5min), NOT respawning. Manual restart required.\n`); } catch {}
+      const { count, backoffMinutes } = recordCrash();
+      if (backoffMinutes > 0) {
+        try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] CRASH LOOP: ${count} crashes, backing off ${backoffMinutes}min before respawn\n`); } catch {}
+        try {
+          spawn("sh", ["-c", `sleep ${backoffMinutes * 60} && "${process.execPath}" ${process.argv.slice(1).map(a => `"${a}"`).join(" ")}`], {
+            detached: true,
+            stdio: "ignore",
+            env: { ...process.env, CODECAST_RESTART: "1" },
+          }).unref();
+        } catch {}
         return;
       }
     } else {
       clearCrashCount();
     }
     try {
-      const child = spawn(process.execPath, process.argv.slice(1), {
+      spawn(process.execPath, process.argv.slice(1), {
         detached: true,
         stdio: "ignore",
         env: { ...process.env, CODECAST_RESTART: "1" },
-      });
-      child.unref();
+      }).unref();
     } catch {}
   });
 
@@ -3170,6 +3178,145 @@ export async function runDaemon(): Promise<void> {
   if (daemonStarted) return;
   daemonStarted = true;
   return main();
+}
+
+export async function runWatchdog(): Promise<void> {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.convex_url) {
+    process.exit(0);
+  }
+
+  const siteUrl = config.convex_url.replace(".cloud", ".site");
+  const version = getVersion();
+  const logLine = (msg: string) => {
+    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [watchdog] ${msg}\n`); } catch {}
+  };
+
+  // 1. Report crash loop info if crash file exists
+  if (fs.existsSync(CRASH_FILE)) {
+    try {
+      const crashes = JSON.parse(fs.readFileSync(CRASH_FILE, "utf-8"));
+      if (crashes.count > 3) {
+        await fetch(`${siteUrl}/cli/logs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            logs: [{
+              level: "error",
+              message: `CRASH LOOP: ${crashes.count} crashes since ${new Date(crashes.firstCrash).toISOString()}, watchdog reporting`,
+              metadata: { error_code: "crash_loop" },
+              daemon_version: version,
+              platform: process.platform,
+              timestamp: Date.now(),
+            }],
+          }),
+        }).catch(() => {});
+      }
+    } catch {}
+  }
+
+  // 2. Check if daemon is alive
+  let daemonAlive = false;
+  if (fs.existsSync(PID_FILE)) {
+    try {
+      const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
+      if (pid > 0) {
+        process.kill(pid, 0);
+        daemonAlive = true;
+      }
+    } catch {
+      daemonAlive = false;
+    }
+  }
+
+  // 3. Send heartbeat (keeps server aware even if daemon is dead)
+  let commands: Array<{ id: string; command: string }> = [];
+  try {
+    const response = await fetch(`${siteUrl}/cli/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        version: daemonAlive ? version : `${version}-watchdog`,
+        platform: process.platform,
+        pid: 0,
+        autostart_enabled: true,
+      }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      commands = data.commands || [];
+    }
+  } catch {}
+
+  // 4. If daemon is dead, restart it
+  if (!daemonAlive) {
+    logLine("Daemon not running, restarting...");
+
+    // Handle force_update before restart so daemon starts with new binary
+    const updateCmd = commands.find(c => c.command === "force_update");
+    if (updateCmd) {
+      logLine("Force update pending, updating before restart...");
+      const success = await performUpdate();
+      // Report result
+      await fetch(`${siteUrl}/cli/command-result`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          command_id: updateCmd.id,
+          result: success ? "Updated by watchdog" : undefined,
+          error: success ? undefined : "Watchdog update failed",
+        }),
+      }).catch(() => {});
+      if (success) {
+        logLine("Update successful");
+        clearCrashCount();
+      }
+      commands = commands.filter(c => c.id !== updateCmd.id);
+    }
+
+    // Mark remaining commands as executed (daemon will get fresh ones on reconnect)
+    for (const cmd of commands) {
+      await fetch(`${siteUrl}/cli/command-result`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          command_id: cmd.id,
+          result: `Handled by watchdog (daemon was dead): restarting`,
+        }),
+      }).catch(() => {});
+    }
+
+    // Spawn daemon
+    clearCrashCount();
+    const { executablePath, args } = getDaemonExecInfo();
+    try {
+      const child = spawn(executablePath, args, {
+        detached: true,
+        stdio: "ignore",
+        env: { ...process.env, CODECAST_RESTART: "1" },
+      });
+      child.unref();
+      logLine("Daemon restarted");
+    } catch (err) {
+      logLine(`Failed to restart daemon: ${err}`);
+    }
+  } else if (commands.some(c => c.command === "force_update")) {
+    // Daemon is alive but has pending force_update -- it should handle it via subscription
+    // But if it hasn't within reasonable time, the watchdog can nudge by sending SIGUSR1
+    logLine("Daemon alive with pending force_update, daemon should handle via subscription");
+  }
+}
+
+function getDaemonExecInfo(): { executablePath: string; args: string[] } {
+  const isBinary = !__filename.endsWith(".ts") && !__filename.endsWith(".js");
+  if (isBinary) {
+    return { executablePath: process.argv[0], args: ["--", "_daemon"] };
+  }
+  return { executablePath: process.execPath, args: [path.resolve(__dirname, "daemon.js")] };
 }
 
 // Only run directly if executed as the main module (not when imported)
