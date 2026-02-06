@@ -3137,12 +3137,12 @@ program
     }
   });
 
-function getExecutableInfo(): { executablePath: string; args: string[] } {
+function getExecutableInfo(command = "_daemon"): { executablePath: string; args: string[] } {
   const isBundle = __filename.includes("/dist/") || __filename.includes("/build/");
   const isBinary = !__filename.endsWith(".ts") && !__filename.endsWith(".js");
 
   if (isBinary) {
-    return { executablePath: process.argv[0], args: ["--", "_daemon"] };
+    return { executablePath: process.argv[0], args: ["--", command] };
   } else if (isBundle) {
     return { executablePath: process.execPath, args: [path.resolve(__dirname, "daemon.js")] };
   } else {
@@ -5141,6 +5141,14 @@ program
   .action(async () => {
     const { runDaemon } = await import("./daemon.js");
     await runDaemon();
+  });
+
+program
+  .command("_watchdog", { hidden: true })
+  .description("Watchdog health check (internal use)")
+  .action(async () => {
+    const { runWatchdog } = await import("./daemon.js");
+    await runWatchdog();
   });
 
 // Check for updates in background (non-blocking)
