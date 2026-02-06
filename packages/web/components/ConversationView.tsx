@@ -103,6 +103,7 @@ export type ConversationData = {
     username: string;
   } | null;
   compaction_count?: number;
+  loaded_start_index?: number;
   fork_children?: Array<{
     _id: string;
     title: string;
@@ -177,6 +178,8 @@ type ConversationViewProps = {
   isLoadingNewer?: boolean;
   onLoadOlder?: () => void;
   onLoadNewer?: () => void;
+  onJumpToStart?: () => void;
+  onJumpToEnd?: () => void;
   highlightQuery?: string;
   onClearHighlight?: () => void;
   embedded?: boolean;
@@ -249,6 +252,43 @@ function formatTimestamp(ts: number) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function hasRichMarkdown(text: string): boolean {
+  const markers = [
+    /^#{1,3}\s+\S/m,           // headers
+    /\|.+\|.+\|/,              // tables
+    /^```\w*/m,                 // fenced code blocks
+    /^\d+\.\s+\*\*[^*]+\*\*/m, // numbered list with bold
+    /^-\s+\[[ x]\]/im,         // task lists
+  ];
+  let hits = 0;
+  for (const m of markers) {
+    if (m.test(text)) hits++;
+    if (hits >= 2) return true;
+  }
+  return false;
+}
+
+const PLAN_PREFIXES = [
+  /^implement\s+the\s+following\s+plan\s*:\s*/i,
+  /^implement\s+this\s+plan\s*:\s*/i,
+  /^here(?:'s| is)\s+the\s+plan\s*:\s*/i,
+  /^plan\s*:\s*\n/i,
+];
+
+function extractPlanContent(text: string): string | null {
+  const trimmed = text.trim();
+  for (const prefix of PLAN_PREFIXES) {
+    const match = trimmed.match(prefix);
+    if (match) {
+      const rest = trimmed.slice(match[0].length).trim();
+      if (rest.length > 200 && hasRichMarkdown(rest)) {
+        return rest;
+      }
+    }
+  }
+  return null;
 }
 
 function formatRelativeTime(ts: number): string {
@@ -579,7 +619,11 @@ const mcpToolNames: Record<string, string> = {
 };
 
 const codexToolNames: Record<string, string> = {
-  shell_command: "Shell",
+  shell_command: "Terminal",
+  shell: "Terminal",
+  exec_command: "Terminal",
+  "container.exec": "Terminal",
+  apply_patch: "Patch",
   file_read: "Read",
   file_write: "Write",
   file_edit: "Edit",
@@ -600,11 +644,22 @@ function formatToolName(name: string): string {
   return name.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean }) {
+function isPlanWriteToolCall(tc: ToolCall): boolean {
+  if (tc.name !== "Write") return false;
+  try {
+    const parsed = JSON.parse(tc.input);
+    return String(parsed.file_path || "").includes('.claude/plans/');
+  } catch {
+    return false;
+  }
+}
+
+function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, onStartShareSelection, collapsed, timestamp }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean; messageId?: string; onStartShareSelection?: (messageId: string) => void; collapsed?: boolean; timestamp?: number }) {
   const isEdit = tool.name === "Edit" || tool.name === "Write";
   const [expanded, setExpanded] = useState(isEdit);
   const isRead = tool.name === "Read";
-  const isBash = tool.name === "Bash";
+  const isCodexShell = tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec";
+  const isBash = tool.name === "Bash" || isCodexShell;
   const isGlob = tool.name === "Glob";
   const isGrep = tool.name === "Grep";
 
@@ -623,7 +678,31 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: To
   const isMarkdown = isMarkdownFile(filePath);
   const content = isRead ? (result?.content || "") : String(parsedInput.content || "");
   const isPlan = isMarkdown && isPlanFile(filePath, content);
-  const [viewMode, setViewMode] = useState<'raw' | 'rendered'>(isPlan ? 'rendered' : 'raw');
+  const isPlanWrite = tool.name === "Write" && filePath.includes('.claude/plans/');
+  const [viewMode, setViewMode] = useState<'raw' | 'rendered'>(isMarkdown ? 'rendered' : 'raw');
+  const [mdExpanded, setMdExpanded] = useState(false);
+  const [mdFullscreen, setMdFullscreen] = useState(false);
+  const mdContainerRef = useRef<HTMLDivElement>(null);
+  const [mdOverflowing, setMdOverflowing] = useState(false);
+  const MD_COLLAPSED_HEIGHT = 600;
+
+  useEffect(() => {
+    if (mdContainerRef.current && !mdExpanded && viewMode === 'rendered') {
+      requestAnimationFrame(() => {
+        if (mdContainerRef.current) {
+          setMdOverflowing(mdContainerRef.current.scrollHeight > MD_COLLAPSED_HEIGHT);
+        }
+      });
+    }
+  }, [content, mdExpanded, viewMode, expanded]);
+
+  useEffect(() => {
+    if (!mdFullscreen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMdFullscreen(false); };
+    document.addEventListener('keydown', handleKey);
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
+  }, [mdFullscreen]);
 
   const truncateStr = (s: string, max: number) => s.length > max ? s.slice(0, max) + "..." : s;
   const shortenUrl = (url: string) => {
@@ -640,16 +719,18 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: To
 
   const getToolSummary = () => {
     if (isEdit || isRead) return relativePath;
-    if (isBash && parsedInput.command) {
-      const cmd = String(parsedInput.command);
-      return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd;
+    if (isBash) {
+      const cmd = String(parsedInput.command || parsedInput.cmd || "");
+      if (cmd) return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd;
     }
     if (isGlob && parsedInput.pattern) return String(parsedInput.pattern);
     if (isGrep && parsedInput.pattern) return String(parsedInput.pattern);
 
-    if (tool.name === "shell_command" || tool.name === "shell") {
-      const cmd = String(parsedInput.command || parsedInput.cmd || "");
-      return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd || null;
+    if (tool.name === "apply_patch") {
+      const input = String(parsedInput.input || parsedInput.patch || "");
+      const fileMatch = input.match(/\*\*\* (?:Update|Add|Delete) File: (.+)/);
+      if (fileMatch) return getRelativePath(fileMatch[1].trim());
+      return "Apply patch";
     }
     if (tool.name === "file_read" || tool.name === "file_write" || tool.name === "file_edit") {
       return getRelativePath(String(parsedInput.file_path || parsedInput.path || ""));
@@ -780,6 +861,10 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: To
 
   const codexToolColors: Record<string, string> = {
     shell_command: "text-sol-green/80",
+    shell: "text-sol-green/80",
+    exec_command: "text-sol-green/80",
+    "container.exec": "text-sol-green/80",
+    apply_patch: "text-sol-orange/80",
     file_read: "text-sol-blue/80",
     file_write: "text-sol-orange/80",
     file_edit: "text-sol-orange/80",
@@ -821,6 +906,10 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: To
       setExpanded(!expanded);
     }
   };
+
+  if (isPlanWrite && content) {
+    return <PlanBlock content={content} timestamp={timestamp || Date.now()} collapsed={collapsed} messageId={messageId} onStartShareSelection={onStartShareSelection} shareSelectionMode={shareSelectionMode} />;
+  }
 
   return (
     <div className="my-0.5">
@@ -893,9 +982,64 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: To
             />
           ) : tool.name === "Write" && !!parsedInput.content ? (
             isMarkdown && viewMode === 'rendered' ? (
-              <div className="max-h-96 overflow-auto p-3">
-                <MarkdownRenderer content={String(parsedInput.content)} filePath={filePath} />
-              </div>
+              <>
+                <div
+                  ref={mdContainerRef}
+                  className="relative p-3"
+                  style={!mdExpanded && mdOverflowing ? { maxHeight: MD_COLLAPSED_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
+                >
+                  <MarkdownRenderer content={String(parsedInput.content)} filePath={filePath} />
+                </div>
+                <div className="flex items-center gap-3 px-3 pb-2">
+                  {(mdOverflowing || mdExpanded) && (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setMdExpanded(v => !v); }}
+                        className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                      >
+                        {mdExpanded ? "Collapse" : "Expand"}
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setMdFullscreen(true); }}
+                        className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                      >
+                        Fullscreen
+                      </button>
+                    </>
+                  )}
+                  {onStartShareSelection && messageId && !shareSelectionMode && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onStartShareSelection(messageId); }}
+                      className="text-xs font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors flex items-center gap-1"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                      </svg>
+                      Share
+                    </button>
+                  )}
+                </div>
+                {mdFullscreen && createPortal(
+                  <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setMdFullscreen(false)}>
+                    <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center justify-between mb-6">
+                        <span className="text-sol-text-secondary text-sm font-medium">{filePath.split('/').pop()}</span>
+                        <button
+                          onClick={() => setMdFullscreen(false)}
+                          className="text-sol-text-dim hover:text-sol-text-muted transition-colors p-1"
+                          title="Close (Esc)"
+                        >
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                      <MarkdownRenderer content={String(parsedInput.content)} filePath={filePath} />
+                    </div>
+                  </div>,
+                  document.body
+                )}
+              </>
             ) : (
               <DiffView
                 oldStr=""
@@ -904,11 +1048,11 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode }: { tool: To
                 language={language}
               />
             )
-          ) : isBash && parsedInput.command ? (
+          ) : isBash && (parsedInput.command || parsedInput.cmd) ? (
             <div className="max-h-80 overflow-auto">
               <div className="px-2 py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
                 <pre className="text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
-                  $ {String(parsedInput.command)}
+                  $ {String(parsedInput.command || parsedInput.cmd)}
                 </pre>
               </div>
               {processedContent && processedContent.trim() ? (
@@ -995,6 +1139,79 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>; answers?: Record<string, string> } = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  const questions = parsedInput.questions || [];
+  if (questions.length === 0) return null;
+
+  let answers: Record<string, string> = {};
+  if (parsedInput.answers && typeof parsedInput.answers === "object") {
+    answers = parsedInput.answers;
+  } else if (result?.content) {
+    const regex = /"([^"]+)"="([^"]+)"/g;
+    let match;
+    while ((match = regex.exec(result.content)) !== null) {
+      answers[match[1]] = match[2];
+    }
+  }
+
+  return (
+    <div className="my-1.5 ml-1 border-l-2 border-sol-violet/30 pl-3 space-y-2.5">
+      {questions.map((q, i) => {
+        const answer = answers[q.question];
+        const isCustom = answer !== undefined && !q.options.some(
+          o => o.label === answer || o.label.replace(" (Recommended)", "") === answer
+        );
+        return (
+          <div key={i} className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              {q.header && (
+                <span className="text-[9px] uppercase tracking-wider font-semibold px-1 py-px rounded bg-sol-violet/15 text-sol-violet/80 border border-sol-violet/20">
+                  {q.header}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-sol-text-muted">{q.question}</div>
+            <div className="flex flex-wrap gap-1">
+              {q.options.map((opt, j) => {
+                const cleanLabel = opt.label.replace(" (Recommended)", "");
+                const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
+                return (
+                  <span
+                    key={j}
+                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${
+                      isSelected
+                        ? "bg-sol-green/15 border-sol-green/40 text-sol-green"
+                        : "border-sol-border/30 text-sol-text-dim"
+                    }`}
+                  >
+                    {isSelected && (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                    {opt.label}
+                  </span>
+                );
+              })}
+              {isCustom && (
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border bg-sol-blue/15 border-sol-blue/40 text-sol-blue">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                  {answer}
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1094,10 +1311,58 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
+const USER_CONTENT_MAX_HEIGHT = 1800;
+
+function parseSkillBlocks(text: string): { parts: Array<{ type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string }>} {
+  const parts: Array<{ type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string }> = [];
+  const skillRegex = /<skill>([\s\S]*?)<\/skill>/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = skillRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const before = text.slice(lastIndex, match.index).trim();
+      if (before) parts.push({ type: 'text', content: before });
+    }
+    const inner = match[1];
+    const nameMatch = inner.match(/<name>(.*?)<\/name>/);
+    const pathMatch = inner.match(/<path>(.*?)<\/path>/);
+    const descMatch = inner.match(/description:\s*(.+)/);
+    parts.push({
+      type: 'skill',
+      content: match[0],
+      skillName: nameMatch?.[1],
+      skillDesc: descMatch?.[1]?.trim(),
+      skillPath: pathMatch?.[1],
+    });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    const remaining = text.slice(lastIndex).trim();
+    if (remaining) parts.push({ type: 'text', content: remaining });
+  }
+  if (parts.length === 0) parts.push({ type: 'text', content: text });
+  return { parts };
+}
+
+function SkillCard({ name, description, path }: { name?: string; description?: string; path?: string }) {
+  const shortPath = path ? path.replace(/^\/Users\/[^/]+\//, "~/") : undefined;
+  return (
+    <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-sol-bg-alt border border-sol-border/40 text-xs font-mono">
+      <span className="text-sol-violet font-semibold">/{name || "skill"}</span>
+      {description && <span className="text-sol-text-muted">{description}</span>}
+      {shortPath && <span className="text-sol-text-dim text-[10px] hidden sm:inline">{shortPath}</span>}
+    </div>
+  );
+}
+
 function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
+  const [contentExpanded, setContentExpanded] = useState(false);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const isMarkdown = hasRichMarkdown(content);
 
   const effectivelyCollapsed = collapsed && !isExpanded;
 
@@ -1109,6 +1374,20 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
       setIsTruncated(false);
     }
   }, [effectivelyCollapsed, content]);
+
+  useEffect(() => {
+    if (!effectivelyCollapsed && contentRef.current && !contentExpanded) {
+      setIsOverflowing(contentRef.current.scrollHeight > USER_CONTENT_MAX_HEIGHT);
+    }
+  }, [content, effectivelyCollapsed, contentExpanded]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
+    document.addEventListener('keydown', handleKey);
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
+  }, [fullscreen]);
 
   const commentCount = useQuery(api.comments.getCommentCount, {
     message_id: messageId as Id<"messages">,
@@ -1233,9 +1512,55 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
       </div>
       <div
         ref={contentRef}
-        className={`text-sol-text text-sm pl-8 whitespace-pre-wrap break-words ${effectivelyCollapsed ? "line-clamp-2" : ""}`}
+        className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : isMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}
+        style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
       >
-        {content}
+        {effectivelyCollapsed ? content : (() => {
+          const hasSkill = content.includes('<skill>');
+          if (hasSkill) {
+            const { parts } = parseSkillBlocks(content);
+            return (
+              <div className="space-y-2">
+                {parts.map((part, i) => part.type === 'skill' ? (
+                  <SkillCard key={i} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
+                ) : isMarkdown || hasRichMarkdown(part.content) ? (
+                  <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
+                    components={{ pre: ({ node, children, ...props }) => {
+                      const codeElement = node?.children?.[0];
+                      if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                        const className = codeElement.properties?.className as string[] | undefined;
+                        const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                        const codeContent = codeElement.children?.[0];
+                        const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                        if (code) return <CodeBlock code={code} language={language} />;
+                      }
+                      return <pre {...props}>{children}</pre>;
+                    }}}
+                  >{part.content}</ReactMarkdown>
+                ) : <span key={i}>{part.content}</span>)}
+              </div>
+            );
+          }
+          return isMarkdown ? (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeHighlight]}
+              components={{
+                pre: ({ node, children, ...props }) => {
+                  const codeElement = node?.children?.[0];
+                  if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                    const className = codeElement.properties?.className as string[] | undefined;
+                    const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                    const codeContent = codeElement.children?.[0];
+                    const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                    if (code) return <CodeBlock code={code} language={language} />;
+                  }
+                  return <pre {...props}>{children}</pre>;
+                },
+              }}
+            >{content}</ReactMarkdown>
+          ) : content;
+        })()}
       </div>
       {isTruncated && (
         <button
@@ -1252,6 +1577,67 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         >
           Collapse
         </button>
+      )}
+      {!effectivelyCollapsed && (isOverflowing || contentExpanded) && (
+        <div className="flex items-center gap-3 mt-2 ml-8">
+          <button
+            onClick={() => setContentExpanded(e => !e)}
+            className="text-xs font-medium text-sol-blue hover:text-sol-blue/80 transition-colors"
+          >
+            {contentExpanded ? "Collapse" : "Expand"}
+          </button>
+          <button
+            onClick={() => setFullscreen(true)}
+            className="text-xs font-medium text-sol-blue hover:text-sol-blue/80 transition-colors"
+          >
+            Fullscreen
+          </button>
+        </div>
+      )}
+
+      {fullscreen && createPortal(
+        <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
+          <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <span className="text-sol-text-secondary text-sm font-medium">{userName || "You"}</span>
+              <button
+                onClick={() => setFullscreen(false)}
+                className="text-sol-text-dim hover:text-sol-text-muted transition-colors p-1"
+                title="Close (Esc)"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className={isMarkdown ? "prose prose-invert prose-sm max-w-none text-sol-text" : "text-sol-text text-sm whitespace-pre-wrap"}>
+              {isMarkdown ? (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[rehypeHighlight]}
+                  components={{
+                    pre: ({ node, children, ...props }) => {
+                      const codeElement = node?.children?.[0];
+                      if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                        const className = codeElement.properties?.className as string[] | undefined;
+                        const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                        const codeContent = codeElement.children?.[0];
+                        const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                        if (code) {
+                          return <CodeBlock code={code} language={language} />;
+                        }
+                      }
+                      return <pre {...props}>{children}</pre>;
+                    },
+                  }}
+                >
+                  {content}
+                </ReactMarkdown>
+              ) : content}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -1311,7 +1697,7 @@ function AssistantBlock({
   agentType?: string;
 }) {
   const COLLAPSED_LINES = 2;
-  const CONTENT_MAX_HEIGHT = 400;
+  const CONTENT_MAX_HEIGHT = 1800;
 
   const [contentExpanded, setContentExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
@@ -1416,14 +1802,15 @@ function AssistantBlock({
     return null;
   }
 
-  // When collapsed and only tool calls (no text content), hide completely
-  if (collapsed && onlyToolCalls) {
+  // When collapsed and only tool calls (no text content), hide completely -- unless it has plan writes
+  const hasPlanWrite = hasToolCalls && toolCalls?.some(isPlanWriteToolCall);
+  if (collapsed && onlyToolCalls && !hasPlanWrite) {
     return null;
   }
 
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
-      {hasContent && (
+      {(hasContent || hasToolCalls) && (
         <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {onStartShareSelection && (
             <MessageSharePopover
@@ -1507,8 +1894,9 @@ function AssistantBlock({
 
         {!collapsed && hasThinking && showThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
 
-        {!collapsed && hasToolCalls && toolCalls?.map((tc) => (
-          tc.name === "Task" ? (
+        {hasToolCalls && toolCalls?.map((tc) => {
+          if (collapsed && !isPlanWriteToolCall(tc)) return null;
+          return tc.name === "Task" ? (
             <TaskToolBlock
               key={tc.id}
               tool={tc}
@@ -1517,6 +1905,8 @@ function AssistantBlock({
             />
           ) : tc.name === "TodoWrite" ? (
             <TodoWriteBlock key={tc.id} tool={tc} />
+          ) : tc.name === "AskUserQuestion" ? (
+            <AskUserQuestionBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : (
             <ToolBlock
               key={tc.id}
@@ -1524,9 +1914,13 @@ function AssistantBlock({
               result={toolResultMap[tc.id]}
               changeIndex={toolCallToChangeIndexMap?.[tc.id]}
               shareSelectionMode={shareSelectionMode}
+              messageId={messageId}
+              onStartShareSelection={onStartShareSelection}
+              collapsed={collapsed}
+              timestamp={timestamp}
             />
-          )
-        ))}
+          );
+        })}
 
         {hasContent && (
           <>
@@ -1540,7 +1934,7 @@ function AssistantBlock({
                 <div
                   ref={contentRef}
                   className="relative"
-                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflow: 'hidden' } : undefined}
+                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
                 >
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
@@ -1564,23 +1958,20 @@ function AssistantBlock({
                   >
                     {content}
                   </ReactMarkdown>
-                  {!contentExpanded && isOverflowing && (
-                    <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-sol-bg to-transparent pointer-events-none" />
-                  )}
                 </div>
               )}
             </div>
             {!collapsed && (isOverflowing || contentExpanded) && (
-              <div className="flex items-center gap-3 mt-1">
+              <div className="flex items-center gap-3 mt-2">
                 <button
                   onClick={() => setContentExpanded(e => !e)}
-                  className="text-xs text-sol-text-dim hover:text-sol-text-muted transition-colors"
+                  className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
                 >
                   {contentExpanded ? "Collapse" : "Expand"}
                 </button>
                 <button
                   onClick={() => setFullscreen(true)}
-                  className="text-xs text-sol-text-dim hover:text-sol-text-muted transition-colors"
+                  className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
                 >
                   Fullscreen
                 </button>
@@ -1719,6 +2110,173 @@ function CompactionSummaryBlock({ content }: { content: string }) {
             {content}
           </ReactMarkdown>
         </div>
+      )}
+    </div>
+  );
+}
+
+const PLAN_MAX_HEIGHT = 1800;
+
+function PlanBlock({ content, timestamp, collapsed, messageId, onStartShareSelection, shareSelectionMode }: { content: string; timestamp: number; collapsed?: boolean; messageId?: string; onStartShareSelection?: (messageId: string) => void; shareSelectionMode?: boolean }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+
+  useEffect(() => {
+    if (contentRef.current && !isExpanded) {
+      setIsOverflowing(contentRef.current.scrollHeight > PLAN_MAX_HEIGHT);
+    }
+  }, [content, isExpanded]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
+    document.addEventListener('keydown', handleKey);
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
+  }, [fullscreen]);
+
+  const title = content.match(/^#\s+(.+)$/m)?.[1] || "Plan";
+
+  if (collapsed) {
+    return (
+      <div className="mb-2 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 px-4 py-2">
+        <div className="flex items-center gap-2 text-xs text-sol-text-muted">
+          <svg className="w-3.5 h-3.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+          </svg>
+          <span className="font-medium">{title}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-6 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-sol-border/40">
+        <div className="flex items-center gap-2">
+          <svg className="w-3.5 h-3.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+          </svg>
+          <span className="text-xs font-medium text-sol-text-muted">Plan</span>
+          <span className="text-xs text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          {onStartShareSelection && messageId && !shareSelectionMode && (
+            <button
+              onClick={() => onStartShareSelection(messageId)}
+              className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors"
+              title="Share"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+            </button>
+          )}
+          <button
+            onClick={() => setFullscreen(true)}
+            className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors"
+            title="Fullscreen"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div className="px-4 py-3">
+        <div
+          ref={contentRef}
+          className="relative prose prose-invert prose-sm max-w-none"
+          style={!isExpanded && isOverflowing ? { maxHeight: PLAN_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
+        >
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeHighlight]}
+            components={{
+              pre: ({ node, children, ...props }) => {
+                const codeElement = node?.children?.[0];
+                if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                  const className = codeElement.properties?.className as string[] | undefined;
+                  const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                  const codeContent = codeElement.children?.[0];
+                  const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                  if (code) {
+                    return <CodeBlock code={code} language={language} />;
+                  }
+                }
+                return <pre {...props}>{children}</pre>;
+              },
+            }}
+          >
+            {content}
+          </ReactMarkdown>
+        </div>
+        {(isOverflowing || isExpanded) && (
+          <div className="flex items-center gap-3 mt-2 pt-2 border-t border-sol-border/30">
+            <button
+              onClick={() => setIsExpanded(e => !e)}
+              className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+            >
+              {isExpanded ? "Collapse" : "Expand"}
+            </button>
+            <button
+              onClick={() => setFullscreen(true)}
+              className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+            >
+              Fullscreen
+            </button>
+          </div>
+        )}
+      </div>
+
+      {fullscreen && createPortal(
+        <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
+          <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+                </svg>
+                <span className="text-sol-text-secondary text-sm font-medium">Plan</span>
+              </div>
+              <button
+                onClick={() => setFullscreen(false)}
+                className="text-sol-text-dim hover:text-sol-text-muted transition-colors p-1"
+                title="Close"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="prose prose-invert prose-sm max-w-none text-sol-text">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeHighlight]}
+                components={{
+                  pre: ({ node, children, ...props }) => {
+                    const codeElement = node?.children?.[0];
+                    if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                      const className = codeElement.properties?.className as string[] | undefined;
+                      const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                      const codeContent = codeElement.children?.[0];
+                      const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                      if (code) {
+                        return <CodeBlock code={code} language={language} />;
+                      }
+                    }
+                    return <pre {...props}>{children}</pre>;
+                  },
+                }}
+              >
+                {content}
+              </ReactMarkdown>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -1951,10 +2509,11 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [userScrolled, setUserScrolled] = useState(false);
+  const [isNearTop, setIsNearTop] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
@@ -1963,11 +2522,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
-  const prevScrollHeightRef = useRef<number>(0);
-  const shouldRestoreScrollRef = useRef(false);
+  const scrollAnchorRef = useRef<{ messageId: string; pixelOffset: number } | null>(null);
   const prevTimelineLengthRef = useRef<number>(0);
   const isNearBottomRef = useRef(true);
+  const scrollProgressRef = useRef<HTMLDivElement>(null);
   const hasScrolledToTarget = useRef(false);
+  const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
+  const isPaginatingRef = useRef(false);
   const [shareSelectionMode, setShareSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
@@ -2345,22 +2906,49 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
       isNearBottomRef.current = isNearBottom;
 
-      // Only set userScrolled to true when scrolling away from bottom
-      // Don't reset it to false - let the auto-scroll effect handle that
+      setIsNearTop(scrollTop < 300);
+
       if (!isNearBottom) {
         setUserScrolled(true);
       }
 
+      if (scrollProgressRef.current) {
+        const items = virtualizer.getVirtualItems();
+        if (items.length > 0) {
+          const centerIdx = items[Math.floor(items.length / 2)].index;
+          const totalMessages = conversation?.message_count || messages.length;
+          const loadedMessages = messages.length;
+          const startOffset = conversation?.loaded_start_index ?? 0;
+          const tLen = Math.max(timeline.length, 1);
+          const progress = totalMessages > 0 ? Math.max(0, Math.min(1, (startOffset + (centerIdx / tLen) * loadedMessages) / totalMessages)) : 1;
+          scrollProgressRef.current.style.height = `${progress * 100}%`;
+        }
+      }
+
       // Load older messages when near top (within 300px)
       if (scrollTop < 300 && hasMoreAbove && !isLoadingOlder && onLoadOlder) {
-        prevScrollHeightRef.current = scrollHeight;
-        shouldRestoreScrollRef.current = true;
+        // Save anchor: find first visible message to restore position after load
+        const items = virtualizer.getVirtualItems();
+        for (const item of items) {
+          if (item.end > scrollTop) {
+            const tItem = timeline[item.index];
+            if (tItem?.type === 'message') {
+              scrollAnchorRef.current = {
+                messageId: tItem.data._id,
+                pixelOffset: item.start - scrollTop,
+              };
+              break;
+            }
+          }
+        }
+        isPaginatingRef.current = true;
         onLoadOlder();
       }
 
       // Load newer messages when near bottom (within 300px)
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       if (distanceFromBottom < 300 && hasMoreBelow && !isLoadingNewer && onLoadNewer) {
+        isPaginatingRef.current = true;
         onLoadNewer();
       }
     };
@@ -2369,31 +2957,54 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => scrollContainer.removeEventListener("scroll", handleScroll);
   }, [embedded, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer]);
 
-  // Restore scroll position after loading older messages
   useEffect(() => {
-    const scrollContainer = scrollContainerRef.current || containerRef.current;
-    if (!scrollContainer || !shouldRestoreScrollRef.current) return;
+    if (!scrollProgressRef.current) return;
+    const items = virtualizer.getVirtualItems();
+    if (items.length === 0) return;
+    const centerIdx = items[Math.floor(items.length / 2)].index;
+    const totalMessages = conversation?.message_count || messages.length;
+    const loadedMessages = messages.length;
+    const startOffset = conversation?.loaded_start_index ?? 0;
+    const tLen = Math.max(timeline.length, 1);
+    const progress = totalMessages > 0 ? Math.max(0, Math.min(1, (startOffset + (centerIdx / tLen) * loadedMessages) / totalMessages)) : 1;
+    scrollProgressRef.current.style.height = `${progress * 100}%`;
+  });
 
-    // After messages are prepended, adjust scroll to maintain position
-    const newScrollHeight = scrollContainer.scrollHeight;
-    const scrollDiff = newScrollHeight - prevScrollHeightRef.current;
-    if (scrollDiff > 0) {
-      scrollContainer.scrollTop += scrollDiff;
-    }
-    shouldRestoreScrollRef.current = false;
-  }, [messages.length]);
+  // Restore scroll position after loading older messages using anchor
+  useEffect(() => {
+    if (!scrollAnchorRef.current) return;
+    const { messageId, pixelOffset } = scrollAnchorRef.current;
+    const newIndex = timeline.findIndex(item =>
+      item.type === 'message' && (item.data as Message)._id === messageId
+    );
+    if (newIndex < 0) return;
+
+    // Scroll to the anchor item, then fine-tune pixel offset
+    virtualizer.scrollToIndex(newIndex, { align: 'start' });
+    scrollAnchorRef.current = null;
+    requestAnimationFrame(() => {
+      const scrollContainer = scrollContainerRef.current || containerRef.current;
+      if (!scrollContainer) return;
+      // scrollToIndex put the item at viewport top; adjust so it's at original offset
+      scrollContainer.scrollTop -= pixelOffset;
+    });
+  }, [timeline, virtualizer]);
 
   useEffect(() => {
     const hasNewMessages = timeline.length > prevTimelineLengthRef.current;
     prevTimelineLengthRef.current = timeline.length;
 
-    // Only auto-scroll when new messages arrive and user is near bottom
-    // Skip when targeting a specific message (deep link or search highlight)
-    if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && isNearBottomRef.current) {
+    // Only auto-scroll for real-time new messages, not forward pagination
+    if (hasNewMessages && isPaginatingRef.current) {
+      isPaginatingRef.current = false;
+      return;
+    }
+
+    if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && isNearBottomRef.current && !hasMoreBelow) {
       virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
       setUserScrolled(false);
     }
-  }, [timeline.length, virtualizer, highlightQuery, targetMessageId]);
+  }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow]);
 
   const hasInitialScrolled = useRef(false);
   useEffect(() => {
@@ -2404,6 +3015,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }, 100);
     }
   }, [timeline.length, virtualizer, highlightQuery]);
+
+  // Scroll after jump to start/end
+  useEffect(() => {
+    if (jumpDirectionRef.current && timeline.length > 0) {
+      const dir = jumpDirectionRef.current;
+      jumpDirectionRef.current = null;
+      setTimeout(() => {
+        if (dir === 'start') {
+          virtualizer.scrollToIndex(0, { align: "start" });
+          setUserScrolled(true);
+        } else {
+          virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+          setUserScrolled(false);
+        }
+      }, 50);
+    }
+  }, [timeline, virtualizer]);
 
   useEffect(() => {
     if (timeline.length && window.location.hash && !targetMessageId) {
@@ -2588,6 +3216,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (prevMsg?.role === 'system' && prevMsg?.subtype === 'compact_boundary') {
           return <CompactionSummaryBlock key={msg._id} content={msg.content} />;
         }
+        const planContent = extractPlanContent(msg.content);
+        if (planContent) {
+          return <PlanBlock key={msg._id} content={planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} onStartShareSelection={handleStartShareSelection} shareSelectionMode={shareSelectionMode} />;
+        }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
         return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} />;
       }
@@ -2660,26 +3292,29 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       // In collapsed mode, only render messages if sequence is expanded OR this is the first with text
       if (collapsed && !isSequenceExpanded) {
-        const hasTextContent = msg.content && msg.content.trim().length > 0;
+        const hasMsgPlanWrite = msg.tool_calls?.some(isPlanWriteToolCall);
+        if (!hasMsgPlanWrite) {
+          const hasTextContent = msg.content && msg.content.trim().length > 0;
 
-        // Check if there's an earlier assistant message with text content in this sequence
-        let hasEarlierTextContent = false;
-        for (let i = index - 1; i >= 0; i--) {
-          const checkItem = timeline[i];
-          if (checkItem.type !== 'message') continue;
-          const checkMsg = checkItem.data as Message;
-          if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
-            break;
+          // Check if there's an earlier assistant message with text content in this sequence
+          let hasEarlierTextContent = false;
+          for (let i = index - 1; i >= 0; i--) {
+            const checkItem = timeline[i];
+            if (checkItem.type !== 'message') continue;
+            const checkMsg = checkItem.data as Message;
+            if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
+              break;
+            }
+            if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
+              hasEarlierTextContent = true;
+              break;
+            }
           }
-          if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
-            hasEarlierTextContent = true;
-            break;
-          }
-        }
 
-        // Skip this message if: no text content, or there's earlier text content in sequence
-        if (!hasTextContent || hasEarlierTextContent) {
-          return null;
+          // Skip this message if: no text content, or there's earlier text content in sequence
+          if (!hasTextContent || hasEarlierTextContent) {
+            return null;
+          }
         }
       }
 
@@ -2756,6 +3391,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   startedAt={conversation.started_at}
                   messageCount={conversation.message_count}
                 />
+
+                {conversation.parent_conversation_id && (
+                  <Link
+                    href={`/conversation/${conversation.parent_conversation_id}`}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+                    title="View parent conversation"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                    </svg>
+                    Parent
+                  </Link>
+                )}
 
                 {(conversation.compaction_count ?? 0) > 0 && (
                   <span
@@ -2964,6 +3612,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             No messages in this conversation
           </div>
         ) : (
+          <>
+          {conversation?.parent_conversation_id && !hasMoreAbove && (
+            <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
+              <Link
+                href={`/conversation/${conversation.parent_conversation_id}`}
+                className="inline-flex items-center gap-1.5 text-xs text-sol-cyan/70 hover:text-sol-cyan transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                Spawned from parent session
+              </Link>
+            </div>
+          )}
           <div
             className="flex-1"
             style={{
@@ -3045,6 +3707,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </div>
             )}
           </div>
+          {conversation?.child_conversations && conversation.child_conversations.length > 0 && !hasMoreBelow && (
+            <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[10px] text-sol-text-dim uppercase tracking-wider">Subagents</span>
+                {conversation.child_conversations.map((child) => (
+                  <Link
+                    key={child._id}
+                    href={`/conversation/${child._id}`}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-sol-cyan/10 text-sol-cyan/70 border border-sol-cyan/20 hover:bg-sol-cyan/20 hover:text-sol-cyan transition-colors truncate max-w-[200px]"
+                  >
+                    <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                    </svg>
+                    {child.title}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+          </>
         )}
 
           {showMessageInput && conversation && conversation.status === "active" && (
@@ -3054,58 +3736,88 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {timeline.length > 0 && (
-        <div className="fixed bottom-24 right-8 z-30 flex flex-col gap-2">
-          {!userScrolled && (
-            <button
-              onClick={() => {
-                if (embedded && containerRef.current) {
-                  let el = containerRef.current.parentElement;
-                  while (el) {
-                    const style = getComputedStyle(el);
-                    if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-                      el.scrollTo({ top: 0, behavior: 'smooth' });
-                      break;
+        <div className="fixed bottom-24 right-8 z-30 flex items-center gap-2.5">
+          <div className="flex flex-col gap-2">
+            {(!isNearTop || hasMoreAbove) && (
+              <button
+                onClick={() => {
+                  if (hasMoreAbove && onJumpToStart) {
+                    jumpDirectionRef.current = 'start';
+                    onJumpToStart();
+                  } else if (embedded && containerRef.current) {
+                    let el = containerRef.current.parentElement;
+                    while (el) {
+                      const style = getComputedStyle(el);
+                      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+                        el.scrollTo({ top: 0 });
+                        break;
+                      }
+                      el = el.parentElement;
                     }
-                    el = el.parentElement;
+                  } else {
+                    virtualizer.scrollToIndex(0, { align: "start" });
                   }
-                } else {
-                  virtualizer.scrollToIndex(0, { align: "start", behavior: "smooth" });
-                }
-                setUserScrolled(true);
-              }}
-              className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
-              aria-label="Scroll to top"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-              </svg>
-            </button>
-          )}
-          {userScrolled && (
-            <button
-              onClick={() => {
-                if (embedded && containerRef.current) {
-                  let el = containerRef.current.parentElement;
-                  while (el) {
-                    const style = getComputedStyle(el);
-                    if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-                      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-                      break;
+                }}
+                className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
+                aria-label="Scroll to top"
+              >
+                {isLoadingOlder ? (
+                  <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                  </svg>
+                )}
+              </button>
+            )}
+            {(userScrolled || hasMoreBelow) && (
+              <button
+                onClick={() => {
+                  if (hasMoreBelow && onJumpToEnd) {
+                    jumpDirectionRef.current = 'end';
+                    onJumpToEnd();
+                  } else if (embedded && containerRef.current) {
+                    let el = containerRef.current.parentElement;
+                    while (el) {
+                      const style = getComputedStyle(el);
+                      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+                        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+                        break;
+                      }
+                      el = el.parentElement;
                     }
-                    el = el.parentElement;
+                  } else {
+                    virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
                   }
-                } else {
-                  virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
-                }
-                setUserScrolled(false);
-              }}
-              className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
-              aria-label="Scroll to bottom"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-              </svg>
-            </button>
+                  setUserScrolled(false);
+                }}
+                className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
+                aria-label="Scroll to bottom"
+              >
+                {isLoadingNewer ? (
+                  <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                  </svg>
+                )}
+              </button>
+            )}
+          </div>
+          {(conversation?.message_count ?? 0) > 150 && (!isNearTop || userScrolled || hasMoreAbove || hasMoreBelow) && (
+            <div className="w-1.5 h-16 rounded-full bg-sol-green/15 overflow-hidden relative">
+              <div
+                ref={scrollProgressRef}
+                className="absolute top-0 w-full rounded-full bg-sol-green/50"
+                style={{ height: '0%', transition: 'height 0.15s ease-out' }}
+              />
+            </div>
           )}
         </div>
       )}

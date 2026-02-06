@@ -25,6 +25,7 @@ export function useSharedConversationMessages(conversationId: string, highlightQ
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [accessLevel, setAccessLevel] = useState<string | null>(null);
   const [isSearchingForTarget, setIsSearchingForTarget] = useState(false);
+  const [jumpMode, setJumpMode] = useState<'start' | null>(null);
   const highlightSearchAttempts = useRef(0);
   const maxSearchAttempts = 20;
 
@@ -51,6 +52,18 @@ export function useSharedConversationMessages(conversationId: string, highlightQ
           conversation_id: conversationId as Id<"conversations">,
           limit: 50,
           before_timestamp: loadOlderTimestamp,
+        }
+      : "skip"
+  );
+
+  const jumpStartData = useQuery(
+    api.conversations.getMessagesAroundTimestamp,
+    jumpMode === 'start'
+      ? {
+          conversation_id: conversationId as Id<"conversations">,
+          center_timestamp: 0,
+          limit_before: 0,
+          limit_after: 100,
         }
       : "skip"
   );
@@ -100,6 +113,18 @@ export function useSharedConversationMessages(conversationId: string, highlightQ
     }
   }, [olderMessagesData]);
 
+  // Handle jump to start
+  useEffect(() => {
+    if (jumpStartData && jumpMode === 'start') {
+      setCachedMessages(jumpStartData.messages || []);
+      setOldestTimestamp(jumpStartData.oldest_timestamp);
+      setHasMoreAbove(jumpStartData.has_more_above ?? false);
+      setLoadOlderTimestamp(undefined);
+      setIsLoadingOlder(false);
+      setJumpMode(null);
+    }
+  }, [jumpStartData, jumpMode]);
+
   useEffect(() => {
     if (!highlightMessageResult || !cachedMessages.length) {
       return;
@@ -144,6 +169,10 @@ export function useSharedConversationMessages(conversationId: string, highlightQ
     }
   }, [oldestTimestamp, hasMoreAbove, isLoadingOlder]);
 
+  const jumpToStart = useCallback(() => {
+    setJumpMode('start');
+  }, []);
+
   const conversation = cachedConversation
     ? {
         ...cachedConversation,
@@ -157,6 +186,7 @@ export function useSharedConversationMessages(conversationId: string, highlightQ
     hasMoreAbove,
     isLoadingOlder,
     loadOlder,
+    jumpToStart,
     isSearchingForTarget,
   };
 }

@@ -27,10 +27,13 @@ export function useConversationMessages(
   const [cachedConversation, setCachedConversation] = useState<any>(null);
   const [hasMoreAbove, setHasMoreAbove] = useState(false);
   const [hasMoreBelow, setHasMoreBelow] = useState(false);
+  const [loadedStartIndex, setLoadedStartIndex] = useState(0);
   const [loadOlderTimestamp, setLoadOlderTimestamp] = useState<number | undefined>(undefined);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [isLoadingNewer, setIsLoadingNewer] = useState(false);
+  const [loadNewerTimestamp, setLoadNewerTimestamp] = useState<number | undefined>(undefined);
   const [isSearchingForTarget, setIsSearchingForTarget] = useState(false);
+  const [jumpMode, setJumpMode] = useState<'start' | 'end' | null>(null);
   const searchAttempts = useRef(0);
   const maxSearchAttempts = 20;
   const initializedRef = useRef(false);
@@ -96,9 +99,40 @@ export function useConversationMessages(
       : "skip"
   );
 
+  const jumpStartData = useQuery(
+    api.conversations.getMessagesAroundTimestamp,
+    jumpMode === 'start'
+      ? {
+          conversation_id: conversationId as Id<"conversations">,
+          center_timestamp: 0,
+          limit_before: 0,
+          limit_after: 100,
+        }
+      : "skip"
+  );
+
+  const jumpEndData = useQuery(
+    api.conversations.getAllMessages,
+    jumpMode === 'end'
+      ? { conversation_id: conversationId as Id<"conversations">, limit: 100 }
+      : "skip"
+  );
+
+  const newerMessagesData = useQuery(
+    api.conversations.getMessagesAroundTimestamp,
+    loadNewerTimestamp !== undefined
+      ? {
+          conversation_id: conversationId as Id<"conversations">,
+          center_timestamp: loadNewerTimestamp,
+          limit_before: 0,
+          limit_after: 50,
+        }
+      : "skip"
+  );
+
   const newMessagesResult = useQuery(
     api.conversations.getNewMessages,
-    lastTimestamp !== null
+    lastTimestamp !== null && !hasMoreBelow
       ? {
           conversation_id: conversationId as Id<"conversations">,
           after_timestamp: lastTimestamp,
@@ -117,6 +151,15 @@ export function useConversationMessages(
       setHasMoreAbove(aroundData.has_more_above ?? false);
       setHasMoreBelow(aroundData.has_more_below ?? false);
       setIsSearchingForTarget(false);
+      const total = aroundData.message_count || aroundData.messages?.length || 0;
+      const loaded = aroundData.messages?.length || 0;
+      if (!aroundData.has_more_above) {
+        setLoadedStartIndex(0);
+      } else if (!aroundData.has_more_below) {
+        setLoadedStartIndex(Math.max(0, total - loaded));
+      } else {
+        setLoadedStartIndex(Math.max(0, Math.round((total - loaded) / 2)));
+      }
     }
   }, [aroundData]);
 
@@ -130,6 +173,9 @@ export function useConversationMessages(
       setOldestTimestamp(initialData.oldest_timestamp);
       setHasMoreAbove(initialData.has_more_above ?? false);
       setHasMoreBelow(false);
+      const total = initialData.message_count || initialData.messages?.length || 0;
+      const loaded = initialData.messages?.length || 0;
+      setLoadedStartIndex(Math.max(0, total - loaded));
     }
   }, [initialData]);
 
@@ -149,24 +195,93 @@ export function useConversationMessages(
   // Handle older messages loading
   useEffect(() => {
     if (olderMessagesData && olderMessagesData.messages?.length > 0) {
-      setCachedMessages((prev) => {
-        const existingIds = new Set(prev.map((m) => m._id));
-        const uniqueOlder = olderMessagesData.messages.filter(
-          (m: Message) => !existingIds.has(m._id)
-        );
-        if (uniqueOlder.length === 0) return prev;
-        return [...uniqueOlder, ...prev].sort((a, b) => a.timestamp - b.timestamp);
-      });
+      const existingIds = new Set(cachedMessages.map((m) => m._id));
+      const uniqueOlder = olderMessagesData.messages.filter(
+        (m: Message) => !existingIds.has(m._id)
+      );
+      if (uniqueOlder.length > 0) {
+        setCachedMessages((prev) => {
+          const ids = new Set(prev.map((m) => m._id));
+          const fresh = olderMessagesData.messages.filter((m: Message) => !ids.has(m._id));
+          if (fresh.length === 0) return prev;
+          return [...fresh, ...prev].sort((a, b) => a.timestamp - b.timestamp);
+        });
+        setLoadedStartIndex((idx) => Math.max(0, idx - uniqueOlder.length));
+      }
       setOldestTimestamp(olderMessagesData.oldest_timestamp);
       setHasMoreAbove(olderMessagesData.has_more_above ?? false);
+      if (!olderMessagesData.has_more_above) {
+        setLoadedStartIndex(0);
+      }
       setIsLoadingOlder(false);
       setLoadOlderTimestamp(undefined);
     } else if (olderMessagesData && olderMessagesData.messages?.length === 0) {
       setHasMoreAbove(false);
+      setLoadedStartIndex(0);
       setIsLoadingOlder(false);
       setLoadOlderTimestamp(undefined);
     }
   }, [olderMessagesData]);
+
+  // Handle jump to start
+  useEffect(() => {
+    if (jumpStartData && jumpMode === 'start') {
+      setCachedMessages(jumpStartData.messages || []);
+      setLastTimestamp(jumpStartData.last_timestamp);
+      setOldestTimestamp(jumpStartData.oldest_timestamp);
+      setHasMoreAbove(jumpStartData.has_more_above ?? false);
+      setHasMoreBelow(jumpStartData.has_more_below ?? false);
+      setLoadedStartIndex(0);
+      setLoadOlderTimestamp(undefined);
+      setLoadNewerTimestamp(undefined);
+      setIsLoadingOlder(false);
+      setIsLoadingNewer(false);
+      setJumpMode(null);
+    }
+  }, [jumpStartData, jumpMode]);
+
+  // Handle jump to end
+  useEffect(() => {
+    if (jumpEndData && jumpMode === 'end') {
+      setCachedMessages(jumpEndData.messages || []);
+      setLastTimestamp(jumpEndData.last_timestamp);
+      setOldestTimestamp(jumpEndData.oldest_timestamp);
+      setHasMoreAbove(jumpEndData.has_more_above ?? false);
+      setHasMoreBelow(false);
+      const total = jumpEndData.message_count || jumpEndData.messages?.length || 0;
+      const loaded = jumpEndData.messages?.length || 0;
+      setLoadedStartIndex(Math.max(0, total - loaded));
+      setLoadOlderTimestamp(undefined);
+      setLoadNewerTimestamp(undefined);
+      setIsLoadingOlder(false);
+      setIsLoadingNewer(false);
+      setJumpMode(null);
+    }
+  }, [jumpEndData, jumpMode]);
+
+  // Handle newer messages loading (forward pagination)
+  useEffect(() => {
+    if (newerMessagesData && newerMessagesData.messages?.length > 0) {
+      setCachedMessages((prev) => {
+        const existingIds = new Set(prev.map((m) => m._id));
+        const uniqueNewer = newerMessagesData.messages.filter(
+          (m: Message) => !existingIds.has(m._id)
+        );
+        if (uniqueNewer.length === 0) return prev;
+        return [...prev, ...uniqueNewer].sort((a, b) => a.timestamp - b.timestamp);
+      });
+      if (newerMessagesData.last_timestamp) {
+        setLastTimestamp(newerMessagesData.last_timestamp);
+      }
+      setHasMoreBelow(newerMessagesData.has_more_below ?? false);
+      setIsLoadingNewer(false);
+      setLoadNewerTimestamp(undefined);
+    } else if (newerMessagesData && newerMessagesData.messages?.length === 0) {
+      setHasMoreBelow(false);
+      setIsLoadingNewer(false);
+      setLoadNewerTimestamp(undefined);
+    }
+  }, [newerMessagesData]);
 
   // Handle new messages polling
   useEffect(() => {
@@ -184,6 +299,19 @@ export function useConversationMessages(
         setLastTimestamp(newMessagesResult.last_timestamp);
       }
       setHasMoreBelow(false);
+
+      if (newMessagesResult.child_conversations?.length || newMessagesResult.child_conversation_map) {
+        setCachedConversation((prev: any) => {
+          if (!prev) return prev;
+          const existingIds = new Set((prev.child_conversations || []).map((c: any) => c._id));
+          const newChildren = (newMessagesResult.child_conversations || []).filter((c: any) => !existingIds.has(c._id));
+          return {
+            ...prev,
+            child_conversations: [...(prev.child_conversations || []), ...newChildren],
+            child_conversation_map: { ...(prev.child_conversation_map || {}), ...(newMessagesResult.child_conversation_map || {}) },
+          };
+        });
+      }
     }
   }, [newMessagesResult]);
 
@@ -273,13 +401,25 @@ export function useConversationMessages(
   const loadNewer = useCallback(() => {
     if (lastTimestamp !== null && hasMoreBelow && !isLoadingNewer) {
       setIsLoadingNewer(true);
+      setLoadNewerTimestamp(lastTimestamp);
     }
   }, [lastTimestamp, hasMoreBelow, isLoadingNewer]);
+
+  const jumpToStart = useCallback(() => {
+    setJumpMode('start');
+    setIsLoadingOlder(true);
+  }, []);
+
+  const jumpToEnd = useCallback(() => {
+    setJumpMode('end');
+    setIsLoadingNewer(true);
+  }, []);
 
   const conversation = cachedConversation
     ? {
         ...cachedConversation,
         messages: cachedMessages,
+        loaded_start_index: loadedStartIndex,
       }
     : null;
 
@@ -302,6 +442,8 @@ export function useConversationMessages(
     isLoadingNewer,
     loadOlder,
     loadNewer,
+    jumpToStart,
+    jumpToEnd,
     isSearchingForTarget,
     targetMessageFound,
   };
