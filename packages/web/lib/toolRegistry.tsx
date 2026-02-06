@@ -23,6 +23,7 @@ import { BashToolView } from "@/components/tools/BashToolView";
 import { ReadToolView } from "@/components/tools/ReadToolView";
 import { TodoToolView } from "@/components/tools/TodoToolView";
 import { TaskToolView } from "@/components/tools/TaskToolView";
+import { AskUserQuestionToolView } from "@/components/tools/AskUserQuestionToolView";
 import { DefaultToolView } from "@/components/tools/DefaultToolView";
 
 function truncate(str: string | undefined, max: number): string {
@@ -167,6 +168,23 @@ export const toolRegistry: Record<string, ToolConfig> = {
         return `${input.todos.length} todos`;
       }
       return "Updated todos";
+    }
+  },
+
+  AskUserQuestion: {
+    title: "Question",
+    icon: FormInput,
+    color: "violet",
+    component: AskUserQuestionToolView,
+    extractSummary: (input) => {
+      const questions = input?.questions;
+      if (Array.isArray(questions) && questions.length > 0) {
+        const header = questions[0].header;
+        if (header) return header;
+        const q = questions[0].question;
+        return q?.length > 40 ? q.slice(0, 37) + "..." : q || "Question";
+      }
+      return "Question";
     }
   },
 
