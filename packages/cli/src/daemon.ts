@@ -110,6 +110,7 @@ const syncStats = {
 };
 
 let lastWatcherEventTime = Date.now();
+let lastWatcherIdleLogTime = 0;
 
 const HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -160,19 +161,22 @@ function logHealthSummary(): void {
   const now = Date.now();
   const periodMinutes = Math.round((now - syncStats.lastReportTime) / 60000);
   const sessionsCount = syncStats.sessionsActive.size;
+  const hadActivity = syncStats.messagesSynced > 0 || syncStats.conversationsCreated > 0 || sessionsCount > 0 || syncStats.errors > 0;
 
-  const summary = `Health OK: ${syncStats.messagesSynced} msgs synced, ${syncStats.conversationsCreated} convos created, ${sessionsCount} active sessions (${periodMinutes}min period)`;
+  if (hadActivity) {
+    const summary = `Health OK: ${syncStats.messagesSynced} msgs synced, ${syncStats.conversationsCreated} convos created, ${sessionsCount} active sessions (${periodMinutes}min period)`;
 
-  log(summary, "info");
+    log(summary, "info");
 
-  remoteLogQueue.push({
-    level: "info",
-    message: summary,
-    metadata: {
-      error_code: syncStats.errors > 0 ? `${syncStats.errors} errors` : undefined,
-    },
-    timestamp: now,
-  });
+    remoteLogQueue.push({
+      level: "info",
+      message: summary,
+      metadata: {
+        error_code: syncStats.errors > 0 ? `${syncStats.errors} errors` : undefined,
+      },
+      timestamp: now,
+    });
+  }
 
   syncStats.messagesSynced = 0;
   syncStats.conversationsCreated = 0;
@@ -2115,13 +2119,10 @@ function logHealthReport(retryQueue: RetryQueue): void {
   const droppedOps = retryQueue.getDroppedOperations();
   const queueSize = retryQueue.getQueueSize();
 
-  // Only log if there are issues
   if (unsyncedFiles.length > 0 || droppedOps.length > 0 || queueSize > 10) {
     logWarn(
       `Health: ${unsyncedFiles.length} pending files, ${droppedOps.length} dropped ops, ${queueSize} in retry queue`
     );
-  } else {
-    log(`Health: All synced, no issues`);
   }
 }
 
@@ -2195,10 +2196,12 @@ function startWatchdog(
       return;
     }
 
-    // Check for watcher staleness (informational - no events is normal when user isn't working)
+    // Check for watcher staleness - only log once per hour to avoid noise
     const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);
-    if (watcherIdleMinutes >= 30) {
+    const minutesSinceLastIdleLog = Math.floor((now - lastWatcherIdleLogTime) / 60000);
+    if (watcherIdleMinutes >= 30 && minutesSinceLastIdleLog >= 60) {
       logWarn(`Watcher idle for ${watcherIdleMinutes}min`);
+      lastWatcherIdleLogTime = now;
     }
 
     const staleClaudeFiles = findStaleSessionFiles();
@@ -2789,7 +2792,9 @@ async function main(): Promise<void> {
   const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe: (() => void) | null = null;
   let permissionUnsubscribe: (() => void) | null = null;
+  let commandUnsubscribe: (() => void) | null = null;
   const processedPermissionIds = new Set<string>();
+  const processedCommandIds = new Set<string>();
 
   const setupSubscription = () => {
     try {
@@ -2974,6 +2979,51 @@ async function main(): Promise<void> {
 
   setupPermissionSubscription();
 
+  const setupCommandSubscription = () => {
+    try {
+      log("Setting up daemon commands subscription");
+      commandUnsubscribe = subscriptionClient.onUpdate(
+        "users:getMyPendingCommands" as any,
+        { api_token: config.auth_token },
+        async (commands: any) => {
+          if (!commands || !Array.isArray(commands) || commands.length === 0) {
+            return;
+          }
+
+          log(`Command subscription update: ${commands.length} pending command(s)`);
+
+          for (const cmd of commands) {
+            if (processedCommandIds.has(cmd.id)) {
+              continue;
+            }
+
+            processedCommandIds.add(cmd.id);
+            log(`[SUBSCRIPTION] Executing command: ${cmd.command} (${cmd.id})`);
+            await executeRemoteCommand(cmd.id, cmd.command, config);
+          }
+
+          resetReconnectDelay();
+        }
+      );
+      log("Command subscription established successfully");
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      logError("Command subscription error", error);
+      if (commandUnsubscribe) {
+        commandUnsubscribe();
+        commandUnsubscribe = null;
+      }
+
+      const delay = getReconnectDelay();
+      logWarn(`Command subscription lost, reconnecting in ${delay}ms`);
+      setTimeout(() => {
+        setupCommandSubscription();
+      }, delay);
+    }
+  };
+
+  setupCommandSubscription();
+
   const shutdown = async () => {
     log("Shutting down gracefully");
 
@@ -2985,6 +3035,10 @@ async function main(): Promise<void> {
 
     if (permissionUnsubscribe) {
       permissionUnsubscribe();
+    }
+
+    if (commandUnsubscribe) {
+      commandUnsubscribe();
     }
 
     clearInterval(watchdogInterval);
