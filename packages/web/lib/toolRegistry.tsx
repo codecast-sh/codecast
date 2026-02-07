@@ -16,6 +16,12 @@ import {
   Camera,
   Layers,
   Settings,
+  ListPlus,
+  ListChecks,
+  ClipboardList,
+  Users,
+  UserMinus,
+  MessageSquare,
   type LucideIcon
 } from "lucide-react";
 import { EditToolView } from "@/components/tools/EditToolView";
@@ -25,6 +31,8 @@ import { TodoToolView } from "@/components/tools/TodoToolView";
 import { TaskToolView } from "@/components/tools/TaskToolView";
 import { AskUserQuestionToolView } from "@/components/tools/AskUserQuestionToolView";
 import { DefaultToolView } from "@/components/tools/DefaultToolView";
+import { TaskListToolView } from "@/components/tools/TaskListToolView";
+import { SendMessageToolView } from "@/components/tools/SendMessageToolView";
 
 function truncate(str: string | undefined, max: number): string {
   if (!str) return "";
@@ -185,6 +193,82 @@ export const toolRegistry: Record<string, ToolConfig> = {
         return q?.length > 40 ? q.slice(0, 37) + "..." : q || "Question";
       }
       return "Question";
+    }
+  },
+
+  TaskCreate: {
+    title: "Create Task",
+    icon: ListPlus,
+    color: "emerald",
+    component: DefaultToolView,
+    extractSummary: (input) => {
+      if (input?.subject) return truncate(input.subject, 50);
+      return "New task";
+    }
+  },
+
+  TaskUpdate: {
+    title: "Update Task",
+    icon: ListChecks,
+    color: "emerald",
+    component: DefaultToolView,
+    extractSummary: (input) => {
+      const id = input?.taskId || "";
+      const status = input?.status;
+      if (id && status) return `#${id} -> ${status}`;
+      if (id) return `#${id}`;
+      return "Update task";
+    }
+  },
+
+  TaskList: {
+    title: "Task List",
+    icon: ClipboardList,
+    color: "emerald",
+    component: TaskListToolView,
+    extractSummary: (_input, output) => {
+      if (typeof output === "string") {
+        const lines = output.split("\n").filter(l => l.match(/#\d+\s+\[/));
+        if (lines.length > 0) return `${lines.length} tasks`;
+      }
+      return "Tasks";
+    }
+  },
+
+  TaskGet: {
+    title: "Get Task",
+    icon: ClipboardList,
+    color: "emerald",
+    component: DefaultToolView,
+    extractSummary: (input) => input?.taskId ? `#${input.taskId}` : "Get task"
+  },
+
+  TeamCreate: {
+    title: "Create Team",
+    icon: Users,
+    color: "cyan",
+    component: DefaultToolView,
+    extractSummary: (input) => input?.team_name || "New team"
+  },
+
+  TeamDelete: {
+    title: "Delete Team",
+    icon: UserMinus,
+    color: "cyan",
+    component: DefaultToolView,
+    extractSummary: () => "Cleanup"
+  },
+
+  SendMessage: {
+    title: "Message",
+    icon: MessageSquare,
+    color: "amber",
+    component: SendMessageToolView,
+    extractSummary: (input) => {
+      if (input?.summary) return truncate(input.summary, 40);
+      if (input?.recipient) return `to ${input.recipient}`;
+      if (input?.type === "broadcast") return "broadcast";
+      return "Message";
     }
   },
 
