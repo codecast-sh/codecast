@@ -1571,6 +1571,13 @@ interface ClaudeSessionInfo {
   sessionId: string;
 }
 
+function normalizeTty(tty: string): string {
+  if (tty.startsWith("/dev/")) return tty;
+  if (tty.startsWith("ttys")) return `/dev/${tty}`;
+  if (tty.match(/^s\d+$/)) return `/dev/tty${tty}`;
+  return `/dev/${tty}`;
+}
+
 function buildReverseConversationCache(cache: ConversationCache): Record<string, string> {
   const reverse: Record<string, string> = {};
   for (const [sessionId, convId] of Object.entries(cache)) {
@@ -1593,7 +1600,7 @@ async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessio
       const tty = parts[6];
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
 
-      return { pid, tty: tty.startsWith("/dev/") ? tty : `/dev/${tty}`, sessionId };
+      return { pid, tty: normalizeTty(tty), sessionId };
     }
 
     // Fallback: find ANY claude process by lsof on the session JSONL
@@ -1617,7 +1624,7 @@ async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessio
                   const { stdout: psOut } = await execAsync(`ps -o tty= -p ${pid}`);
                   const tty = psOut.trim();
                   if (tty && tty !== "??" && tty !== "?") {
-                    return { pid, tty: tty.startsWith("/dev/") ? tty : `/dev/${tty}`, sessionId };
+                    return { pid, tty: normalizeTty(tty), sessionId };
                   }
                 } catch {}
               }
@@ -1637,7 +1644,7 @@ async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessio
 async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   try {
     const { stdout } = await execAsync("tmux list-panes -a -F '#{pane_tty} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null");
-    const normalizedTty = tty.startsWith("/dev/") ? tty : `/dev/${tty}`;
+    const normalizedTty = normalizeTty(tty);
 
     for (const line of stdout.trim().split("\n")) {
       const [paneTty, target] = line.split(" ");
@@ -1659,7 +1666,7 @@ async function injectViaTmux(target: string, content: string): Promise<void> {
 }
 
 async function injectViaIterm(tty: string, content: string): Promise<void> {
-  const normalizedTty = tty.startsWith("/dev/") ? tty : `/dev/${tty}`;
+  const normalizedTty = normalizeTty(tty);
   const escaped = content.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const script = `
     tell application "iTerm2"
