@@ -192,16 +192,12 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
 
   const pendingMessages = useQuery(
     api.pendingMessages.getPendingMessages,
-    isActive ? {} : "skip"
+    {}
   ) as PendingMessage[] | undefined;
 
   const conversationPendingMessages = pendingMessages?.filter(
     (msg) => msg.conversation_id === conversationId
   ) || [];
-
-  if (!isActive) {
-    return null;
-  }
 
   const handleRetry = async (messageId: Id<"pending_messages">) => {
     try {
@@ -238,6 +234,11 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
 
   return (
     <RNView style={styles.inputContainer}>
+      {!isActive && (
+        <RNView style={styles.resumeHint}>
+          <RNText style={styles.resumeHintText}>Session inactive. Sending will auto-resume it.</RNText>
+        </RNView>
+      )}
       {error && (
         <RNView style={styles.errorBanner}>
           <RNText style={styles.errorBannerText}>{error}</RNText>
@@ -251,7 +252,7 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
           style={styles.textInput}
           value={message}
           onChangeText={setMessage}
-          placeholder="Type a message..."
+          placeholder={isActive ? "Type a message..." : "Send to resume session..."}
           placeholderTextColor={Theme.textMuted0}
           multiline
           maxLength={10000}
@@ -554,6 +555,16 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.bgAlt,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Theme.borderLight,
+  },
+  resumeHint: {
+    backgroundColor: Theme.bgAlt,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  resumeHintText: {
+    color: Theme.textMuted0,
+    fontSize: 12,
+    fontFamily: 'JetBrainsMono-Regular',
   },
   errorBanner: {
     backgroundColor: Theme.red,
