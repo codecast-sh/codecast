@@ -1668,26 +1668,30 @@ async function injectViaTmux(target: string, content: string): Promise<void> {
 async function injectViaIterm(tty: string, content: string): Promise<void> {
   const normalizedTty = normalizeTty(tty);
   const escaped = content.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const script = `
-    tell application "iTerm2"
-      repeat with w in windows
-        repeat with t in tabs of w
-          repeat with s in sessions of t
-            if tty of s is "${normalizedTty}" then
-              write text "${escaped}" in s
-              return "ok"
-            end if
-          end repeat
-        end repeat
+  const scriptContent = `tell application "iTerm2"
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if tty of s is "${normalizedTty}" then
+          write text "${escaped}" in s
+          return "ok"
+        end if
       end repeat
-    end tell
-    return "not_found"
-  `;
-  const { stdout } = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
-  if (stdout.trim() === "not_found") {
-    throw new Error(`iTerm2 session not found for TTY ${normalizedTty}`);
+    end repeat
+  end repeat
+end tell
+return "not_found"`;
+  const tmpFile = path.join(CONFIG_DIR, "iterm-inject.scpt");
+  fs.writeFileSync(tmpFile, scriptContent);
+  try {
+    const { stdout } = await execAsync(`osascript "${tmpFile}"`);
+    if (stdout.trim() === "not_found") {
+      throw new Error(`iTerm2 session not found for TTY ${normalizedTty}`);
+    }
+    log(`Injected via iTerm2 for TTY ${normalizedTty}`);
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
   }
-  log(`Injected via iTerm2 for TTY ${normalizedTty}`);
 }
 
 function findSessionJsonlPath(sessionId: string): string | null {
