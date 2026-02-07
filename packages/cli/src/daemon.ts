@@ -2433,10 +2433,20 @@ async function main(): Promise<void> {
     daemonVersion = "unknown";
   }
 
-  clearCrashCount(); // If we got this far, startup succeeded
+  // Report crash recovery if we had crashes before this successful startup
+  let crashRecoveryInfo = "";
+  if (fs.existsSync(CRASH_FILE)) {
+    try {
+      const crashes = JSON.parse(fs.readFileSync(CRASH_FILE, "utf-8"));
+      if (crashes.count > 0) {
+        crashRecoveryInfo = ` (recovered from ${crashes.count} crashes)`;
+      }
+    } catch {}
+  }
+  clearCrashCount();
 
   const isRestart = process.env.CODECAST_RESTART === "1";
-  logLifecycle("daemon_start", `v${daemonVersion} PID=${process.pid}${isRestart ? " (restart after update)" : ""}`);
+  logLifecycle("daemon_start", `v${daemonVersion} PID=${process.pid}${isRestart ? " (restart after update)" : ""}${crashRecoveryInfo}`);
   log(`PID: ${process.pid}`);
 
   if (isSyncPaused()) {
@@ -3197,19 +3207,16 @@ export async function runWatchdog(): Promise<void> {
     try {
       const crashes = JSON.parse(fs.readFileSync(CRASH_FILE, "utf-8"));
       if (crashes.count > 3) {
-        await fetch(`${siteUrl}/cli/logs`, {
+        await fetch(`${siteUrl}/cli/log`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             api_token: config.auth_token,
-            logs: [{
-              level: "error",
-              message: `CRASH LOOP: ${crashes.count} crashes since ${new Date(crashes.firstCrash).toISOString()}, watchdog reporting`,
-              metadata: { error_code: "crash_loop" },
-              daemon_version: version,
-              platform: process.platform,
-              timestamp: Date.now(),
-            }],
+            level: "error",
+            message: `CRASH LOOP: ${crashes.count} crashes since ${new Date(crashes.firstCrash).toISOString()}, watchdog reporting`,
+            metadata: { error_code: "crash_loop" },
+            cli_version: version,
+            platform: process.platform,
           }),
         }).catch(() => {});
       }
