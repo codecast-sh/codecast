@@ -790,6 +790,30 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     }
     if (tool.name === "mcp__claude-in-chrome__get_page_text") return "Extract text";
 
+    if (tool.name === "TaskCreate") return parsedInput.subject ? truncateStr(String(parsedInput.subject), 50) : "New task";
+    if (tool.name === "TaskUpdate") {
+      const id = parsedInput.taskId ? `#${parsedInput.taskId}` : "";
+      const status = parsedInput.status ? String(parsedInput.status) : "";
+      if (id && status) return `${id} -> ${status}`;
+      return id || "Update task";
+    }
+    if (tool.name === "TaskList") {
+      if (result) {
+        const lines = result.content.split("\n").filter((l: string) => l.match(/#\d+\s+\[/));
+        if (lines.length > 0) return `${lines.length} tasks`;
+      }
+      return "Tasks";
+    }
+    if (tool.name === "TaskGet") return parsedInput.taskId ? `#${parsedInput.taskId}` : "Get task";
+    if (tool.name === "TeamCreate") return parsedInput.team_name ? String(parsedInput.team_name) : "New team";
+    if (tool.name === "TeamDelete") return "Cleanup";
+    if (tool.name === "SendMessage") {
+      if (parsedInput.summary) return truncateStr(String(parsedInput.summary), 40);
+      if (parsedInput.recipient) return `to ${String(parsedInput.recipient)}`;
+      if (parsedInput.type === "broadcast") return "broadcast";
+      return "Message";
+    }
+
     if (tool.name.startsWith("mcp__")) {
       const parts = tool.name.split("__");
       const method = parts[2] || "";
@@ -843,6 +867,13 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     Glob: "text-sol-violet/80",
     Grep: "text-sol-violet/80",
     Task: "text-sol-cyan/80",
+    TaskCreate: "text-emerald-500/80",
+    TaskUpdate: "text-emerald-500/80",
+    TaskList: "text-emerald-500/80",
+    TaskGet: "text-emerald-500/80",
+    TeamCreate: "text-sol-cyan/80",
+    TeamDelete: "text-sol-cyan/80",
+    SendMessage: "text-amber-500/80",
     TodoWrite: "text-sol-magenta/80",
     "mcp__claude-in-chrome__computer": "text-sol-orange/80",
     "mcp__claude-in-chrome__navigate": "text-sol-blue/80",
@@ -1143,6 +1174,176 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
+function TaskListBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+  if (!result) return null;
+  const lines = result.content.split("\n");
+  const items: Array<{ id: string; status: string; subject: string; owner?: string; blockedBy?: string[] }> = [];
+  for (const line of lines) {
+    const match = line.match(/#(\d+)\s+\[(\w+)]\s+(.+?)(?:\s+\(([^)]+)\))?(?:\s+\[blocked by ([^\]]+)])?$/);
+    if (match) {
+      items.push({
+        id: match[1], status: match[2], subject: match[3].trim(),
+        owner: match[4]?.trim(),
+        blockedBy: match[5]?.split(",").map(s => s.trim().replace("#", "")),
+      });
+    }
+  }
+  if (items.length === 0) return null;
+
+  const completed = items.filter(t => t.status === "completed").length;
+  const inProgress = items.filter(t => t.status === "in_progress").length;
+
+  return (
+    <div className="my-2">
+      <div className="flex items-center gap-2 py-0.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+        <span className="font-mono text-sm font-medium text-emerald-600 dark:text-emerald-400">TaskList</span>
+        <span className="text-sol-text-dim text-sm font-mono">
+          {completed}/{items.length} done{inProgress > 0 && `, ${inProgress} active`}
+        </span>
+      </div>
+      <div className="ml-3.5 mt-1 space-y-0.5">
+        {items.map(task => {
+          const isBlocked = task.blockedBy && task.blockedBy.length > 0;
+          return (
+            <div key={task.id} className={`flex items-start gap-2 text-sm ${isBlocked ? "opacity-50" : ""}`}>
+              {task.status === "completed" ? (
+                <svg className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : task.status === "in_progress" ? (
+                <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              ) : isBlocked ? (
+                <svg className="w-4 h-4 text-sol-text-dim flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4 text-sol-text-dim flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <circle cx="12" cy="12" r="9" strokeWidth={2} />
+                </svg>
+              )}
+              <span className="text-sol-text-dim text-xs font-mono mt-0.5">#{task.id}</span>
+              <span className={
+                task.status === "completed" ? "text-sol-text-dim line-through" :
+                task.status === "in_progress" ? "text-sol-text-secondary" :
+                "text-sol-text-muted"
+              }>
+                {task.subject}
+              </span>
+              {task.owner && (
+                <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">
+                  @{task.owner}
+                </span>
+              )}
+              {isBlocked && (
+                <span className="text-[10px] text-sol-text-dim mt-0.5">
+                  blocked by {task.blockedBy!.map(id => `#${id}`).join(", ")}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TaskCreateUpdateBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+  let parsedInput: Record<string, any> = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  const isCreate = tool.name === "TaskCreate";
+  const subject = parsedInput.subject;
+  const taskId = parsedInput.taskId;
+  const status = parsedInput.status;
+  const owner = parsedInput.owner;
+  const activeForm = parsedInput.activeForm;
+
+  let resultId = "";
+  if (isCreate && result) {
+    const idMatch = result.content.match(/#?(\d+)/);
+    if (idMatch) resultId = idMatch[1];
+  }
+
+  return (
+    <div className="my-0.5">
+      <div className="flex items-center gap-1.5 text-xs">
+        <span className="font-mono text-emerald-500/80">{tool.name}</span>
+        {isCreate ? (
+          <>
+            {resultId && <span className="text-sol-text-dim font-mono">#{resultId}</span>}
+            {subject && <span className="text-sol-text-muted">{String(subject).slice(0, 60)}</span>}
+            {activeForm && <span className="text-sol-text-dim italic">({activeForm})</span>}
+          </>
+        ) : (
+          <>
+            {taskId && <span className="text-sol-text-dim font-mono">#{taskId}</span>}
+            {status && (
+              <span className={`px-1 py-0.5 rounded text-[10px] font-mono ${
+                status === "completed" ? "bg-emerald-500/15 text-emerald-400" :
+                status === "in_progress" ? "bg-amber-500/15 text-amber-400" :
+                status === "deleted" ? "bg-red-500/15 text-red-400" :
+                "bg-gray-500/15 text-gray-400"
+              }`}>
+                {status}
+              </span>
+            )}
+            {owner && <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
+            {parsedInput.addBlockedBy && <span className="text-sol-text-dim">blocked by {parsedInput.addBlockedBy.map((id: string) => `#${id}`).join(", ")}</span>}
+            {parsedInput.addBlocks && <span className="text-sol-text-dim">blocks {parsedInput.addBlocks.map((id: string) => `#${id}`).join(", ")}</span>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SendMessageBlock({ tool }: { tool: ToolCall }) {
+  let parsedInput: Record<string, any> = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  const type = parsedInput.type || "message";
+  const recipient = parsedInput.recipient;
+  const summary = parsedInput.summary;
+
+  return (
+    <div className="my-0.5">
+      <div className="flex items-center gap-1.5 text-xs">
+        <span className="font-mono text-amber-500/80">SendMessage</span>
+        {type === "broadcast" ? (
+          <span className="px-1 py-0.5 rounded text-[10px] font-mono bg-red-500/15 text-red-400">broadcast</span>
+        ) : type === "shutdown_request" ? (
+          <span className="px-1 py-0.5 rounded text-[10px] font-mono bg-red-500/15 text-red-400">shutdown</span>
+        ) : recipient ? (
+          <span className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono">@{recipient}</span>
+        ) : null}
+        {summary && <span className="text-sol-text-muted">{String(summary).slice(0, 60)}</span>}
+      </div>
+    </div>
+  );
+}
+
+function TeamCreateBlock({ tool }: { tool: ToolCall }) {
+  let parsedInput: Record<string, any> = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  return (
+    <div className="my-0.5">
+      <div className="flex items-center gap-1.5 text-xs">
+        <span className="font-mono text-sol-cyan/80">{tool.name}</span>
+        {parsedInput.team_name && (
+          <span className="px-1 py-0.5 rounded text-[10px] font-mono bg-cyan-500/15 text-cyan-400 border border-cyan-500/20">
+            {parsedInput.team_name}
+          </span>
+        )}
+        {parsedInput.description && <span className="text-sol-text-dim">{String(parsedInput.description).slice(0, 60)}</span>}
+      </div>
+    </div>
+  );
+}
+
 function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
   let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
@@ -1355,6 +1556,142 @@ function SkillCard({ name, description, path }: { name?: string; description?: s
   );
 }
 
+type TeammateMessagePart = { type: 'text'; content: string } | { type: 'teammate'; teammateId: string; color?: string; summary?: string; content: string; };
+
+function parseTeammateMessages(text: string): TeammateMessagePart[] {
+  const parts: TeammateMessagePart[] = [];
+  const regex = /<teammate-message\s+([^>]*)>([\s\S]*?)<\/teammate-message>/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const before = text.slice(lastIndex, match.index).trim();
+      if (before) parts.push({ type: 'text', content: before });
+    }
+    const attrs = match[1];
+    const inner = match[2].trim();
+    const idMatch = attrs.match(/teammate_id="([^"]+)"/);
+    const colorMatch = attrs.match(/color="([^"]+)"/);
+    const summaryMatch = attrs.match(/summary="([^"]+)"/);
+    parts.push({
+      type: 'teammate',
+      teammateId: idMatch?.[1] || 'agent',
+      color: colorMatch?.[1],
+      summary: summaryMatch?.[1],
+      content: inner,
+    });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    const remaining = text.slice(lastIndex).trim();
+    if (remaining) parts.push({ type: 'text', content: remaining });
+  }
+  return parts;
+}
+
+const agentColorMap: Record<string, string> = {
+  blue: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+  red: "bg-red-500/20 text-red-400 border-red-500/30",
+  green: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
+  yellow: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+  purple: "bg-violet-500/20 text-violet-400 border-violet-500/30",
+  cyan: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
+  orange: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+  pink: "bg-pink-500/20 text-pink-400 border-pink-500/30",
+};
+
+const agentBorderMap: Record<string, string> = {
+  blue: "border-blue-500/30",
+  red: "border-red-500/30",
+  green: "border-emerald-500/30",
+  yellow: "border-amber-500/30",
+  purple: "border-violet-500/30",
+  cyan: "border-cyan-500/30",
+  orange: "border-orange-500/30",
+  pink: "border-pink-500/30",
+};
+
+function TeammateMessageCard({ teammateId, color, summary, content }: { teammateId: string; color?: string; summary?: string; content: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  let parsed: any = null;
+  try { parsed = JSON.parse(content); } catch {}
+
+  if (parsed?.type === "idle_notification") {
+    const idleSummary = parsed.summary;
+    if (idleSummary) {
+      return (
+        <div className="flex items-center gap-2 py-1 text-xs text-sol-text-dim">
+          <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
+            {teammateId}
+          </span>
+          <span className="italic">{idleSummary}</span>
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center gap-2 py-0.5 text-xs text-sol-text-dim opacity-50">
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
+          {teammateId}
+        </span>
+        <span className="italic">idle</span>
+      </div>
+    );
+  }
+
+  if (parsed?.type === "task_assignment") {
+    return (
+      <div className="flex items-center gap-2 py-1 text-xs">
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
+          {parsed.assignedBy || teammateId}
+        </span>
+        <span className="text-sol-text-muted">
+          assigned <span className="font-mono text-sol-text-dim">#{parsed.taskId}</span> {parsed.subject}
+        </span>
+      </div>
+    );
+  }
+
+  if (parsed?.type === "shutdown_request") {
+    return (
+      <div className="flex items-center gap-2 py-1 text-xs">
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "red"] || agentColorMap.red}`}>
+          {teammateId}
+        </span>
+        <span className="text-red-400 italic">shutdown request</span>
+      </div>
+    );
+  }
+
+  const borderColor = agentBorderMap[color || "blue"] || agentBorderMap.blue;
+  const badgeColor = agentColorMap[color || "blue"] || agentColorMap.blue;
+  const isLong = content.length > 200;
+
+  return (
+    <div className={`my-1.5 border-l-2 ${borderColor} pl-3 py-1`}>
+      <div className="flex items-center gap-2 mb-1">
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${badgeColor}`}>
+          {teammateId}
+        </span>
+        {summary && <span className="text-xs text-sol-text-muted">{summary}</span>}
+      </div>
+      <div
+        className={`text-sm text-sol-text-secondary whitespace-pre-wrap break-words ${isLong && !expanded ? "line-clamp-4" : ""}`}
+      >
+        {content}
+      </div>
+      {isLong && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="text-xs text-sol-text-dim hover:text-sol-blue mt-1 transition-colors"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -1516,6 +1853,31 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
       >
         {effectivelyCollapsed ? content : (() => {
+          const hasTeammate = content.includes('<teammate-message');
+          if (hasTeammate) {
+            const tmParts = parseTeammateMessages(content);
+            return (
+              <div className="space-y-1">
+                {tmParts.map((part, i) => part.type === 'teammate' ? (
+                  <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
+                ) : hasRichMarkdown(part.content) ? (
+                  <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
+                    components={{ pre: ({ node, children, ...props }) => {
+                      const codeElement = node?.children?.[0];
+                      if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                        const className = codeElement.properties?.className as string[] | undefined;
+                        const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                        const codeContent = codeElement.children?.[0];
+                        const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                        if (code) return <CodeBlock code={code} language={language} />;
+                      }
+                      return <pre {...props}>{children}</pre>;
+                    }}}
+                  >{part.content}</ReactMarkdown>
+                ) : <span key={i} className="whitespace-pre-wrap">{part.content}</span>)}
+              </div>
+            );
+          }
           const hasSkill = content.includes('<skill>');
           if (hasSkill) {
             const { parts } = parseSkillBlocks(content);
@@ -1907,6 +2269,14 @@ function AssistantBlock({
             <TodoWriteBlock key={tc.id} tool={tc} />
           ) : tc.name === "AskUserQuestion" ? (
             <AskUserQuestionBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+          ) : tc.name === "TaskList" ? (
+            <TaskListBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+          ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
+            <TaskCreateUpdateBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+          ) : tc.name === "SendMessage" ? (
+            <SendMessageBlock key={tc.id} tool={tc} />
+          ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
+            <TeamCreateBlock key={tc.id} tool={tc} />
           ) : (
             <ToolBlock
               key={tc.id}
@@ -3636,8 +4006,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           >
             {/* Earlier messages indicator at top */}
             {hasMoreAbove && !isLoadingOlder && (
-              <div className="sticky top-0 z-10 flex justify-center py-2">
-                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-xs shadow-sm">
+              <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
+                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-xs shadow-sm pointer-events-auto">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
                   </svg>
@@ -3649,8 +4019,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
             {/* Loading indicator at top */}
             {isLoadingOlder && (
-              <div className="sticky top-0 z-10 flex justify-center py-2">
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs">
+              <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs pointer-events-auto">
                   <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -3685,8 +4055,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             })}
             {/* Loading indicator at bottom */}
             {isLoadingNewer && (
-              <div className="sticky bottom-0 z-10 flex justify-center py-2">
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs">
+              <div className="sticky bottom-0 z-10 flex justify-center py-2 pointer-events-none">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs pointer-events-auto">
                   <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -3695,10 +4065,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </div>
               </div>
             )}
-            {/* Later messages indicator at bottom */}
-            {hasMoreBelow && !isLoadingNewer && (
-              <div className="sticky bottom-0 z-10 flex justify-center py-2">
-                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-xs shadow-sm">
+            {/* Later messages indicator at bottom - hide when near top to avoid confusing placement */}
+            {hasMoreBelow && !isLoadingNewer && !isNearTop && (
+              <div className="sticky bottom-0 z-10 flex justify-center py-2 pointer-events-none">
+                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-xs shadow-sm pointer-events-auto">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
@@ -3811,10 +4181,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
           </div>
           {(conversation?.message_count ?? 0) > 150 && (!isNearTop || userScrolled || hasMoreAbove || hasMoreBelow) && (
-            <div className="w-1.5 h-16 rounded-full bg-sol-green/15 overflow-hidden relative">
+            <div className="w-2 h-16 rounded-full bg-sol-border overflow-hidden relative">
               <div
                 ref={scrollProgressRef}
-                className="absolute top-0 w-full rounded-full bg-sol-green/50"
+                className="absolute top-0 w-full rounded-full bg-sol-cyan"
                 style={{ height: '0%', transition: 'height 0.15s ease-out' }}
               />
             </div>
