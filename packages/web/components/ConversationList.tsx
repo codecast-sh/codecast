@@ -235,6 +235,7 @@ type Conversation = {
   author_name: string;
   is_own: boolean;
   parent_conversation_id?: string | null;
+  parent_title?: string | null;
   children?: Conversation[];
   latest_todos?: { todos: Array<{ status: string; content: string; activeForm?: string }>; timestamp: number };
   latest_usage?: {
@@ -480,7 +481,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   const { conversations, hasMore, loadMore, isLoadingMore, isLoading } = useConversationsWithError(filter, memberFilter);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
-  const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("main");
+  const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("all");
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const listRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
@@ -592,55 +593,13 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
       filtered = filtered.filter(c => isSubagent(c));
     }
 
-    // Build parent-child map for nesting
-    const childrenMap = new Map<string, Conversation[]>();
-    const topLevel: Conversation[] = [];
-
-    for (const conv of filtered) {
-      if (conv.parent_conversation_id) {
-        const children = childrenMap.get(conv.parent_conversation_id) || [];
-        children.push(conv);
-        childrenMap.set(conv.parent_conversation_id, children);
-      } else {
-        topLevel.push(conv);
-      }
-    }
-
-    // Attach children to parents, or promote orphans to top level
-    const withChildren = topLevel.map(conv => ({
-      ...conv,
-      children: childrenMap.get(conv._id) || [],
-    }));
-
-    // Find orphan children (parent not in current filtered set)
-    const parentIds = new Set(topLevel.map(c => c._id));
-    for (const [parentId, children] of childrenMap) {
-      if (!parentIds.has(parentId)) {
-        // Parent not visible, show children at top level
-        for (const child of children) {
-          withChildren.push({ ...child, children: [] });
-        }
-      }
-    }
-
-    // Sort by updated_at descending
-    withChildren.sort((a, b) => b.updated_at - a.updated_at);
-
-    filtered = withChildren as any;
+    // Sort by updated_at descending - all conversations shown flat (no nesting)
+    filtered.sort((a, b) => b.updated_at - a.updated_at);
 
     return { filteredConversations: filtered, counts, directories };
   }, [conversations, filter, timeFilter, subagentFilter, directoryFilter]);
 
-  const flatConversations = useMemo(() => {
-    const flat: Conversation[] = [];
-    filteredConversations.forEach((conv) => {
-      flat.push(conv);
-      if (conv.children && conv.children.length > 0) {
-        flat.push(...conv.children);
-      }
-    });
-    return flat;
-  }, [filteredConversations]);
+  const flatConversations = filteredConversations;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -904,14 +863,14 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                 >
                   <div className={`relative border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 transition-all duration-200 shadow-sm dark:shadow-none ${
                     isOthersRestrictedView
-                      ? "bg-white dark:bg-sol-bg-alt/60 border-sol-border/30 opacity-70"
+                      ? "bg-white dark:bg-sol-bg-alt border-sol-border/30 opacity-70"
                       : filter === "team" && conv.is_own && !conv.is_private
                         ? isFocused
                           ? "bg-[#fcfffc] dark:bg-[#0d1f15] ring-2 ring-sol-yellow border-2 border-emerald-400/40 hover:border-emerald-400/60 hover:shadow-md"
                           : "bg-[#fcfffc] dark:bg-[#0d1f15] border-2 border-emerald-400/35 hover:border-emerald-400/50 hover:shadow-md"
                         : isFocused
-                          ? "bg-white dark:bg-sol-bg-alt/60 ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
-                          : "bg-white dark:bg-sol-bg-alt/60 border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
+                          ? "bg-white dark:bg-sol-bg-alt ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
+                          : "bg-white dark:bg-sol-bg-alt border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
                   }`}>
                   <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4">
                     <div className="flex-1 min-w-0">
@@ -971,6 +930,23 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                           </span>
                         </div>
                       </div>
+
+                      {/* Subagent parent link */}
+                      {conv.parent_conversation_id && (
+                        <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-sol-text-dim">
+                          <svg className="w-3 h-3 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                          </svg>
+                          <span>sub of</span>
+                          <Link
+                            href={`/conversation/${conv.parent_conversation_id}`}
+                            className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[200px] transition-colors"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {conv.parent_title || "parent session"}
+                          </Link>
+                        </div>
+                      )}
 
                       {/* Subtitle - shown for full/detailed/summary modes */}
                       {conv.subtitle && conv.visibility_mode !== "minimal" && (
@@ -1099,7 +1075,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             {type}
                           </span>
                         ))}
-                        {conv.title?.startsWith("Session agent-") && (
+                        {(conv.parent_conversation_id || conv.title?.startsWith("Session agent-")) && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
                             Subagent
                           </span>
@@ -1111,60 +1087,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
               </Link>
               );
             })}
-            {/* Render children (subagents) indented */}
-            {group.conversations.map((conv) =>
-              conv.children && conv.children.length > 0 && (
-                <div key={`children-${conv._id}`} className="ml-6 border-l-2 border-violet-600/30 pl-3 space-y-2">
-                  {conv.children.map((child) => {
-                    const childIndex = flatConversations.findIndex(c => c._id === child._id);
-                    const isChildFocused = childIndex === focusedIndex;
-                    return (
-                      <Link
-                        key={child._id}
-                        href={`/conversation/${child._id}`}
-                        className="group block relative"
-                        role="listitem"
-                        aria-label={`Subagent: ${createConversationAriaLabel(child)}`}
-                        aria-current={isChildFocused ? "true" : undefined}
-                      >
-                        <div className={`relative bg-white dark:bg-sol-bg-alt/60 border rounded-lg p-3 hover:border-violet-500/50 transition-all duration-200 shadow-sm hover:shadow-md dark:shadow-none ${
-                          isChildFocused
-                            ? "ring-2 ring-sol-yellow border-sol-yellow/60"
-                            : "border-sol-border/40"
-                        }`}>
-                        <div className="flex items-center gap-2 mb-1">
-                          <AgentIcon agentType={child.agent_type || "claude_code"} className="w-3.5 h-3.5 shrink-0" />
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
-                            Subagent
-                          </span>
-                          <h4 className="text-sol-text-secondary text-sm truncate flex-1">
-                            {child.title}
-                          </h4>
-                          {child.is_active && (
-                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-sol-text-muted0">
-                          <span>{getRelativeTime(child.updated_at)}</span>
-                          {child.duration_ms > 60000 && (
-                            <span>{formatDuration(child.duration_ms)}</span>
-                          )}
-                          {(child.message_count ?? 0) > 0 && (
-                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${getMessageCountColor(child.message_count ?? 0)}`}>
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                              </svg>
-                              <span className="text-[10px] font-semibold">{child.message_count}</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </Link>
-                    );
-                  })}
-                </div>
-              )
-            )}
           </div>
         </div>
       ))}
