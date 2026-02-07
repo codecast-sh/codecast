@@ -44,9 +44,8 @@ export const sendMessageToSession = mutation({
       throw new Error("Unauthorized: can only send messages to your own conversations");
     }
 
-    if (conversation.status !== "active") {
-      throw new Error("Cannot send message to inactive conversation");
-    }
+    // Allow sending to both active and completed conversations
+    // The daemon will auto-resume completed sessions
 
     const messageId = await ctx.db.insert("pending_messages", {
       conversation_id: args.conversation_id,

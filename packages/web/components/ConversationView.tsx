@@ -2765,19 +2765,13 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
-function MessageInput({ conversationId, embedded }: { conversationId: string; embedded?: boolean }) {
+function MessageInput({ conversationId, status, embedded }: { conversationId: string; status?: string; embedded?: boolean }) {
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
-  const [showUnmanagedWarning, setShowUnmanagedWarning] = useState(false);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
-  const managedStatus = useQuery(api.managedSessions.isSessionManaged, {
-    conversation_id: conversationId as Id<"conversations">,
-  });
 
-  // Only show warning if query completed and explicitly returned managed: false
-  const isManaged = managedStatus?.managed === true;
-  const queryComplete = managedStatus !== undefined;
+  const isInactive = status && status !== "active";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2795,11 +2789,6 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
       setMessage("");
       toast.success("Message sent");
 
-      // Only show warning if query completed and session is NOT managed
-      if (queryComplete && !isManaged) {
-        setShowUnmanagedWarning(true);
-      }
-
       setTimeout(() => setLastStatus(null), 2000);
     } catch (error) {
       setLastStatus("failed");
@@ -2813,27 +2802,10 @@ function MessageInput({ conversationId, embedded }: { conversationId: string; em
     <div className="sticky bottom-0 z-30 pointer-events-none">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
-        {showUnmanagedWarning && (
+        {isInactive && (
           <div className="max-w-2xl mx-auto px-4 mb-2">
-            <div className="bg-sol-orange/10 border border-sol-orange/30 rounded-lg px-3 py-2 flex items-start gap-2">
-              <svg className="w-4 h-4 text-sol-orange mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <div className="flex-1 text-xs">
-                <span className="text-sol-orange font-medium">Unreliable delivery:</span>
-                <span className="text-sol-text-secondary ml-1">
-                  This session wasn&apos;t started with <code className="bg-sol-bg-alt px-1 rounded">codecast claude</code>.
-                  Message delivery may fail. Use <code className="bg-sol-bg-alt px-1 rounded">codecast claude</code> for reliable messaging.
-                </span>
-              </div>
-              <button
-                onClick={() => setShowUnmanagedWarning(false)}
-                className="text-sol-text-dim hover:text-sol-text p-0.5"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+            <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg px-3 py-2 text-xs text-sol-text-secondary">
+              This session is inactive. Sending a message will auto-resume it in a new terminal.
             </div>
           </div>
         )}
@@ -4099,8 +4071,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </>
         )}
 
-          {showMessageInput && conversation && conversation.status === "active" && (
-            <MessageInput conversationId={conversation._id} embedded={embedded} />
+          {showMessageInput && conversation && (
+            <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} />
           )}
         </div>
       </div>

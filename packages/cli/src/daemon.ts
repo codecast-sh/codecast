@@ -933,27 +933,32 @@ async function processSessionFile(
             const response = decision.approved ? "y" : "n";
             log(`Attempting to inject response '${response}' to Claude Code`);
 
-            findClaudeCodeProcesses().then((processes) => {
-              if (processes.length === 0) {
-                log("No Claude Code processes found");
+            findClaudeSessionProcess(sessionId).then((proc) => {
+              if (!proc) {
+                log("No Claude Code process found for session");
                 return;
               }
-
-              for (const proc of processes) {
-                getTtyPath(proc.tty).then((ttyPath) => {
-                  if (ttyPath) {
-                    injectMessageToStdin(ttyPath, response).then(() => {
-                      log(`Injected '${response}' to Claude Code process ${proc.pid} at ${ttyPath}`);
+              findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
+                if (tmuxTarget) {
+                  injectViaTmux(tmuxTarget, response).then(() => {
+                    log(`Injected '${response}' via tmux for session ${sessionId.slice(0, 8)}`);
+                  }).catch(() => {
+                    injectViaIterm(proc.tty, response).then(() => {
+                      log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
                     }).catch((err) => {
-                      log(`Failed to inject to ${ttyPath}: ${err instanceof Error ? err.message : String(err)}`);
+                      log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
                     });
-                  }
-                }).catch((err) => {
-                  log(`Failed to get TTY path for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
-                });
-              }
+                  });
+                } else {
+                  injectViaIterm(proc.tty, response).then(() => {
+                    log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
+                  }).catch((err) => {
+                    log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
+                  });
+                }
+              });
             }).catch((err) => {
-              log(`Failed to find Claude Code processes: ${err instanceof Error ? err.message : String(err)}`);
+              log(`Failed to find Claude session: ${err instanceof Error ? err.message : String(err)}`);
             });
           } else {
             log("Permission request timed out or failed");
@@ -1560,64 +1565,251 @@ function resetReconnectDelay(): void {
   reconnectAttempt = 0;
 }
 
-interface ClaudeCodeProcess {
+interface ClaudeSessionInfo {
   pid: number;
   tty: string;
+  sessionId: string;
 }
 
-async function findClaudeCodeProcesses(): Promise<ClaudeCodeProcess[]> {
+function buildReverseConversationCache(cache: ConversationCache): Record<string, string> {
+  const reverse: Record<string, string> = {};
+  for (const [sessionId, convId] of Object.entries(cache)) {
+    reverse[convId] = sessionId;
+  }
+  return reverse;
+}
+
+async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
   try {
-    const { stdout } = await execAsync("ps aux | grep -i 'claude' | grep -v grep");
+    const { stdout } = await execAsync("ps aux | grep -E 'claude.*--resume' | grep -v grep");
     const lines = stdout.trim().split("\n");
-    const processes: ClaudeCodeProcess[] = [];
 
     for (const line of lines) {
+      if (!line.includes(sessionId)) continue;
       const parts = line.trim().split(/\s+/);
       if (parts.length < 7) continue;
 
       const pid = parseInt(parts[1], 10);
       const tty = parts[6];
-
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
 
-      processes.push({ pid, tty });
+      return { pid, tty: tty.startsWith("/dev/") ? tty : `/dev/${tty}`, sessionId };
     }
 
-    return processes;
+    // Fallback: find ANY claude process by lsof on the session JSONL
+    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+    if (fs.existsSync(claudeProjectsDir)) {
+      const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
+        .filter(d => d.isDirectory()).map(d => d.name);
+
+      for (const dir of projectDirs) {
+        const jsonlPath = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+        if (fs.existsSync(jsonlPath)) {
+          try {
+            const { stdout: lsofOut } = await execAsync(`lsof "${jsonlPath}" 2>/dev/null | grep -v COMMAND`);
+            const lsofLine = lsofOut.trim().split("\n")[0];
+            if (lsofLine) {
+              const lsofParts = lsofLine.trim().split(/\s+/);
+              const pid = parseInt(lsofParts[1], 10);
+              if (!isNaN(pid)) {
+                // Get TTY from pid
+                try {
+                  const { stdout: psOut } = await execAsync(`ps -o tty= -p ${pid}`);
+                  const tty = psOut.trim();
+                  if (tty && tty !== "??" && tty !== "?") {
+                    return { pid, tty: tty.startsWith("/dev/") ? tty : `/dev/${tty}`, sessionId };
+                  }
+                } catch {}
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    return null;
   } catch (err) {
-    log(`Error finding Claude Code processes: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
+    log(`Error finding Claude session process: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
   }
 }
 
-async function getTtyPath(tty: string): Promise<string | null> {
-  if (tty.startsWith("/dev/")) {
-    return tty;
-  }
+async function findTmuxPaneForTty(tty: string): Promise<string | null> {
+  try {
+    const { stdout } = await execAsync("tmux list-panes -a -F '#{pane_tty} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null");
+    const normalizedTty = tty.startsWith("/dev/") ? tty : `/dev/${tty}`;
 
-  if (tty.startsWith("ttys")) {
-    return `/dev/${tty}`;
+    for (const line of stdout.trim().split("\n")) {
+      const [paneTty, target] = line.split(" ");
+      if (paneTty === normalizedTty && target) {
+        return target;
+      }
+    }
+    return null;
+  } catch {
+    return null;
   }
+}
 
-  if (tty.match(/^s\d+$/)) {
-    return `/dev/tty${tty}`;
+async function injectViaTmux(target: string, content: string): Promise<void> {
+  const escaped = content.replace(/'/g, "'\\''");
+  await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
+  await execAsync(`tmux send-keys -t '${target}' Enter`);
+  log(`Injected via tmux to ${target}`);
+}
+
+async function injectViaIterm(tty: string, content: string): Promise<void> {
+  const normalizedTty = tty.startsWith("/dev/") ? tty : `/dev/${tty}`;
+  const escaped = content.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const script = `
+    tell application "iTerm2"
+      repeat with w in windows
+        repeat with t in tabs of w
+          repeat with s in sessions of t
+            if tty of s is "${normalizedTty}" then
+              write text "${escaped}" in s
+              return "ok"
+            end if
+          end repeat
+        end repeat
+      end repeat
+    end tell
+    return "not_found"
+  `;
+  const { stdout } = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+  if (stdout.trim() === "not_found") {
+    throw new Error(`iTerm2 session not found for TTY ${normalizedTty}`);
   }
+  log(`Injected via iTerm2 for TTY ${normalizedTty}`);
+}
 
+function findSessionJsonlPath(sessionId: string): string | null {
+  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+  if (!fs.existsSync(claudeProjectsDir)) return null;
+
+  const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
+    .filter(d => d.isDirectory()).map(d => d.name);
+
+  for (const dir of projectDirs) {
+    const jsonlPath = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+    if (fs.existsSync(jsonlPath)) return jsonlPath;
+  }
   return null;
 }
 
-async function injectMessageToStdin(ttyPath: string, content: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const messageWithNewline = content + "\n";
+const resumeSessionCache = new Map<string, string>();
 
-    fs.writeFile(ttyPath, messageWithNewline, (err) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve();
+async function autoResumeSession(sessionId: string, content: string): Promise<boolean> {
+  const jsonlPath = findSessionJsonlPath(sessionId);
+  if (!jsonlPath) {
+    log(`Cannot auto-resume: JSONL not found for session ${sessionId.slice(0, 8)}`);
+    return false;
+  }
+
+  const projectDir = path.dirname(jsonlPath);
+  const projectDirName = path.basename(projectDir);
+  // Decode the project working directory from the hash dir name
+  // Try extracting cwd from JSONL content
+  const jsonlContent = fs.readFileSync(jsonlPath, "utf-8").slice(0, 5000);
+  const cwd = extractCwd(jsonlContent) || process.env.HOME || "/tmp";
+
+  const shortId = sessionId.slice(0, 8);
+  const tmuxSession = `cc-resume-${shortId}`;
+
+  try {
+    // Kill existing session if any
+    try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
+
+    await execAsync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`);
+    await execAsync(`tmux send-keys -t '${tmuxSession}' 'claude --resume ${sessionId}' Enter`);
+
+    log(`Auto-resumed session ${shortId} in tmux session ${tmuxSession}, cwd=${cwd}`);
+
+    // Wait for Claude to start up
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    // Now inject the message
+    await execAsync(`tmux send-keys -t '${tmuxSession}' -l '${content.replace(/'/g, "'\\''")}'`);
+    await execAsync(`tmux send-keys -t '${tmuxSession}' Enter`);
+
+    resumeSessionCache.set(sessionId, tmuxSession);
+    log(`Injected message to auto-resumed session ${shortId}`);
+    return true;
+  } catch (err) {
+    log(`Auto-resume failed for ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+async function deliverMessage(
+  conversationId: string,
+  content: string,
+  conversationCache: ConversationCache,
+  syncService: SyncService,
+  messageId: string
+): Promise<boolean> {
+  const reverseCache = buildReverseConversationCache(conversationCache);
+  const sessionId = reverseCache[conversationId];
+
+  if (!sessionId) {
+    log(`No session_id found for conversation ${conversationId}`);
+    return false;
+  }
+
+  log(`Delivering message to session ${sessionId.slice(0, 8)} (conversation ${conversationId.slice(0, 12)})`);
+
+  // Check if we have a cached tmux target from a previous auto-resume
+  const cachedTmux = resumeSessionCache.get(sessionId);
+  if (cachedTmux) {
+    try {
+      // Verify session still exists
+      await execAsync(`tmux has-session -t '${cachedTmux}' 2>/dev/null`);
+      await injectViaTmux(cachedTmux, content);
+      await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+      return true;
+    } catch {
+      resumeSessionCache.delete(sessionId);
+    }
+  }
+
+  // Find the running process
+  const proc = await findClaudeSessionProcess(sessionId);
+
+  if (proc) {
+    // Try tmux first (most reliable)
+    const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+    if (tmuxTarget) {
+      try {
+        await injectViaTmux(tmuxTarget, content);
+        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        return true;
+      } catch (err) {
+        log(`tmux injection failed: ${err instanceof Error ? err.message : String(err)}`);
       }
-    });
-  });
+    }
+
+    // Try iTerm2 AppleScript
+    try {
+      await injectViaIterm(proc.tty, content);
+      await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+      return true;
+    } catch (err) {
+      log(`iTerm2 injection failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    log(`All injection methods failed for active session ${sessionId.slice(0, 8)}`);
+    return false;
+  }
+
+  // No running process - try auto-resume
+  log(`No running process for session ${sessionId.slice(0, 8)}, attempting auto-resume`);
+  const resumed = await autoResumeSession(sessionId, content);
+  if (resumed) {
+    await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+    return true;
+  }
+
+  return false;
 }
 
 function isSyncPaused(): boolean {
@@ -2893,51 +3085,17 @@ async function main(): Promise<void> {
               log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}"`);
 
               try {
-                // Check if this session is managed (wrapper will handle delivery)
-                const managedStatus = await syncService.checkManagedSession(msg.conversation_id);
-                if (managedStatus?.managed) {
-                  log(`Session is managed, skipping TTY injection (wrapper will deliver)`);
-                  continue;
-                }
-
-                // Unmanaged session - try TTY injection
-                log(`Unmanaged session, attempting TTY injection`);
-                const processes = await findClaudeCodeProcesses();
-                log(`Found ${processes.length} Claude Code process(es)`);
-
-                if (processes.length === 0) {
-                  log(`No Claude Code processes found, message will remain pending`);
-                  continue;
-                }
-
-                let injected = false;
-                for (const proc of processes) {
-                  const ttyPath = await getTtyPath(proc.tty);
-                  if (!ttyPath) {
-                    log(`Could not resolve tty path for ${proc.tty}`);
-                    continue;
-                  }
-
-                  try {
-                    await injectMessageToStdin(ttyPath, msg.content);
-                    log(`Successfully injected message to ${ttyPath} (pid ${proc.pid})`);
-
-                    await syncService.updateMessageStatus({
-                      messageId: msg._id,
-                      status: "delivered",
-                      deliveredAt: Date.now(),
-                    });
-                    log(`Updated message status to delivered`);
-                    injected = true;
-                    break;
-                  } catch (writeErr) {
-                    const writeErrMsg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-                    log(`Failed to inject to ${ttyPath}: ${writeErrMsg}`);
-                  }
-                }
-
-                if (!injected) {
-                  log(`Failed to inject message to any process`);
+                const delivered = await deliverMessage(
+                  msg.conversation_id,
+                  msg.content,
+                  conversationCache,
+                  syncService,
+                  msg._id
+                );
+                if (delivered) {
+                  log(`Message delivered successfully`);
+                } else {
+                  log(`Message delivery failed, will retry on next update`);
                 }
               } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
@@ -2995,38 +3153,34 @@ async function main(): Promise<void> {
             log(`New permission response: ${permission._id} status=${permission.status} tool=${permission.tool_name}`);
 
             try {
-              const processes = await findClaudeCodeProcesses();
-              log(`Found ${processes.length} Claude Code process(es) for permission injection`);
-
-              if (processes.length === 0) {
-                log(`No Claude Code processes found, will retry on next update`);
-                continue;
-              }
-
               const response = permission.status === "approved" ? "y" : "n";
+              const sessionId = permission.session_id;
               let injected = false;
 
-              for (const proc of processes) {
-                const ttyPath = await getTtyPath(proc.tty);
-                if (!ttyPath) {
-                  log(`Could not resolve tty path for ${proc.tty}`);
-                  continue;
-                }
-
-                try {
-                  await injectMessageToStdin(ttyPath, response);
-                  log(`Successfully injected permission response '${response}' to ${ttyPath} (pid ${proc.pid})`);
-                  processedPermissionIds.add(permission._id);
-                  injected = true;
-                  break;
-                } catch (writeErr) {
-                  const writeErrMsg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-                  log(`Failed to inject permission to ${ttyPath}: ${writeErrMsg}`);
+              if (sessionId) {
+                const proc = await findClaudeSessionProcess(sessionId);
+                if (proc) {
+                  const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+                  if (tmuxTarget) {
+                    try {
+                      await injectViaTmux(tmuxTarget, response);
+                      injected = true;
+                    } catch {}
+                  }
+                  if (!injected) {
+                    try {
+                      await injectViaIterm(proc.tty, response);
+                      injected = true;
+                    } catch {}
+                  }
                 }
               }
 
-              if (!injected) {
-                log(`Failed to inject permission response to any process`);
+              if (injected) {
+                log(`Injected permission response '${response}' for session ${sessionId?.slice(0, 8)}`);
+                processedPermissionIds.add(permission._id);
+              } else {
+                log(`Failed to inject permission response, will retry on next update`);
               }
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
