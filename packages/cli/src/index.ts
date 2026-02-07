@@ -3159,16 +3159,19 @@ function setupMacOS(disable: boolean): void {
 
   const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
   const plistPath = path.join(launchAgentsDir, "sh.codecast.daemon.plist");
+  const watchdogPlistPath = path.join(launchAgentsDir, "sh.codecast.watchdog.plist");
+  const uid = `gui/${process.getuid!()}`;
 
   if (disable) {
-    if (!fs.existsSync(plistPath)) {
+    if (!fs.existsSync(plistPath) && !fs.existsSync(watchdogPlistPath)) {
       console.log("Auto-start is not enabled");
       return;
     }
-    spawnSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plistPath], { stdio: "inherit" });
-    fs.unlinkSync(plistPath);
-    console.log("Auto-start disabled");
-    console.log(`Removed: ${plistPath}`);
+    spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
+    spawnSync("launchctl", ["bootout", uid, watchdogPlistPath], { stdio: "ignore" });
+    if (fs.existsSync(plistPath)) fs.unlinkSync(plistPath);
+    if (fs.existsSync(watchdogPlistPath)) fs.unlinkSync(watchdogPlistPath);
+    console.log("Auto-start disabled (daemon + watchdog removed)");
     return;
   }
 
@@ -3176,6 +3179,7 @@ function setupMacOS(disable: boolean): void {
     fs.mkdirSync(launchAgentsDir, { recursive: true });
   }
 
+  // Daemon plist
   const { executablePath, args } = getExecutableInfo();
   const programArgs = [executablePath, ...args]
     .map((arg) => `    <string>${arg}</string>`)
@@ -3205,20 +3209,46 @@ ${programArgs}
 </plist>
 `;
 
-  spawnSync("launchctl", ["bootout", `gui/${process.getuid!()}`, plistPath], { stdio: "ignore" });
-
+  spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
   fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
-  console.log("Auto-start enabled");
-  console.log(`LaunchAgent created: ${plistPath}`);
-  console.log(`Command: ${executablePath} ${args.join(" ")}`);
+  spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
+  console.log("Daemon LaunchAgent installed");
 
-  const result = spawnSync("launchctl", ["bootstrap", `gui/${process.getuid!()}`, plistPath], { stdio: "inherit" });
-  if (result.status === 0) {
-    console.log("\nLaunchAgent loaded successfully");
-  } else {
-    console.log("\nNote: LaunchAgent will start on next login");
-    console.log("Or manually load with: launchctl bootstrap gui/$(id -u) " + plistPath);
-  }
+  // Watchdog plist (runs every 5 minutes, independent of daemon)
+  const wdInfo = getExecutableInfo("_watchdog");
+  const wdArgs = [wdInfo.executablePath, ...wdInfo.args]
+    .map((arg) => `    <string>${arg}</string>`)
+    .join("\n");
+
+  const watchdogPlistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.codecast.watchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+${wdArgs}
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${CONFIG_DIR}/watchdog.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>${CONFIG_DIR}/watchdog.err.log</string>
+</dict>
+</plist>
+`;
+
+  spawnSync("launchctl", ["bootout", uid, watchdogPlistPath], { stdio: "ignore" });
+  fs.writeFileSync(watchdogPlistPath, watchdogPlistContent, { mode: 0o644 });
+  const wdResult = spawnSync("launchctl", ["bootstrap", uid, watchdogPlistPath], { stdio: "ignore" });
+  console.log("Watchdog LaunchAgent installed (checks every 5min)");
+
+  console.log(`\nDaemon: ${executablePath} ${args.join(" ")}`);
+  console.log("Auto-start enabled with watchdog");
 }
 
 function setupLinux(disable: boolean): void {
@@ -3289,17 +3319,22 @@ function ensureAutostart(): boolean {
     if (platform === "darwin") {
       const home = process.env.HOME;
       if (!home) return false;
-      const plistPath = path.join(home, "Library", "LaunchAgents", "sh.codecast.daemon.plist");
-      if (fs.existsSync(plistPath)) return true; // Already set up
-
       const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
+      const plistPath = path.join(launchAgentsDir, "sh.codecast.daemon.plist");
+      const watchdogPlistPath = path.join(launchAgentsDir, "sh.codecast.watchdog.plist");
+      const uid = `gui/${process.getuid!()}`;
+      const daemonExists = fs.existsSync(plistPath);
+      const watchdogExists = fs.existsSync(watchdogPlistPath);
+      if (daemonExists && watchdogExists) return true;
+
       if (!fs.existsSync(launchAgentsDir)) {
         fs.mkdirSync(launchAgentsDir, { recursive: true });
       }
 
-      const { executablePath, args } = getExecutableInfo();
-      const programArgs = [executablePath, ...args].map((arg) => `    <string>${arg}</string>`).join("\n");
-      const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+      if (!daemonExists) {
+        const { executablePath, args } = getExecutableInfo();
+        const programArgs = [executablePath, ...args].map((arg) => `    <string>${arg}</string>`).join("\n");
+        const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -3322,8 +3357,37 @@ ${programArgs}
 </dict>
 </plist>
 `;
-      fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
-      spawnSync("launchctl", ["bootstrap", `gui/${process.getuid!()}`, plistPath], { stdio: "ignore" });
+        fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
+        spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
+      }
+
+      if (!watchdogExists) {
+        const wdInfo = getExecutableInfo("_watchdog");
+        const wdArgs = [wdInfo.executablePath, ...wdInfo.args].map((arg) => `    <string>${arg}</string>`).join("\n");
+        const wdContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.codecast.watchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+${wdArgs}
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${CONFIG_DIR}/watchdog.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>${CONFIG_DIR}/watchdog.err.log</string>
+</dict>
+</plist>
+`;
+        fs.writeFileSync(watchdogPlistPath, wdContent, { mode: 0o644 });
+        spawnSync("launchctl", ["bootstrap", uid, watchdogPlistPath], { stdio: "ignore" });
+      }
       return true;
     } else if (platform === "linux") {
       const home = process.env.HOME;
