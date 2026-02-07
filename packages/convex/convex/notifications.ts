@@ -54,15 +54,16 @@ export const notifyTeamSessionStart = internalMutation({
       return;
     }
 
-    const teamMembers = await ctx.db
-      .query("users")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("team_id"), conversation.team_id),
-          q.neq(q.field("_id"), args.user_id)
-        )
-      )
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q: any) => q.eq("team_id", conversation.team_id))
       .collect();
+    const memberUsers = await Promise.all(
+      memberships
+        .filter((m: any) => m.user_id.toString() !== args.user_id.toString())
+        .map((m: any) => ctx.db.get(m.user_id))
+    );
+    const teamMembers = memberUsers.filter((u: any): u is NonNullable<typeof u> => u !== null);
 
     for (const member of teamMembers) {
       if (

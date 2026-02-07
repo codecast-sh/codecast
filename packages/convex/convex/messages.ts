@@ -7,6 +7,12 @@ import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { shouldGenerateTitle } from "./titleGeneration";
 
+async function isTeamMember(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<boolean> {
+  const m = await ctx.db.query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId)).first();
+  return !!m;
+}
+
 export const getMessageTimestamp = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -26,12 +32,7 @@ export const getMessageTimestamp = query({
       if (conversation.is_private !== false) {
         return null;
       }
-      const authUser = await ctx.db.get(authUserId);
-      if (
-        !authUser ||
-        !authUser.team_id ||
-        authUser.team_id.toString() !== conversation.team_id?.toString()
-      ) {
+      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
         return null;
       }
     }
@@ -323,12 +324,7 @@ export const generateMessageShareLink = mutation({
       if (conversation.is_private !== false) {
         throw new Error("Unauthorized: can only share messages from your own conversations");
       }
-      const authUser = await ctx.db.get(authUserId);
-      if (
-        !authUser ||
-        !authUser.team_id ||
-        authUser.team_id.toString() !== conversation.team_id?.toString()
-      ) {
+      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
         throw new Error("Unauthorized: can only share messages from your own conversations");
       }
     }
@@ -368,12 +364,7 @@ export const findMessageByContent = query({
       if (conversation.is_private !== false) {
         return null;
       }
-      const authUser = await ctx.db.get(authUserId);
-      if (
-        !authUser ||
-        !authUser.team_id ||
-        authUser.team_id.toString() !== conversation.team_id?.toString()
-      ) {
+      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
         return null;
       }
     }

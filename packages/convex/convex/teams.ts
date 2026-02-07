@@ -314,12 +314,12 @@ export const renameTeam = mutation({
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    const requestingUser = await ctx.db.get(args.requesting_user_id);
-    if (!requestingUser || requestingUser.role !== "admin") {
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", args.requesting_user_id).eq("team_id", args.team_id))
+      .first();
+    if (!membership || membership.role !== "admin") {
       throw new Error("Only admins can rename the team");
-    }
-    if (requestingUser.team_id?.toString() !== args.team_id.toString()) {
-      throw new Error("Not a member of this team");
     }
     await ctx.db.patch(args.team_id, { name: args.name.trim() });
   },
@@ -331,12 +331,12 @@ export const inviteToTeam = mutation({
     requesting_user_id: v.id("users"),
   },
   handler: async (ctx, args) => {
-    const requestingUser = await ctx.db.get(args.requesting_user_id);
-    if (!requestingUser || requestingUser.role !== "admin") {
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", args.requesting_user_id).eq("team_id", args.team_id))
+      .first();
+    if (!membership || membership.role !== "admin") {
       throw new Error("Only admins can generate invite codes");
-    }
-    if (requestingUser.team_id?.toString() !== args.team_id.toString()) {
-      throw new Error("Not a member of this team");
     }
     const newCode = generateInviteCode();
     const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
@@ -354,12 +354,12 @@ export const regenerateInviteCode = mutation({
     requesting_user_id: v.id("users"),
   },
   handler: async (ctx, args) => {
-    const requestingUser = await ctx.db.get(args.requesting_user_id);
-    if (!requestingUser || requestingUser.role !== "admin") {
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", args.requesting_user_id).eq("team_id", args.team_id))
+      .first();
+    if (!membership || membership.role !== "admin") {
       throw new Error("Only admins can regenerate invite codes");
-    }
-    if (requestingUser.team_id?.toString() !== args.team_id.toString()) {
-      throw new Error("Not a member of this team");
     }
     const newCode = generateInviteCode();
     const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;

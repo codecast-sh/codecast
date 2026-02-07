@@ -45,10 +45,16 @@ export const create = mutation({
       }
     }
 
+    let teamId = user.team_id;
+    if (conversationId) {
+      const conv = await ctx.db.get(conversationId);
+      if (conv?.team_id) teamId = conv.team_id;
+    }
+
     const now = Date.now();
     const id = await ctx.db.insert("patterns", {
       user_id: result.userId,
-      team_id: user.team_id,
+      team_id: teamId,
       name: args.name,
       description: args.description,
       content: args.content,

@@ -3,6 +3,12 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 
+async function isTeamMember(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<boolean> {
+  const m = await ctx.db.query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId)).first();
+  return !!m;
+}
+
 export const recordTeamActivity = internalMutation({
   args: {
     team_id: v.id("teams"),
@@ -70,8 +76,7 @@ export const getTeamActivityFeed = query({
       throw new Error("Not authenticated");
     }
 
-    const user = await ctx.db.get(authUserId);
-    if (!user?.team_id || user.team_id.toString() !== args.team_id.toString()) {
+    if (!(await isTeamMember(ctx, authUserId, args.team_id))) {
       throw new Error("Not a member of this team");
     }
 

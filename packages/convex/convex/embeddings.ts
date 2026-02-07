@@ -3,6 +3,12 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
+async function isTeamMember(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<boolean> {
+  const m = await ctx.db.query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId)).first();
+  return !!m;
+}
+
 export async function generateEmbedding(text: string): Promise<number[] | null> {
   const apiKey = process.env.VOYAGE_API_KEY || process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
@@ -232,8 +238,8 @@ export const enrichSearchResults = internalQuery({
       if (!conversation) continue;
 
       const isOwner = conversation.user_id === args.user_id;
-      const isTeamMember = user.team_id && conversation.team_id === user.team_id;
-      const isAccessible = isOwner || (isTeamMember && !conversation.is_private);
+      const hasTeamAccess = conversation.team_id ? await isTeamMember(ctx, args.user_id, conversation.team_id) : false;
+      const isAccessible = isOwner || (hasTeamAccess && !conversation.is_private);
 
       if (!isAccessible) continue;
 

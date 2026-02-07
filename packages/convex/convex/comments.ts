@@ -4,6 +4,12 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 
+async function isTeamMember(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<boolean> {
+  const m = await ctx.db.query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId)).first();
+  return !!m;
+}
+
 export const addComment = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -26,8 +32,7 @@ export const addComment = mutation({
     }
 
     if (conversation.team_id) {
-      const user = await ctx.db.get(userId);
-      if (!user || user.team_id?.toString() !== conversation.team_id.toString()) {
+      if (!(await isTeamMember(ctx, userId, conversation.team_id))) {
         throw new Error("Unauthorized: not a member of this team");
       }
     }
@@ -51,13 +56,15 @@ export const addComment = mutation({
     const mentions = Array.from(args.content.matchAll(mentionRegex)).map(match => match[1]);
 
     if (conversation.team_id && mentions.length > 0) {
-      const teamMembers = await ctx.db
-        .query("users")
-        .filter((q) => q.eq(q.field("team_id"), conversation.team_id))
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_team_id", (q: any) => q.eq("team_id", conversation.team_id))
         .collect();
+      const teamMembers = await Promise.all(memberships.map((m: any) => ctx.db.get(m.user_id)));
+      const validMembers = teamMembers.filter((u: any): u is NonNullable<typeof u> => u !== null);
 
       for (const mention of mentions) {
-        const mentionedUser = teamMembers.find(
+        const mentionedUser = validMembers.find(
           u => u.github_username === mention || u.name === mention
         );
 
@@ -156,8 +163,7 @@ export const getComments = query({
     }
 
     if (conversation.team_id) {
-      const user = await ctx.db.get(userId);
-      if (!user || user.team_id?.toString() !== conversation.team_id.toString()) {
+      if (!(await isTeamMember(ctx, userId, conversation.team_id))) {
         return [];
       }
     }

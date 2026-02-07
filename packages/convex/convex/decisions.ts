@@ -35,10 +35,16 @@ export const create = mutation({
       }
     }
 
+    let teamId = user.team_id;
+    if (conversationId) {
+      const conv = await ctx.db.get(conversationId);
+      if (conv?.team_id) teamId = conv.team_id;
+    }
+
     const now = Date.now();
     const id = await ctx.db.insert("decisions", {
       user_id: result.userId,
-      team_id: user.team_id,
+      team_id: teamId,
       project_path: args.project_path,
       title: args.title,
       rationale: args.rationale,
