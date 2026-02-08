@@ -1,8 +1,9 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, ScrollView, View as RNView, Text as RNText } from 'react-native';
-import { useQuery } from 'convex/react';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, ScrollView, TextInput, Alert, View as RNView, Text as RNText } from 'react-native';
+import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
 
@@ -112,6 +113,145 @@ const EVENT_TYPE_FILTERS = [
   { label: "PRs", value: "pr_created" },
 ];
 
+function NoTeamView({ userId }: { userId: Id<"users"> }) {
+  const [mode, setMode] = useState<"none" | "join" | "create">("none");
+  const [inviteCode, setInviteCode] = useState('');
+  const [teamName, setTeamName] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const joinTeam = useMutation(api.teams.joinTeam);
+  const createTeam = useMutation(api.teams.createTeam);
+
+  const handleJoin = async () => {
+    if (!inviteCode.trim()) return;
+    setLoading(true);
+    try {
+      await joinTeam({ invite_code: inviteCode.trim(), user_id: userId });
+      Alert.alert('Joined', 'You have joined the team.');
+    } catch (err) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to join team');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreate = async () => {
+    if (!teamName.trim()) return;
+    setLoading(true);
+    try {
+      await createTeam({ name: teamName.trim(), user_id: userId });
+      Alert.alert('Created', 'Your team has been created.');
+    } catch (err) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to create team');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (mode === "join") {
+    return (
+      <RNView style={styles.noTeamContainer}>
+        <RNText style={styles.noTeamTitle}>Join a Team</RNText>
+        <RNText style={styles.noTeamSubtitle}>Enter the invite code from your team admin</RNText>
+        <TextInput
+          style={styles.noTeamInput}
+          value={inviteCode}
+          onChangeText={setInviteCode}
+          placeholder="Invite code"
+          placeholderTextColor={Theme.textMuted0}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <RNView style={styles.noTeamButtons}>
+          <TouchableOpacity
+            style={[styles.noTeamButton, styles.noTeamButtonPrimary]}
+            onPress={handleJoin}
+            disabled={loading || !inviteCode.trim()}
+            activeOpacity={0.7}
+          >
+            <RNText style={styles.noTeamButtonPrimaryText}>
+              {loading ? 'Joining...' : 'Join'}
+            </RNText>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.noTeamButton}
+            onPress={() => setMode("none")}
+            activeOpacity={0.7}
+          >
+            <RNText style={styles.noTeamButtonText}>Back</RNText>
+          </TouchableOpacity>
+        </RNView>
+      </RNView>
+    );
+  }
+
+  if (mode === "create") {
+    return (
+      <RNView style={styles.noTeamContainer}>
+        <RNText style={styles.noTeamTitle}>Create a Team</RNText>
+        <RNText style={styles.noTeamSubtitle}>Start a new team and invite your colleagues</RNText>
+        <TextInput
+          style={styles.noTeamInput}
+          value={teamName}
+          onChangeText={setTeamName}
+          placeholder="Team name"
+          placeholderTextColor={Theme.textMuted0}
+          autoCapitalize="words"
+        />
+        <RNView style={styles.noTeamButtons}>
+          <TouchableOpacity
+            style={[styles.noTeamButton, styles.noTeamButtonPrimary]}
+            onPress={handleCreate}
+            disabled={loading || !teamName.trim()}
+            activeOpacity={0.7}
+          >
+            <RNText style={styles.noTeamButtonPrimaryText}>
+              {loading ? 'Creating...' : 'Create'}
+            </RNText>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.noTeamButton}
+            onPress={() => setMode("none")}
+            activeOpacity={0.7}
+          >
+            <RNText style={styles.noTeamButtonText}>Back</RNText>
+          </TouchableOpacity>
+        </RNView>
+      </RNView>
+    );
+  }
+
+  return (
+    <RNView style={styles.noTeamContainer}>
+      <RNView style={styles.noTeamIcon}>
+        <FontAwesome name="users" size={28} color={Theme.textMuted0} />
+      </RNView>
+      <RNText style={styles.noTeamTitle}>No Team Yet</RNText>
+      <RNText style={styles.noTeamSubtitle}>
+        Teams let you see what your colleagues are working on and share sessions.
+      </RNText>
+      <RNView style={styles.noTeamButtons}>
+        <TouchableOpacity
+          style={[styles.noTeamButton, styles.noTeamButtonPrimary]}
+          onPress={() => setMode("join")}
+          activeOpacity={0.7}
+        >
+          <FontAwesome name="sign-in" size={14} color="#fff" style={{ marginRight: 6 }} />
+          <RNText style={styles.noTeamButtonPrimaryText}>Join Team</RNText>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.noTeamButton}
+          onPress={() => setMode("create")}
+          activeOpacity={0.7}
+        >
+          <FontAwesome name="plus" size={12} color={Theme.text} style={{ marginRight: 6 }} />
+          <RNText style={styles.noTeamButtonText}>Create Team</RNText>
+        </TouchableOpacity>
+      </RNView>
+    </RNView>
+  );
+}
+
 export default function TeamScreen() {
   const [view, setView] = useState<"activity" | "directory">("activity");
   const [eventTypeFilter, setEventTypeFilter] = useState<string | undefined>(undefined);
@@ -188,13 +328,10 @@ export default function TeamScreen() {
   );
 
   if (!currentUser?.team_id) {
+    if (!currentUser?._id) return null;
     return (
       <RNView style={styles.container}>
-        <RNView style={styles.emptyContainer}>
-          <RNText style={styles.emptyText}>
-            You are not part of a team.{'\n'}Join or create a team to see activity.
-          </RNText>
-        </RNView>
+        <NoTeamView userId={currentUser._id} />
       </RNView>
     );
   }
@@ -267,9 +404,9 @@ export default function TeamScreen() {
 
       {view === "directory" && (
         <FlatList
-          data={teamMembers || []}
+          data={(teamMembers || []).filter(Boolean)}
           renderItem={renderTeamMemberItem}
-          keyExtractor={(item) => item._id}
+          keyExtractor={(item) => item!._id}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Theme.textMuted} />
           }
@@ -458,6 +595,79 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 10,
     fontWeight: '600',
+  },
+  noTeamContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  noTeamIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: Theme.bgAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.lg,
+  },
+  noTeamTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: Theme.text,
+    marginBottom: Spacing.sm,
+    textAlign: 'center',
+  },
+  noTeamSubtitle: {
+    fontSize: 15,
+    color: Theme.textMuted,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: Spacing.xxl,
+    maxWidth: 280,
+  },
+  noTeamInput: {
+    width: '100%',
+    maxWidth: 280,
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 10,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: Theme.text,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+    marginBottom: Spacing.lg,
+    textAlign: 'center',
+  },
+  noTeamButtons: {
+    gap: 10,
+    width: '100%',
+    maxWidth: 280,
+  },
+  noTeamButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 10,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+  },
+  noTeamButtonPrimary: {
+    backgroundColor: Theme.accent,
+    borderColor: Theme.accent,
+  },
+  noTeamButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Theme.text,
+  },
+  noTeamButtonPrimaryText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
   emptyContainer: {
     flex: 1,
