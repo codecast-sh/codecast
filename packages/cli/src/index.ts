@@ -2665,25 +2665,21 @@ program
 program
   .command("resume")
   .description(
-    "Resume a session by searching with natural language\n\n" +
-    "Searches your session history and opens the matching session in the\n" +
-    "appropriate tool (Claude Code, Codex). Cursor sessions cannot be\n" +
-    "resumed from CLI.\n" +
-    "If multiple matches are found, shows a selection to choose from.\n\n" +
+    "List live sessions or resume by search query\n\n" +
+    "With no arguments, shows all running Claude/Codex sessions.\n" +
+    "With a query, searches history and opens the matching session.\n\n" +
     "Multiple words are AND-ed (all must match).\n" +
     "Use \"quotes\" for exact phrase matching.\n\n" +
     "Configure default args:\n" +
     "  codecast config claude_args \"--dangerously-skip-permissions\"\n" +
     "  codecast config codex_args \"--dangerously-bypass-approvals-and-sandbox\"\n\n" +
     "Examples:\n" +
-    "  codecast resume logo design             # matches both 'logo' AND 'design'\n" +
-    "  codecast resume \"logo design\"           # matches exact phrase\n" +
-    "  codecast resume auth token -g           # search globally\n" +
-    "  codecast resume refactor -n 10          # show up to 10 results\n" +
-    "  codecast resume auth --as codex         # resume Claude session in Codex\n" +
-    "  codecast resume auth --as claude        # resume Codex session in Claude"
+    "  codecast resume                          # list live sessions\n" +
+    "  codecast resume logo design              # search: 'logo' AND 'design'\n" +
+    "  codecast resume \"logo design\"            # exact phrase\n" +
+    "  codecast resume auth --as codex          # resume Claude session in Codex"
   )
-  .argument("<query...>", "Search terms (AND-ed, use quotes for exact phrase)")
+  .argument("[query...]", "Search terms (AND-ed, use quotes for exact phrase)")
   .option("-g, --global", "Search all sessions (not just current project)")
   .option("-n, --limit <n>", "Max results to show (use -n 10 for more)", "4")
   .option("--dry-run", "Show matches without opening Claude")
@@ -2700,6 +2696,52 @@ program
     if (options.as && !["claude", "codex"].includes(options.as.toLowerCase())) {
       console.error(`Invalid --as value: "${options.as}". Use "claude" or "codex".`);
       process.exit(1);
+    }
+
+    // No query: show live sessions
+    if (!queryWords || queryWords.length === 0) {
+      const procs = discoverLiveProcesses();
+      const output = await enrichAndFormatLiveSessions(procs, config);
+      console.log(output);
+
+      if (procs.length === 0) process.exit(0);
+
+      const readline = await import("readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+      const promptForSession = (): void => {
+        rl.question("> ", (answer) => {
+          const trimmed = answer.trim().toLowerCase();
+          if (trimmed === "q" || trimmed === "quit" || trimmed === "exit" || trimmed === "") {
+            rl.close();
+            process.exit(0);
+          }
+          const num = parseInt(trimmed);
+          if (isNaN(num) || num < 1 || num > procs.length) {
+            console.log(`Enter 1-${procs.length}, or q to quit`);
+            promptForSession();
+            return;
+          }
+          rl.close();
+          const p = procs[num - 1];
+          if (p.tmuxSession) {
+            console.log(`\nAttaching to tmux session: ${p.tmuxSession}`);
+            try {
+              spawnSync("tmux", ["attach-session", "-t", p.tmuxSession], { stdio: "inherit" });
+            } catch (err) {
+              console.error(`Failed to attach: ${err instanceof Error ? err.message : err}`);
+            }
+          } else if (!p.sessionId.startsWith("unknown")) {
+            console.log(`\nResuming: ${p.sessionId.slice(0, 8)}`);
+            const extraArgs = resolveAgentArgs(p.agentType, options.claudeArgs, config);
+            launchSession(p.sessionId, p.agentType, extraArgs, !extraArgs);
+          } else {
+            console.log(`\nSession PID ${p.pid} on ${p.tty} -- attach manually or use tmux`);
+          }
+        });
+      };
+      promptForSession();
+      return;
     }
 
     const query = queryWords.join(" ");

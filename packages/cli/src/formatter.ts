@@ -75,7 +75,7 @@ function formatDate(isoDate: string): string {
   }
 }
 
-function formatRelativeTime(isoDate: string): string {
+export function formatRelativeTime(isoDate: string): string {
   const date = new Date(isoDate);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
