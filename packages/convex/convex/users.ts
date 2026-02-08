@@ -267,6 +267,8 @@ export const storePushToken = mutation({
         team_session_start: true,
         mention: true,
         permission_request: true,
+        session_idle: true,
+        session_error: true,
       },
     });
   },
@@ -279,6 +281,8 @@ export const updateNotificationPreferences = mutation({
       team_session_start: v.boolean(),
       mention: v.boolean(),
       permission_request: v.boolean(),
+      session_idle: v.optional(v.boolean()),
+      session_error: v.optional(v.boolean()),
     })),
   },
   handler: async (ctx, args) => {

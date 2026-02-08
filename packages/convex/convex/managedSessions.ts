@@ -105,6 +105,39 @@ export const updateSessionConversation = mutation({
   },
 });
 
+export const updateManagedSessionId = mutation({
+  args: {
+    old_session_id: v.string(),
+    new_session_id: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication required");
+    }
+
+    const session = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", args.old_session_id))
+      .first();
+
+    if (!session) {
+      return { found: false };
+    }
+
+    if (session.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Unauthorized");
+    }
+
+    await ctx.db.patch(session._id, {
+      session_id: args.new_session_id,
+    });
+
+    return { found: true, updated: true };
+  },
+});
+
 export const heartbeat = mutation({
   args: {
     session_id: v.string(),
