@@ -1,20 +1,46 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Text as RNText } from 'react-native';
-import { useQuery } from 'convex/react';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, SectionList } from 'react-native';
+import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useState } from 'react';
+import { useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'expo-router';
-import { Theme, Spacing, FontSize, BorderRadius } from '@/constants/Theme';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { Theme, Spacing } from '@/constants/Theme';
+import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 
 type Conversation = {
   _id: string;
-  title: string;
+  title?: string;
   subtitle?: string | null;
   started_at: number;
   updated_at: number;
-  message_count: number;
+  message_count?: number;
   is_active: boolean;
   author_name: string;
   is_own: boolean;
+  agent_type?: string;
+  project_path?: string | null;
+};
+
+type SearchResult = {
+  conversationId: string;
+  title: string;
+  matches: Array<{
+    messageId: string;
+    content: string;
+    role: string;
+    timestamp: number;
+  }>;
+  updatedAt: number;
+  authorName: string;
+  isOwn: boolean;
+  messageCount: number;
+};
+
+type FavoriteConversation = {
+  _id: string;
+  title?: string;
+  updated_at: number;
+  message_count: number;
   agent_type: string;
 };
 
@@ -34,15 +60,42 @@ function formatRelativeTime(timestamp: number): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-type ConversationItemProps = {
+function agentLabel(agentType: string): string {
+  switch (agentType) {
+    case "claude_code": return "Claude";
+    case "codex": return "Codex";
+    case "cursor": return "Cursor";
+    default: return "";
+  }
+}
+
+function agentColor(agentType: string): string {
+  switch (agentType) {
+    case "claude_code": return Theme.orange;
+    case "codex": return Theme.green;
+    case "cursor": return Theme.violet;
+    default: return Theme.textMuted0;
+  }
+}
+
+function projectName(path?: string): string | null {
+  if (!path) return null;
+  const parts = path.split('/');
+  return parts[parts.length - 1] || null;
+}
+
+function ConversationItem({ conversation, onPress, onLongPress }: {
   conversation: Conversation;
   onPress: () => void;
-};
+  onLongPress?: () => void;
+}) {
+  const project = projectName(conversation.project_path ?? undefined);
+  const agent = agentLabel(conversation.agent_type ?? "");
 
-function ConversationItem({ conversation, onPress }: ConversationItemProps) {
   return (
     <TouchableOpacity
       onPress={onPress}
+      onLongPress={onLongPress}
       style={styles.conversationItem}
       activeOpacity={0.6}
     >
@@ -51,18 +104,32 @@ function ConversationItem({ conversation, onPress }: ConversationItemProps) {
           <RNView style={styles.titleRow}>
             <RNView style={conversation.is_active ? styles.activeDot : styles.inactiveDot} />
             <RNText style={styles.conversationTitle} numberOfLines={1}>
-              {conversation.title}
+              {conversation.title || 'Untitled'}
             </RNText>
           </RNView>
           <RNText style={styles.messageCount}>
-            {conversation.message_count}
+            {conversation.message_count ?? 0}
           </RNText>
         </RNView>
 
         <RNView style={styles.conversationMeta}>
+          {agent ? (
+            <>
+              <RNText style={[styles.agentBadge, { color: agentColor(conversation.agent_type ?? "") }]}>
+                {agent}
+              </RNText>
+              <RNText style={styles.metaSeparator}>·</RNText>
+            </>
+          ) : null}
           <RNText style={styles.metaText}>
             {formatRelativeTime(conversation.updated_at)}
           </RNText>
+          {project && (
+            <>
+              <RNText style={styles.metaSeparator}>·</RNText>
+              <RNText style={styles.projectText} numberOfLines={1}>{project}</RNText>
+            </>
+          )}
           {!conversation.is_own && (
             <>
               <RNText style={styles.metaSeparator}>·</RNText>
@@ -75,29 +142,121 @@ function ConversationItem({ conversation, onPress }: ConversationItemProps) {
   );
 }
 
+function FavoriteItem({ item, onPress }: { item: FavoriteConversation; onPress: () => void }) {
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.favoriteChip} activeOpacity={0.7}>
+      <FontAwesome name="star" size={10} color={Theme.accent} style={{ marginRight: 5 }} />
+      <RNText style={styles.favoriteChipText} numberOfLines={1}>
+        {item.title || 'Untitled'}
+      </RNText>
+    </TouchableOpacity>
+  );
+}
+
+function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: () => void }) {
+  const firstMatch = result.matches[0];
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.searchResultItem} activeOpacity={0.6}>
+      <RNView style={styles.searchResultHeader}>
+        <RNText style={styles.searchResultTitle} numberOfLines={1}>{result.title}</RNText>
+        <RNText style={styles.searchResultCount}>{result.matches.length} match{result.matches.length !== 1 ? 'es' : ''}</RNText>
+      </RNView>
+      {firstMatch && (
+        <RNText style={styles.searchResultSnippet} numberOfLines={2}>
+          {firstMatch.content}
+        </RNText>
+      )}
+      <RNView style={styles.searchResultMeta}>
+        <RNText style={styles.metaText}>{formatRelativeTime(result.updatedAt)}</RNText>
+        <RNText style={styles.metaSeparator}>·</RNText>
+        <RNText style={styles.metaText}>{result.messageCount} msgs</RNText>
+        {!result.isOwn && (
+          <>
+            <RNText style={styles.metaSeparator}>·</RNText>
+            <RNText style={styles.authorText}>{result.authorName}</RNText>
+          </>
+        )}
+      </RNView>
+    </TouchableOpacity>
+  );
+}
+
 export default function SessionsScreen() {
   const [filter, setFilter] = useState<"my" | "team">("my");
   const [refreshing, setRefreshing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [showFavorites, setShowFavorites] = useState(true);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
+
+  const isSearching = debouncedQuery.length >= 2;
 
   const result = useQuery(api.conversations.listConversations, {
     filter,
     limit: 100,
   });
 
+  const searchResults = useQuery(
+    api.conversations.searchConversations,
+    isSearching ? { query: debouncedQuery, limit: 20 } : "skip"
+  );
+
+  const favorites = useQuery(api.conversations.listFavorites);
+  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
+
   const conversations = result?.conversations || [];
+  const hasFavorites = favorites && favorites.length > 0;
+
+  const handleSearchChange = useCallback((text: string) => {
+    setSearchQuery(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedQuery(text.trim());
+    }, 300);
+  }, []);
+
+  const clearSearch = useCallback(() => {
+    setSearchQuery('');
+    setDebouncedQuery('');
+  }, []);
+
+  const handleLongPress = useCallback(async (conversationId: string) => {
+    try {
+      await toggleFavorite({ conversation_id: conversationId as Id<"conversations"> });
+    } catch {}
+  }, [toggleFavorite]);
 
   const onRefresh = async () => {
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 1000);
   };
 
-  const renderItem = ({ item }: { item: Conversation }) => (
-    <ConversationItem
-      conversation={item}
-      onPress={() => router.push(`/session/${item._id}`)}
-    />
-  );
+  const renderSearchResults = () => {
+    if (!searchResults) return null;
+    const results = 'results' in searchResults ? searchResults.results : [];
+    if (results.length === 0) {
+      return (
+        <RNView style={styles.emptyContainer}>
+          <RNText style={styles.emptyText}>No results for "{debouncedQuery}"</RNText>
+        </RNView>
+      );
+    }
+    return (
+      <FlatList
+        data={results}
+        renderItem={({ item }) => (
+          <SearchResultItem
+            result={item}
+            onPress={() => router.push(`/session/${item.conversationId}`)}
+          />
+        )}
+        keyExtractor={(item) => item.conversationId}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+      />
+    );
+  };
 
   const renderEmpty = () => (
     <RNView style={styles.emptyContainer}>
@@ -111,42 +270,98 @@ export default function SessionsScreen() {
 
   return (
     <RNView style={styles.container}>
-      <RNView style={styles.tabs}>
-        <TouchableOpacity
-          style={[styles.tab, filter === "my" && styles.tabActive]}
-          onPress={() => setFilter("my")}
-          activeOpacity={0.7}
-        >
-          <RNText style={[styles.tabText, filter === "my" && styles.tabTextActive]}>
-            Sessions
-          </RNText>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, filter === "team" && styles.tabActive]}
-          onPress={() => setFilter("team")}
-          activeOpacity={0.7}
-        >
-          <RNText style={[styles.tabText, filter === "team" && styles.tabTextActive]}>
-            Team
-          </RNText>
-        </TouchableOpacity>
+      <RNView style={styles.searchContainer}>
+        <RNView style={styles.searchInputRow}>
+          <FontAwesome name="search" size={14} color={Theme.textMuted0} style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={handleSearchChange}
+            placeholder="Search sessions..."
+            placeholderTextColor={Theme.textMuted0}
+            returnKeyType="search"
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={clearSearch} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <FontAwesome name="times-circle" size={16} color={Theme.textMuted0} />
+            </TouchableOpacity>
+          )}
+        </RNView>
       </RNView>
 
-      <FlatList
-        data={conversations}
-        renderItem={renderItem}
-        keyExtractor={(item) => item._id}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={Theme.textMuted}
+      {isSearching ? (
+        renderSearchResults()
+      ) : (
+        <>
+          <RNView style={styles.tabs}>
+            <TouchableOpacity
+              style={[styles.tab, filter === "my" && styles.tabActive]}
+              onPress={() => setFilter("my")}
+              activeOpacity={0.7}
+            >
+              <RNText style={[styles.tabText, filter === "my" && styles.tabTextActive]}>
+                Sessions
+              </RNText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, filter === "team" && styles.tabActive]}
+              onPress={() => setFilter("team")}
+              activeOpacity={0.7}
+            >
+              <RNText style={[styles.tabText, filter === "team" && styles.tabTextActive]}>
+                Team
+              </RNText>
+            </TouchableOpacity>
+          </RNView>
+
+          <FlatList
+            data={conversations}
+            renderItem={({ item }) => (
+              <ConversationItem
+                conversation={item}
+                onPress={() => router.push(`/session/${item._id}`)}
+                onLongPress={() => handleLongPress(item._id)}
+              />
+            )}
+            keyExtractor={(item) => item._id}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={Theme.textMuted}
+              />
+            }
+            ListHeaderComponent={
+              hasFavorites && showFavorites && filter === "my" ? (
+                <RNView style={styles.favoritesSection}>
+                  <TouchableOpacity
+                    style={styles.favoritesHeader}
+                    onPress={() => setShowFavorites(!showFavorites)}
+                    activeOpacity={0.7}
+                  >
+                    <FontAwesome name="star" size={12} color={Theme.accent} />
+                    <RNText style={styles.favoritesTitle}>Favorites</RNText>
+                  </TouchableOpacity>
+                  <RNView style={styles.favoritesRow}>
+                    {favorites!.map((fav) => (
+                      <FavoriteItem
+                        key={fav._id}
+                        item={fav}
+                        onPress={() => router.push(`/session/${fav._id}`)}
+                      />
+                    ))}
+                  </RNView>
+                </RNView>
+              ) : null
+            }
+            ListEmptyComponent={result === undefined ? null : renderEmpty}
+            contentContainerStyle={conversations.length === 0 ? styles.emptyList : styles.listContent}
+            showsVerticalScrollIndicator={false}
           />
-        }
-        ListEmptyComponent={result === undefined ? null : renderEmpty}
-        contentContainerStyle={conversations.length === 0 ? styles.emptyList : styles.listContent}
-        showsVerticalScrollIndicator={false}
-      />
+        </>
+      )}
     </RNView>
   );
 }
@@ -155,6 +370,33 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
+  },
+  searchContainer: {
+    backgroundColor: Theme.bgAlt,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+  },
+  searchInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Theme.bg,
+    borderRadius: 10,
+    paddingHorizontal: Spacing.md,
+    height: 38,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
+  searchIcon: {
+    marginRight: Spacing.sm,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: Theme.text,
+    paddingVertical: 0,
   },
   tabs: {
     flexDirection: 'row',
@@ -180,6 +422,48 @@ const styles = StyleSheet.create({
   tabTextActive: {
     color: Theme.text,
     fontWeight: '600',
+  },
+  favoritesSection: {
+    backgroundColor: Theme.bgAlt,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.bgHighlight,
+  },
+  favoritesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.sm,
+    gap: 6,
+  },
+  favoritesTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  favoritesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  favoriteChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Theme.bg,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    maxWidth: 180,
+  },
+  favoriteChipText: {
+    fontSize: 13,
+    color: Theme.text,
+    fontWeight: '500',
+    flexShrink: 1,
   },
   listContent: {
     paddingBottom: Spacing.xl,
@@ -237,9 +521,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginLeft: 14,
   },
+  agentBadge: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
   metaText: {
     fontSize: 13,
     color: Theme.textDim,
+  },
+  projectText: {
+    fontSize: 13,
+    color: Theme.textMuted,
+    maxWidth: 100,
   },
   authorText: {
     fontSize: 13,
@@ -247,8 +541,43 @@ const styles = StyleSheet.create({
   },
   metaSeparator: {
     color: Theme.textMuted0,
-    marginHorizontal: 6,
+    marginHorizontal: 5,
     fontSize: 13,
+  },
+  searchResultItem: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.bgHighlight,
+    backgroundColor: Theme.bg,
+  },
+  searchResultHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  searchResultTitle: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: Theme.text,
+    flex: 1,
+    marginRight: Spacing.sm,
+  },
+  searchResultCount: {
+    fontSize: 11,
+    color: Theme.accent,
+    fontWeight: '600',
+  },
+  searchResultSnippet: {
+    fontSize: 13,
+    color: Theme.textMuted,
+    lineHeight: 18,
+    marginBottom: 6,
+  },
+  searchResultMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   emptyContainer: {
     flex: 1,
