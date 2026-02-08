@@ -827,23 +827,6 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
         </RNView>
       )}
 
-      {hasThinking && (
-        <TouchableOpacity
-          onPress={() => setThinkingExpanded(!thinkingExpanded)}
-          activeOpacity={0.7}
-          style={styles.thinkingToggle}
-        >
-          <RNView style={styles.thinkingHeader}>
-            <FontAwesome
-              name={thinkingExpanded ? 'chevron-down' : 'chevron-right'}
-              size={10}
-              color={Theme.textMuted0}
-            />
-            <RNText style={styles.thinkingLabel}>thinking...</RNText>
-          </RNView>
-        </TouchableOpacity>
-      )}
-      {hasThinking && thinkingExpanded && <ThinkingBlock content={message.thinking!} />}
 
       {hasImages && (
         <RNView style={styles.imagesContainer}>
@@ -1385,7 +1368,7 @@ const styles = StyleSheet.create({
   },
   messageList: {
     padding: 16,
-    paddingBottom: 8,
+    paddingBottom: 120,
   },
   permissionsContainer: {
     marginBottom: 16,
@@ -1411,9 +1394,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 4,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 6,
   },
   bubbleRole: {
     fontSize: 11,
@@ -1432,8 +1415,8 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.5)',
   },
   bubbleContent: {
-    paddingHorizontal: 12,
-    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
   },
   showMoreButton: {
     marginTop: 6,
@@ -1595,8 +1578,8 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   toolCallsContainer: {
-    paddingHorizontal: 12,
-    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
     gap: 4,
   },
   toolCallContainer: {
@@ -1901,8 +1884,8 @@ const styles = StyleSheet.create({
   },
   // Images
   imagesContainer: {
-    paddingHorizontal: 12,
-    paddingBottom: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
     gap: 8,
   },
   imageContainer: {
