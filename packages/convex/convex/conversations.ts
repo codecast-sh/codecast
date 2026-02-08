@@ -1083,20 +1083,17 @@ export const listConversations = query({
 
       const query = ctx.db
         .query("conversations")
-        .withIndex("by_user_updated", (q) =>
+        .withIndex("by_team_user_updated", (q) =>
           cursorTimestamp
-            ? q.eq("user_id", args.memberId!).lt("updated_at", cursorTimestamp)
-            : q.eq("user_id", args.memberId!)
+            ? q.eq("team_id", effectiveTeamId!).eq("user_id", args.memberId!).lt("updated_at", cursorTimestamp)
+            : q.eq("team_id", effectiveTeamId!).eq("user_id", args.memberId!)
         )
         .order("desc");
 
-      // Fetch extra to account for filtering, then filter by team, privacy, and project visibility
-      const fetched = await query.take((limit + 1) * 3);
+      // Filter by privacy and project visibility
+      const fetched = await query.take((limit + 1) * 2);
       conversations = fetched.filter((c) => {
-        if (!effectiveTeamId) return false;
         if (c.is_private !== false) return false;
-        if (!teamUserMap.has(c.user_id.toString())) return false;
-        if (!c.team_id || c.team_id.toString() !== effectiveTeamId.toString()) return false;
         const projectPath = c.git_root || c.project_path;
         return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
       }).slice(0, limit + 1);
@@ -1108,23 +1105,22 @@ export const listConversations = query({
         return visibility !== "hidden";
       });
 
-      const perMemberLimit = Math.max(10, Math.ceil((limit + 1) * 2 / Math.max(visibleMembers.length, 1)));
+      const perMemberLimit = Math.max(5, Math.ceil((limit + 1) * 2 / Math.max(visibleMembers.length, 1)));
 
       const memberConversations = await Promise.all(
         visibleMembers.map(async (member) => {
           const query = ctx.db
             .query("conversations")
-            .withIndex("by_user_updated", (q) =>
+            .withIndex("by_team_user_updated", (q) =>
               cursorTimestamp
-                ? q.eq("user_id", member.user_id).lt("updated_at", cursorTimestamp)
-                : q.eq("user_id", member.user_id)
+                ? q.eq("team_id", effectiveTeamId!).eq("user_id", member.user_id).lt("updated_at", cursorTimestamp)
+                : q.eq("team_id", effectiveTeamId!).eq("user_id", member.user_id)
             )
             .order("desc");
 
-          const convs = await query.take(perMemberLimit * 3);
+          const convs = await query.take(perMemberLimit * 2);
           return convs.filter((c) => {
             if (c.is_private !== false) return false;
-            if (!c.team_id || c.team_id.toString() !== effectiveTeamId!.toString()) return false;
             const projectPath = c.git_root || c.project_path;
             return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
           }).slice(0, perMemberLimit);
@@ -1146,27 +1142,13 @@ export const listConversations = query({
         const conversationUser = await ctx.db.get(c.user_id);
 
         type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
-        const isOwn = c.user_id.toString() === userId.toString();
 
-        // Team view: show content based on owner's visibility setting
-        // IMPORTANT: Same rendering for everyone (including owner) so team feed is consistent
-        // The `is_own` flag is returned separately for UI badges, but content rendering is uniform
         function getTeamVisibility(): VisibilityMode {
           if (args.filter !== "team") return "full";
-
-          // Check for per-conversation visibility override first
           if (c.team_visibility) {
             return c.team_visibility as VisibilityMode;
           }
-
-          // Fall back to owner's team membership visibility setting
           const ownerVisibility = membershipVisibilityMap.get(c.user_id.toString()) || "activity";
-
-          // Map team visibility levels to conversation visibility modes
-          // "hidden" -> don't show at all (handled earlier in filter)
-          // "activity" -> minimal (just activity line)
-          // "summary" -> summary (title + bullet summary)
-          // "full" -> full (complete conversation visible)
           const visibilityMapping: Record<string, VisibilityMode> = {
             "hidden": "minimal",
             "activity": "minimal",
@@ -1175,19 +1157,66 @@ export const listConversations = query({
             "detailed": "detailed",
             "minimal": "minimal",
           };
-
           return visibilityMapping[ownerVisibility] || "detailed";
         }
 
         const visibilityMode = getTeamVisibility();
+        const authorName = conversationUser?.name || conversationUser?.email?.split("@")[0] || "Unknown";
+        const authorAvatar = conversationUser?.image || conversationUser?.github_avatar_url || null;
+        const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
+        const durationMs = c.updated_at - c.started_at;
+        const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+        const isActive = c.status === "active" && c.updated_at > fiveMinutesAgo;
+        const title = c.title || `Session ${c.session_id.slice(0, 8)}`;
 
+        if (visibilityMode === "minimal") {
+          return {
+            _id: c._id,
+            user_id: c.user_id,
+            visibility_mode: visibilityMode,
+            author_name: authorName,
+            author_avatar: authorAvatar,
+            is_own: c.user_id.toString() === userId.toString(),
+            is_active: isActive,
+            updated_at: c.updated_at,
+            started_at: c.started_at,
+            duration_ms: durationMs,
+            activity_summary: `1 agent in ${projectName}`,
+            project_path: c.project_path || null,
+            git_root: c.git_root || null,
+          };
+        }
+
+        if (visibilityMode === "summary") {
+          return {
+            _id: c._id,
+            user_id: c.user_id,
+            visibility_mode: visibilityMode,
+            title,
+            subtitle: c.subtitle || null,
+            author_name: authorName,
+            author_avatar: authorAvatar,
+            is_own: c.user_id.toString() === userId.toString(),
+            is_active: isActive,
+            updated_at: c.updated_at,
+            started_at: c.started_at,
+            duration_ms: durationMs,
+            project_path: c.project_path || null,
+            git_root: c.git_root || null,
+            tool_names: [],
+            subagent_types: [],
+          };
+        }
+
+        // Only fetch messages for full/detailed visibility
+        const msgLimit = args.filter === "team" ? 3 : 5;
         const firstMessages = await ctx.db
           .query("messages")
           .withIndex("by_conversation_id", (q) =>
             q.eq("conversation_id", c._id)
           )
           .order("asc")
-          .take(5);
+          .take(msgLimit);
 
         const recentMessages = await ctx.db
           .query("messages")
@@ -1195,9 +1224,8 @@ export const listConversations = query({
             q.eq("conversation_id", c._id)
           )
           .order("desc")
-          .take(5);
+          .take(msgLimit);
 
-        // Combine and dedupe
         const messageIds = new Set<string>();
         const messages = [];
         for (const m of firstMessages) {
@@ -1235,7 +1263,6 @@ export const listConversations = query({
                   }
                 } catch {}
               }
-              // Extract TodoWrite todos
               if (tc.name === "TodoWrite" && tc.input) {
                 try {
                   const input = JSON.parse(tc.input);
@@ -1278,10 +1305,7 @@ export const listConversations = query({
         const firstUserMessage = messageAlternates.find(m => m.role === "user")?.content || "";
         const firstAssistantMessage = messageAlternates.find(m => m.role === "assistant")?.content || "";
 
-        const title = c.title || firstUserMessage || `Session ${c.session_id.slice(0, 8)}`;
-        const durationMs = c.updated_at - c.started_at;
-        const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-        const isActive = c.status === "active" && c.updated_at > fiveMinutesAgo;
+        const fullTitle = c.title || firstUserMessage || `Session ${c.session_id.slice(0, 8)}`;
 
         let parentConversationId: string | null = null;
         let parentTitle: string | null = null;
@@ -1299,56 +1323,11 @@ export const listConversations = query({
           }
         }
 
-        const authorName = conversationUser?.name || conversationUser?.email?.split("@")[0] || "Unknown";
-        const authorAvatar = conversationUser?.image || conversationUser?.github_avatar_url || null;
-        const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
-
-        if (visibilityMode === "summary") {
-          // Summary mode: show title + subtitle bullets, but not full message content
-          return {
-            _id: c._id,
-            user_id: c.user_id,
-            visibility_mode: visibilityMode,
-            title,
-            subtitle: c.subtitle || null,
-            author_name: authorName,
-            author_avatar: authorAvatar,
-            is_own: c.user_id.toString() === userId.toString(),
-            is_active: isActive,
-            updated_at: c.updated_at,
-            started_at: c.started_at,
-            duration_ms: durationMs,
-            project_path: c.project_path || null,
-            git_root: c.git_root || null,
-            tool_names: toolNames,
-            subagent_types: subagentTypes,
-          };
-        }
-
-        if (visibilityMode === "minimal") {
-          const agentCount = subagentTypes.length || 1;
-          return {
-            _id: c._id,
-            user_id: c.user_id,
-            visibility_mode: visibilityMode,
-            author_name: authorName,
-            author_avatar: authorAvatar,
-            is_own: c.user_id.toString() === userId.toString(),
-            is_active: isActive,
-            updated_at: c.updated_at,
-            started_at: c.started_at,
-            duration_ms: durationMs,
-            activity_summary: `${agentCount} agent${agentCount > 1 ? "s" : ""} in ${projectName}`,
-            project_path: c.project_path || null,
-            git_root: c.git_root || null,
-          };
-        }
-
         return {
           _id: c._id,
           user_id: c.user_id,
           visibility_mode: visibilityMode,
-          title,
+          title: fullTitle,
           subtitle: (visibilityMode === "full" || visibilityMode === "detailed") ? (c.subtitle || null) : null,
           first_user_message: visibilityMode === "full" ? firstUserMessage : null,
           first_assistant_message: visibilityMode === "full" ? firstAssistantMessage : null,
@@ -3340,11 +3319,11 @@ export const feedForCLI = query({
       const searchResults = await ctx.db
         .query("messages")
         .withSearchIndex("search_content", (q) => q.search("content", query))
-        .take(100);
+        .take(50);
       matchingConvIds = new Set(searchResults.map((m) => m.conversation_id.toString()));
 
       const matchedConvs = await Promise.all(
-        Array.from(matchingConvIds).slice(0, 50).map(async (convId) => {
+        Array.from(matchingConvIds).slice(0, 25).map(async (convId) => {
           try {
             return await ctx.db.get(convId as Id<"conversations">);
           } catch {
@@ -3362,8 +3341,9 @@ export const feedForCLI = query({
       );
     }
 
-    // Use by_user_updated index for proper recency ordering
-    const fetchLimit = projectPath ? 300 : Math.min(offset + limit + 50, 300);
+    const fetchLimit = query
+      ? Math.min(offset + limit + 20, 100)
+      : projectPath ? 200 : Math.min(offset + limit + 50, 200);
     let ownConversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_updated", (q) => q.eq("user_id", authUserId))
@@ -3391,7 +3371,7 @@ export const feedForCLI = query({
             .query("conversations")
             .withIndex("by_user_updated", (q) => q.eq("user_id", member._id))
             .order("desc")
-            .take(20);
+            .take(10);
           return convos.filter(c =>
             c.is_private === false &&
             c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString())
@@ -3464,7 +3444,7 @@ export const feedForCLI = query({
         .query("messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
         .order("asc")
-        .take(10);
+        .take(6);
 
       let firstUserMessage = "";
       for (const msg of messages) {
