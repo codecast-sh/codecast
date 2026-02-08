@@ -1050,6 +1050,10 @@ export default function SessionDetailScreen() {
   const [olderHasMore, setOlderHasMore] = useState(true);
   const [olderOldestTs, setOlderOldestTs] = useState<number | null>(null);
   const [initialScrollDone, setInitialScrollDone] = useState(false);
+  const [userScrolled, setUserScrolled] = useState(false);
+  const [isNearTop, setIsNearTop] = useState(true);
+  const isNearBottomRef = useRef(true);
+  const prevMessageCountRef = useRef(0);
 
   const conversation = useQuery(
     api.conversations.getAllMessages,
@@ -1085,7 +1089,20 @@ export default function SessionDetailScreen() {
     setOlderHasMore(true);
     setOlderOldestTs(null);
     setInitialScrollDone(false);
+    setUserScrolled(false);
+    prevMessageCountRef.current = 0;
   }, [id]);
+
+  // Auto-scroll when new messages arrive (if near bottom)
+  useEffect(() => {
+    const hasNewMessages = allMessages.length > prevMessageCountRef.current;
+    prevMessageCountRef.current = allMessages.length;
+
+    if (hasNewMessages && initialScrollDone && isNearBottomRef.current && allMessages.length > 0) {
+      flatListRef.current?.scrollToEnd({ animated: true });
+      setUserScrolled(false);
+    }
+  }, [allMessages.length, initialScrollDone]);
 
   const loadOlderMessages = useCallback(async () => {
     if (loadingOlder || !id) return;
@@ -1120,8 +1137,26 @@ export default function SessionDetailScreen() {
   }, [convex, id, loadingOlder, olderOldestTs, conversation?.oldest_timestamp]);
 
   const handleScroll = useCallback((event: any) => {
-    const { contentOffset } = event.nativeEvent;
-    if (contentOffset.y < 100 && hasMoreAbove && !loadingOlder && initialScrollDone) {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const scrollTop = contentOffset.y;
+    const scrollHeight = contentSize.height;
+    const clientHeight = layoutMeasurement.height;
+
+    // Check if near bottom (within 100px like web)
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    const isNearBottom = distanceFromBottom < 100;
+    isNearBottomRef.current = isNearBottom;
+
+    // Check if near top
+    setIsNearTop(scrollTop < 300);
+
+    // Set userScrolled if scrolling away from bottom
+    if (!isNearBottom) {
+      setUserScrolled(true);
+    }
+
+    // Load older messages when near top
+    if (scrollTop < 100 && hasMoreAbove && !loadingOlder && initialScrollDone) {
       loadOlderMessages();
     }
   }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone]);
@@ -1180,7 +1215,7 @@ export default function SessionDetailScreen() {
                   </RNText>
                 )}
                 <RNText style={styles.messageCountText}>
-                  {allMessages.length} msgs
+                  {conversation.message_count || allMessages.length} msgs
                 </RNText>
                 {isActive && (
                   <RNView style={styles.activeIndicator}>
@@ -1246,6 +1281,37 @@ export default function SessionDetailScreen() {
         />
 
         <MessageInput conversationId={id as Id<"conversations">} isActive={isActive} />
+
+        {/* Jump arrows */}
+        <RNView style={styles.jumpButtonsContainer}>
+          {(!isNearTop || hasMoreAbove) && (
+            <TouchableOpacity
+              onPress={() => {
+                if (hasMoreAbove) {
+                  flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+                } else {
+                  flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+                }
+              }}
+              style={styles.jumpButton}
+              activeOpacity={0.7}
+            >
+              <FontAwesome name="arrow-up" size={18} color={Theme.text} />
+            </TouchableOpacity>
+          )}
+          {userScrolled && (
+            <TouchableOpacity
+              onPress={() => {
+                flatListRef.current?.scrollToEnd({ animated: true });
+                setUserScrolled(false);
+              }}
+              style={styles.jumpButton}
+              activeOpacity={0.7}
+            >
+              <FontAwesome name="arrow-down" size={18} color={Theme.text} />
+            </TouchableOpacity>
+          )}
+        </RNView>
       </KeyboardAvoidingView>
     </>
   );
@@ -1932,5 +1998,29 @@ const styles = StyleSheet.create({
     paddingLeft: 12,
     borderLeftWidth: 2,
     borderLeftColor: Theme.accent + '60',
+  },
+  // Jump buttons
+  jumpButtonsContainer: {
+    position: 'absolute',
+    bottom: 90,
+    right: 16,
+    flexDirection: 'column',
+    gap: 10,
+    zIndex: 100,
+  },
+  jumpButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Theme.bgAlt,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.bgHighlight,
   },
 });
