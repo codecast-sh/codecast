@@ -44,18 +44,23 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request') => {
+  const handleToggleNotificationType = async (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_error') => {
     const currentPrefs = currentUser?.notification_preferences || {
       team_session_start: true,
       mention: true,
       permission_request: true,
+      session_idle: true,
+      session_error: true,
     };
 
     try {
+      const currentVal = (currentPrefs as any)[type] ?? true;
       await updateNotificationPreferences({
         notification_preferences: {
           ...currentPrefs,
-          [type]: !currentPrefs[type],
+          session_idle: currentPrefs.session_idle ?? true,
+          session_error: currentPrefs.session_error ?? true,
+          [type]: !currentVal,
         },
       });
     } catch (error) {
@@ -206,6 +211,40 @@ export default function SettingsScreen() {
                 <Switch
                   value={currentUser?.notification_preferences?.permission_request ?? true}
                   onValueChange={() => handleToggleNotificationType('permission_request')}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
+
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Session Idle</RNText>
+                  <RNText style={styles.settingDescription}>
+                    When a session is waiting for input
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={currentUser?.notification_preferences?.session_idle ?? true}
+                  onValueChange={() => handleToggleNotificationType('session_idle')}
+                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={Theme.bgHighlight}
+                />
+              </RNView>
+
+              <RNView style={styles.settingDivider} />
+              <RNView style={styles.setting}>
+                <RNView style={styles.settingText}>
+                  <RNText style={styles.settingLabel}>Session Errors</RNText>
+                  <RNText style={styles.settingDescription}>
+                    When a session encounters an error
+                  </RNText>
+                </RNView>
+                <Switch
+                  value={currentUser?.notification_preferences?.session_error ?? true}
+                  onValueChange={() => handleToggleNotificationType('session_error')}
                   trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
                   thumbColor="#fff"
                   ios_backgroundColor={Theme.bgHighlight}
