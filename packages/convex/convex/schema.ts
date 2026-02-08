@@ -26,6 +26,8 @@ export default defineSchema({
       team_session_start: v.boolean(),
       mention: v.boolean(),
       permission_request: v.boolean(),
+      session_idle: v.optional(v.boolean()),
+      session_error: v.optional(v.boolean()),
     })),
     pr_auto_comment_enabled: v.optional(v.boolean()),
     bio: v.optional(v.string()),
@@ -150,6 +152,7 @@ export default defineSchema({
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
+    .index("by_team_user_updated", ["team_id", "user_id", "updated_at"])
     .index("by_agent_type", ["agent_type"])
     .vectorIndex("by_title_embedding", {
       vectorField: "title_embedding",
@@ -533,9 +536,13 @@ export default defineSchema({
       v.literal("mention"),
       v.literal("comment_reply"),
       v.literal("conversation_comment"),
-      v.literal("team_invite")
+      v.literal("team_invite"),
+      v.literal("session_idle"),
+      v.literal("permission_request"),
+      v.literal("session_error"),
+      v.literal("team_session_start")
     ),
-    actor_user_id: v.id("users"),
+    actor_user_id: v.optional(v.id("users")),
     comment_id: v.optional(v.id("comments")),
     conversation_id: v.optional(v.id("conversations")),
     message: v.string(),
