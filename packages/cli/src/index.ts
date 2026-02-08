@@ -3103,19 +3103,14 @@ program
         return firstNonEmpty?.content;
       };
 
-      const queryWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length > 1);
-
       const rawConversations = (result.conversations || []).map((conv) => ({
         ...conv,
         preview: extractPreviewText(conv.preview),
         goal: extractGoalFromPreview(conv.preview),
       }));
 
-      const conversations = rawConversations.filter((conv) => {
-        if (queryWords.length <= 1) return true;
-        const searchText = [conv.title, conv.subtitle, conv.goal, conv.preview].filter(Boolean).join(" ").toLowerCase();
-        return queryWords.every((word: string) => searchText.includes(word));
-      }).slice(0, limit);
+      // Trust the feed endpoint's search results - it already filters by message content
+      const conversations = rawConversations.slice(0, limit);
 
       if (conversations.length === 0) {
         console.log(`No sessions found matching "${query}"`);

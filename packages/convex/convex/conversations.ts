@@ -3334,7 +3334,7 @@ export const feedForCLI = query({
         const results = await ctx.db
           .query("messages")
           .withSearchIndex("search_content", (q) => q.search("content", term))
-          .take(50);
+          .take(200);
         for (const msg of results) {
           const msgId = msg._id.toString();
           if (!allSearchResults.has(msgId)) {
@@ -3373,7 +3373,25 @@ export const feedForCLI = query({
         })
       );
       const validConvs = matchedConvs.filter((c): c is NonNullable<typeof c> => c !== null);
-      queryMatchedOwnConversations = validConvs.filter(c => c.user_id.toString() === authUserId.toString());
+
+      // Filter own conversations by project path if specified
+      queryMatchedOwnConversations = validConvs.filter(c => {
+        if (c.user_id.toString() !== authUserId.toString()) return false;
+
+        // Apply project path filter for own conversations
+        if (projectPath) {
+          const convPath = c.project_path || "";
+          const convGitRoot = c.git_root || "";
+          const isPathMatch = convPath === projectPath ||
+            (convPath && convPath.startsWith(projectPath + "/")) ||
+            convGitRoot === projectPath ||
+            (convGitRoot && convGitRoot.startsWith(projectPath + "/"));
+          if (!isPathMatch) return false;
+        }
+
+        return true;
+      });
+
       const teamUserIdSet = new Set(teamUsers.filter(u => u._id.toString() !== authUserId.toString()).map(u => u._id.toString()));
       queryMatchedTeamConversations = validConvs.filter(c =>
         teamUserIdSet.has(c.user_id.toString()) &&
@@ -3430,20 +3448,45 @@ export const feedForCLI = query({
       }
     }
 
-    const isOwnConversation = (c: { user_id: Id<"users"> }) => c.user_id.toString() === authUserId.toString();
+    const isOwnConversation = (c: typeof ownConversations[number]) => c.user_id.toString() === authUserId.toString();
 
     const allConversations = [...ownConversations, ...teamConversations]
-      .filter((c) => {
+      .filter((c): c is typeof ownConversations[number] => {
         if (filterUserId && c.user_id.toString() !== filterUserId) return false;
-        // Path filter only for own conversations - team members have different absolute paths
-        if (projectPath && !filterUserId && isOwnConversation(c)) {
+
+        // Path filter: when in a specific project, filter to same git repository
+        if (projectPath && !filterUserId) {
           const convPath = c.project_path || "";
           const convGitRoot = c.git_root || "";
-          const isPathMatch = convPath === projectPath ||
-            (convPath && convPath.startsWith(projectPath + "/")) ||
-            convGitRoot === projectPath ||
-            (convGitRoot && convGitRoot.startsWith(projectPath + "/"));
-          if (!isPathMatch) return false;
+
+          if (isOwnConversation(c)) {
+            // Own conversations: match full path or git root
+            const isPathMatch = convPath === projectPath ||
+              (convPath && convPath.startsWith(projectPath + "/")) ||
+              convGitRoot === projectPath ||
+              (convGitRoot && convGitRoot.startsWith(projectPath + "/"));
+            if (!isPathMatch) return false;
+          } else {
+            // Team conversations: filter to same git repo (different home dirs, but same repo name)
+            // Extract repo name from paths like ~/src/codecast or /Users/jason/code/union-mobile/outreach
+            const getRepoName = (path: string) => {
+              const parts = path.split("/");
+              // Find the last meaningful directory (not ~ or empty)
+              for (let i = parts.length - 1; i >= 0; i--) {
+                if (parts[i] && parts[i] !== "~" && !parts[i].startsWith(".")) {
+                  return parts[i];
+                }
+              }
+              return "";
+            };
+
+            const projectRepo = getRepoName(projectPath);
+            const convRepo = getRepoName(convGitRoot || convPath);
+
+            if (!projectRepo || !convRepo || projectRepo !== convRepo) {
+              return false;
+            }
+          }
         }
         if (startTime && c.updated_at < startTime) return false;
         if (endTime && c.updated_at > endTime) return false;

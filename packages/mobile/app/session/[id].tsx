@@ -278,7 +278,20 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
   if (name === 'Edit' || name === 'Write') return { icon: 'pencil', color: Theme.accent };
   if (name === 'WebSearch' || name === 'WebFetch') return { icon: 'globe', color: Theme.blue };
   if (name === 'Task') return { icon: 'code-fork', color: Theme.violet };
-  if (name.startsWith('mcp__')) return { icon: 'plug', color: Theme.magenta };
+
+  if (name.startsWith('mcp__')) {
+    if (name.includes('computer') || name.includes('screenshot')) {
+      return { icon: 'desktop', color: Theme.cyan };
+    }
+    if (name.includes('chrome') || name.includes('navigate') || name.includes('read_page')) {
+      return { icon: 'chrome', color: Theme.blue };
+    }
+    if (name.includes('find') || name.includes('form')) {
+      return { icon: 'search', color: Theme.accent };
+    }
+    return { icon: 'plug', color: Theme.magenta };
+  }
+
   return { icon: 'cog', color: Theme.textMuted };
 }
 
@@ -307,6 +320,15 @@ function toolSummary(tc: ToolCall): string {
     if (tc.name === 'SendMessage') return input.summary?.slice(0, 40) || 'message';
     if (tc.name === 'TeamCreate') return input.team_name || 'team';
     if (tc.name === 'Skill') return `/${input.skill}`;
+
+    if (tc.name.startsWith('mcp__')) {
+      const action = input.action || input.url || input.query || input.text || '';
+      if (typeof action === 'string' && action) {
+        return action.slice(0, 50);
+      }
+      const parts = tc.name.split('__');
+      return parts[parts.length - 1] || '';
+    }
   } catch {}
   return '';
 }
@@ -660,11 +682,18 @@ function SystemMessage({ message }: { message: Message }) {
   );
 }
 
+function assistantLabel(agentType?: string): string {
+  if (agentType === 'codex') return 'Codex';
+  if (agentType === 'cursor') return 'Cursor';
+  return 'Claude';
+}
+
 const CONTENT_TRUNCATE_LENGTH = 800;
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({ message, agentType, showHeader = true }: { message: Message; agentType?: string; showHeader?: boolean }) {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [contentExpanded, setContentExpanded] = useState(false);
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
 
   if (message.role === 'system') {
     return <SystemMessage message={message} />;
@@ -697,14 +726,32 @@ function MessageBubble({ message }: { message: Message }) {
 
   return (
     <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-      <RNView style={styles.bubbleHeader}>
-        <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
-          {isUser ? 'You' : 'Assistant'}
-        </RNText>
-        <RNText style={styles.bubbleTime}>{formatTimestamp(message.timestamp)}</RNText>
-      </RNView>
+      {showHeader && (
+        <RNView style={styles.bubbleHeader}>
+          <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
+            {isUser ? 'You' : assistantLabel(agentType)}
+          </RNText>
+          <RNText style={styles.bubbleTime}>{formatTimestamp(message.timestamp)}</RNText>
+        </RNView>
+      )}
 
-      {hasThinking && <ThinkingBlock content={message.thinking!} />}
+      {hasThinking && (
+        <TouchableOpacity
+          onPress={() => setThinkingExpanded(!thinkingExpanded)}
+          activeOpacity={0.7}
+          style={styles.thinkingToggle}
+        >
+          <RNView style={styles.thinkingHeader}>
+            <FontAwesome
+              name={thinkingExpanded ? 'chevron-down' : 'chevron-right'}
+              size={10}
+              color={Theme.textMuted0}
+            />
+            <RNText style={styles.thinkingLabel}>thinking...</RNText>
+          </RNView>
+        </TouchableOpacity>
+      )}
+      {hasThinking && thinkingExpanded && <ThinkingBlock content={message.thinking!} />}
 
       {hasImages && (
         <RNView style={styles.imagesContainer}>
@@ -1070,7 +1117,17 @@ export default function SessionDetailScreen() {
         <FlatList
           ref={flatListRef}
           data={allMessages}
-          renderItem={({ item }) => <MessageBubble message={item} />}
+          renderItem={({ item, index }) => {
+            const prevMessage = index > 0 ? allMessages[index - 1] : null;
+            const showHeader = !prevMessage || prevMessage.role !== item.role;
+            return (
+              <MessageBubble
+                message={item}
+                agentType={conversation.agent_type}
+                showHeader={showHeader}
+              />
+            );
+          }}
           keyExtractor={(item) => item._id}
           contentContainerStyle={styles.messageList}
           showsVerticalScrollIndicator={false}
@@ -1357,6 +1414,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     color: '#93a1a1',
+  },
+  thinkingToggle: {
+    marginHorizontal: 12,
+    marginBottom: 4,
+  },
+  thinkingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  thinkingLabel: {
+    fontSize: 11,
+    fontStyle: 'italic',
+    color: Theme.textMuted0,
+    opacity: 0.7,
   },
   thinkingBlock: {
     marginHorizontal: 12,
