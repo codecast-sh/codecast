@@ -552,6 +552,29 @@ export class SyncService {
     }
   }
 
+  async createSessionNotification(params: {
+    conversation_id: string;
+    type: "session_idle" | "permission_request" | "session_error";
+    title: string;
+    message: string;
+  }): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.client.mutation(
+        "notifications:createSessionNotification" as any,
+        {
+          api_token: this.apiToken,
+          conversation_id: params.conversation_id,
+          type: params.type,
+          title: params.title,
+          message: params.message,
+        }
+      );
+    } catch {
+      // Best-effort notification
+    }
+  }
+
   async getMessageCountsForReconciliation(sessionIds: string[]): Promise<Array<{
     session_id: string;
     conversation_id: string;
