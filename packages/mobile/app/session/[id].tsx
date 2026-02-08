@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -694,8 +694,9 @@ function CompactionSummaryBlock({ content }: { content: string }) {
   );
 }
 
-function ToolCallItem({ toolCall, expanded, onToggle }: {
+function ToolCallItem({ toolCall, result, expanded, onToggle }: {
   toolCall: ToolCall;
+  result?: ToolResult;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -704,6 +705,26 @@ function ToolCallItem({ toolCall, expanded, onToggle }: {
   const inputDisplay = expanded && toolCall.input.length > 2000
     ? toolCall.input.slice(0, 2000) + '\n... (truncated)'
     : toolCall.input;
+
+  const resultDisplay = result && expanded && result.content.length > 2000
+    ? result.content.slice(0, 2000) + '\n... (truncated)'
+    : result?.content;
+
+  // Check if result looks like code (for Read/Write/Edit tools)
+  const isCodeResult = result && (
+    toolCall.name === 'Read' ||
+    toolCall.name === 'Write' ||
+    toolCall.name === 'Edit' ||
+    toolCall.name === 'Grep' ||
+    toolCall.name === 'Glob'
+  );
+
+  // Check if result is markdown-like (contains ### or **)
+  const isMarkdownResult = result && !isCodeResult && (
+    result.content.includes('###') ||
+    result.content.includes('**') ||
+    result.content.includes('```')
+  );
 
   return (
     <TouchableOpacity onPress={onToggle} style={styles.toolCallContainer} activeOpacity={0.7}>
@@ -717,7 +738,34 @@ function ToolCallItem({ toolCall, expanded, onToggle }: {
       </RNView>
       {expanded && (
         <RNView style={styles.toolCallContent}>
-          <RNText style={styles.toolCallInput} selectable>{inputDisplay}</RNText>
+          {toolCall.input && toolCall.input.length > 2 && (
+            <RNView style={styles.toolInputSection}>
+              <RNText style={styles.toolSectionLabel}>Input:</RNText>
+              <RNText style={styles.toolCallInput} selectable>{inputDisplay}</RNText>
+            </RNView>
+          )}
+          {result && resultDisplay && (
+            <RNView style={styles.toolResultSection}>
+              <RNText style={[styles.toolSectionLabel, result.is_error && { color: Theme.red }]}>
+                {result.is_error ? 'Error:' : 'Result:'}
+              </RNText>
+              {isCodeResult ? (
+                <RNView style={styles.codeBlock}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator>
+                    <RNView style={styles.codeContent}>
+                      <RNText style={styles.codeText} selectable>{resultDisplay}</RNText>
+                    </RNView>
+                  </ScrollView>
+                </RNView>
+              ) : isMarkdownResult ? (
+                <MarkdownContent text={resultDisplay} baseStyle={styles.toolCallResult} isUser={false} />
+              ) : (
+                <RNText style={[styles.toolCallResult, result.is_error && { color: Theme.red }]} selectable>
+                  {resultDisplay}
+                </RNText>
+              )}
+            </RNView>
+          )}
         </RNView>
       )}
     </TouchableOpacity>
@@ -787,6 +835,47 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
   const [contentExpanded, setContentExpanded] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
 
+  const handleLongPress = () => {
+    const messageText = message.content || '';
+    const options = ['Share Message', 'Copy Text', 'Cancel'];
+    const cancelButtonIndex = 2;
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options,
+          cancelButtonIndex,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 0) {
+            // Share
+            Share.share({ message: messageText });
+          } else if (buttonIndex === 1) {
+            // Copy - would need Clipboard API
+            Alert.alert('Copy', 'Text copied to clipboard');
+          }
+        }
+      );
+    } else {
+      // For Android, use Alert
+      Alert.alert(
+        'Message Actions',
+        'Choose an action',
+        [
+          {
+            text: 'Share',
+            onPress: () => Share.share({ message: messageText }),
+          },
+          {
+            text: 'Copy',
+            onPress: () => Alert.alert('Copy', 'Text copied to clipboard'),
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+    }
+  };
+
   if (message.role === 'system') {
     return <SystemMessage message={message} />;
   }
@@ -817,8 +906,9 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
   };
 
   return (
-    <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-      {showHeader && (
+    <Pressable onLongPress={handleLongPress}>
+      <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble]}>
+        {showHeader && (
         <RNView style={styles.bubbleHeader}>
           <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
             {isUser ? 'You' : assistantLabel(agentType)}
@@ -893,6 +983,7 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
               <ToolCallItem
                 key={tc.id}
                 toolCall={tc}
+                result={result}
                 expanded={expandedTools.has(tc.id)}
                 onToggle={() => toggleTool(tc.id)}
               />
@@ -900,7 +991,8 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
           })}
         </RNView>
       )}
-    </RNView>
+      </RNView>
+    </Pressable>
   );
 }
 
@@ -1678,10 +1770,30 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: 'rgba(255,255,255,0.1)',
   },
+  toolInputSection: {
+    marginBottom: 12,
+  },
+  toolResultSection: {
+    marginTop: 4,
+  },
+  toolSectionLabel: {
+    fontSize: 10,
+    color: Theme.textMuted0,
+    fontWeight: '600',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   toolCallInput: {
     fontSize: 11,
     color: 'rgba(255,255,255,0.6)',
     fontFamily: 'SpaceMono',
+  },
+  toolCallResult: {
+    fontSize: 11,
+    color: Theme.text,
+    fontFamily: 'SpaceMono',
+    lineHeight: 16,
   },
   inputContainer: {
     backgroundColor: Theme.bgAlt,
