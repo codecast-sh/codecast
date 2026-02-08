@@ -1250,7 +1250,7 @@ function TaskListBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }
   );
 }
 
-function TaskCreateUpdateBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+function TaskCreateUpdateBlock({ tool, result, taskSubjectMap }: { tool: ToolCall; result?: ToolResult; taskSubjectMap?: Record<string, string> }) {
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
@@ -1262,9 +1262,32 @@ function TaskCreateUpdateBlock({ tool, result }: { tool: ToolCall; result?: Tool
   const activeForm = parsedInput.activeForm;
 
   let resultId = "";
-  if (isCreate && result) {
-    const idMatch = result.content.match(/#?(\d+)/);
+  if (result) {
+    const idMatch = result.content.match(/Task #(\d+)/);
     if (idMatch) resultId = idMatch[1];
+  }
+
+  const resolvedSubject = subject || (taskId && taskSubjectMap?.[taskId]);
+
+  if (!isCreate && resolvedSubject) {
+    return (
+      <div className="my-0.5">
+        <div className="flex items-center gap-1.5 text-xs">
+          <span className="text-sol-text-muted">{String(resolvedSubject).slice(0, 60)}</span>
+          {status && (
+            <span className={`px-1 py-0.5 rounded text-[10px] font-mono ${
+              status === "completed" ? "bg-emerald-500/15 text-emerald-400" :
+              status === "in_progress" ? "bg-amber-500/15 text-amber-400" :
+              status === "deleted" ? "bg-red-500/15 text-red-400" :
+              "bg-gray-500/15 text-gray-400"
+            }`}>
+              {status}
+            </span>
+          )}
+          {owner && <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -1291,8 +1314,6 @@ function TaskCreateUpdateBlock({ tool, result }: { tool: ToolCall; result?: Tool
               </span>
             )}
             {owner && <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
-            {parsedInput.addBlockedBy && <span className="text-sol-text-dim">blocked by {parsedInput.addBlockedBy.map((id: string) => `#${id}`).join(", ")}</span>}
-            {parsedInput.addBlocks && <span className="text-sol-text-dim">blocks {parsedInput.addBlocks.map((id: string) => `#${id}`).join(", ")}</span>}
           </>
         )}
       </div>
@@ -2031,6 +2052,7 @@ function AssistantBlock({
   onToggleShareSelection,
   onStartShareSelection,
   agentType,
+  taskSubjectMap,
 }: {
   content?: string;
   timestamp: number;
@@ -2057,6 +2079,7 @@ function AssistantBlock({
   onToggleShareSelection?: () => void;
   onStartShareSelection?: (messageId: string) => void;
   agentType?: string;
+  taskSubjectMap?: Record<string, string>;
 }) {
   const COLLAPSED_LINES = 2;
   const CONTENT_MAX_HEIGHT = 1800;
@@ -2272,7 +2295,7 @@ function AssistantBlock({
           ) : tc.name === "TaskList" ? (
             <TaskListBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
-            <TaskCreateUpdateBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+            <TaskCreateUpdateBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} taskSubjectMap={taskSubjectMap} />
           ) : tc.name === "SendMessage" ? (
             <SendMessageBlock key={tc.id} tool={tc} />
           ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
@@ -2799,7 +2822,7 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
   };
 
   return (
-    <div className="sticky bottom-0 z-30 pointer-events-none">
+    <div className="sticky bottom-0 z-30 pointer-events-none mt-auto">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         {isInactive && (
@@ -3487,6 +3510,34 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [conversation?.messages]);
 
+  const taskSubjectMap = useMemo(() => {
+    const createInputs: Record<string, string> = {};
+    const idMap: Record<string, string> = {};
+    if (conversation?.messages) {
+      for (const msg of conversation.messages) {
+        if (msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            if (tc.name === "TaskCreate") {
+              try {
+                const inp = JSON.parse(tc.input);
+                if (inp.subject) createInputs[tc.id] = String(inp.subject);
+              } catch {}
+            }
+          }
+        }
+        if (msg.role === "user" && msg.tool_results) {
+          for (const tr of msg.tool_results) {
+            if (createInputs[tr.tool_use_id]) {
+              const m = tr.content.match(/Task #(\d+)/);
+              if (m) idMap[m[1]] = createInputs[tr.tool_use_id];
+            }
+          }
+        }
+      }
+    }
+    return idMap;
+  }, [conversation?.messages]);
+
   const renderItem = (item: TimelineItem, index: number) => {
     if (item.type === 'commit') {
       const commit = item.data;
@@ -3705,6 +3756,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           onToggleShareSelection={() => handleToggleMessageSelection(msg._id)}
           onStartShareSelection={handleStartShareSelection}
           agentType={conversation?.agent_type}
+          taskSubjectMap={taskSubjectMap}
         />
       );
     }
@@ -3950,7 +4002,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         {!conversation ? (
           <ConversationSkeleton />
         ) : timeline.length === 0 ? (
-          <div className="text-sol-text-dim text-center py-8 text-sm">
+          <div className="flex-1 flex items-center justify-center text-sol-text-dim text-sm">
             No messages in this conversation
           </div>
         ) : (
@@ -4153,12 +4205,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
           </div>
           {(conversation?.message_count ?? 0) > 150 && (!isNearTop || userScrolled || hasMoreAbove || hasMoreBelow) && (
-            <div className="w-2 h-16 rounded-full bg-sol-border overflow-hidden relative">
-              <div
-                ref={scrollProgressRef}
-                className="absolute top-0 w-full rounded-full bg-sol-cyan"
-                style={{ height: '0%', transition: 'height 0.15s ease-out' }}
-              />
+            <div className="w-2 h-16 rounded-full relative shadow-[0_0_4px_1px_rgba(0,0,0,0.12)]">
+              <div className="w-full h-full rounded-full bg-black/[0.06] overflow-hidden">
+                <div
+                  ref={scrollProgressRef}
+                  className="w-full rounded-full bg-sol-cyan"
+                  style={{ height: '0%', transition: 'height 0.15s ease-out' }}
+                />
+              </div>
             </div>
           )}
         </div>
