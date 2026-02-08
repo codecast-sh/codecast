@@ -11,7 +11,9 @@
     "build:preview": "eas build --profile preview --platform ios",
     "build:prod": "eas build --profile production --platform ios",
     "submit:ios": "eas submit --platform ios --latest",
-    "release:ios": "eas build --profile production --platform ios --auto-submit"
+    "release:ios": "eas build --profile production --platform ios --auto-submit",
+    "update:preview": "eas update --branch preview",
+    "update:production": "eas update --branch production"
   },
   "dependencies": {
     "@convex-dev/auth": "^0.0.90",
@@ -33,6 +35,7 @@
     "expo-secure-store": "^15.0.8",
     "expo-splash-screen": "~31.0.12",
     "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.16",
     "expo-web-browser": "~15.0.10",
     "react": "19.1.0",
     "react-dom": "19.1.0",

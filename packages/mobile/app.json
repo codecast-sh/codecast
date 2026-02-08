@@ -3,6 +3,9 @@
     "name": "Codecast",
     "slug": "codecast",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "codecast",
@@ -43,8 +46,12 @@
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
+    "updates": {
+      "url": "https://u.expo.dev/a2698c27-7e77-4406-aae2-063844898e60"
+    },
     "plugins": [
       "expo-router",
+      "expo-updates",
       "expo-secure-store",
       "expo-local-authentication",
       "expo-apple-authentication",
