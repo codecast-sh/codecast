@@ -543,6 +543,98 @@ function SkillCard({ tool }: { tool: ToolCall }) {
   );
 }
 
+function TaskCreateUpdateBlock({ tool }: { tool: ToolCall }) {
+  let parsedInput: Record<string, any> = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  const isCreate = tool.name === 'TaskCreate';
+  const subject = parsedInput.subject;
+  const taskId = parsedInput.taskId;
+  const status = parsedInput.status;
+  const owner = parsedInput.owner;
+
+  const statusColors: Record<string, string> = {
+    completed: Theme.green,
+    in_progress: Theme.accent,
+    deleted: Theme.red,
+    pending: Theme.textMuted0,
+  };
+
+  return (
+    <RNView style={styles.taskOpBlock}>
+      <RNText style={[styles.taskOpName, { color: Theme.green }]}>{tool.name}</RNText>
+      {isCreate && subject && (
+        <RNText style={styles.taskOpText} numberOfLines={1}>{subject}</RNText>
+      )}
+      {!isCreate && taskId && (
+        <RNText style={styles.taskOpId}>#{taskId}</RNText>
+      )}
+      {status && (
+        <RNView style={[styles.taskOpBadge, { backgroundColor: statusColors[status] + '20', borderColor: statusColors[status] + '40' }]}>
+          <RNText style={[styles.taskOpBadgeText, { color: statusColors[status] }]}>{status}</RNText>
+        </RNView>
+      )}
+      {owner && (
+        <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.blue + '20', borderColor: Theme.blue + '40' }]}>
+          <RNText style={[styles.taskOpBadgeText, { color: Theme.blue }]}>@{owner}</RNText>
+        </RNView>
+      )}
+    </RNView>
+  );
+}
+
+function SendMessageBlock({ tool }: { tool: ToolCall }) {
+  let parsedInput: Record<string, any> = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  const type = parsedInput.type || 'message';
+  const recipient = parsedInput.recipient;
+  const summary = parsedInput.summary;
+
+  return (
+    <RNView style={styles.taskOpBlock}>
+      <RNText style={[styles.taskOpName, { color: Theme.accent }]}>SendMessage</RNText>
+      {type === 'broadcast' && (
+        <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.red + '20', borderColor: Theme.red + '40' }]}>
+          <RNText style={[styles.taskOpBadgeText, { color: Theme.red }]}>broadcast</RNText>
+        </RNView>
+      )}
+      {type === 'shutdown_request' && (
+        <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.red + '20', borderColor: Theme.red + '40' }]}>
+          <RNText style={[styles.taskOpBadgeText, { color: Theme.red }]}>shutdown</RNText>
+        </RNView>
+      )}
+      {recipient && (
+        <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.accent + '20', borderColor: Theme.accent + '40' }]}>
+          <RNText style={[styles.taskOpBadgeText, { color: Theme.accent }]}>@{recipient}</RNText>
+        </RNView>
+      )}
+      {summary && (
+        <RNText style={styles.taskOpText} numberOfLines={1}>{summary}</RNText>
+      )}
+    </RNView>
+  );
+}
+
+function TeamCreateBlock({ tool }: { tool: ToolCall }) {
+  let parsedInput: Record<string, any> = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  return (
+    <RNView style={styles.taskOpBlock}>
+      <RNText style={[styles.taskOpName, { color: Theme.cyan }]}>{tool.name}</RNText>
+      {parsedInput.team_name && (
+        <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.cyan + '20', borderColor: Theme.cyan + '40' }]}>
+          <RNText style={[styles.taskOpBadgeText, { color: Theme.cyan }]}>{parsedInput.team_name}</RNText>
+        </RNView>
+      )}
+      {parsedInput.description && (
+        <RNText style={styles.taskOpText} numberOfLines={1}>{parsedInput.description}</RNText>
+      )}
+    </RNView>
+  );
+}
+
 function ImageBlock({ image }: { image: ImageData }) {
   const storageUrl = useQuery(
     api.images.getImageUrl,
@@ -799,6 +891,15 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
             }
             if (tc.name === 'TaskList' && result) {
               return <TaskListBlock key={tc.id} result={result} />;
+            }
+            if (tc.name === 'TaskCreate' || tc.name === 'TaskUpdate') {
+              return <TaskCreateUpdateBlock key={tc.id} tool={tc} />;
+            }
+            if (tc.name === 'SendMessage') {
+              return <SendMessageBlock key={tc.id} tool={tc} />;
+            }
+            if (tc.name === 'TeamCreate') {
+              return <TeamCreateBlock key={tc.id} tool={tc} />;
             }
             if (tc.name === 'Skill') {
               return <SkillCard key={tc.id} tool={tc} />;
@@ -1762,6 +1863,41 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Theme.violet,
     fontFamily: 'SpaceMono',
+  },
+  // Task operations (TaskCreate/Update, SendMessage, TeamCreate)
+  taskOpBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginVertical: 2,
+  },
+  taskOpName: {
+    fontSize: 11,
+    fontWeight: '600',
+    fontFamily: 'SpaceMono',
+  },
+  taskOpId: {
+    fontSize: 10,
+    color: Theme.textMuted0,
+    fontFamily: 'SpaceMono',
+  },
+  taskOpBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  taskOpBadgeText: {
+    fontSize: 9,
+    fontWeight: '600',
+    fontFamily: 'SpaceMono',
+  },
+  taskOpText: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    flex: 1,
   },
   // Images
   imagesContainer: {

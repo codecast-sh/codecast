@@ -2261,7 +2261,7 @@ export const searchForCLI = query({
       if (results.length >= limit) break;
 
       const conv = await ctx.db.get(messages[0].conversation_id);
-      if (!conv) continue;
+      if (!conv || conv._id.tableName !== "conversations") continue;
 
       // Check access - user can see their own conversations, or non-private
       // conversations from team members whose team_id matches the effective team
