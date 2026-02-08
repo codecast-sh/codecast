@@ -5,6 +5,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { PermissionCard } from '@/components/PermissionCard';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -1011,6 +1012,7 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
 
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const retryMessage = useMutation(api.pendingMessages.retryMessage);
@@ -1021,17 +1023,47 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
     (msg) => msg.conversation_id === conversationId
   ) || [];
 
+  const pickImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please grant photo library access to attach images');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        quality: 0.8,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets) {
+        const uris = result.assets.map(asset => asset.uri);
+        setSelectedImages(prev => [...prev, ...uris]);
+      }
+    } catch (err) {
+      console.error('Image picker error:', err);
+    }
+  };
+
+  const removeImage = (uri: string) => {
+    setSelectedImages(prev => prev.filter(img => img !== uri));
+  };
+
   const handleSend = async () => {
     const trimmedMessage = message.trim();
-    if (!trimmedMessage || isSending) return;
+    if ((!trimmedMessage && selectedImages.length === 0) || isSending) return;
 
     setIsSending(true);
     setError(null);
 
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      await sendMessage({ conversation_id: conversationId, content: trimmedMessage });
+      // TODO: Update sendMessage to support images
+      await sendMessage({ conversation_id: conversationId, content: trimmedMessage || '📷' });
       setMessage('');
+      setSelectedImages([]);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
@@ -1056,7 +1088,31 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
           </TouchableOpacity>
         </RNView>
       )}
+      {selectedImages.length > 0 && (
+        <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false}>
+          {selectedImages.map((uri, index) => (
+            <RNView key={index} style={styles.imagePreview}>
+              <Image source={{ uri }} style={styles.previewImage} />
+              <TouchableOpacity
+                style={styles.removeImageButton}
+                onPress={() => removeImage(uri)}
+                activeOpacity={0.7}
+              >
+                <FontAwesome name="times-circle" size={20} color={Theme.red} />
+              </TouchableOpacity>
+            </RNView>
+          ))}
+        </ScrollView>
+      )}
       <RNView style={styles.inputRow}>
+        <TouchableOpacity
+          style={styles.imageButton}
+          onPress={pickImage}
+          disabled={isSending}
+          activeOpacity={0.7}
+        >
+          <FontAwesome name="image" size={20} color={Theme.textMuted} />
+        </TouchableOpacity>
         <TextInput
           style={styles.textInput}
           value={message}
@@ -1069,9 +1125,9 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
           blurOnSubmit={false}
         />
         <TouchableOpacity
-          style={[styles.sendButton, (!message.trim() || isSending) && styles.sendButtonDisabled]}
+          style={[styles.sendButton, ((!message.trim() && selectedImages.length === 0) || isSending) && styles.sendButtonDisabled]}
           onPress={handleSend}
-          disabled={!message.trim() || isSending}
+          disabled={(!message.trim() && selectedImages.length === 0) || isSending}
           activeOpacity={0.7}
         >
           <FontAwesome name="arrow-up" size={16} color="#fff" />
@@ -1827,6 +1883,33 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     paddingLeft: 12,
+  },
+  imagePreviewContainer: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    maxHeight: 120,
+  },
+  imagePreview: {
+    position: 'relative',
+    marginRight: 8,
+  },
+  previewImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    backgroundColor: Theme.bg,
+    borderRadius: 10,
+  },
+  imageButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   inputRow: {
     flexDirection: 'row',
