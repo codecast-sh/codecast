@@ -2662,6 +2662,271 @@ program
     }
   });
 
+interface LiveProcess {
+  pid: number;
+  tty: string;
+  sessionId: string;
+  agentType: "claude_code" | "codex";
+  tmuxSession: string | null;
+  label: string;
+  uptime: string;
+}
+
+function normalizePsTty(tty: string): string {
+  if (tty.startsWith("/dev/")) return tty;
+  if (/^s\d+$/.test(tty)) return `/dev/tty${tty}`;
+  return `/dev/${tty}`;
+}
+
+function discoverLiveProcesses(): LiveProcess[] {
+  const procs: LiveProcess[] = [];
+  const seen = new Set<number>();
+  const seenTty = new Set<string>();
+
+  const tmuxPanes: Record<string, string> = {};
+  try {
+    const out = execSync("tmux list-panes -a -F '#{pane_tty} #{session_name}' 2>/dev/null", { encoding: "utf-8" });
+    for (const line of out.trim().split("\n").filter(Boolean)) {
+      const i = line.indexOf(" ");
+      if (i > 0) tmuxPanes[line.slice(0, i)] = line.slice(i + 1);
+    }
+  } catch {}
+
+  const formatUptime = (startStr: string): string => {
+    const start = new Date(startStr).getTime();
+    if (isNaN(start)) return "?";
+    const mins = Math.floor((Date.now() - start) / 60000);
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h${mins % 60}m`;
+    return `${Math.floor(hours / 24)}d${hours % 24}h`;
+  };
+
+  const addProcess = (pid: number, tty: string, sessionId: string, agentType: "claude_code" | "codex") => {
+    const normalTty = normalizePsTty(tty);
+    if (seen.has(pid) || seenTty.has(normalTty)) return;
+    seen.add(pid);
+    seenTty.add(normalTty);
+
+    let startTime = "";
+    try { startTime = execSync(`ps -o lstart= -p ${pid}`, { encoding: "utf-8" }).trim(); } catch {}
+
+    const tmuxSession = tmuxPanes[normalTty] || null;
+    let label = "iTerm";
+    if (tmuxSession) {
+      if (tmuxSession.startsWith("codecast-")) label = "managed";
+      else if (tmuxSession.startsWith("cc-resume") || tmuxSession.startsWith("cx-resume")) label = "resumed";
+      else label = "tmux";
+    }
+
+    procs.push({ pid, tty: normalTty, sessionId, agentType, tmuxSession, label, uptime: formatUptime(startTime) });
+  };
+
+  const findSessionByCwd = (pid: number): string | null => {
+    let cwd: string | null = null;
+    try {
+      const out = execSync(`lsof -d cwd -a -p ${pid} -F n 2>/dev/null`, { encoding: "utf-8" });
+      const line = out.split("\n").find(l => l.startsWith("n"));
+      if (line) cwd = line.slice(1);
+    } catch {}
+    if (!cwd) return null;
+
+    const claudeDir = path.join(os.homedir(), ".claude", "projects");
+    if (!fs.existsSync(claudeDir)) return null;
+    let best: string | null = null;
+    let bestMtime = 0;
+    for (const dir of fs.readdirSync(claudeDir, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      for (const f of fs.readdirSync(path.join(claudeDir, dir.name)).filter(f => f.endsWith(".jsonl"))) {
+        const fp = path.join(claudeDir, dir.name, f);
+        try {
+          const stat = fs.statSync(fp);
+          if (stat.mtimeMs <= bestMtime || Date.now() - stat.mtimeMs > 86_400_000) continue;
+          const head = fs.readFileSync(fp, "utf-8").slice(0, 5000);
+          for (const hl of head.split("\n").slice(0, 5)) {
+            try {
+              const e = JSON.parse(hl);
+              if (e.cwd && (e.cwd === cwd || cwd!.startsWith(e.cwd + "/"))) { bestMtime = stat.mtimeMs; best = path.basename(fp, ".jsonl"); break; }
+            } catch {}
+          }
+        } catch {}
+      }
+    }
+    return best;
+  };
+
+  const findCodexSessionByCwd = (pid: number): string | null => {
+    let cwd: string | null = null;
+    try {
+      const out = execSync(`lsof -d cwd -a -p ${pid} -F n 2>/dev/null`, { encoding: "utf-8" });
+      const line = out.split("\n").find(l => l.startsWith("n"));
+      if (line) cwd = line.slice(1);
+    } catch {}
+    if (!cwd) return null;
+
+    const { extractCodexCwd } = require("./parser.js");
+    const codexDir = path.join(os.homedir(), ".codex", "sessions");
+    if (!fs.existsSync(codexDir)) return null;
+    const walk = (dir: string): string | null => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { const r = walk(full); if (r) return r; }
+        else if (entry.name.endsWith(".jsonl")) {
+          try {
+            const stat = fs.statSync(full);
+            if (Date.now() - stat.mtimeMs > 86_400_000) continue;
+            const content = fs.readFileSync(full, "utf-8").slice(0, 2000);
+            const fileCwd = extractCodexCwd(content);
+            if (fileCwd && (fileCwd === cwd || cwd!.startsWith(fileCwd + "/"))) {
+              for (const l of content.split("\n")) {
+                try { const e = JSON.parse(l); if (e.type === "session_meta" && e.payload?.id) return e.payload.id; } catch {}
+              }
+            }
+          } catch {}
+        }
+      }
+      return null;
+    };
+    return walk(codexDir);
+  };
+
+  // Claude processes
+  try {
+    const psOut = execSync("ps aux | grep -w claude | grep -v grep | grep -v 'bash -c' | grep -v codecast | grep -v mcp", { encoding: "utf-8" });
+    for (const line of psOut.trim().split("\n")) {
+      if (!line.trim() || line.includes("mcp")) continue;
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 11) continue;
+      const pid = parseInt(parts[1], 10);
+      const tty = parts[6];
+      if (isNaN(pid) || tty === "?" || tty === "??") continue;
+      const args = parts.slice(10).join(" ");
+      const resumeMatch = args.match(/--resume\s+([0-9a-f-]{36})/i);
+      const sid = resumeMatch ? resumeMatch[1] : findSessionByCwd(pid);
+      addProcess(pid, tty, sid || `unknown-${pid}`, "claude_code");
+    }
+  } catch {}
+
+  // Codex processes
+  try {
+    const psOut = execSync("ps aux | grep -E 'codex/codex|/codex\\b' | grep -v grep | grep -v 'Codex.app' | grep -v Sparkle | grep -v Autoupdate | grep -v Helper | grep -v Renderer | grep -v Crashpad | grep -v app-server", { encoding: "utf-8" });
+    for (const line of psOut.trim().split("\n")) {
+      if (!line.trim()) continue;
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 7) continue;
+      const pid = parseInt(parts[1], 10);
+      const tty = parts[6];
+      if (isNaN(pid) || tty === "?" || tty === "??") continue;
+      const sid = findCodexSessionByCwd(pid);
+      addProcess(pid, tty, sid || `unknown-codex-${pid}`, "codex");
+    }
+  } catch {}
+
+  return procs;
+}
+
+async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config): Promise<string> {
+  const lines: string[] = [];
+
+  if (procs.length === 0) {
+    lines.push(`${c.dim}No live sessions found${c.reset}`);
+    lines.push("");
+    lines.push(`${c.dim}Start a session with:${c.reset}  claude`);
+    lines.push(`${c.dim}Search history with:${c.reset}  codecast resume <query>`);
+    return lines.join("\n");
+  }
+
+  const sessionIds = procs.filter(p => !p.sessionId.startsWith("unknown")).map(p => p.sessionId);
+  const siteUrl = config.convex_url!.replace(".cloud", ".site");
+  let convexData: Record<string, { title: string; subtitle: string | null; message_count: number; updated_at: string; preview?: string | null; agent_type?: string | null; project_path: string | null }> = {};
+
+  if (sessionIds.length > 0) {
+    try {
+      const resp = await fetch(`${siteUrl}/cli/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: config.auth_token, session_ids: sessionIds }),
+      });
+      if (resp.ok) {
+        const data = await resp.json() as any;
+        for (const conv of data.conversations || []) {
+          convexData[conv.session_id] = conv;
+        }
+      }
+    } catch {}
+  }
+
+  procs.sort((a, b) => {
+    const ca = convexData[a.sessionId];
+    const cb = convexData[b.sessionId];
+    if (ca && cb) return new Date(cb.updated_at).getTime() - new Date(ca.updated_at).getTime();
+    if (ca && !cb) return -1;
+    if (!ca && cb) return 1;
+    return 0;
+  });
+
+  lines.push(`${c.dim}${procs.length} live session${procs.length === 1 ? "" : "s"}${c.reset}`);
+  lines.push("");
+
+  const { formatRelativeTime } = await import("./formatter.js");
+
+  for (let i = 0; i < procs.length; i++) {
+    const p = procs[i];
+    const conv = convexData[p.sessionId];
+    const num = `${c.bold}${c.cyan}[${i + 1}]${c.reset}`;
+
+    const title = conv?.title || `Session ${p.sessionId.startsWith("unknown") ? `PID ${p.pid}` : p.sessionId.slice(0, 8)}`;
+    const displayTitle = title.length > 70 ? title.slice(0, 70) + "..." : title;
+    lines.push(`${num} ${c.bold}${displayTitle}${c.reset}`);
+
+    const meta: string[] = [];
+    if (conv) {
+      meta.push(`${c.dim}${formatRelativeTime(conv.updated_at)}${c.reset}`);
+      meta.push(`${c.dim}${conv.message_count} msgs${c.reset}`);
+    } else {
+      meta.push(`${c.dim}up ${p.uptime}${c.reset}`);
+    }
+
+    const labelColor = p.label === "managed" ? c.green : p.label === "resumed" ? c.yellow : c.dim;
+    meta.push(`${labelColor}${p.label}${c.reset}`);
+
+    if (p.agentType === "codex" || conv?.agent_type === "codex") {
+      meta.push(`${c.yellow}Codex${c.reset}`);
+    }
+
+    const projectPath = conv?.project_path;
+    if (projectPath) {
+      const home = os.homedir();
+      const short = projectPath.startsWith(home) ? "~" + projectPath.slice(home.length) : projectPath;
+      meta.push(`${c.dim}${short}${c.reset}`);
+    }
+
+    lines.push(`    ${meta.join(" | ")}`);
+
+    if (conv?.preview) {
+      const msgLine = conv.preview.split("\n")[0].trim();
+      const maxLen = 85;
+      lines.push(`    ${c.green}>${c.reset} ${msgLine.length > maxLen ? msgLine.slice(0, maxLen) + "..." : msgLine}`);
+    }
+
+    if (conv?.subtitle) {
+      const subtitleLines = conv.subtitle.split("\n").filter((l: string) => l.trim());
+      for (let j = 0; j < Math.min(subtitleLines.length, 3); j++) {
+        const raw = subtitleLines[j].trim();
+        lines.push(`      ${raw.length > 83 ? raw.slice(0, 83) + "..." : raw}`);
+      }
+      if (subtitleLines.length > 3) {
+        lines.push(`      ${c.dim}... (${subtitleLines.length - 3} more)${c.reset}`);
+      }
+    }
+
+    lines.push("");
+  }
+
+  lines.push(`${c.dim}Enter number to attach, or q to quit${c.reset}`);
+  return lines.join("\n");
+}
+
 program
   .command("resume")
   .description(

@@ -673,6 +673,56 @@ http.route({
 });
 
 http.route({
+  path: "/cli/sessions",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const { api_token, session_ids } = body;
+      if (!api_token || !session_ids) {
+        return new Response(JSON.stringify({ error: "Missing api_token or session_ids" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+      const result = await ctx.runQuery(api.conversations.getConversationsBySessionIds, {
+        api_token,
+        session_ids,
+      });
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: "Internal error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/sessions",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
   path: "/cli/bookmark",
   method: "POST",
   handler: httpAction(async (ctx, request) => {

@@ -3949,3 +3949,62 @@ export const backfillAutoSharedConversations = internalMutation({
     return { scanned: result.page.length, fixed, nextCursor, dry_run: !!args.dry_run };
   },
 });
+
+export const getConversationsBySessionIds = query({
+  args: {
+    api_token: v.string(),
+    session_ids: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) return { error: "Unauthorized" };
+
+    const results: Array<{
+      session_id: string;
+      title: string;
+      subtitle: string | null;
+      message_count: number;
+      updated_at: string;
+      preview: string | null;
+      agent_type: string | null;
+      project_path: string | null;
+    }> = [];
+
+    for (const sessionId of args.session_ids.slice(0, 30)) {
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", sessionId))
+        .first();
+      if (!conv) continue;
+
+      let preview: string | null = null;
+      const msgs = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .take(3);
+      const firstUser = msgs.find((m) => m.role === "user" && m.content);
+      if (firstUser) {
+        preview = typeof firstUser.content === "string"
+          ? firstUser.content.slice(0, 200)
+          : null;
+      }
+
+      const title = conv.title || (preview ? preview.slice(0, 80) : `Session ${sessionId.slice(0, 8)}`);
+
+      results.push({
+        session_id: sessionId,
+        title,
+        subtitle: conv.subtitle || null,
+        message_count: conv.message_count ?? 0,
+        updated_at: conv.updated_at
+          ? new Date(conv.updated_at).toISOString()
+          : new Date(conv._creationTime).toISOString(),
+        preview,
+        agent_type: conv.agent_type || null,
+        project_path: conv.project_path || null,
+      });
+    }
+
+    return { conversations: results };
+  },
+});
