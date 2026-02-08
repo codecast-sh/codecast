@@ -2764,7 +2764,7 @@ program
 
       const conversations = rawConversations.filter((conv) => {
         if (queryWords.length <= 1) return true;
-        const searchText = [conv.title, conv.subtitle, conv.goal].filter(Boolean).join(" ").toLowerCase();
+        const searchText = [conv.title, conv.subtitle, conv.goal, conv.preview].filter(Boolean).join(" ").toLowerCase();
         return queryWords.every((word: string) => searchText.includes(word));
       }).slice(0, limit);
 
