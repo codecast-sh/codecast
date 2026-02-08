@@ -2825,7 +2825,7 @@ function discoverLiveProcesses(): LiveProcess[] {
   return procs;
 }
 
-async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config): Promise<string> {
+async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config, offset = 0, limit = 50): Promise<{ output: string; sessions: LiveProcess[]; total: number; hasMore: boolean }> {
   const lines: string[] = [];
 
   if (procs.length === 0) {
@@ -2833,10 +2833,22 @@ async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config)
     lines.push("");
     lines.push(`${c.dim}Start a session with:${c.reset}  claude`);
     lines.push(`${c.dim}Search history with:${c.reset}  codecast resume <query>`);
-    return lines.join("\n");
+    return { output: lines.join("\n"), sessions: [], total: 0, hasMore: false };
   }
 
-  const sessionIds = procs.filter(p => !p.sessionId.startsWith("unknown")).map(p => p.sessionId);
+  // Deduplicate: if multiple processes share the same session ID, keep the one
+  // with the most specific label (managed > resumed > tmux > iTerm) or most recent
+  const dedupMap = new Map<string, LiveProcess>();
+  const labelRank: Record<string, number> = { managed: 3, resumed: 2, tmux: 1, iTerm: 0 };
+  for (const p of procs) {
+    const existing = dedupMap.get(p.sessionId);
+    if (!existing || (labelRank[p.label] ?? 0) > (labelRank[existing.label] ?? 0)) {
+      dedupMap.set(p.sessionId, p);
+    }
+  }
+  const dedupedProcs = Array.from(dedupMap.values());
+
+  const sessionIds = dedupedProcs.filter(p => !p.sessionId.startsWith("unknown")).map(p => p.sessionId);
   const siteUrl = config.convex_url!.replace(".cloud", ".site");
   let convexData: Record<string, { title: string; subtitle: string | null; message_count: number; updated_at: string; preview?: string | null; agent_type?: string | null; project_path: string | null }> = {};
 
@@ -2856,7 +2868,7 @@ async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config)
     } catch {}
   }
 
-  procs.sort((a, b) => {
+  dedupedProcs.sort((a, b) => {
     const ca = convexData[a.sessionId];
     const cb = convexData[b.sessionId];
     if (ca && cb) return new Date(cb.updated_at).getTime() - new Date(ca.updated_at).getTime();
@@ -2865,13 +2877,20 @@ async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config)
     return 0;
   });
 
-  lines.push(`${c.dim}${procs.length} live session${procs.length === 1 ? "" : "s"}${c.reset}`);
+  const total = dedupedProcs.length;
+  const pageProcs = dedupedProcs.slice(offset, offset + limit);
+  const hasMore = offset + limit < total;
+
+  const pageInfo = total > limit
+    ? `${c.dim}Showing ${offset + 1}-${offset + pageProcs.length} of ${total} live sessions${c.reset}`
+    : `${c.dim}${total} live session${total === 1 ? "" : "s"}${c.reset}`;
+  lines.push(pageInfo);
   lines.push("");
 
   const { formatRelativeTime } = await import("./formatter.js");
 
-  for (let i = 0; i < procs.length; i++) {
-    const p = procs[i];
+  for (let i = 0; i < pageProcs.length; i++) {
+    const p = pageProcs[i];
     const conv = convexData[p.sessionId];
     const num = `${c.bold}${c.cyan}[${i + 1}]${c.reset}`;
 
@@ -2923,8 +2942,12 @@ async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config)
     lines.push("");
   }
 
-  lines.push(`${c.dim}Enter number to attach, or q to quit${c.reset}`);
-  return lines.join("\n");
+  const promptParts = ["Enter number to attach"];
+  if (hasMore) promptParts.push("n for next page");
+  promptParts.push("q to quit");
+  lines.push(`${c.dim}${promptParts.join(", ")}${c.reset}`);
+
+  return { output: lines.join("\n"), sessions: pageProcs, total, hasMore };
 }
 
 program
@@ -2965,47 +2988,66 @@ program
 
     // No query: show live sessions
     if (!queryWords || queryWords.length === 0) {
-      const procs = discoverLiveProcesses();
-      const output = await enrichAndFormatLiveSessions(procs, config);
-      console.log(output);
+      const rawProcs = discoverLiveProcesses();
+      let currentOffset = 0;
+      const pageSize = 50;
 
-      if (procs.length === 0) process.exit(0);
+      const showPage = async (): Promise<void> => {
+        const { output, sessions, total, hasMore } = await enrichAndFormatLiveSessions(rawProcs, config, currentOffset, pageSize);
+        console.log(output);
 
-      const readline = await import("readline");
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        if (total === 0) process.exit(0);
 
-      const promptForSession = (): void => {
-        rl.question("> ", (answer) => {
-          const trimmed = answer.trim().toLowerCase();
-          if (trimmed === "q" || trimmed === "quit" || trimmed === "exit" || trimmed === "") {
-            rl.close();
-            process.exit(0);
-          }
-          const num = parseInt(trimmed);
-          if (isNaN(num) || num < 1 || num > procs.length) {
-            console.log(`Enter 1-${procs.length}, or q to quit`);
-            promptForSession();
-            return;
-          }
-          rl.close();
-          const p = procs[num - 1];
-          if (p.tmuxSession) {
-            console.log(`\nAttaching to tmux session: ${p.tmuxSession}`);
-            try {
-              spawnSync("tmux", ["attach-session", "-t", p.tmuxSession], { stdio: "inherit" });
-            } catch (err) {
-              console.error(`Failed to attach: ${err instanceof Error ? err.message : err}`);
+        const readline = await import("readline");
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+        const promptForSession = (): void => {
+          rl.question("> ", async (answer) => {
+            const trimmed = answer.trim().toLowerCase();
+            if (trimmed === "q" || trimmed === "quit" || trimmed === "exit" || trimmed === "") {
+              rl.close();
+              process.exit(0);
             }
-          } else if (!p.sessionId.startsWith("unknown")) {
-            console.log(`\nResuming: ${p.sessionId.slice(0, 8)}`);
-            const extraArgs = resolveAgentArgs(p.agentType, options.claudeArgs, config);
-            launchSession(p.sessionId, p.agentType, extraArgs, !extraArgs);
-          } else {
-            console.log(`\nSession PID ${p.pid} on ${p.tty} -- attach manually or use tmux`);
-          }
-        });
+            if (trimmed === "n" || trimmed === "next") {
+              if (hasMore) {
+                rl.close();
+                currentOffset += pageSize;
+                await showPage();
+              } else {
+                console.log("No more sessions");
+                promptForSession();
+              }
+              return;
+            }
+            const num = parseInt(trimmed);
+            if (isNaN(num) || num < 1 || num > sessions.length) {
+              const validOpts = hasMore ? `1-${sessions.length}, n, or q` : `1-${sessions.length} or q`;
+              console.log(`Enter ${validOpts}`);
+              promptForSession();
+              return;
+            }
+            rl.close();
+            const p = sessions[num - 1];
+            if (p.tmuxSession) {
+              console.log(`\nAttaching to tmux session: ${p.tmuxSession}`);
+              try {
+                spawnSync("tmux", ["attach-session", "-t", p.tmuxSession], { stdio: "inherit" });
+              } catch (err) {
+                console.error(`Failed to attach: ${err instanceof Error ? err.message : err}`);
+              }
+            } else if (!p.sessionId.startsWith("unknown")) {
+              console.log(`\nResuming: ${p.sessionId.slice(0, 8)}`);
+              const extraArgs = resolveAgentArgs(p.agentType, options.claudeArgs, config);
+              launchSession(p.sessionId, p.agentType, extraArgs, !extraArgs);
+            } else {
+              console.log(`\nSession PID ${p.pid} on ${p.tty} -- attach manually or use tmux`);
+            }
+          });
+        };
+        promptForSession();
       };
-      promptForSession();
+
+      await showPage();
       return;
     }
 

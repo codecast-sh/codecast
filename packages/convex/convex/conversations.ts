@@ -3970,7 +3970,7 @@ export const getConversationsBySessionIds = query({
       project_path: string | null;
     }> = [];
 
-    for (const sessionId of args.session_ids.slice(0, 30)) {
+    for (const sessionId of args.session_ids.slice(0, 100)) {
       const conv = await ctx.db
         .query("conversations")
         .withIndex("by_session_id", (q) => q.eq("session_id", sessionId))
