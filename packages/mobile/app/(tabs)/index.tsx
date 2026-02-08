@@ -112,6 +112,12 @@ function ConversationItem({ conversation, onPress, onLongPress }: {
           </RNText>
         </RNView>
 
+        {conversation.subtitle && (
+          <RNText style={styles.conversationSubtitle} numberOfLines={2}>
+            {conversation.subtitle}
+          </RNText>
+        )}
+
         <RNView style={styles.conversationMeta}>
           {agent ? (
             <>
@@ -333,29 +339,6 @@ export default function SessionsScreen() {
                 tintColor={Theme.textMuted}
               />
             }
-            ListHeaderComponent={
-              hasFavorites && showFavorites && filter === "my" ? (
-                <RNView style={styles.favoritesSection}>
-                  <TouchableOpacity
-                    style={styles.favoritesHeader}
-                    onPress={() => setShowFavorites(!showFavorites)}
-                    activeOpacity={0.7}
-                  >
-                    <FontAwesome name="star" size={12} color={Theme.accent} />
-                    <RNText style={styles.favoritesTitle}>Favorites</RNText>
-                  </TouchableOpacity>
-                  <RNView style={styles.favoritesRow}>
-                    {favorites!.map((fav) => (
-                      <FavoriteItem
-                        key={fav._id}
-                        item={fav}
-                        onPress={() => router.push(`/session/${fav._id}`)}
-                      />
-                    ))}
-                  </RNView>
-                </RNView>
-              ) : null
-            }
             ListEmptyComponent={result === undefined ? null : renderEmpty}
             contentContainerStyle={conversations.length === 0 ? styles.emptyList : styles.listContent}
             showsVerticalScrollIndicator={false}
@@ -475,13 +458,13 @@ const styles = StyleSheet.create({
   },
   conversationContent: {
     paddingHorizontal: Spacing.lg,
-    paddingVertical: 14,
+    paddingVertical: 10,
   },
   conversationHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    marginBottom: 4,
   },
   titleRow: {
     flexDirection: 'row',
@@ -509,6 +492,13 @@ const styles = StyleSheet.create({
     color: Theme.text,
     flex: 1,
     letterSpacing: -0.2,
+  },
+  conversationSubtitle: {
+    fontSize: 13,
+    color: Theme.textMuted,
+    marginLeft: 14,
+    marginBottom: 4,
+    lineHeight: 18,
   },
   messageCount: {
     fontSize: 11,
