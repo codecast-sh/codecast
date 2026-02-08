@@ -1,16 +1,55 @@
 import React from 'react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Tabs } from 'expo-router';
+import { useQuery } from 'convex/react';
+import { api } from '@codecast/convex/convex/_generated/api';
+import { View as RNView, Text as RNText, StyleSheet } from 'react-native';
 import { Theme } from '@/constants/Theme';
 
 function TabBarIcon(props: {
   name: React.ComponentProps<typeof FontAwesome>['name'];
   color: string;
+  badge?: number;
 }) {
-  return <FontAwesome size={22} style={{ marginBottom: -2 }} {...props} />;
+  const { badge, ...iconProps } = props;
+  return (
+    <RNView style={{ position: 'relative' }}>
+      <FontAwesome size={22} style={{ marginBottom: -2 }} {...iconProps} />
+      {badge !== undefined && badge > 0 && (
+        <RNView style={badgeStyles.badge}>
+          <RNText style={badgeStyles.badgeText}>
+            {badge > 99 ? '99+' : badge}
+          </RNText>
+        </RNView>
+      )}
+    </RNView>
+  );
 }
 
+const badgeStyles = StyleSheet.create({
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: -8,
+    backgroundColor: Theme.red,
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+});
+
 export default function TabLayout() {
+  const unreadCount = useQuery(api.notifications.getUnreadCount);
+
   return (
     <Tabs
       screenOptions={{
@@ -60,7 +99,9 @@ export default function TabLayout() {
         name="notifications"
         options={{
           title: 'Notifications',
-          tabBarIcon: ({ color }) => <TabBarIcon name="bell" color={color} />,
+          tabBarIcon: ({ color }) => (
+            <TabBarIcon name="bell" color={color} badge={unreadCount ?? 0} />
+          ),
         }}
       />
       <Tabs.Screen
