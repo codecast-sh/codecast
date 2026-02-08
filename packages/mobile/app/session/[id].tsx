@@ -273,6 +273,73 @@ function formatAgentType(agentType?: string): string {
   return agentType;
 }
 
+const mcpToolNames: Record<string, string> = {
+  "mcp__claude-in-chrome__computer": "Browser",
+  "mcp__claude-in-chrome__navigate": "Navigate",
+  "mcp__claude-in-chrome__read_page": "Read Page",
+  "mcp__claude-in-chrome__find": "Find",
+  "mcp__claude-in-chrome__form_input": "Form",
+  "mcp__claude-in-chrome__javascript_tool": "JS",
+  "mcp__claude-in-chrome__tabs_context_mcp": "Tabs",
+  "mcp__claude-in-chrome__tabs_create_mcp": "New Tab",
+  "mcp__claude-in-chrome__update_plan": "Plan",
+  "mcp__claude-in-chrome__gif_creator": "GIF",
+  "mcp__claude-in-chrome__read_console_messages": "Console",
+  "mcp__claude-in-chrome__read_network_requests": "Network",
+  "mcp__claude-in-chrome__get_page_text": "Page Text",
+  "mcp__claude-in-chrome__upload_image": "Upload",
+  "mcp__claude-in-chrome__resize_window": "Resize",
+  "mcp__claude-in-chrome__shortcuts_list": "Shortcuts",
+  "mcp__claude-in-chrome__shortcuts_execute": "Shortcut",
+};
+
+const codexToolNames: Record<string, string> = {
+  shell_command: "Terminal",
+  shell: "Terminal",
+  exec_command: "Terminal",
+  "container.exec": "Terminal",
+  apply_patch: "Patch",
+  file_read: "Read",
+  file_write: "Write",
+  file_edit: "Edit",
+  web_search: "Search",
+  web_fetch: "Fetch",
+  code_search: "Search",
+  code_analysis: "Analyze",
+};
+
+function formatToolName(name: string): string {
+  if (mcpToolNames[name]) return mcpToolNames[name];
+  if (codexToolNames[name]) return codexToolNames[name];
+  if (name.startsWith("mcp__")) {
+    const parts = name.split("__");
+    const method = parts[2] || parts[1] || "MCP";
+    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 12);
+  }
+  return name.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function truncateStr(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + "..." : s;
+}
+
+function shortenUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    const path = parsed.pathname;
+    if (path === "/" || path === "") return host;
+    return host + (path.length > 25 ? path.slice(0, 22) + "..." : path);
+  } catch {
+    return truncateStr(url, 40);
+  }
+}
+
+function getRelativePath(filePath: string): string {
+  // Simple relative path - remove common prefixes
+  return filePath.replace(/^\/Users\/[^/]+\//, "~/").replace(/^\/home\/[^/]+\//, "~/");
+}
+
 function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome>['name']; color: string } {
   if (name === 'Bash') return { icon: 'terminal', color: Theme.green };
   if (name === 'Read' || name === 'Glob' || name === 'Grep') return { icon: 'file-code-o', color: Theme.cyan };
@@ -297,40 +364,120 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
 }
 
 function toolSummary(tc: ToolCall): string {
+  let parsedInput: Record<string, any> = {};
   try {
-    const input = JSON.parse(tc.input);
-    if (tc.name === 'Bash') return input.command?.slice(0, 60) || 'command';
-    if (tc.name === 'Read') return input.file_path?.split('/').pop() || 'file';
-    if (tc.name === 'Edit') return input.file_path?.split('/').pop() || 'file';
-    if (tc.name === 'Write') return input.file_path?.split('/').pop() || 'file';
-    if (tc.name === 'Glob') return input.pattern || 'pattern';
-    if (tc.name === 'Grep') return input.pattern || 'pattern';
-    if (tc.name === 'WebSearch') return input.query?.slice(0, 40) || 'search';
-    if (tc.name === 'Task') return input.description?.slice(0, 40) || 'task';
-    if (tc.name === 'AskUserQuestion') {
-      const questions = input.questions as any[];
-      return questions?.[0]?.question?.slice(0, 50) || 'question';
-    }
-    if (tc.name === 'TodoWrite') {
-      const todos = input.todos as any[];
-      return `${todos?.length || 0} tasks`;
-    }
-    if (tc.name === 'TaskList') return 'task list';
-    if (tc.name === 'TaskCreate') return input.subject?.slice(0, 40) || 'create task';
-    if (tc.name === 'TaskUpdate') return input.subject?.slice(0, 40) || 'update task';
-    if (tc.name === 'SendMessage') return input.summary?.slice(0, 40) || 'message';
-    if (tc.name === 'TeamCreate') return input.team_name || 'team';
-    if (tc.name === 'Skill') return `/${input.skill}`;
+    parsedInput = JSON.parse(tc.input);
+  } catch {
+    return '';
+  }
 
-    if (tc.name.startsWith('mcp__')) {
-      const action = input.action || input.url || input.query || input.text || '';
-      if (typeof action === 'string' && action) {
-        return action.slice(0, 50);
-      }
-      const parts = tc.name.split('__');
-      return parts[parts.length - 1] || '';
+  // File-based tools
+  if (tc.name === 'Read' || tc.name === 'Edit' || tc.name === 'Write') {
+    return getRelativePath(String(parsedInput.file_path || ''));
+  }
+  if (tc.name === 'file_read' || tc.name === 'file_write' || tc.name === 'file_edit') {
+    return getRelativePath(String(parsedInput.file_path || parsedInput.path || ''));
+  }
+
+  // Shell/Terminal tools
+  if (tc.name === 'Bash' || tc.name === 'shell_command' || tc.name === 'shell' || tc.name === 'exec_command' || tc.name === 'container.exec') {
+    const cmd = String(parsedInput.command || parsedInput.cmd || '');
+    return cmd ? truncateStr(cmd, 60) : '';
+  }
+
+  // Search tools
+  if (tc.name === 'Glob' && parsedInput.pattern) return String(parsedInput.pattern);
+  if (tc.name === 'Grep' && parsedInput.pattern) return String(parsedInput.pattern);
+  if (tc.name === 'WebSearch') return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : '';
+
+  // Patch tool
+  if (tc.name === 'apply_patch') {
+    const input = String(parsedInput.input || parsedInput.patch || '');
+    const fileMatch = input.match(/\*\*\* (?:Update|Add|Delete) File: (.+)/);
+    if (fileMatch) return getRelativePath(fileMatch[1].trim());
+    return '';
+  }
+
+  // MCP Browser tools
+  if (tc.name === 'mcp__claude-in-chrome__computer') {
+    const action = String(parsedInput.action || '');
+    if (action === 'screenshot') return 'Screenshot';
+    if (action === 'left_click') {
+      const coord = parsedInput.coordinate as number[] | undefined;
+      return coord ? `Click (${coord[0]}, ${coord[1]})` : 'Click';
     }
-  } catch {}
+    if (action === 'type') return `Type "${truncateStr(String(parsedInput.text || ''), 20)}"`;
+    if (action === 'key') return `Key: ${String(parsedInput.text || '')}`;
+    if (action === 'scroll') return `Scroll ${String(parsedInput.scroll_direction || '')}`;
+    if (action === 'wait') return `Wait ${String(parsedInput.duration || '')}s`;
+    return action || '';
+  }
+  if (tc.name === 'mcp__claude-in-chrome__navigate') {
+    const url = String(parsedInput.url || '');
+    if (url === 'back') return 'Back';
+    if (url === 'forward') return 'Forward';
+    return url ? shortenUrl(url) : '';
+  }
+  if (tc.name === 'mcp__claude-in-chrome__read_page') {
+    if (parsedInput.ref_id) return `Element ${String(parsedInput.ref_id)}`;
+    if (parsedInput.filter === 'interactive') return 'Interactive elements';
+    return 'Page content';
+  }
+  if (tc.name === 'mcp__claude-in-chrome__find') {
+    return parsedInput.query ? `"${truncateStr(String(parsedInput.query), 30)}"` : '';
+  }
+  if (tc.name === 'mcp__claude-in-chrome__form_input') {
+    const ref = parsedInput.ref ? String(parsedInput.ref) : '';
+    const val = parsedInput.value;
+    if (ref && val !== undefined) return `${ref} = "${truncateStr(String(val), 20)}"`;
+    return '';
+  }
+  if (tc.name === 'mcp__claude-in-chrome__javascript_tool') {
+    return parsedInput.text ? truncateStr(String(parsedInput.text), 40) : '';
+  }
+  if (tc.name === 'mcp__claude-in-chrome__tabs_context_mcp') return 'Get tabs';
+  if (tc.name === 'mcp__claude-in-chrome__tabs_create_mcp') return 'Create tab';
+  if (tc.name === 'mcp__claude-in-chrome__update_plan') {
+    const domains = parsedInput.domains as string[] | undefined;
+    if (Array.isArray(domains) && domains.length) {
+      return domains.slice(0, 2).join(', ') + (domains.length > 2 ? '...' : '');
+    }
+    return '';
+  }
+  if (tc.name === 'mcp__claude-in-chrome__gif_creator') return String(parsedInput.action || '');
+  if (tc.name === 'mcp__claude-in-chrome__read_console_messages') {
+    return parsedInput.pattern ? `Filter: ${String(parsedInput.pattern)}` : '';
+  }
+  if (tc.name === 'mcp__claude-in-chrome__read_network_requests') {
+    return parsedInput.urlPattern ? `Filter: ${String(parsedInput.urlPattern)}` : '';
+  }
+  if (tc.name === 'mcp__claude-in-chrome__get_page_text') return 'Extract text';
+
+  // Task tools
+  if (tc.name === 'Task') return parsedInput.description ? truncateStr(String(parsedInput.description), 40) : '';
+  if (tc.name === 'AskUserQuestion') {
+    const questions = parsedInput.questions as any[];
+    return questions?.[0]?.question ? truncateStr(String(questions[0].question), 50) : '';
+  }
+  if (tc.name === 'TodoWrite') {
+    const todos = parsedInput.todos as any[];
+    return `${todos?.length || 0} tasks`;
+  }
+  if (tc.name === 'TaskList') return '';
+  if (tc.name === 'TaskCreate') return parsedInput.subject ? truncateStr(String(parsedInput.subject), 40) : '';
+  if (tc.name === 'TaskUpdate') {
+    const id = parsedInput.taskId ? `#${parsedInput.taskId}` : '';
+    const status = parsedInput.status ? String(parsedInput.status) : '';
+    if (id && status) return `${id} → ${status}`;
+    return id || '';
+  }
+  if (tc.name === 'SendMessage') {
+    if (parsedInput.type === 'broadcast') return 'broadcast';
+    return parsedInput.recipient ? `to ${parsedInput.recipient}` : '';
+  }
+  if (tc.name === 'TeamCreate') return parsedInput.team_name ? String(parsedInput.team_name) : '';
+  if (tc.name === 'Skill') return `/${parsedInput.skill || ''}`;
+
   return '';
 }
 
@@ -731,7 +878,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle }: {
     <TouchableOpacity onPress={onToggle} style={styles.toolCallContainer} activeOpacity={0.7}>
       <RNView style={styles.toolCallHeader}>
         <FontAwesome name={icon} size={12} color={color} style={{ marginRight: 6 }} />
-        <RNText style={[styles.toolCallName, { color }]}>{toolCall.name}</RNText>
+        <RNText style={[styles.toolCallName, { color }]}>{formatToolName(toolCall.name)}</RNText>
         {summary && !expanded ? (
           <RNText style={styles.toolCallSummary} numberOfLines={1}> {summary}</RNText>
         ) : null}
