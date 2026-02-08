@@ -10,21 +10,21 @@ import { Logo, LogoIcon } from "@/components/Logo";
 
 function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" }) {
   const colors = {
-    amber: "bg-amber-200/60",
-    green: "bg-emerald-200/60",
-    blue: "bg-sky-200/60",
+    amber: "bg-amber-300/50",
+    green: "bg-emerald-300/50",
+    blue: "bg-sky-300/50",
   };
   return (
     <span className="relative inline-block">
       <span
-        className={`absolute inset-0 ${colors[color]} rounded-sm`}
+        className={`absolute inset-0 ${colors[color]}`}
         style={{
-          transform: `rotate(${color === "amber" ? -0.7 : color === "green" ? 0.5 : -0.3}deg)`,
-          top: "0.05em",
-          bottom: "0.05em",
-          left: "-0.15em",
-          right: "-0.15em",
-          borderRadius: "0.2em 0.3em 0.25em 0.35em",
+          transform: `rotate(${color === "amber" ? -2.1 : color === "green" ? 1.8 : -1.5}deg) translate(${color === "amber" ? "-2px, 1px" : color === "green" ? "1px, -2px" : "2px, 1px"})`,
+          top: "-0.28em",
+          bottom: "-0.25em",
+          left: "-0.4em",
+          right: "-0.4em",
+          clipPath: "polygon(1% 8%, 99% 2%, 98% 94%, 2% 97%)",
         }}
       />
       <span className="relative">{children}</span>
