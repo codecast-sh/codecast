@@ -1,24 +1,25 @@
 import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Text as RNText } from 'react-native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { useQuery } from 'convex/react';
+import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
 
-type Comment = {
-  _id: Id<"comments">;
-  conversation_id: Id<"conversations">;
-  user_id: Id<"users">;
-  content: string;
+type Notification = {
+  _id: Id<"notifications">;
+  type: "mention" | "comment_reply" | "conversation_comment" | "team_invite" | "session_idle" | "permission_request" | "session_error" | "team_session_start";
+  message: string;
+  read: boolean;
   created_at: number;
-};
-
-type CommentWithUser = Comment & {
-  user_name?: string;
-  user_email?: string;
-  conversation_title?: string;
+  conversation_id?: Id<"conversations">;
+  actor: {
+    _id: Id<"users">;
+    name?: string;
+    github_username?: string;
+    github_avatar_url?: string;
+  } | null;
 };
 
 function formatRelativeTime(timestamp: number): string {
@@ -37,36 +38,57 @@ function formatRelativeTime(timestamp: number): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-type NotificationItemProps = {
-  comment: CommentWithUser;
-  onPress: () => void;
-};
+function notificationIcon(type: string): { name: React.ComponentProps<typeof FontAwesome>['name']; color: string } {
+  switch (type) {
+    case "mention": return { name: "at", color: Theme.blue };
+    case "comment_reply": return { name: "reply", color: Theme.violet };
+    case "conversation_comment": return { name: "comment", color: Theme.accent };
+    case "team_invite": return { name: "users", color: Theme.greenBright };
+    case "session_idle": return { name: "pause", color: Theme.accent };
+    case "permission_request": return { name: "shield", color: "#f59e0b" };
+    case "session_error": return { name: "exclamation-triangle", color: Theme.red };
+    case "team_session_start": return { name: "play-circle", color: Theme.blue };
+    default: return { name: "bell", color: Theme.textMuted };
+  }
+}
 
-function NotificationItem({ comment, onPress }: NotificationItemProps) {
-  const userName = comment.user_name || comment.user_email?.split('@')[0] || "Unknown";
-  const conversationTitle = comment.conversation_title || "Untitled conversation";
+function NotificationItem({ notification, onPress, onMarkRead }: {
+  notification: Notification;
+  onPress: () => void;
+  onMarkRead: () => void;
+}) {
+  const selfTypes = ["session_idle", "permission_request", "session_error"];
+  const isSelf = selfTypes.includes(notification.type);
+  const actorName = isSelf
+    ? (notification.type === "session_idle" ? "Waiting for input"
+      : notification.type === "permission_request" ? "Permission needed"
+      : "Session error")
+    : (notification.actor?.name || notification.actor?.github_username || "Someone");
+  const icon = notificationIcon(notification.type);
 
   return (
-    <TouchableOpacity onPress={onPress} style={styles.notificationCard} activeOpacity={0.7}>
-      <RNView style={styles.notificationAvatar}>
-        <RNText style={styles.notificationAvatarText}>
-          {userName[0]?.toUpperCase() || "?"}
-        </RNText>
+    <TouchableOpacity
+      onPress={onPress}
+      style={[styles.notificationCard, !notification.read && styles.notificationUnread]}
+      activeOpacity={0.7}
+    >
+      <RNView style={styles.notificationIconContainer}>
+        <FontAwesome name={icon.name} size={16} color={icon.color} />
       </RNView>
       <RNView style={styles.notificationContent}>
         <RNView style={styles.notificationHeader}>
-          <RNText style={styles.notificationUserName}>{userName}</RNText>
+          <RNText style={styles.notificationActorName}>{actorName}</RNText>
           <RNText style={styles.notificationTime}>
-            {formatRelativeTime(comment.created_at)}
+            {formatRelativeTime(notification.created_at)}
           </RNText>
         </RNView>
-        <RNText style={styles.notificationContext} numberOfLines={1}>
-          commented on {conversationTitle}
-        </RNText>
-        <RNText style={styles.notificationText} numberOfLines={2}>
-          {comment.content}
+        <RNText style={styles.notificationMessage} numberOfLines={2}>
+          {notification.message}
         </RNText>
       </RNView>
+      {!notification.read && (
+        <RNView style={styles.unreadDot} />
+      )}
     </TouchableOpacity>
   );
 }
@@ -75,23 +97,36 @@ export default function NotificationsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const myConversations = useQuery(
-    api.conversations.listConversations,
-    currentUser ? { filter: "my", limit: 100 } : "skip"
-  );
+  const notifications = useQuery(api.notifications.list) as Notification[] | undefined;
+  const unreadCount = useQuery(api.notifications.getUnreadCount);
+  const markAsRead = useMutation(api.notifications.markAsRead);
+  const markAllAsRead = useMutation(api.notifications.markAllAsRead);
 
   const onRefresh = async () => {
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 1000);
   };
 
-  const conversationIds = myConversations?.conversations.map((c: any) => c._id) || [];
+  const handlePress = async (notification: Notification) => {
+    if (!notification.read) {
+      await markAsRead({ notificationId: notification._id });
+    }
+    if (notification.conversation_id) {
+      router.push(`/session/${notification.conversation_id}`);
+    }
+  };
 
-  const renderItem = ({ item }: { item: CommentWithUser }) => (
+  const handleMarkRead = async (notification: Notification) => {
+    if (!notification.read) {
+      await markAsRead({ notificationId: notification._id });
+    }
+  };
+
+  const renderItem = ({ item }: { item: Notification }) => (
     <NotificationItem
-      comment={item}
-      onPress={() => router.push(`/session/${item.conversation_id}`)}
+      notification={item}
+      onPress={() => handlePress(item)}
+      onMarkRead={() => handleMarkRead(item)}
     />
   );
 
@@ -102,15 +137,26 @@ export default function NotificationsScreen() {
       </RNView>
       <RNText style={styles.emptyTitle}>No notifications</RNText>
       <RNText style={styles.emptyText}>
-        Comments on your conversations{'\n'}will appear here.
+        Mentions, comments, and team invites{'\n'}will appear here.
       </RNText>
     </RNView>
   );
 
+  const hasUnread = (unreadCount ?? 0) > 0;
+
   return (
     <RNView style={styles.container}>
+      {hasUnread && (
+        <TouchableOpacity
+          style={styles.markAllButton}
+          onPress={() => markAllAsRead({})}
+          activeOpacity={0.7}
+        >
+          <RNText style={styles.markAllText}>Mark all as read</RNText>
+        </TouchableOpacity>
+      )}
       <FlatList
-        data={[]}
+        data={notifications ?? []}
         renderItem={renderItem}
         keyExtractor={(item) => item._id}
         refreshControl={
@@ -120,8 +166,8 @@ export default function NotificationsScreen() {
             tintColor={Theme.textMuted}
           />
         }
-        ListEmptyComponent={renderEmpty}
-        contentContainerStyle={styles.emptyList}
+        ListEmptyComponent={notifications === undefined ? null : renderEmpty}
+        contentContainerStyle={(notifications?.length ?? 0) === 0 ? styles.emptyList : styles.listContent}
         showsVerticalScrollIndicator={false}
       />
     </RNView>
@@ -133,26 +179,43 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Theme.bg,
   },
+  markAllButton: {
+    backgroundColor: Theme.bgAlt,
+    paddingVertical: 10,
+    paddingHorizontal: Spacing.lg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+    alignItems: 'flex-end',
+  },
+  markAllText: {
+    fontSize: 13,
+    color: Theme.accent,
+    fontWeight: '600',
+  },
+  listContent: {
+    paddingBottom: Spacing.xl,
+  },
   notificationCard: {
     flexDirection: 'row',
-    padding: Spacing.lg,
+    alignItems: 'flex-start',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.bgHighlight,
     backgroundColor: Theme.bg,
   },
-  notificationAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Theme.bgHighlight,
+  notificationUnread: {
+    backgroundColor: `${Theme.accent}08`,
+  },
+  notificationIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Theme.bgAlt,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: Spacing.md,
-  },
-  notificationAvatarText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Theme.text,
+    marginTop: 2,
   },
   notificationContent: {
     flex: 1,
@@ -161,9 +224,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 2,
+    marginBottom: 3,
   },
-  notificationUserName: {
+  notificationActorName: {
     fontSize: 15,
     fontWeight: '600',
     color: Theme.text,
@@ -172,15 +235,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Theme.textMuted0,
   },
-  notificationContext: {
-    fontSize: 13,
-    color: Theme.textMuted,
-    marginBottom: 4,
-  },
-  notificationText: {
+  notificationMessage: {
     fontSize: 14,
-    color: Theme.textSecondary,
+    color: Theme.textMuted,
     lineHeight: 20,
+  },
+  unreadDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Theme.accent,
+    marginLeft: Spacing.sm,
+    marginTop: 6,
   },
   emptyContainer: {
     flex: 1,
