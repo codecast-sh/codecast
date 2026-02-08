@@ -193,16 +193,43 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
       setInterval(pollForMessages, 2000);
       setInterval(sendHeartbeat, 30000);
 
-      // Watch for conversation ID
+      // Watch for conversation ID and discover real session ID
       const claudeDir = path.join(os.homedir(), ".claude", "projects");
       if (fs.existsSync(claudeDir)) {
         let conversationId: string | null = null;
+        let realSessionDiscovered = false;
         const watcher = fs.watch(claudeDir, { recursive: true }, async (_eventType, filename) => {
           if (!filename || !filename.endsWith(".jsonl") || conversationId) return;
           const match = filename.match(/([0-9a-f-]{36})\.jsonl$/);
           if (match) {
             const claudeSessionId = match[1];
             log(`Session file detected: ${claudeSessionId}`);
+
+            // Rename tmux session to use real session ID
+            if (!realSessionDiscovered && claudeSessionId !== sessionId && tmuxSessionName) {
+              realSessionDiscovered = true;
+              const newTmuxName = `codecast-${claudeSessionId.slice(0, 8)}`;
+              try {
+                execSync(`tmux rename-session -t '${tmuxSessionName}' '${newTmuxName}' 2>/dev/null`, { stdio: "ignore" });
+                log(`Renamed tmux session ${tmuxSessionName} -> ${newTmuxName}`);
+                tmuxSessionName = newTmuxName;
+              } catch (err) {
+                log(`Failed to rename tmux session: ${err}`);
+              }
+
+              // Re-register managed session with real ID
+              try {
+                await client.mutation("managedSessions:updateManagedSessionId" as any, {
+                  old_session_id: sessionId,
+                  new_session_id: claudeSessionId,
+                  api_token: config.auth_token,
+                });
+                log(`Updated managed session ID: ${sessionId.slice(0, 8)} -> ${claudeSessionId.slice(0, 8)}`);
+              } catch (err) {
+                log(`Failed to update managed session ID: ${err}`);
+              }
+            }
+
             setTimeout(async () => {
               try {
                 const result = await client.query("managedSessions:getConversationBySessionId" as any, {
@@ -212,8 +239,9 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                 if (result?.conversation_id && !conversationId) {
                   conversationId = result.conversation_id;
                   log(`Found conversation: ${conversationId}`);
+                  const activeSessionId = realSessionDiscovered ? claudeSessionId : sessionId;
                   await client.mutation("managedSessions:updateSessionConversation" as any, {
-                    session_id: sessionId,
+                    session_id: activeSessionId,
                     conversation_id: conversationId,
                     api_token: config.auth_token,
                   });
@@ -318,8 +346,27 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
   pollInterval = setInterval(pollForMessages, 2000);
   heartbeatInterval = setInterval(sendHeartbeat, 30000);
 
+  let activeSessionId = sessionId;
+
+  const updateSessionIdIfNeeded = async (claudeSessionId: string) => {
+    if (claudeSessionId === sessionId || activeSessionId !== sessionId) return;
+    try {
+      await client.mutation("managedSessions:updateManagedSessionId" as any, {
+        old_session_id: sessionId,
+        new_session_id: claudeSessionId,
+        api_token: config.auth_token,
+      });
+      activeSessionId = claudeSessionId;
+      log(`Updated managed session ID: ${sessionId.slice(0, 8)} -> ${claudeSessionId.slice(0, 8)}`);
+    } catch (err) {
+      log(`Failed to update managed session ID: ${err}`);
+    }
+  };
+
   const linkConversation = async (claudeSessionId: string) => {
     if (conversationId) return;
+
+    await updateSessionIdIfNeeded(claudeSessionId);
 
     try {
       const result = await client.query("managedSessions:getConversationBySessionId" as any, {
@@ -332,7 +379,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
         log(`Found conversation: ${conversationId}`);
 
         await client.mutation("managedSessions:updateSessionConversation" as any, {
-          session_id: sessionId,
+          session_id: activeSessionId,
           conversation_id: conversationId,
           api_token: config.auth_token,
         });
@@ -382,7 +429,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
 
     try {
       await client.mutation("managedSessions:unregisterManagedSession" as any, {
-        session_id: sessionId,
+        session_id: activeSessionId,
         api_token: config.auth_token,
       });
       log(`Unregistered managed session`);
