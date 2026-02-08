@@ -101,6 +101,38 @@ let syncServiceRef: SyncService | null = null;
 let daemonVersion: string | undefined;
 const platform = process.platform;
 
+const IDLE_TIMEOUT_MS = 30_000;
+const IDLE_COOLDOWN_MS = 5 * 60_000;
+const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const lastIdleNotification = new Map<string, number>();
+const lastErrorNotification = new Map<string, number>();
+
+function truncateForNotification(text: string, maxLen = 200): string {
+  let result = text
+    .replace(/```[\s\S]*?```/g, "[code]")
+    .replace(/\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (result.length > maxLen) {
+    result = result.slice(0, maxLen) + "...";
+  }
+  return result;
+}
+
+function detectErrorInMessage(content: string): string | null {
+  const patterns = [
+    /(?:Error|ERROR|FATAL|FAILED|panic):\s*(.+)/,
+    /(?:compilation failed|build failed|test failed)/i,
+    /exit code (?!0\b)\d+/i,
+    /(?:Traceback|Exception|Unhandled rejection)/i,
+  ];
+  for (const pat of patterns) {
+    const match = content.match(pat);
+    if (match) return match[0].slice(0, 200);
+  }
+  return null;
+}
+
 const syncStats = {
   messagesSynced: 0,
   conversationsCreated: 0,
@@ -923,6 +955,16 @@ async function processSessionFile(
       if (permissionPrompt) {
         log(`Permission prompt detected for tool: ${permissionPrompt.tool_name}`);
 
+        const permArgPreview = truncateForNotification(
+          `${permissionPrompt.tool_name}: ${permissionPrompt.arguments_preview || ""}`, 150
+        );
+        syncService.createSessionNotification({
+          conversation_id: conversationId,
+          type: "permission_request",
+          title: `codecast - Permission needed`,
+          message: permArgPreview,
+        }).catch(() => {});
+
         handlePermissionRequest(
           syncService,
           conversationId,
@@ -967,6 +1009,56 @@ async function processSessionFile(
         }).catch((err) => {
           log(`Permission handling error: ${err instanceof Error ? err.message : String(err)}`);
         });
+      }
+
+      const errorText = detectErrorInMessage(lastAssistantMessage.content);
+      if (errorText && !permissionPrompt) {
+        const now = Date.now();
+        const lastErr = lastErrorNotification.get(sessionId) ?? 0;
+        if (now - lastErr > IDLE_COOLDOWN_MS) {
+          lastErrorNotification.set(sessionId, now);
+          syncService.createSessionNotification({
+            conversation_id: conversationId,
+            type: "session_error",
+            title: "codecast - Error",
+            message: truncateForNotification(errorText),
+          }).catch(() => {});
+        }
+      }
+
+      if (!permissionPrompt) {
+        const existingTimer = idleTimers.get(sessionId);
+        if (existingTimer) clearTimeout(existingTimer);
+
+        const capturedFilePath = filePath;
+        const capturedSize = stats.size;
+        idleTimers.set(sessionId, setTimeout(() => {
+          idleTimers.delete(sessionId);
+          try {
+            const currentStats = fs.statSync(capturedFilePath);
+            if (currentStats.size !== capturedSize) return;
+          } catch { return; }
+
+          const now = Date.now();
+          const lastIdle = lastIdleNotification.get(sessionId) ?? 0;
+          if (now - lastIdle < IDLE_COOLDOWN_MS) return;
+
+          lastIdleNotification.set(sessionId, now);
+          const preview = truncateForNotification(lastAssistantMessage.content);
+          syncService.createSessionNotification({
+            conversation_id: conversationId,
+            type: "session_idle",
+            title: "codecast - Waiting for input",
+            message: preview,
+          }).catch(() => {});
+          log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
+        }, IDLE_TIMEOUT_MS));
+      }
+    } else if (conversationId) {
+      const existingTimer = idleTimers.get(sessionId);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        idleTimers.delete(sessionId);
       }
     }
 
@@ -1588,47 +1680,131 @@ function buildReverseConversationCache(cache: ConversationCache): Record<string,
 }
 
 async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
+  // Check process cache first
+  const cached = await getCachedSessionProcess(sessionId);
+  if (cached) {
+    log(`Process cache hit for session ${sessionId.slice(0, 8)}: pid=${cached.pid}`);
+    return cached;
+  }
+
   try {
-    const { stdout } = await execAsync("ps aux | grep -E 'claude.*--resume' | grep -v grep");
-    const lines = stdout.trim().split("\n");
+    // Strategy A: grep for --resume <sessionId> (exact match for resumed sessions)
+    try {
+      const { stdout } = await execAsync("ps aux | grep -E 'claude.*--resume' | grep -v grep");
+      const lines = stdout.trim().split("\n");
+      for (const line of lines) {
+        if (!line.includes(sessionId)) continue;
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 7) continue;
+        const pid = parseInt(parts[1], 10);
+        const tty = parts[6];
+        if (isNaN(pid) || tty === "?" || tty === "??") continue;
+        const result = { pid, tty: normalizeTty(tty), sessionId };
+        cacheSessionProcess(sessionId, result);
+        log(`Found session ${sessionId.slice(0, 8)} via --resume grep: pid=${pid}`);
+        return result;
+      }
+    } catch {}
 
-    for (const line of lines) {
-      if (!line.includes(sessionId)) continue;
-      const parts = line.trim().split(/\s+/);
-      if (parts.length < 7) continue;
+    // Strategy B: Scan tmux sessions named cc-resume-* or codecast-*
+    try {
+      const { stdout: tmuxList } = await execAsync("tmux list-sessions -F '#{session_name}' 2>/dev/null");
+      const shortId = sessionId.slice(0, 8);
+      for (const tmuxName of tmuxList.trim().split("\n")) {
+        if (!tmuxName.includes(shortId)) continue;
+        // Get the pane TTY for this tmux session
+        try {
+          const { stdout: paneInfo } = await execAsync(`tmux list-panes -t '${tmuxName}' -F '#{pane_tty} #{pane_pid}' 2>/dev/null`);
+          const paneLine = paneInfo.trim().split("\n")[0];
+          if (paneLine) {
+            const [paneTty, panePidStr] = paneLine.split(" ");
+            // Find the claude child process in this pane
+            const panePid = parseInt(panePidStr, 10);
+            if (!isNaN(panePid) && paneTty) {
+              try {
+                const { stdout: childPs } = await execAsync(`pgrep -P ${panePid} -f claude 2>/dev/null || ps -o pid= -p ${panePid}`);
+                const childPid = parseInt(childPs.trim().split("\n")[0]?.trim(), 10);
+                const pid = isNaN(childPid) ? panePid : childPid;
+                const result = { pid, tty: normalizeTty(paneTty), sessionId };
+                cacheSessionProcess(sessionId, result, `${tmuxName}:0.0`);
+                log(`Found session ${sessionId.slice(0, 8)} via tmux session ${tmuxName}: pid=${pid}`);
+                return result;
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+    } catch {}
 
-      const pid = parseInt(parts[1], 10);
-      const tty = parts[6];
-      if (isNaN(pid) || tty === "?" || tty === "??") continue;
+    // Strategy C: CWD-based matching for non-resumed sessions
+    const jsonlPath = findSessionJsonlPath(sessionId);
+    if (jsonlPath) {
+      const jsonlStat = fs.statSync(jsonlPath);
+      const recentlyModified = Date.now() - jsonlStat.mtimeMs < 60_000;
 
-      return { pid, tty: normalizeTty(tty), sessionId };
-    }
+      if (recentlyModified) {
+        // Determine the project directory from the JSONL content
+        const jsonlContent = fs.readFileSync(jsonlPath, "utf-8").slice(0, 5000);
+        const projectCwd = extractCwd(jsonlContent);
 
-    // Fallback: find ANY claude process by lsof on the session JSONL
-    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-    if (fs.existsSync(claudeProjectsDir)) {
-      const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
-        .filter(d => d.isDirectory()).map(d => d.name);
-
-      for (const dir of projectDirs) {
-        const jsonlPath = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
-        if (fs.existsSync(jsonlPath)) {
+        if (projectCwd) {
           try {
-            const { stdout: lsofOut } = await execAsync(`lsof "${jsonlPath}" 2>/dev/null | grep -v COMMAND`);
-            const lsofLine = lsofOut.trim().split("\n")[0];
-            if (lsofLine) {
-              const lsofParts = lsofLine.trim().split(/\s+/);
-              const pid = parseInt(lsofParts[1], 10);
-              if (!isNaN(pid)) {
-                // Get TTY from pid
+            // Get all running claude processes (not just --resume ones)
+            const { stdout: psOut } = await execAsync("ps aux | grep -E '/claude\\b|claude-code' | grep -v grep | grep -v 'codecast'");
+            const candidates: Array<{ pid: number; tty: string }> = [];
+
+            for (const line of psOut.trim().split("\n")) {
+              if (!line.trim()) continue;
+              const parts = line.trim().split(/\s+/);
+              if (parts.length < 7) continue;
+              const pid = parseInt(parts[1], 10);
+              const tty = parts[6];
+              if (isNaN(pid) || tty === "?" || tty === "??") continue;
+
+              // Check CWD of this process
+              try {
+                const { stdout: lsofOut } = await execAsync(`lsof -d cwd -a -p ${pid} -F n 2>/dev/null`);
+                const cwdLine = lsofOut.split("\n").find(l => l.startsWith("n"));
+                if (cwdLine) {
+                  const processCwd = cwdLine.slice(1);
+                  // Match if CWD is the project dir or a subdirectory of it
+                  if (processCwd === projectCwd || processCwd.startsWith(projectCwd + "/")) {
+                    candidates.push({ pid, tty: normalizeTty(tty) });
+                  }
+                }
+              } catch {}
+            }
+
+            if (candidates.length === 1) {
+              const result = { pid: candidates[0].pid, tty: candidates[0].tty, sessionId };
+              cacheSessionProcess(sessionId, result);
+              log(`Found session ${sessionId.slice(0, 8)} via CWD match: pid=${candidates[0].pid}, cwd=${projectCwd}`);
+              return result;
+            } else if (candidates.length > 1) {
+              // Disambiguate using JSONL birth time vs process start time
+              const jsonlBirthMs = jsonlStat.birthtimeMs;
+              let bestCandidate: { pid: number; tty: string } | null = null;
+              let bestDelta = Infinity;
+
+              for (const c of candidates) {
                 try {
-                  const { stdout: psOut } = await execAsync(`ps -o tty= -p ${pid}`);
-                  const tty = psOut.trim();
-                  if (tty && tty !== "??" && tty !== "?") {
-                    return { pid, tty: normalizeTty(tty), sessionId };
+                  const { stdout: etimeOut } = await execAsync(`ps -o lstart= -p ${c.pid}`);
+                  const processStart = new Date(etimeOut.trim()).getTime();
+                  const delta = Math.abs(processStart - jsonlBirthMs);
+                  if (delta < bestDelta) {
+                    bestDelta = delta;
+                    bestCandidate = c;
                   }
                 } catch {}
               }
+
+              if (bestCandidate && bestDelta < 300_000) {
+                const result = { pid: bestCandidate.pid, tty: bestCandidate.tty, sessionId };
+                cacheSessionProcess(sessionId, result);
+                log(`Found session ${sessionId.slice(0, 8)} via CWD+timing match: pid=${bestCandidate.pid}, delta=${Math.round(bestDelta / 1000)}s`);
+                return result;
+              }
+              log(`CWD match found ${candidates.length} candidates for ${sessionId.slice(0, 8)}, could not disambiguate`);
             }
           } catch {}
         }
@@ -1711,17 +1887,62 @@ function findSessionJsonlPath(sessionId: string): string | null {
 
 const resumeSessionCache = new Map<string, string>();
 
-async function autoResumeSession(sessionId: string, content: string): Promise<boolean> {
+interface CachedProcessInfo {
+  pid: number;
+  tty: string;
+  tmuxTarget?: string;
+  lastVerified: number;
+}
+
+const sessionProcessCache = new Map<string, CachedProcessInfo>();
+const PROCESS_CACHE_TTL_MS = 30_000;
+
+function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTarget?: string): void {
+  sessionProcessCache.set(sessionId, {
+    pid: info.pid,
+    tty: info.tty,
+    tmuxTarget,
+    lastVerified: Date.now(),
+  });
+}
+
+async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
+  const cached = sessionProcessCache.get(sessionId);
+  if (!cached) return null;
+  if (Date.now() - cached.lastVerified > PROCESS_CACHE_TTL_MS) {
+    if (!isProcessRunning(cached.pid)) {
+      sessionProcessCache.delete(sessionId);
+      return null;
+    }
+    cached.lastVerified = Date.now();
+  }
+  return { pid: cached.pid, tty: cached.tty, sessionId };
+}
+
+function validateProcessCache(): void {
+  for (const [sessionId, cached] of sessionProcessCache) {
+    if (!isProcessRunning(cached.pid)) {
+      sessionProcessCache.delete(sessionId);
+    }
+  }
+}
+
+function slugify(text: string, maxLen = 30): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLen)
+    .replace(/-+$/, "");
+}
+
+async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache): Promise<boolean> {
   const jsonlPath = findSessionJsonlPath(sessionId);
   if (!jsonlPath) {
     log(`Cannot auto-resume: JSONL not found for session ${sessionId.slice(0, 8)}`);
     return false;
   }
 
-  const projectDir = path.dirname(jsonlPath);
-  const projectDirName = path.basename(projectDir);
-  // Decode the project working directory from the hash dir name
-  // Try extracting cwd from JSONL content
   const jsonlContent = fs.readFileSync(jsonlPath, "utf-8").slice(0, 5000);
   const cwd = extractCwd(jsonlContent) || process.env.HOME || "/tmp";
 
@@ -1738,7 +1959,9 @@ async function autoResumeSession(sessionId: string, content: string): Promise<bo
   } catch {}
 
   const shortId = sessionId.slice(0, 8);
-  const tmuxSession = `cc-resume-${shortId}`;
+  const title = titleCache[sessionId] || extractSummaryTitle(jsonlContent);
+  const slug = title ? slugify(title) : "";
+  const tmuxSession = slug ? `cc-resume-${slug}-${shortId}` : `cc-resume-${shortId}`;
   const resumeCmd = `claude --resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
 
   try {
@@ -1771,7 +1994,8 @@ async function deliverMessage(
   content: string,
   conversationCache: ConversationCache,
   syncService: SyncService,
-  messageId: string
+  messageId: string,
+  titleCache: TitleCache
 ): Promise<boolean> {
   const reverseCache = buildReverseConversationCache(conversationCache);
   const sessionId = reverseCache[conversationId];
@@ -1828,7 +2052,7 @@ async function deliverMessage(
 
   // No running process - try auto-resume
   log(`No running process for session ${sessionId.slice(0, 8)}, attempting auto-resume`);
-  const resumed = await autoResumeSession(sessionId, content);
+  const resumed = await autoResumeSession(sessionId, content, titleCache);
   if (resumed) {
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     return true;
@@ -2449,6 +2673,9 @@ function startWatchdog(
     if (isSyncPaused()) {
       return;
     }
+
+    // Validate process cache
+    validateProcessCache();
 
     // Check for watcher staleness - only log once per hour to avoid noise
     const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);
@@ -3115,7 +3342,8 @@ async function main(): Promise<void> {
                   msg.content,
                   conversationCache,
                   syncService,
-                  msg._id
+                  msg._id,
+                  titleCache
                 );
                 if (delivered) {
                   log(`Message delivered successfully`);
