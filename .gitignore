@@ -52,3 +52,6 @@ packages/web/binaries/
 
 # Deploy secrets
 .env.deploy
+
+# OTA marker
+.last-mobile-ota
