@@ -3,7 +3,19 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+PREVIEW_ONLY=false
+FORCE_CLI=false
+for arg in "$@"; do
+  case "$arg" in
+    --preview) PREVIEW_ONLY=true ;;
+    --force) FORCE_CLI=true ;;
+  esac
+done
+
 echo "=== Codecast Full Deployment ==="
+if $PREVIEW_ONLY; then
+  echo "    (preview OTA only -- skipping production OTA)"
+fi
 echo ""
 
 # Check for uncommitted changes
@@ -64,7 +76,7 @@ echo "   Deployed CLI version: ${REMOTE_VERSION:-unknown}"
 
 if [[ "$CURRENT_VERSION" != "$REMOTE_VERSION" ]]; then
   echo "   Version mismatch - deploying..."
-  if [[ "$1" == "--force" ]]; then
+  if $FORCE_CLI; then
     ./scripts/deploy.sh --force
   else
     ./scripts/deploy.sh
@@ -81,12 +93,37 @@ echo "3. Pushing to git (triggers Railway auto-deploy)..."
 git push origin main 2>/dev/null && echo "   ✓ Pushed to main" || echo "   Already up to date"
 echo ""
 
+# 4. Mobile OTA update
+echo "4. Pushing mobile OTA update..."
+LAST_MOBILE_UPDATE=$(git log -1 --format=%H -- packages/mobile/)
+LAST_MOBILE_OTA_MARKER=".last-mobile-ota"
+
+if [[ -f "$LAST_MOBILE_OTA_MARKER" ]] && [[ "$(cat "$LAST_MOBILE_OTA_MARKER")" == "$LAST_MOBILE_UPDATE" ]]; then
+  echo "   No mobile changes since last OTA - skipping"
+else
+  COMMIT_MSG=$(git log -1 --format=%s -- packages/mobile/)
+  cd packages/mobile
+  if $PREVIEW_ONLY; then
+    echo "   Pushing to preview branch..."
+    eas update --branch preview --message "$COMMIT_MSG" --non-interactive
+    echo "   ✓ OTA pushed to preview"
+  else
+    echo "   Pushing to production branch..."
+    eas update --branch production --message "$COMMIT_MSG" --non-interactive
+    echo "   ✓ OTA pushed to production"
+  fi
+  cd ../..
+  echo "$LAST_MOBILE_UPDATE" > "$LAST_MOBILE_OTA_MARKER"
+fi
+echo ""
+
 echo "=== Deployment Complete ==="
 echo ""
 echo "Deployed:"
-echo "  - Convex: https://marvelous-meerkat-539.convex.cloud"
-echo "  - CLI:    https://dl.codecast.sh/latest.json"
-echo "  - Web:    https://codecast.sh (Railway auto-deploys on push)"
+echo "  - Convex:  https://marvelous-meerkat-539.convex.cloud"
+echo "  - CLI:     https://dl.codecast.sh/latest.json"
+echo "  - Web:     https://codecast.sh (Railway auto-deploys on push)"
+echo "  - Mobile:  OTA via EAS Update"
 echo ""
 echo "Tailing Railway build logs (Ctrl+C to stop)..."
 echo ""
