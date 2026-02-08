@@ -1,9 +1,9 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { PermissionCard } from '@/components/PermissionCard';
@@ -21,6 +21,12 @@ type ToolResult = {
   is_error?: boolean;
 };
 
+type ImageData = {
+  media_type: string;
+  data?: string;
+  storage_id?: string;
+};
+
 type Message = {
   _id: string;
   role: string;
@@ -29,6 +35,8 @@ type Message = {
   thinking?: string;
   tool_calls?: ToolCall[];
   tool_results?: ToolResult[];
+  images?: ImageData[];
+  subtype?: string;
 };
 
 type ConversationData = {
@@ -38,89 +46,538 @@ type ConversationData = {
   is_favorite?: boolean;
   share_token?: string | null;
   messages: Message[];
+  has_more_above?: boolean;
+  oldest_timestamp?: number | null;
+  model?: string;
+  agent_type?: string;
+  started_at?: number;
+  message_count?: number;
 };
 
-function extractCodeBlocks(text: string): Array<{ type: 'text' | 'code'; content: string; language?: string }> {
-  const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
-  const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+// --- Markdown rendering ---
 
+function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = ''): React.ReactNode[] {
+  const result: React.ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+))/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      result.push(<RNText key={`${keyPrefix}t${key++}`}>{text.slice(lastIndex, match.index)}</RNText>);
+    }
+
+    if (match[0].startsWith('`')) {
+      const code = match[0].slice(1, -1);
+      result.push(
+        <RNText key={`${keyPrefix}c${key++}`} style={styles.inlineCode}>{code}</RNText>
+      );
+    } else if (match[2] !== undefined) {
+      result.push(
+        <RNText key={`${keyPrefix}b${key++}`} style={{ fontWeight: '700' }}>{match[2]}</RNText>
+      );
+    } else if (match[3] !== undefined) {
+      result.push(
+        <RNText key={`${keyPrefix}i${key++}`} style={{ fontStyle: 'italic' }}>{match[3]}</RNText>
+      );
+    } else if (match[4] && match[5]) {
+      const url = match[5];
+      result.push(
+        <RNText key={`${keyPrefix}l${key++}`} style={styles.linkText} onPress={() => Linking.openURL(url)}>
+          {match[4]}
+        </RNText>
+      );
+    } else if (match[6]) {
+      const url = match[6];
+      result.push(
+        <RNText key={`${keyPrefix}u${key++}`} style={styles.linkText} onPress={() => Linking.openURL(url)}>
+          {url}
+        </RNText>
+      );
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    result.push(<RNText key={`${keyPrefix}t${key++}`}>{text.slice(lastIndex)}</RNText>);
+  }
+
+  return result;
+}
+
+function MarkdownContent({ text, baseStyle, isUser }: { text: string; baseStyle: any; isUser: boolean }) {
+  const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+  const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
   let lastIndex = 0;
   let match;
 
   while ((match = codeBlockRegex.exec(text)) !== null) {
     if (match.index > lastIndex) {
-      const textContent = text.slice(lastIndex, match.index);
-      if (textContent.trim()) {
-        blocks.push({ type: 'text', content: textContent });
-      }
+      const t = text.slice(lastIndex, match.index);
+      if (t.trim()) blocks.push({ type: 'text', content: t });
     }
-
-    blocks.push({
-      type: 'code',
-      content: match[2],
-      language: match[1] || 'plaintext',
-    });
-
+    blocks.push({ type: 'code', content: match[2], language: match[1] || 'plaintext' });
     lastIndex = match.index + match[0].length;
   }
 
   if (lastIndex < text.length) {
-    const textContent = text.slice(lastIndex);
-    if (textContent.trim()) {
-      blocks.push({ type: 'text', content: textContent });
-    }
+    const t = text.slice(lastIndex);
+    if (t.trim()) blocks.push({ type: 'text', content: t });
   }
 
-  return blocks.length > 0 ? blocks : [{ type: 'text', content: text }];
-}
+  if (blocks.length === 0) blocks.push({ type: 'text', content: text });
 
-function parseTextWithLinks(text: string): Array<{ type: 'text' | 'link'; content: string }> {
-  const regex = /(https?:\/\/[^\s<>\])"']+)/g;
-  const parts: Array<{ type: 'text' | 'link'; content: string }> = [];
-  let lastIndex = 0;
-  let match;
-
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ type: 'text', content: text.slice(lastIndex, match.index) });
-    }
-    parts.push({ type: 'link', content: match[1] });
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push({ type: 'text', content: text.slice(lastIndex) });
-  }
-
-  return parts.length > 0 ? parts : [{ type: 'text', content: text }];
-}
-
-function LinkedText({ text, style }: { text: string; style: any }) {
-  const parts = parseTextWithLinks(text);
   return (
-    <RNText style={style} selectable>
-      {parts.map((part, i) =>
-        part.type === 'link' ? (
-          <RNText
-            key={i}
-            style={styles.linkText}
-            onPress={() => Linking.openURL(part.content)}
-          >
-            {part.content}
-          </RNText>
-        ) : (
-          <RNText key={i}>{part.content}</RNText>
-        )
-      )}
-    </RNText>
+    <RNView>
+      {blocks.map((block, idx) => {
+        if (block.type === 'code') {
+          return (
+            <RNView key={idx} style={styles.codeBlock}>
+              <RNView style={styles.codeHeader}>
+                <RNText style={styles.codeLanguage}>{block.language}</RNText>
+              </RNView>
+              <ScrollView horizontal showsHorizontalScrollIndicator>
+                <RNView style={styles.codeContent}>
+                  <RNText style={styles.codeText} selectable>{block.content}</RNText>
+                </RNView>
+              </ScrollView>
+            </RNView>
+          );
+        }
+
+        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`b${idx}`} />;
+      })}
+    </RNView>
   );
 }
 
+function MarkdownTextBlock({ text, baseStyle, blockKey }: { text: string; baseStyle: any; blockKey: string }) {
+  const lines = text.split('\n');
+  const elements: React.ReactNode[] = [];
+  let i = 0;
+  let elKey = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) { i++; continue; }
+
+    const headerMatch = trimmed.match(/^(#{1,3})\s+(.+)/);
+    if (headerMatch) {
+      const level = headerMatch[1].length;
+      const fontSize = level === 1 ? 18 : level === 2 ? 16 : 15;
+      elements.push(
+        <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
+          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`)}
+        </RNText>
+      );
+      i++;
+      continue;
+    }
+
+    if (trimmed.match(/^[-*]\s/) || trimmed.match(/^\d+[.)]\s/)) {
+      const listItems: { text: string; ordered: boolean; num?: number }[] = [];
+      while (i < lines.length) {
+        const l = lines[i].trim();
+        const ulMatch = l.match(/^[-*]\s+(.*)/);
+        const olMatch = l.match(/^(\d+)[.)]\s+(.*)/);
+        if (ulMatch) {
+          listItems.push({ text: ulMatch[1], ordered: false });
+          i++;
+        } else if (olMatch) {
+          listItems.push({ text: olMatch[2], ordered: true, num: parseInt(olMatch[1]) });
+          i++;
+        } else break;
+      }
+      elements.push(
+        <RNView key={`${blockKey}li${elKey++}`} style={styles.listContainer}>
+          {listItems.map((item, j) => (
+            <RNView key={j} style={styles.listItem}>
+              <RNText style={[baseStyle, styles.listBullet]}>
+                {item.ordered ? `${item.num}.` : '\u2022'}
+              </RNText>
+              <RNText style={[baseStyle, { flex: 1 }]}>
+                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`)}
+              </RNText>
+            </RNView>
+          ))}
+        </RNView>
+      );
+      continue;
+    }
+
+    if (trimmed.startsWith('> ')) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith('> ')) {
+        quoteLines.push(lines[i].trim().slice(2));
+        i++;
+      }
+      elements.push(
+        <RNView key={`${blockKey}q${elKey++}`} style={styles.blockquote}>
+          <RNText style={[baseStyle, styles.blockquoteText]}>
+            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`)}
+          </RNText>
+        </RNView>
+      );
+      continue;
+    }
+
+    const paraLines: string[] = [];
+    while (i < lines.length) {
+      const l = lines[i].trim();
+      if (!l || l.match(/^#{1,3}\s/) || l.match(/^[-*]\s/) || l.match(/^\d+[.)]\s/) || l.startsWith('> ')) break;
+      paraLines.push(lines[i]);
+      i++;
+    }
+    if (paraLines.length > 0) {
+      elements.push(
+        <RNText key={`${blockKey}p${elKey++}`} style={[baseStyle, { marginBottom: 6 }]} selectable>
+          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`)}
+        </RNText>
+      );
+    }
+  }
+
+  return <>{elements}</>;
+}
+
+// --- Message components ---
+
 function formatTimestamp(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatModel(model?: string): string {
+  if (!model) return '';
+  if (model.includes('claude-sonnet')) {
+    return model.replace('claude-sonnet-', 'sonnet-').replace('-20', '-\'').slice(0, 12);
+  }
+  if (model.includes('claude-opus')) {
+    return model.replace('claude-opus-', 'opus-').replace('-20', '-\'').slice(0, 12);
+  }
+  if (model.includes('claude-haiku')) {
+    return model.replace('claude-haiku-', 'haiku-').replace('-20', '-\'').slice(0, 12);
+  }
+  return model.slice(0, 12);
+}
+
+function formatAgentType(agentType?: string): string {
+  if (!agentType) return '';
+  if (agentType === 'claude_code') return 'Claude Code';
+  if (agentType === 'codex') return 'Codex';
+  if (agentType === 'cursor') return 'Cursor';
+  return agentType;
+}
+
+function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome>['name']; color: string } {
+  if (name === 'Bash') return { icon: 'terminal', color: Theme.green };
+  if (name === 'Read' || name === 'Glob' || name === 'Grep') return { icon: 'file-code-o', color: Theme.cyan };
+  if (name === 'Edit' || name === 'Write') return { icon: 'pencil', color: Theme.accent };
+  if (name === 'WebSearch' || name === 'WebFetch') return { icon: 'globe', color: Theme.blue };
+  if (name === 'Task') return { icon: 'code-fork', color: Theme.violet };
+  if (name.startsWith('mcp__')) return { icon: 'plug', color: Theme.magenta };
+  return { icon: 'cog', color: Theme.textMuted };
+}
+
+function toolSummary(tc: ToolCall): string {
+  try {
+    const input = JSON.parse(tc.input);
+    if (tc.name === 'Bash') return input.command?.slice(0, 60) || 'command';
+    if (tc.name === 'Read') return input.file_path?.split('/').pop() || 'file';
+    if (tc.name === 'Edit') return input.file_path?.split('/').pop() || 'file';
+    if (tc.name === 'Write') return input.file_path?.split('/').pop() || 'file';
+    if (tc.name === 'Glob') return input.pattern || 'pattern';
+    if (tc.name === 'Grep') return input.pattern || 'pattern';
+    if (tc.name === 'WebSearch') return input.query?.slice(0, 40) || 'search';
+    if (tc.name === 'Task') return input.description?.slice(0, 40) || 'task';
+    if (tc.name === 'AskUserQuestion') {
+      const questions = input.questions as any[];
+      return questions?.[0]?.question?.slice(0, 50) || 'question';
+    }
+    if (tc.name === 'TodoWrite') {
+      const todos = input.todos as any[];
+      return `${todos?.length || 0} tasks`;
+    }
+    if (tc.name === 'TaskList') return 'task list';
+    if (tc.name === 'TaskCreate') return input.subject?.slice(0, 40) || 'create task';
+    if (tc.name === 'TaskUpdate') return input.subject?.slice(0, 40) || 'update task';
+    if (tc.name === 'SendMessage') return input.summary?.slice(0, 40) || 'message';
+    if (tc.name === 'TeamCreate') return input.team_name || 'team';
+    if (tc.name === 'Skill') return `/${input.skill}`;
+  } catch {}
+  return '';
+}
+
+// Specialized tool rendering components
+
+function TaskToolBlock({ tool }: { tool: ToolCall }) {
+  const [expanded, setExpanded] = useState(false);
+
+  let parsedInput: Record<string, unknown> = {};
+  try {
+    parsedInput = JSON.parse(tool.input);
+  } catch {}
+
+  const subagentType = String(parsedInput.subagent_type || 'unknown');
+  const description = String(parsedInput.description || '');
+  const prompt = String(parsedInput.prompt || '');
+  const model = parsedInput.model ? String(parsedInput.model) : null;
+
+  const subagentColors: Record<string, string> = {
+    Explore: Theme.green,
+    Plan: Theme.blue,
+    implementor: Theme.accent,
+    'general-purpose': Theme.textMuted,
+    'claude-code-guide': Theme.violet,
+  };
+
+  const color = subagentColors[subagentType] || Theme.textMuted;
+  const truncatedPrompt = prompt.length > 300 && !expanded ? prompt.slice(0, 300) + '...' : prompt;
+
+  return (
+    <TouchableOpacity
+      onPress={() => setExpanded(!expanded)}
+      style={[styles.specialToolBlock, { borderLeftColor: color }]}
+      activeOpacity={0.7}
+    >
+      <RNView style={styles.specialToolHeader}>
+        <FontAwesome name="code-fork" size={11} color={color} style={{ marginRight: 5 }} />
+        <RNText style={[styles.specialToolName, { color }]}>Task</RNText>
+        <RNView style={[styles.specialToolBadge, { backgroundColor: color + '20', borderColor: color + '40' }]}>
+          <RNText style={[styles.specialToolBadgeText, { color }]}>{subagentType}</RNText>
+        </RNView>
+        {model && (
+          <RNText style={styles.specialToolMeta}>{model}</RNText>
+        )}
+      </RNView>
+      {description && (
+        <RNText style={styles.specialToolDesc} numberOfLines={1}>{description}</RNText>
+      )}
+      {expanded && (
+        <RNText style={styles.specialToolContent} selectable>{truncatedPrompt}</RNText>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string }> }>; answers?: Record<string, string> } = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  const questions = parsedInput.questions || [];
+  if (questions.length === 0) return null;
+
+  let answers: Record<string, string> = {};
+  if (parsedInput.answers) {
+    answers = parsedInput.answers;
+  } else if (result?.content) {
+    const regex = /"([^"]+)"="([^"]+)"/g;
+    let match;
+    while ((match = regex.exec(result.content)) !== null) {
+      answers[match[1]] = match[2];
+    }
+  }
+
+  return (
+    <RNView style={styles.askQuestionBlock}>
+      {questions.map((q, i) => {
+        const answer = answers[q.question];
+        return (
+          <RNView key={i} style={styles.questionItem}>
+            {q.header && (
+              <RNText style={styles.questionHeader}>{q.header}</RNText>
+            )}
+            <RNText style={styles.questionText}>{q.question}</RNText>
+            <RNView style={styles.optionsRow}>
+              {q.options.map((opt, j) => {
+                const isSelected = answer === opt.label || answer === opt.label.replace(' (Recommended)', '');
+                return (
+                  <RNView
+                    key={j}
+                    style={[
+                      styles.optionPill,
+                      isSelected && styles.optionPillSelected
+                    ]}
+                  >
+                    {isSelected && (
+                      <FontAwesome name="check" size={10} color={Theme.green} style={{ marginRight: 4 }} />
+                    )}
+                    <RNText style={[
+                      styles.optionPillText,
+                      isSelected && styles.optionPillTextSelected
+                    ]}>
+                      {opt.label}
+                    </RNText>
+                  </RNView>
+                );
+              })}
+            </RNView>
+          </RNView>
+        );
+      })}
+    </RNView>
+  );
+}
+
+function TodoWriteBlock({ tool }: { tool: ToolCall }) {
+  let parsedInput: { todos?: Array<{ content: string; status: string; activeForm?: string }> } = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  const todos = parsedInput.todos || [];
+  if (todos.length === 0) return null;
+
+  const completed = todos.filter(t => t.status === 'completed').length;
+  const inProgress = todos.filter(t => t.status === 'in_progress').length;
+
+  return (
+    <RNView style={styles.todoBlock}>
+      <RNView style={styles.todoHeader}>
+        <FontAwesome name="list" size={11} color={Theme.magenta} style={{ marginRight: 5 }} />
+        <RNText style={styles.todoTitle}>TodoWrite</RNText>
+        <RNText style={styles.todoStats}>
+          {completed}/{todos.length} done{inProgress > 0 && `, ${inProgress} active`}
+        </RNText>
+      </RNView>
+      <RNView style={styles.todoList}>
+        {todos.map((todo, i) => (
+          <RNView key={i} style={styles.todoItem}>
+            {todo.status === 'completed' ? (
+              <FontAwesome name="check-circle" size={14} color={Theme.green} style={{ marginRight: 6 }} />
+            ) : todo.status === 'in_progress' ? (
+              <FontAwesome name="clock-o" size={14} color={Theme.accent} style={{ marginRight: 6 }} />
+            ) : (
+              <FontAwesome name="circle-o" size={14} color={Theme.textMuted0} style={{ marginRight: 6 }} />
+            )}
+            <RNText style={[
+              styles.todoItemText,
+              todo.status === 'completed' && styles.todoItemCompleted
+            ]}>
+              {todo.status === 'in_progress' ? (todo.activeForm || todo.content) : todo.content}
+            </RNText>
+          </RNView>
+        ))}
+      </RNView>
+    </RNView>
+  );
+}
+
+function TaskListBlock({ result }: { result?: ToolResult }) {
+  if (!result) return null;
+
+  const lines = result.content.split('\n');
+  const items: Array<{ id: string; status: string; subject: string }> = [];
+  for (const line of lines) {
+    const match = line.match(/#(\d+)\s+\[(\w+)]\s+(.+?)(?:\s+\(|$)/);
+    if (match) {
+      items.push({ id: match[1], status: match[2], subject: match[3].trim() });
+    }
+  }
+  if (items.length === 0) return null;
+
+  const completed = items.filter(t => t.status === 'completed').length;
+  const inProgress = items.filter(t => t.status === 'in_progress').length;
+
+  return (
+    <RNView style={styles.todoBlock}>
+      <RNView style={styles.todoHeader}>
+        <FontAwesome name="list" size={11} color={Theme.green} style={{ marginRight: 5 }} />
+        <RNText style={[styles.todoTitle, { color: Theme.green }]}>TaskList</RNText>
+        <RNText style={styles.todoStats}>
+          {completed}/{items.length} done{inProgress > 0 && `, ${inProgress} active`}
+        </RNText>
+      </RNView>
+      <RNView style={styles.todoList}>
+        {items.map((task, i) => (
+          <RNView key={i} style={styles.todoItem}>
+            {task.status === 'completed' ? (
+              <FontAwesome name="check-circle" size={14} color={Theme.green} style={{ marginRight: 6 }} />
+            ) : task.status === 'in_progress' ? (
+              <FontAwesome name="clock-o" size={14} color={Theme.accent} style={{ marginRight: 6 }} />
+            ) : (
+              <FontAwesome name="circle-o" size={14} color={Theme.textMuted0} style={{ marginRight: 6 }} />
+            )}
+            <RNText style={styles.todoItemText}>#{task.id} {task.subject}</RNText>
+          </RNView>
+        ))}
+      </RNView>
+    </RNView>
+  );
+}
+
+function SkillCard({ tool }: { tool: ToolCall }) {
+  let parsedInput: { skill?: string } = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  const skillName = parsedInput.skill || 'skill';
+
+  return (
+    <RNView style={styles.skillCard}>
+      <FontAwesome name="magic" size={12} color={Theme.violet} style={{ marginRight: 6 }} />
+      <RNText style={styles.skillName}>/{skillName}</RNText>
+    </RNView>
+  );
+}
+
+function ImageBlock({ image }: { image: ImageData }) {
+  const storageUrl = useQuery(
+    api.images.getImageUrl,
+    image.storage_id ? { storageId: image.storage_id as Id<"_storage"> } : "skip"
+  );
+
+  const src = image.storage_id
+    ? storageUrl ?? undefined
+    : image.data
+      ? `data:${image.media_type};base64,${image.data}`
+      : undefined;
+
+  if (!src) {
+    return (
+      <RNView style={styles.imageLoading}>
+        <ActivityIndicator size="small" color={Theme.textMuted} />
+        <RNText style={styles.imageLoadingText}>Loading image...</RNText>
+      </RNView>
+    );
+  }
+
+  return (
+    <RNView style={styles.imageContainer}>
+      <Image
+        source={{ uri: src }}
+        style={styles.messageImage}
+        resizeMode="contain"
+      />
+    </RNView>
+  );
+}
+
+function CompactionSummaryBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <RNView style={styles.compactionBlock}>
+      <TouchableOpacity
+        onPress={() => setExpanded(!expanded)}
+        style={styles.compactionHeader}
+        activeOpacity={0.7}
+      >
+        <FontAwesome
+          name={expanded ? "chevron-down" : "chevron-right"}
+          size={10}
+          color={Theme.accent}
+          style={{ marginRight: 6 }}
+        />
+        <RNText style={styles.compactionTitle}>Previous context summary</RNText>
+      </TouchableOpacity>
+      {expanded && (
+        <RNText style={styles.compactionContent} selectable>
+          {content}
+        </RNText>
+      )}
+    </RNView>
+  );
 }
 
 function ToolCallItem({ toolCall, expanded, onToggle }: {
@@ -128,44 +585,115 @@ function ToolCallItem({ toolCall, expanded, onToggle }: {
   expanded: boolean;
   onToggle: () => void;
 }) {
-  return (
-    <RNView style={styles.toolCallContainer}>
-      <TouchableOpacity onPress={onToggle} style={styles.toolCallHeader} activeOpacity={0.7}>
-        <RNText style={styles.toolCallName}>{toolCall.name}</RNText>
-        <RNText style={styles.toolCallToggle}>{expanded ? '▼' : '▶'}</RNText>
-      </TouchableOpacity>
+  const { icon, color } = toolIcon(toolCall.name);
+  const summary = toolSummary(toolCall);
+  const inputDisplay = expanded && toolCall.input.length > 2000
+    ? toolCall.input.slice(0, 2000) + '\n... (truncated)'
+    : toolCall.input;
 
+  return (
+    <TouchableOpacity onPress={onToggle} style={styles.toolCallContainer} activeOpacity={0.7}>
+      <RNView style={styles.toolCallHeader}>
+        <FontAwesome name={icon} size={12} color={color} style={{ marginRight: 6 }} />
+        <RNText style={[styles.toolCallName, { color }]}>{toolCall.name}</RNText>
+        {summary && !expanded ? (
+          <RNText style={styles.toolCallSummary} numberOfLines={1}> {summary}</RNText>
+        ) : null}
+        <RNText style={styles.toolCallToggle}>{expanded ? '\u25BC' : '\u25B6'}</RNText>
+      </RNView>
       {expanded && (
         <RNView style={styles.toolCallContent}>
-          <RNText style={styles.toolCallInput}>{toolCall.input}</RNText>
+          <RNText style={styles.toolCallInput} selectable>{inputDisplay}</RNText>
         </RNView>
       )}
+    </TouchableOpacity>
+  );
+}
+
+function ThinkingBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const preview = content.split('\n').slice(0, 2).join('\n');
+  const isLong = content.split('\n').length > 2 || content.length > 200;
+
+  return (
+    <TouchableOpacity
+      onPress={() => isLong && setExpanded(!expanded)}
+      style={styles.thinkingBlock}
+      activeOpacity={isLong ? 0.7 : 1}
+    >
+      <RNView style={styles.thinkingHeader}>
+        <FontAwesome name="lightbulb-o" size={11} color={Theme.textMuted0} style={{ marginRight: 5 }} />
+        <RNText style={styles.thinkingLabel}>thinking</RNText>
+        {isLong && (
+          <RNText style={styles.thinkingToggle}>{expanded ? '\u25BC' : '\u25B6'}</RNText>
+        )}
+      </RNView>
+      <RNText style={styles.thinkingText} numberOfLines={expanded ? undefined : 3}>
+        {expanded ? content : preview}
+      </RNText>
+    </TouchableOpacity>
+  );
+}
+
+function SystemMessage({ message }: { message: Message }) {
+  if (message.subtype === 'compact_boundary') {
+    return (
+      <RNView style={styles.systemDivider}>
+        <RNView style={styles.systemDividerLine} />
+        <RNText style={styles.systemDividerText}>context compacted</RNText>
+        <RNView style={styles.systemDividerLine} />
+      </RNView>
+    );
+  }
+
+  if (message.subtype === 'compaction_summary' && message.content) {
+    return <CompactionSummaryBlock content={message.content} />;
+  }
+
+  const content = message.content?.slice(0, 120) || '';
+  if (!content) return null;
+
+  return (
+    <RNView style={styles.systemMessage}>
+      <RNText style={styles.systemMessageText} numberOfLines={2}>{content}</RNText>
     </RNView>
   );
 }
 
+const CONTENT_TRUNCATE_LENGTH = 800;
+
 function MessageBubble({ message }: { message: Message }) {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [contentExpanded, setContentExpanded] = useState(false);
+
+  if (message.role === 'system') {
+    return <SystemMessage message={message} />;
+  }
 
   const isUser = message.role === 'user';
-  const content = message.content || message.thinking || '';
+  const hasToolResults = message.tool_results && message.tool_results.length > 0;
+
+  if (hasToolResults && !message.content) {
+    return null;
+  }
+
+  const rawContent = message.content || '';
+  const isLongContent = rawContent.length > CONTENT_TRUNCATE_LENGTH;
+  const content = (isLongContent && !contentExpanded)
+    ? rawContent.slice(0, CONTENT_TRUNCATE_LENGTH)
+    : rawContent;
+  const hasThinking = !!message.thinking?.trim();
+  const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
+  const hasImages = message.images && message.images.length > 0;
 
   const toggleTool = (toolId: string) => {
     setExpandedTools(prev => {
       const next = new Set(prev);
-      if (next.has(toolId)) {
-        next.delete(toolId);
-      } else {
-        next.add(toolId);
-      }
+      if (next.has(toolId)) next.delete(toolId);
+      else next.add(toolId);
       return next;
     });
   };
-
-  const hasToolResults = message.tool_results && message.tool_results.length > 0;
-  if (hasToolResults) {
-    return null;
-  }
 
   return (
     <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble]}>
@@ -176,45 +704,76 @@ function MessageBubble({ message }: { message: Message }) {
         <RNText style={styles.bubbleTime}>{formatTimestamp(message.timestamp)}</RNText>
       </RNView>
 
-      {content && (
-        <RNView style={styles.bubbleContent}>
-          {extractCodeBlocks(content).map((block, idx) => {
-            if (block.type === 'code') {
-              return (
-                <RNView key={idx} style={styles.codeBlock}>
-                  <RNView style={styles.codeHeader}>
-                    <RNText style={styles.codeLanguage}>{block.language}</RNText>
-                  </RNView>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-                    <RNView style={styles.codeContent}>
-                      <RNText style={styles.codeText} selectable>{block.content}</RNText>
-                    </RNView>
-                  </ScrollView>
-                </RNView>
-              );
-            }
-            return (
-              <LinkedText key={idx} text={block.content} style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} />
-            );
-          })}
+      {hasThinking && <ThinkingBlock content={message.thinking!} />}
+
+      {hasImages && (
+        <RNView style={styles.imagesContainer}>
+          {message.images!.map((img, i) => (
+            <ImageBlock key={i} image={img} />
+          ))}
         </RNView>
       )}
 
-      {message.tool_calls && message.tool_calls.length > 0 && (
+      {content ? (
+        <RNView style={styles.bubbleContent}>
+          <MarkdownContent
+            text={content}
+            baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}
+            isUser={isUser}
+          />
+          {isLongContent && (
+            <TouchableOpacity
+              onPress={() => setContentExpanded(!contentExpanded)}
+              style={styles.showMoreButton}
+              activeOpacity={0.7}
+            >
+              <RNText style={styles.showMoreText}>
+                {contentExpanded ? 'Show less' : `Show more (${Math.round(rawContent.length / 1000)}k chars)`}
+              </RNText>
+            </TouchableOpacity>
+          )}
+        </RNView>
+      ) : null}
+
+      {hasToolCalls && (
         <RNView style={styles.toolCallsContainer}>
-          {message.tool_calls.map((toolCall) => (
-            <ToolCallItem
-              key={toolCall.id}
-              toolCall={toolCall}
-              expanded={expandedTools.has(toolCall.id)}
-              onToggle={() => toggleTool(toolCall.id)}
-            />
-          ))}
+          {message.tool_calls!.map((tc) => {
+            const result = message.tool_results?.find(r => r.tool_use_id === tc.id);
+
+            // Specialized rendering for specific tools
+            if (tc.name === 'Task') {
+              return <TaskToolBlock key={tc.id} tool={tc} />;
+            }
+            if (tc.name === 'AskUserQuestion') {
+              return <AskUserQuestionBlock key={tc.id} tool={tc} result={result} />;
+            }
+            if (tc.name === 'TodoWrite') {
+              return <TodoWriteBlock key={tc.id} tool={tc} />;
+            }
+            if (tc.name === 'TaskList' && result) {
+              return <TaskListBlock key={tc.id} result={result} />;
+            }
+            if (tc.name === 'Skill') {
+              return <SkillCard key={tc.id} tool={tc} />;
+            }
+
+            // Default rendering for other tools
+            return (
+              <ToolCallItem
+                key={tc.id}
+                toolCall={tc}
+                expanded={expandedTools.has(tc.id)}
+                onToggle={() => toggleTool(tc.id)}
+              />
+            );
+          })}
         </RNView>
       )}
     </RNView>
   );
 }
+
+// --- Pending messages & input ---
 
 type PendingMessage = {
   _id: string;
@@ -233,24 +792,11 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const retryMessage = useMutation(api.pendingMessages.retryMessage);
 
-  const pendingMessages = useQuery(
-    api.pendingMessages.getPendingMessages,
-    {}
-  ) as PendingMessage[] | undefined;
+  const pendingMessages = useQuery(api.pendingMessages.getPendingMessages, {}) as PendingMessage[] | undefined;
 
   const conversationPendingMessages = pendingMessages?.filter(
     (msg) => msg.conversation_id === conversationId
   ) || [];
-
-  const handleRetry = async (messageId: Id<"pending_messages">) => {
-    try {
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      await retryMessage({ message_id: messageId });
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (err) {
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    }
-  };
 
   const handleSend = async () => {
     const trimmedMessage = message.trim();
@@ -261,10 +807,7 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
 
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      await sendMessage({
-        conversation_id: conversationId,
-        content: trimmedMessage,
-      });
+      await sendMessage({ conversation_id: conversationId, content: trimmedMessage });
       setMessage('');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
@@ -315,6 +858,8 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
   );
 }
 
+// --- Session actions ---
+
 function SessionActions({ conversationId, isFavorite, shareToken }: {
   conversationId: Id<"conversations">;
   isFavorite: boolean;
@@ -340,10 +885,7 @@ function SessionActions({ conversationId, isFavorite, shareToken }: {
       }
       if (token) {
         const url = `https://codecast.sh/share/${token}`;
-        await Share.share({
-          message: url,
-          url: url,
-        });
+        await Share.share({ message: url, url });
       }
     } catch {} finally {
       setSharing(false);
@@ -366,18 +908,92 @@ function SessionActions({ conversationId, isFavorite, shareToken }: {
   );
 }
 
+// --- Main screen with pagination ---
+
 export default function SessionDetailScreen() {
   const { id } = useLocalSearchParams();
+  const convex = useConvex();
+  const flatListRef = useRef<FlatList>(null);
+  const [olderMessages, setOlderMessages] = useState<Message[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderHasMore, setOlderHasMore] = useState(true);
+  const [olderOldestTs, setOlderOldestTs] = useState<number | null>(null);
+  const [initialScrollDone, setInitialScrollDone] = useState(false);
 
   const conversation = useQuery(
     api.conversations.getAllMessages,
-    id ? { conversation_id: id as Id<"conversations"> } : "skip"
+    id ? { conversation_id: id as Id<"conversations">, limit: 50 } : "skip"
   ) as ConversationData | null | undefined;
 
   const pendingPermissions = useQuery(
     api.permissions.getPendingPermissions,
     id ? { conversation_id: id as Id<"conversations"> } : "skip"
   );
+
+  const hasMoreAbove = olderHasMore && (conversation?.has_more_above !== false);
+
+  const allMessages = useMemo(() => {
+    const recent = conversation?.messages || [];
+    if (olderMessages.length === 0) return recent;
+    const recentIds = new Set(recent.map(m => m._id));
+    const uniqueOlder = olderMessages.filter(m => !recentIds.has(m._id));
+    return [...uniqueOlder, ...recent];
+  }, [conversation?.messages, olderMessages]);
+
+  useEffect(() => {
+    if (conversation && !initialScrollDone && allMessages.length > 0) {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: false });
+        setInitialScrollDone(true);
+      }, 150);
+    }
+  }, [conversation?._id, allMessages.length > 0]);
+
+  useEffect(() => {
+    setOlderMessages([]);
+    setOlderHasMore(true);
+    setOlderOldestTs(null);
+    setInitialScrollDone(false);
+  }, [id]);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (loadingOlder || !id) return;
+
+    const beforeTs = olderOldestTs ?? conversation?.oldest_timestamp;
+    if (!beforeTs) return;
+
+    setLoadingOlder(true);
+    try {
+      const result = await convex.query(api.conversations.getOlderMessages, {
+        conversation_id: id as Id<"conversations">,
+        before_timestamp: beforeTs,
+        limit: 50,
+      });
+
+      if (result && result.messages.length > 0) {
+        setOlderMessages(prev => {
+          const existingIds = new Set(prev.map(m => m._id));
+          const newMsgs = result.messages.filter((m: Message) => !existingIds.has(m._id));
+          return [...newMsgs, ...prev];
+        });
+        setOlderOldestTs(result.oldest_timestamp);
+        setOlderHasMore(result.has_more);
+      } else {
+        setOlderHasMore(false);
+      }
+    } catch {
+      setOlderHasMore(false);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [convex, id, loadingOlder, olderOldestTs, conversation?.oldest_timestamp]);
+
+  const handleScroll = useCallback((event: any) => {
+    const { contentOffset } = event.nativeEvent;
+    if (contentOffset.y < 100 && hasMoreAbove && !loadingOlder && initialScrollDone) {
+      loadOlderMessages();
+    }
+  }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone]);
 
   if (conversation === undefined) {
     return (
@@ -397,6 +1013,7 @@ export default function SessionDetailScreen() {
   }
 
   const isActive = conversation.status === 'active';
+  const totalCount = allMessages.length + (conversation.has_more_above ? '+' as any : 0);
 
   return (
     <>
@@ -421,8 +1038,18 @@ export default function SessionDetailScreen() {
                 {conversation.title}
               </RNText>
               <RNView style={styles.sessionMeta}>
+                {conversation.agent_type && (
+                  <RNText style={styles.metaBadge}>
+                    {formatAgentType(conversation.agent_type)}
+                  </RNText>
+                )}
+                {conversation.model && (
+                  <RNText style={styles.metaBadgeModel}>
+                    {formatModel(conversation.model)}
+                  </RNText>
+                )}
                 <RNText style={styles.messageCountText}>
-                  {conversation.messages.length} messages
+                  {allMessages.length} msgs
                 </RNText>
                 {isActive && (
                   <RNView style={styles.activeIndicator}>
@@ -441,19 +1068,39 @@ export default function SessionDetailScreen() {
         </RNView>
 
         <FlatList
-          data={conversation.messages}
+          ref={flatListRef}
+          data={allMessages}
           renderItem={({ item }) => <MessageBubble message={item} />}
           keyExtractor={(item) => item._id}
           contentContainerStyle={styles.messageList}
           showsVerticalScrollIndicator={false}
+          onScroll={handleScroll}
+          scrollEventThrottle={100}
+          maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
           ListHeaderComponent={
-            pendingPermissions && pendingPermissions.length > 0 ? (
-              <RNView style={styles.permissionsContainer}>
-                {pendingPermissions.map((permission) => (
-                  <PermissionCard key={permission._id} permission={permission} />
-                ))}
-              </RNView>
-            ) : null
+            <>
+              {hasMoreAbove && (
+                <TouchableOpacity
+                  onPress={loadOlderMessages}
+                  style={styles.loadMoreButton}
+                  activeOpacity={0.7}
+                  disabled={loadingOlder}
+                >
+                  {loadingOlder ? (
+                    <ActivityIndicator size="small" color={Theme.textMuted} />
+                  ) : (
+                    <RNText style={styles.loadMoreText}>Load older messages</RNText>
+                  )}
+                </TouchableOpacity>
+              )}
+              {pendingPermissions && pendingPermissions.length > 0 ? (
+                <RNView style={styles.permissionsContainer}>
+                  {pendingPermissions.map((permission) => (
+                    <PermissionCard key={permission._id} permission={permission} />
+                  ))}
+                </RNView>
+              ) : null}
+            </>
           }
         />
 
@@ -512,10 +1159,30 @@ const styles = StyleSheet.create({
   sessionMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  metaBadge: {
+    fontSize: 10,
+    color: Theme.text,
+    fontWeight: '600',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 4,
+  },
+  metaBadgeModel: {
+    fontSize: 10,
+    color: Theme.textMuted,
+    fontWeight: '500',
+    fontFamily: 'SpaceMono',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 4,
   },
   messageCountText: {
-    fontSize: 13,
+    fontSize: 12,
     color: Theme.textMuted,
   },
   activeIndicator: {
@@ -547,6 +1214,16 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.bgAlt,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  loadMoreButton: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginBottom: 8,
+  },
+  loadMoreText: {
+    fontSize: 13,
+    color: Theme.accent,
+    fontWeight: '600',
   },
   messageList: {
     padding: 16,
@@ -600,6 +1277,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingBottom: 10,
   },
+  showMoreButton: {
+    marginTop: 6,
+    paddingVertical: 4,
+  },
+  showMoreText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.cyan,
+  },
   bubbleText: {
     fontSize: 15,
     lineHeight: 21,
@@ -613,6 +1299,37 @@ const styles = StyleSheet.create({
   linkText: {
     color: Theme.cyan,
     textDecorationLine: 'underline',
+  },
+  inlineCode: {
+    fontFamily: 'SpaceMono',
+    fontSize: 13,
+    backgroundColor: 'rgba(0,0,0,0.15)',
+    paddingHorizontal: 4,
+    borderRadius: 3,
+    color: Theme.cyan,
+  },
+  listContainer: {
+    marginVertical: 4,
+    paddingLeft: 4,
+  },
+  listItem: {
+    flexDirection: 'row',
+    marginBottom: 3,
+  },
+  listBullet: {
+    width: 20,
+    textAlign: 'center',
+    opacity: 0.6,
+  },
+  blockquote: {
+    borderLeftWidth: 3,
+    borderLeftColor: Theme.accent,
+    paddingLeft: 10,
+    marginVertical: 6,
+    opacity: 0.85,
+  },
+  blockquoteText: {
+    fontStyle: 'italic',
   },
   codeBlock: {
     marginVertical: 8,
@@ -641,10 +1358,72 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     color: '#93a1a1',
   },
+  thinkingBlock: {
+    marginHorizontal: 12,
+    marginBottom: 6,
+    padding: 8,
+    backgroundColor: 'rgba(0,0,0,0.15)',
+    borderRadius: 6,
+  },
+  thinkingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  thinkingLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: 'rgba(253,246,227,0.4)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    flex: 1,
+  },
+  thinkingToggle: {
+    fontSize: 8,
+    color: 'rgba(253,246,227,0.3)',
+  },
+  thinkingText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: 'rgba(253,246,227,0.5)',
+    fontStyle: 'italic',
+  },
+  systemDivider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 16,
+    paddingHorizontal: 8,
+  },
+  systemDividerLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Theme.borderLight,
+  },
+  systemDividerText: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+    marginHorizontal: 10,
+    fontStyle: 'italic',
+  },
+  systemMessage: {
+    alignSelf: 'center',
+    marginVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 8,
+    maxWidth: '80%',
+  },
+  systemMessageText: {
+    fontSize: 12,
+    color: Theme.textMuted0,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
   toolCallsContainer: {
     paddingHorizontal: 12,
     paddingBottom: 10,
-    gap: 6,
+    gap: 4,
   },
   toolCallContainer: {
     backgroundColor: 'rgba(0,0,0,0.2)',
@@ -653,18 +1432,23 @@ const styles = StyleSheet.create({
   },
   toolCallHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 10,
+    padding: 8,
   },
   toolCallName: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
-    color: Theme.cyan,
+  },
+  toolCallSummary: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.4)',
+    flex: 1,
+    marginLeft: 2,
   },
   toolCallToggle: {
-    fontSize: 10,
-    color: 'rgba(255,255,255,0.5)',
+    fontSize: 8,
+    color: 'rgba(255,255,255,0.4)',
+    marginLeft: 6,
   },
   toolCallContent: {
     padding: 10,
@@ -740,5 +1524,221 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
+  },
+  // Specialized tool blocks
+  specialToolBlock: {
+    marginVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(0,0,0,0.15)',
+    borderRadius: 8,
+    borderLeftWidth: 3,
+  },
+  specialToolHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  specialToolName: {
+    fontSize: 11,
+    fontWeight: '600',
+    fontFamily: 'SpaceMono',
+    marginRight: 6,
+  },
+  specialToolBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    marginRight: 6,
+  },
+  specialToolBadgeText: {
+    fontSize: 9,
+    fontWeight: '600',
+    fontFamily: 'SpaceMono',
+  },
+  specialToolMeta: {
+    fontSize: 9,
+    color: Theme.textMuted0,
+    fontFamily: 'SpaceMono',
+    marginLeft: 'auto',
+  },
+  specialToolDesc: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    marginBottom: 4,
+  },
+  specialToolContent: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    fontFamily: 'SpaceMono',
+    marginTop: 4,
+  },
+  // AskUserQuestion
+  askQuestionBlock: {
+    marginVertical: 6,
+    paddingLeft: 10,
+    borderLeftWidth: 2,
+    borderLeftColor: Theme.violet + '60',
+  },
+  questionItem: {
+    marginBottom: 10,
+  },
+  questionHeader: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: Theme.violet + 'cc',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: Theme.violet + '20',
+    borderRadius: 3,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: Theme.violet + '40',
+  },
+  questionText: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    marginBottom: 6,
+  },
+  optionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  optionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+  },
+  optionPillSelected: {
+    backgroundColor: Theme.green + '20',
+    borderColor: Theme.green + '60',
+  },
+  optionPillText: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+  },
+  optionPillTextSelected: {
+    color: Theme.green,
+    fontWeight: '500',
+  },
+  // TodoWrite / TaskList
+  todoBlock: {
+    marginVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+    borderRadius: 8,
+  },
+  todoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  todoTitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Theme.magenta,
+    fontFamily: 'SpaceMono',
+    marginRight: 6,
+  },
+  todoStats: {
+    fontSize: 10,
+    color: Theme.textMuted0,
+    fontFamily: 'SpaceMono',
+  },
+  todoList: {
+    gap: 4,
+  },
+  todoItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  todoItemText: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    flex: 1,
+  },
+  todoItemCompleted: {
+    color: Theme.textMuted0,
+    textDecorationLine: 'line-through',
+  },
+  // Skill card
+  skillCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+    marginVertical: 4,
+  },
+  skillName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.violet,
+    fontFamily: 'SpaceMono',
+  },
+  // Images
+  imagesContainer: {
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+    gap: 8,
+  },
+  imageContainer: {
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
+  messageImage: {
+    width: '100%',
+    height: 200,
+  },
+  imageLoading: {
+    height: 120,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
+  imageLoadingText: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+    marginTop: 6,
+  },
+  // Compaction summary
+  compactionBlock: {
+    marginVertical: 12,
+    paddingHorizontal: 12,
+  },
+  compactionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  compactionTitle: {
+    fontSize: 11,
+    color: Theme.accent + 'b0',
+  },
+  compactionContent: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    marginTop: 8,
+    paddingLeft: 12,
+    borderLeftWidth: 2,
+    borderLeftColor: Theme.accent + '60',
   },
 });
