@@ -13,6 +13,7 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
+import * as Updates from 'expo-updates';
 
 const secureStorage = {
   getItem: async (key: string) => {
@@ -49,6 +50,26 @@ export default function RootLayout() {
   useEffect(() => {
     if (loaded) {
       SplashScreen.hideAsync();
+    }
+  }, [loaded]);
+
+  useEffect(() => {
+    async function checkForUpdates() {
+      if (__DEV__) return;
+
+      try {
+        const update = await Updates.checkForUpdateAsync();
+        if (update.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          await Updates.reloadAsync();
+        }
+      } catch (error) {
+        console.error('Error checking for updates:', error);
+      }
+    }
+
+    if (loaded) {
+      checkForUpdates();
     }
   }, [loaded]);
 

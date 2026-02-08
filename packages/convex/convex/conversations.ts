@@ -2193,12 +2193,23 @@ export const searchForCLI = query({
     const projectPath = args.project_path;
     const userOnly = args.user_only ?? false;
     const terms = parseSearchTerms(searchTerm);
-    const searchQuery = terms.all.join(" ");
 
-    const searchResults = await ctx.db
-      .query("messages")
-      .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
-      .take(200);
+    // Search for each term separately to ensure we get results for all terms
+    // Then combine and deduplicate by message ID
+    const allSearchResults = new Map<string, any>();
+    for (const term of terms.all) {
+      const results = await ctx.db
+        .query("messages")
+        .withSearchIndex("search_content", (q) => q.search("content", term))
+        .take(200);
+      for (const msg of results) {
+        const msgId = msg._id.toString();
+        if (!allSearchResults.has(msgId)) {
+          allSearchResults.set(msgId, msg);
+        }
+      }
+    }
+    const searchResults = Array.from(allSearchResults.values());
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -3316,11 +3327,41 @@ export const feedForCLI = query({
     let queryMatchedOwnConversations: typeof ownConversations = [];
     let queryMatchedTeamConversations: typeof ownConversations = [];
     if (query && query.length >= 2) {
-      const searchResults = await ctx.db
-        .query("messages")
-        .withSearchIndex("search_content", (q) => q.search("content", query))
-        .take(50);
-      matchingConvIds = new Set(searchResults.map((m) => m.conversation_id.toString()));
+      // Search for each term separately to ensure we get results for all terms
+      const terms = parseSearchTerms(query);
+      const allSearchResults = new Map<string, any>();
+      for (const term of terms.all) {
+        const results = await ctx.db
+          .query("messages")
+          .withSearchIndex("search_content", (q) => q.search("content", term))
+          .take(50);
+        for (const msg of results) {
+          const msgId = msg._id.toString();
+          if (!allSearchResults.has(msgId)) {
+            allSearchResults.set(msgId, msg);
+          }
+        }
+      }
+      const searchResults = Array.from(allSearchResults.values());
+
+      // Group messages by conversation and filter to those matching ALL terms
+      const conversationMessages = new Map<string, typeof searchResults>();
+      for (const msg of searchResults) {
+        const convId = msg.conversation_id.toString();
+        if (!conversationMessages.has(convId)) {
+          conversationMessages.set(convId, []);
+        }
+        conversationMessages.get(convId)!.push(msg);
+      }
+
+      // Only include conversations where ALL terms appear across messages
+      for (const [convId, messages] of conversationMessages) {
+        if (!conversationMatchesAllTerms(messages, terms)) {
+          conversationMessages.delete(convId);
+        }
+      }
+
+      matchingConvIds = new Set(conversationMessages.keys());
 
       const matchedConvs = await Promise.all(
         Array.from(matchingConvIds).slice(0, 25).map(async (convId) => {
