@@ -2,6 +2,7 @@ import { mutation, query, internalAction, internalMutation } from "./_generated/
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { verifyApiToken } from "./apiTokens";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -65,16 +66,39 @@ export const notifyTeamSessionStart = internalMutation({
     );
     const teamMembers = memberUsers.filter((u: any): u is NonNullable<typeof u> => u !== null);
 
+    const actorName = user.name || user.email || "Someone";
+    let body = conversation.title || conversation.project_path?.split("/").pop() || "New session";
+    if (!conversation.title) {
+      const firstMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", args.conversation_id))
+        .order("asc")
+        .first();
+      if (firstMsg?.content) {
+        body = firstMsg.content.slice(0, 200);
+      }
+    }
+
     for (const member of teamMembers) {
       if (
         member.push_token &&
         member.notifications_enabled &&
         member.notification_preferences?.team_session_start
       ) {
+        await ctx.db.insert("notifications", {
+          recipient_user_id: member._id,
+          type: "team_session_start",
+          actor_user_id: args.user_id,
+          conversation_id: args.conversation_id,
+          message: body,
+          read: false,
+          created_at: Date.now(),
+        });
+
         await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
           push_token: member.push_token,
-          title: 'New Team Session',
-          body: `${user.name || user.email} started a new session`,
+          title: `${actorName} started coding`,
+          body,
           data: {
             conversationId: args.conversation_id,
             type: 'team_session_start',
@@ -92,9 +116,13 @@ export const create = mutation({
       v.literal("mention"),
       v.literal("comment_reply"),
       v.literal("conversation_comment"),
-      v.literal("team_invite")
+      v.literal("team_invite"),
+      v.literal("session_idle"),
+      v.literal("permission_request"),
+      v.literal("session_error"),
+      v.literal("team_session_start")
     ),
-    actor_user_id: v.id("users"),
+    actor_user_id: v.optional(v.id("users")),
     comment_id: v.optional(v.id("comments")),
     conversation_id: v.optional(v.id("conversations")),
     message: v.string(),
@@ -141,7 +169,9 @@ export const list = query({
 
     const notificationsWithActors = await Promise.all(
       notifications.map(async (notification) => {
-        const actor = await ctx.db.get(notification.actor_user_id);
+        const actor = notification.actor_user_id
+          ? await ctx.db.get(notification.actor_user_id)
+          : null;
         return {
           ...notification,
           actor: actor ? {
@@ -220,5 +250,69 @@ export const markAllAsRead = mutation({
         ctx.db.patch(notification._id, { read: true })
       )
     );
+  },
+});
+
+export const createSessionNotification = mutation({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.id("conversations"),
+    type: v.union(
+      v.literal("session_idle"),
+      v.literal("permission_request"),
+      v.literal("session_error")
+    ),
+    title: v.string(),
+    message: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) {
+      return { error: "Unauthorized" };
+    }
+
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || conversation.user_id !== auth.userId) {
+      return { error: "Not found" };
+    }
+
+    const user = await ctx.db.get(auth.userId);
+    if (!user) {
+      return { error: "User not found" };
+    }
+
+    const prefs = user.notification_preferences;
+    if (args.type === "session_idle" && prefs?.session_idle === false) {
+      return { skipped: true };
+    }
+    if (args.type === "session_error" && prefs?.session_error === false) {
+      return { skipped: true };
+    }
+    if (args.type === "permission_request" && prefs && !prefs.permission_request) {
+      return { skipped: true };
+    }
+
+    const notificationId = await ctx.db.insert("notifications", {
+      recipient_user_id: auth.userId,
+      type: args.type,
+      conversation_id: args.conversation_id,
+      message: args.message,
+      read: false,
+      created_at: Date.now(),
+    });
+
+    if (user.push_token && user.notifications_enabled) {
+      await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+        push_token: user.push_token,
+        title: args.title,
+        body: args.message,
+        data: {
+          conversationId: args.conversation_id,
+          type: args.type,
+        },
+      });
+    }
+
+    return { notificationId };
   },
 });
