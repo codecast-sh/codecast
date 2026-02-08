@@ -1,10 +1,11 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, View as RNView, Text as RNText } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import * as Haptics from 'expo-haptics';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { PermissionCard } from '@/components/PermissionCard';
 import { Theme, Spacing } from '@/constants/Theme';
 
@@ -34,6 +35,8 @@ type ConversationData = {
   _id: string;
   title: string;
   status: string;
+  is_favorite?: boolean;
+  share_token?: string | null;
   messages: Message[];
 };
 
@@ -69,6 +72,48 @@ function extractCodeBlocks(text: string): Array<{ type: 'text' | 'code'; content
   }
 
   return blocks.length > 0 ? blocks : [{ type: 'text', content: text }];
+}
+
+function parseTextWithLinks(text: string): Array<{ type: 'text' | 'link'; content: string }> {
+  const regex = /(https?:\/\/[^\s<>\])"']+)/g;
+  const parts: Array<{ type: 'text' | 'link'; content: string }> = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: 'text', content: text.slice(lastIndex, match.index) });
+    }
+    parts.push({ type: 'link', content: match[1] });
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push({ type: 'text', content: text.slice(lastIndex) });
+  }
+
+  return parts.length > 0 ? parts : [{ type: 'text', content: text }];
+}
+
+function LinkedText({ text, style }: { text: string; style: any }) {
+  const parts = parseTextWithLinks(text);
+  return (
+    <RNText style={style} selectable>
+      {parts.map((part, i) =>
+        part.type === 'link' ? (
+          <RNText
+            key={i}
+            style={styles.linkText}
+            onPress={() => Linking.openURL(part.content)}
+          >
+            {part.content}
+          </RNText>
+        ) : (
+          <RNText key={i}>{part.content}</RNText>
+        )
+      )}
+    </RNText>
+  );
 }
 
 function formatTimestamp(ts: number): string {
@@ -142,16 +187,14 @@ function MessageBubble({ message }: { message: Message }) {
                   </RNView>
                   <ScrollView horizontal showsHorizontalScrollIndicator={true}>
                     <RNView style={styles.codeContent}>
-                      <RNText style={styles.codeText}>{block.content}</RNText>
+                      <RNText style={styles.codeText} selectable>{block.content}</RNText>
                     </RNView>
                   </ScrollView>
                 </RNView>
               );
             }
             return (
-              <RNText key={idx} style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}>
-                {block.content}
-              </RNText>
+              <LinkedText key={idx} text={block.content} style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} />
             );
           })}
         </RNView>
@@ -243,7 +286,7 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
         <RNView style={styles.errorBanner}>
           <RNText style={styles.errorBannerText}>{error}</RNText>
           <TouchableOpacity onPress={() => setError(null)}>
-            <RNText style={styles.errorBannerDismiss}>×</RNText>
+            <RNText style={styles.errorBannerDismiss}>x</RNText>
           </TouchableOpacity>
         </RNView>
       )}
@@ -265,9 +308,60 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
           disabled={!message.trim() || isSending}
           activeOpacity={0.7}
         >
-          <RNText style={styles.sendButtonText}>{isSending ? '...' : '→'}</RNText>
+          <FontAwesome name="arrow-up" size={16} color="#fff" />
         </TouchableOpacity>
       </RNView>
+    </RNView>
+  );
+}
+
+function SessionActions({ conversationId, isFavorite, shareToken }: {
+  conversationId: Id<"conversations">;
+  isFavorite: boolean;
+  shareToken: string | null | undefined;
+}) {
+  const [sharing, setSharing] = useState(false);
+  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
+  const generateShareLink = useMutation(api.conversations.generateShareLink);
+
+  const handleFavorite = useCallback(async () => {
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await toggleFavorite({ conversation_id: conversationId });
+    } catch {}
+  }, [conversationId, toggleFavorite]);
+
+  const handleShare = useCallback(async () => {
+    setSharing(true);
+    try {
+      let token = shareToken;
+      if (!token) {
+        token = await generateShareLink({ conversation_id: conversationId });
+      }
+      if (token) {
+        const url = `https://codecast.sh/share/${token}`;
+        await Share.share({
+          message: url,
+          url: url,
+        });
+      }
+    } catch {} finally {
+      setSharing(false);
+    }
+  }, [conversationId, shareToken, generateShareLink]);
+
+  return (
+    <RNView style={styles.actionsRow}>
+      <TouchableOpacity onPress={handleFavorite} style={styles.actionButton} activeOpacity={0.7}>
+        <FontAwesome
+          name={isFavorite ? "star" : "star-o"}
+          size={18}
+          color={isFavorite ? Theme.accent : Theme.textMuted0}
+        />
+      </TouchableOpacity>
+      <TouchableOpacity onPress={handleShare} style={styles.actionButton} activeOpacity={0.7} disabled={sharing}>
+        <FontAwesome name="share-alt" size={16} color={Theme.textMuted0} />
+      </TouchableOpacity>
     </RNView>
   );
 }
@@ -321,19 +415,28 @@ export default function SessionDetailScreen() {
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
         <RNView style={styles.sessionHeader}>
-          <RNText style={styles.sessionTitle} numberOfLines={2}>
-            {conversation.title}
-          </RNText>
-          <RNView style={styles.sessionMeta}>
-            <RNText style={styles.messageCount}>
-              {conversation.messages.length} messages
-            </RNText>
-            {isActive && (
-              <RNView style={styles.activeIndicator}>
-                <RNView style={styles.activeDot} />
-                <RNText style={styles.activeText}>Active</RNText>
+          <RNView style={styles.sessionTitleRow}>
+            <RNView style={{ flex: 1 }}>
+              <RNText style={styles.sessionTitle} numberOfLines={2}>
+                {conversation.title}
+              </RNText>
+              <RNView style={styles.sessionMeta}>
+                <RNText style={styles.messageCountText}>
+                  {conversation.messages.length} messages
+                </RNText>
+                {isActive && (
+                  <RNView style={styles.activeIndicator}>
+                    <RNView style={styles.activeDot} />
+                    <RNText style={styles.activeText}>Active</RNText>
+                  </RNView>
+                )}
               </RNView>
-            )}
+            </RNView>
+            <SessionActions
+              conversationId={id as Id<"conversations">}
+              isFavorite={conversation.is_favorite ?? false}
+              shareToken={conversation.share_token}
+            />
           </RNView>
         </RNView>
 
@@ -395,6 +498,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.bgHighlight,
   },
+  sessionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
   sessionTitle: {
     fontSize: 17,
     fontWeight: '600',
@@ -407,7 +514,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  messageCount: {
+  messageCountText: {
     fontSize: 13,
     color: Theme.textMuted,
   },
@@ -426,6 +533,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Theme.greenBright,
     fontWeight: '500',
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 12,
+  },
+  actionButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Theme.bgAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   messageList: {
     padding: 16,
@@ -488,6 +609,10 @@ const styles = StyleSheet.create({
   },
   assistantText: {
     color: Theme.assistantBubbleText,
+  },
+  linkText: {
+    color: Theme.cyan,
+    textDecorationLine: 'underline',
   },
   codeBlock: {
     marginVertical: 8,
@@ -564,7 +689,6 @@ const styles = StyleSheet.create({
   resumeHintText: {
     color: Theme.textMuted0,
     fontSize: 12,
-    fontFamily: 'JetBrainsMono-Regular',
   },
   errorBanner: {
     backgroundColor: Theme.red,
@@ -616,10 +740,5 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
-  },
-  sendButtonText: {
-    fontSize: 18,
-    color: '#fff',
-    fontWeight: '600',
   },
 });
