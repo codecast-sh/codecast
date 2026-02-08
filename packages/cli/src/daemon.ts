@@ -35,6 +35,7 @@ interface Config {
   convex_url?: string;
   auth_token?: string;
   excluded_paths?: string;
+  claude_args?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];
 }
@@ -1724,17 +1725,30 @@ async function autoResumeSession(sessionId: string, content: string): Promise<bo
   const jsonlContent = fs.readFileSync(jsonlPath, "utf-8").slice(0, 5000);
   const cwd = extractCwd(jsonlContent) || process.env.HOME || "/tmp";
 
+  const config = readConfig();
+  let extraFlags = config?.claude_args || "";
+  try {
+    const firstUserLine = jsonlContent.split("\n").find(l => l.includes('"type":"user"'));
+    if (firstUserLine) {
+      const parsed = JSON.parse(firstUserLine);
+      if (parsed.permissionMode === "bypassPermissions" && !extraFlags.includes("--dangerously-skip-permissions")) {
+        extraFlags = extraFlags ? extraFlags + " --dangerously-skip-permissions" : "--dangerously-skip-permissions";
+      }
+    }
+  } catch {}
+
   const shortId = sessionId.slice(0, 8);
   const tmuxSession = `cc-resume-${shortId}`;
+  const resumeCmd = `claude --resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
 
   try {
     // Kill existing session if any
     try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
 
     await execAsync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`);
-    await execAsync(`tmux send-keys -t '${tmuxSession}' 'claude --resume ${sessionId}' Enter`);
+    await execAsync(`tmux send-keys -t '${tmuxSession}' '${resumeCmd}' Enter`);
 
-    log(`Auto-resumed session ${shortId} in tmux session ${tmuxSession}, cwd=${cwd}`);
+    log(`Auto-resumed session ${shortId} in tmux session ${tmuxSession}, cwd=${cwd}, cmd=${resumeCmd}`);
 
     // Wait for Claude to start up
     await new Promise(resolve => setTimeout(resolve, 5000));
