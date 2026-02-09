@@ -31,6 +31,7 @@ import { PermissionCard } from "./PermissionCard";
 import { copyToClipboard } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "./tools/MarkdownRenderer";
 import { MessageSharePopover } from "./MessageSharePopover";
+import { ConversationTree } from "./ConversationTree";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -110,6 +111,7 @@ export type ConversationData = {
     short_id?: string;
     started_at: number;
     username: string;
+    parent_message_uuid?: string;
   }>;
 };
 
@@ -1713,7 +1715,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void }) {
+function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string }>; messageUuid?: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -1846,6 +1848,18 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
             <span className="text-xs">{commentCount}</span>
           )}
         </button>
+        {onForkFromMessage && messageUuid && (
+          <button
+            onClick={() => onForkFromMessage(messageUuid)}
+            className="p-1.5 rounded hover:bg-purple-500/20 text-purple-400"
+            title="Fork from this message"
+            aria-label="Fork from this message"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+          </button>
+        )}
         <button
           onClick={handleCopy}
           className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
@@ -1978,6 +1992,23 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         </div>
       )}
 
+      {forkChildren && forkChildren.length > 0 && (
+        <div className="flex items-center gap-1.5 mt-2 ml-8 flex-wrap">
+          <svg className="w-3 h-3 text-purple-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+          </svg>
+          {forkChildren.map((fork) => (
+            <Link
+              key={fork._id}
+              href={`/conversation/${fork._id}`}
+              className="text-[10px] text-purple-400 hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded px-1.5 py-0.5 transition-colors"
+            >
+              {fork.title}
+            </Link>
+          ))}
+        </div>
+      )}
+
       {fullscreen && createPortal(
         <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
           <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
@@ -2053,6 +2084,8 @@ function AssistantBlock({
   onStartShareSelection,
   agentType,
   taskSubjectMap,
+  onForkFromMessage,
+  forkChildren,
 }: {
   content?: string;
   timestamp: number;
@@ -2080,6 +2113,8 @@ function AssistantBlock({
   onStartShareSelection?: (messageId: string) => void;
   agentType?: string;
   taskSubjectMap?: Record<string, string>;
+  onForkFromMessage?: (messageUuid: string) => void;
+  forkChildren?: Array<{ _id: string; title: string; short_id?: string }>;
 }) {
   const COLLAPSED_LINES = 2;
   const CONTENT_MAX_HEIGHT = 1800;
@@ -2247,6 +2282,18 @@ function AssistantBlock({
               <span className="text-xs">{commentCount}</span>
             )}
           </button>
+          {onForkFromMessage && messageUuid && (
+            <button
+              onClick={() => onForkFromMessage(messageUuid)}
+              className="p-1.5 rounded hover:bg-purple-500/20 text-purple-400"
+              title="Fork from this message"
+              aria-label="Fork from this message"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={handleCopy}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
@@ -2671,6 +2718,23 @@ function PlanBlock({ content, timestamp, collapsed, messageId, onStartShareSelec
         </div>,
         document.body
       )}
+
+      {forkChildren && forkChildren.length > 0 && (
+        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+          <svg className="w-3 h-3 text-purple-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+          </svg>
+          {forkChildren.map((fork) => (
+            <Link
+              key={fork._id}
+              href={`/conversation/${fork._id}`}
+              className="text-[10px] text-purple-400 hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded px-1.5 py-0.5 transition-colors"
+            >
+              {fork.title}
+            </Link>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2899,8 +2963,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
 
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
+  const forkFromMessage = useMutation(api.conversations.forkFromMessage);
 
   const messages = conversation?.messages || [];
+
+  const forkPointMap = useMemo(() => {
+    const map: Record<string, Array<{ _id: string; title: string; short_id?: string }>> = {};
+    if (conversation?.fork_children) {
+      for (const fork of conversation.fork_children) {
+        if (fork.parent_message_uuid) {
+          if (!map[fork.parent_message_uuid]) map[fork.parent_message_uuid] = [];
+          map[fork.parent_message_uuid].push(fork);
+        }
+      }
+    }
+    return map;
+  }, [conversation?.fork_children]);
 
   const handleStartShareSelection = useCallback((messageId: string) => {
     setShareSelectionMode(true);
@@ -2953,6 +3031,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       setIsCreatingShareLink(false);
     }
   }, [selectedMessageIds, messages, generateShareLink]);
+
+  const handleForkFromMessage = useCallback(async (messageUuid: string) => {
+    if (!conversation?._id) return;
+    try {
+      const result = await forkFromMessage({
+        conversation_id: conversation._id.toString(),
+        message_uuid: messageUuid,
+      });
+      toast.success("Conversation forked");
+      window.location.href = `/conversation/${result.conversation_id}`;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to fork");
+    }
+  }, [conversation?._id, forkFromMessage]);
 
   const toolCallToChangeIndexMap = useMemo(() => {
     const fileChanges = extractFileChanges(messages as any);
@@ -3614,7 +3706,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <PlanBlock key={msg._id} content={planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} onStartShareSelection={handleStartShareSelection} shareSelectionMode={shareSelectionMode} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} />;
+        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} />;
       }
       return null;
     }
@@ -3757,6 +3849,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           onStartShareSelection={handleStartShareSelection}
           agentType={conversation?.agent_type}
           taskSubjectMap={taskSubjectMap}
+          onForkFromMessage={handleForkFromMessage}
+          forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined}
         />
       );
     }
@@ -3940,28 +4034,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         </Link>
                       </DropdownMenuItem>
                     )}
-                    {conversation.fork_children && conversation.fork_children.length > 0 && (
+                    {((conversation.fork_children && conversation.fork_children.length > 0) || conversation.forked_from) && (
                       <>
                         <DropdownMenuSeparator />
-                        <div className="px-2 py-1 text-[10px] text-sol-text-dim font-medium">
-                          Forks ({conversation.fork_children.length})
-                        </div>
-                        {conversation.fork_children.slice(0, 5).map((fork) => (
-                          <DropdownMenuItem key={fork._id} asChild>
-                            <Link href={`/conversation/${fork._id}`} className="flex items-center gap-2">
-                              <svg className="w-3 h-3 text-purple-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-                              </svg>
-                              <span className="truncate flex-1">{fork.title}</span>
-                              <span className="text-[10px] text-sol-text-dim">@{fork.username}</span>
-                            </Link>
-                          </DropdownMenuItem>
-                        ))}
-                        {conversation.fork_children.length > 5 && (
-                          <div className="px-2 py-1 text-[10px] text-sol-text-dim">
-                            +{conversation.fork_children.length - 5} more
-                          </div>
-                        )}
+                        <ConversationTree conversationId={conversation._id.toString()} />
                       </>
                     )}
                     {conversation.child_conversations && conversation.child_conversations.length > 0 && (

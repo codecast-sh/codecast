@@ -1632,3 +1632,45 @@ export function formatResumeResults(result: ResumeResult): string {
 
   return lines.join("\n");
 }
+
+type TreeNode = {
+  id: string;
+  short_id?: string;
+  title: string;
+  message_count: number;
+  parent_message_uuid?: string;
+  started_at: number;
+  status: string;
+  is_current: boolean;
+  children: TreeNode[];
+};
+
+export function formatTree(tree: TreeNode): string {
+  const lines: string[] = [];
+  lines.push("");
+  lines.push(`${c.bold}Fork Tree${c.reset}`);
+  lines.push("");
+
+  const renderNode = (node: TreeNode, prefix: string, isLast: boolean, isRoot: boolean) => {
+    const connector = isRoot ? "" : isLast ? "+-- " : "+-- ";
+    const marker = node.is_current ? `${c.bold}${c.magenta}*${c.reset} ` : "  ";
+    const shortId = node.short_id || node.id.slice(0, 7);
+    const title = node.title.length > 50 ? node.title.slice(0, 47) + "..." : node.title;
+    const titleColor = node.is_current ? `${c.bold}${c.magenta}` : "";
+    const titleReset = node.is_current ? c.reset : "";
+
+    lines.push(
+      `${prefix}${connector}${marker}${titleColor}${title}${titleReset} ${c.dim}(${shortId}, ${node.message_count} msgs)${c.reset}`
+    );
+
+    const childPrefix = isRoot ? "" : prefix + (isLast ? "    " : "|   ");
+    for (let i = 0; i < node.children.length; i++) {
+      renderNode(node.children[i], childPrefix, i === node.children.length - 1, false);
+    }
+  };
+
+  renderNode(tree, "  ", true, true);
+  lines.push("");
+
+  return lines.join("\n");
+}

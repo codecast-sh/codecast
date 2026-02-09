@@ -3290,6 +3290,26 @@ function launchCodex(sessionId: string, extraArgs?: string, showArgsHint?: boole
   });
 }
 
+function openInNewTab(cmd: string, cwd?: string | null): void {
+  const dir = cwd && fs.existsSync(cwd) ? cwd : process.cwd();
+  const escapedCmd = cmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escapedDir = dir.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const script = `tell application "iTerm2"
+    tell current window
+      create tab with default profile
+      tell current session
+        write text "cd \\"${escapedDir}\\" && ${escapedCmd}"
+      end tell
+    end tell
+  end tell`;
+  try {
+    execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { stdio: "ignore" });
+    console.log("Opened in new iTerm tab.");
+  } catch {
+    console.log(`\nCouldn't open iTerm tab. Run manually:\n  cd ${dir} && ${cmd}`);
+  }
+}
+
 function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
   const args = ["--resume", sessionId];
 
@@ -4930,6 +4950,209 @@ program
       }));
     } catch (error) {
       console.error("Blame failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("fork")
+  .description(
+    "Fork a conversation from a specific message\n\n" +
+    "Creates a new conversation branching from a specific point.\n" +
+    "Like git branching for conversations.\n\n" +
+    "Examples:\n" +
+    "  codecast fork                            # fork current session\n" +
+    "  codecast fork --from 15                  # fork current session from message 15\n" +
+    "  codecast fork --from 15 --resume         # fork and open in Claude\n" +
+    "  codecast fork abc1234                    # fork specific conversation\n" +
+    "  codecast fork abc1234 --from 15          # fork specific conversation from message 15"
+  )
+  .argument("[id]", "Conversation ID or short ID (auto-detects current session if omitted)")
+  .option("--from <index>", "1-based message index to fork from")
+  .option("--resume", "Open forked conversation in Claude/Codex after creating")
+  .option("--as <agent>", "Agent to resume with (claude or codex)")
+  .option("--claude-args <args>", "Additional args to pass to claude")
+  .action(async (id: string | undefined, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    if (!id) {
+      let sessionId: string | null = null;
+      let projectRoot = process.cwd();
+      try {
+        projectRoot = execSync("git rev-parse --show-toplevel", {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "ignore"],
+        }).trim();
+      } catch {}
+
+      sessionId = findCurrentSessionFromProcess(projectRoot);
+
+      if (!sessionId) {
+        const projectDir = projectRoot.replace(/\//g, "-");
+        const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
+        if (fs.existsSync(sessionsDir)) {
+          const now = Date.now();
+          const files = fs.readdirSync(sessionsDir)
+            .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
+            .map(f => ({ name: f, mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime() }))
+            .sort((a, b) => b.mtime - a.mtime);
+          const active = files.filter(f => now - f.mtime < 5 * 60 * 1000);
+          if (active.length >= 1) {
+            sessionId = path.basename(active[0].name, ".jsonl");
+          } else if (files.length > 0) {
+            sessionId = path.basename(files[0].name, ".jsonl");
+          }
+        }
+      }
+
+      if (!sessionId) {
+        console.error("Could not detect current session. Pass a conversation ID: codecast fork <id>");
+        process.exit(1);
+      }
+
+      const linksResp = await fetch(`${siteUrl}/cli/session-links`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, api_token: config.auth_token }),
+      });
+      const linksResult = await linksResp.json() as any;
+      if (!linksResult.conversation_id) {
+        console.error("Could not resolve session to conversation. Try: codecast fork <id>");
+        process.exit(1);
+      }
+      id = linksResult.conversation_id;
+      console.log(`Detected conversation: ${linksResult.title || id!.slice(0, 7)}`);
+    }
+
+    let messageUuid: string | undefined;
+
+    if (options.from) {
+      const fromIndex = parseInt(options.from);
+      if (isNaN(fromIndex) || fromIndex < 1) {
+        console.error("--from must be a positive integer (1-based message index)");
+        process.exit(1);
+      }
+
+      console.log(`Fetching conversation to resolve message ${fromIndex}...`);
+      const data = await fetchExport(siteUrl, config.auth_token!, id!);
+      const userMessages = data.messages.filter((m: any) =>
+        m.role === "user" || m.role === "assistant"
+      );
+
+      if (fromIndex > userMessages.length) {
+        console.error(`Message index ${fromIndex} out of range (conversation has ${userMessages.length} messages)`);
+        process.exit(1);
+      }
+
+      const targetMsg = userMessages[fromIndex - 1];
+      messageUuid = targetMsg.message_uuid;
+      if (!messageUuid) {
+        console.error(`Message ${fromIndex} has no UUID, cannot fork from it`);
+        process.exit(1);
+      }
+    }
+
+    try {
+      console.log(messageUuid ? `Forking from message...` : `Forking entire conversation...`);
+      const response = await fetch(`${siteUrl}/cli/fork`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          conversation_id: id,
+          message_uuid: messageUuid,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        console.error(`Fork failed: ${body.error || response.statusText}`);
+        process.exit(1);
+      }
+
+      const result = await response.json();
+      const shortId = result.short_id || result.conversation_id?.toString().slice(0, 7);
+      console.log(`Forked! New conversation: ${shortId}`);
+      console.log(`View: https://codecast.sh/conversation/${result.conversation_id}`);
+
+      if (options.resume) {
+        const targetAgent = options.as?.toLowerCase() || "claude";
+        console.log(`\nPreparing ${targetAgent} session...`);
+        const data = await fetchExport(siteUrl, config.auth_token!, result.conversation_id);
+        console.log(`  ${data.messages.length} messages exported`);
+
+        if (targetAgent === "codex") {
+          const { jsonl, sessionId } = generateCodexJsonl(data);
+          writeCodexSession(jsonl, sessionId, "cc-import");
+          const resolvedArgs = options.claudeArgs ?? config.codex_args ?? "";
+          const cmd = `codex resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
+          console.log(`\nResume command:\n  ${cmd}`);
+          openInNewTab(cmd, data.conversation.project_path);
+        } else {
+          const { jsonl, sessionId } = generateClaudeCodeJsonl(data);
+          writeClaudeCodeSession(jsonl, sessionId, data.conversation.project_path || undefined);
+          const resolvedArgs = options.claudeArgs ?? config.claude_args ?? "";
+          const cmd = `claude --resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
+          console.log(`\nResume command:\n  ${cmd}`);
+          openInNewTab(cmd, data.conversation.project_path);
+        }
+      }
+    } catch (error) {
+      console.error("Fork failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("tree")
+  .description("Show fork tree for a conversation")
+  .argument("<id>", "Conversation ID or short ID")
+  .action(async (id: string) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/tree`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          conversation_id: id,
+        }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        console.error(`Error: ${body.error || response.statusText}`);
+        process.exit(1);
+      }
+
+      const result = await response.json();
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      if (!result.tree) {
+        console.log("No fork tree found for this conversation.");
+        process.exit(0);
+      }
+
+      const { formatTree } = await import("./formatter.js");
+      console.log(formatTree(result.tree));
+    } catch (error) {
+      console.error("Tree failed:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
   });

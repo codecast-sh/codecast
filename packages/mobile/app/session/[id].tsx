@@ -57,7 +57,7 @@ type ConversationData = {
 
 // --- Markdown rendering ---
 
-function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = ''): React.ReactNode[] {
+function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false): React.ReactNode[] {
   const result: React.ReactNode[] = [];
   const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+))/g;
   let lastIndex = 0;
@@ -72,7 +72,7 @@ function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = ''): Rea
     if (match[0].startsWith('`')) {
       const code = match[0].slice(1, -1);
       result.push(
-        <RNText key={`${keyPrefix}c${key++}`} style={styles.inlineCode}>{code}</RNText>
+        <RNText key={`${keyPrefix}c${key++}`} style={isUser ? styles.inlineCodeUser : styles.inlineCode}>{code}</RNText>
       );
     } else if (match[2] !== undefined) {
       result.push(
@@ -85,14 +85,14 @@ function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = ''): Rea
     } else if (match[4] && match[5]) {
       const url = match[5];
       result.push(
-        <RNText key={`${keyPrefix}l${key++}`} style={styles.linkText} onPress={() => Linking.openURL(url)}>
+        <RNText key={`${keyPrefix}l${key++}`} style={isUser ? styles.linkTextUser : styles.linkText} onPress={() => Linking.openURL(url)}>
           {match[4]}
         </RNText>
       );
     } else if (match[6]) {
       const url = match[6];
       result.push(
-        <RNText key={`${keyPrefix}u${key++}`} style={styles.linkText} onPress={() => Linking.openURL(url)}>
+        <RNText key={`${keyPrefix}u${key++}`} style={isUser ? styles.linkTextUser : styles.linkText} onPress={() => Linking.openURL(url)}>
           {url}
         </RNText>
       );
@@ -148,13 +148,13 @@ function MarkdownContent({ text, baseStyle, isUser }: { text: string; baseStyle:
           );
         }
 
-        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`b${idx}`} />;
+        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`b${idx}`} isUser={isUser} />;
       })}
     </RNView>
   );
 }
 
-function MarkdownTextBlock({ text, baseStyle, blockKey }: { text: string; baseStyle: any; blockKey: string }) {
+function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean }) {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -172,7 +172,7 @@ function MarkdownTextBlock({ text, baseStyle, blockKey }: { text: string; baseSt
       const fontSize = level === 1 ? 18 : level === 2 ? 16 : 15;
       elements.push(
         <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
-          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`)}
+          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser)}
         </RNText>
       );
       i++;
@@ -201,12 +201,20 @@ function MarkdownTextBlock({ text, baseStyle, blockKey }: { text: string; baseSt
                 {item.ordered ? `${item.num}.` : '\u2022'}
               </RNText>
               <RNText style={[baseStyle, { flex: 1 }]}>
-                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`)}
+                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser)}
               </RNText>
             </RNView>
           ))}
         </RNView>
       );
+      continue;
+    }
+
+    if (trimmed.match(/^[-*_]{3,}$/)) {
+      elements.push(
+        <RNView key={`${blockKey}hr${elKey++}`} style={styles.horizontalRule} />
+      );
+      i++;
       continue;
     }
 
@@ -217,9 +225,9 @@ function MarkdownTextBlock({ text, baseStyle, blockKey }: { text: string; baseSt
         i++;
       }
       elements.push(
-        <RNView key={`${blockKey}q${elKey++}`} style={styles.blockquote}>
+        <RNView key={`${blockKey}q${elKey++}`} style={isUser ? styles.blockquoteUser : styles.blockquote}>
           <RNText style={[baseStyle, styles.blockquoteText]}>
-            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`)}
+            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser)}
           </RNText>
         </RNView>
       );
@@ -236,7 +244,7 @@ function MarkdownTextBlock({ text, baseStyle, blockKey }: { text: string; baseSt
     if (paraLines.length > 0) {
       elements.push(
         <RNText key={`${blockKey}p${elKey++}`} style={[baseStyle, { marginBottom: 6 }]} selectable>
-          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`)}
+          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser)}
         </RNText>
       );
     }
@@ -341,23 +349,45 @@ function getRelativePath(filePath: string): string {
 }
 
 function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome>['name']; color: string } {
-  if (name === 'Bash') return { icon: 'terminal', color: Theme.green };
-  if (name === 'Read' || name === 'Glob' || name === 'Grep') return { icon: 'file-code-o', color: Theme.cyan };
-  if (name === 'Edit' || name === 'Write') return { icon: 'pencil', color: Theme.accent };
+  if (name === 'Bash' || name === 'shell_command' || name === 'shell' || name === 'exec_command' || name === 'container.exec') return { icon: 'terminal', color: Theme.green };
+  if (name === 'Read' || name === 'file_read') return { icon: 'file-code-o', color: Theme.blue };
+  if (name === 'Glob' || name === 'Grep') return { icon: 'search', color: Theme.violet };
+  if (name === 'Edit' || name === 'Write' || name === 'file_write' || name === 'file_edit' || name === 'apply_patch') return { icon: 'pencil', color: Theme.orange };
   if (name === 'WebSearch' || name === 'WebFetch') return { icon: 'globe', color: Theme.blue };
-  if (name === 'Task') return { icon: 'code-fork', color: Theme.violet };
+  if (name === 'Task') return { icon: 'code-fork', color: Theme.cyan };
+  if (name === 'TaskCreate' || name === 'TaskUpdate' || name === 'TaskList' || name === 'TaskGet') return { icon: 'tasks', color: '#10b981' };
+  if (name === 'SendMessage') return { icon: 'comment', color: '#f59e0b' };
+  if (name === 'TodoWrite') return { icon: 'check-square-o', color: Theme.magenta };
 
   if (name.startsWith('mcp__')) {
-    if (name.includes('computer') || name.includes('screenshot')) {
-      return { icon: 'desktop', color: Theme.cyan };
+    if (name.includes('tabs_context') || name.includes('tabs_create')) {
+      return { icon: 'chrome', color: Theme.textDim };
     }
-    if (name.includes('chrome') || name.includes('navigate') || name.includes('read_page')) {
+    if (name.includes('computer') || name.includes('screenshot')) {
+      return { icon: 'desktop', color: Theme.orange };
+    }
+    if (name.includes('navigate')) {
       return { icon: 'chrome', color: Theme.blue };
     }
-    if (name.includes('find') || name.includes('form')) {
-      return { icon: 'search', color: Theme.accent };
+    if (name.includes('read_page') || name.includes('get_page_text')) {
+      return { icon: 'chrome', color: Theme.blue };
     }
-    return { icon: 'plug', color: Theme.magenta };
+    if (name.includes('find')) {
+      return { icon: 'search', color: Theme.violet };
+    }
+    if (name.includes('form_input') || name.includes('javascript_tool')) {
+      return { icon: 'chrome', color: Theme.orange };
+    }
+    if (name.includes('gif_creator')) {
+      return { icon: 'chrome', color: Theme.magenta };
+    }
+    if (name.includes('console') || name.includes('network')) {
+      return { icon: 'chrome', color: Theme.green };
+    }
+    if (name.includes('update_plan')) {
+      return { icon: 'chrome', color: Theme.cyan };
+    }
+    return { icon: 'plug', color: Theme.cyan };
   }
 
   return { icon: 'cog', color: Theme.textMuted };
@@ -919,7 +949,7 @@ const agentColors: Record<string, string> = {
   blue: Theme.blue,
   red: Theme.red,
   green: Theme.green,
-  yellow: Theme.yellow,
+  yellow: '#b58900',
   purple: Theme.violet,
   cyan: Theme.cyan,
   orange: Theme.orange,
@@ -1053,19 +1083,76 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   onToggle: () => void;
   images?: ImageData[];
 }) {
-  const { icon, color } = toolIcon(toolCall.name);
+  const { color } = toolIcon(toolCall.name);
   const summary = toolSummary(toolCall);
-  const inputDisplay = expanded && toolCall.input.length > 2000
-    ? toolCall.input.slice(0, 2000) + '\n... (truncated)'
-    : toolCall.input;
+
+  // Format input nicely - parse JSON and extract relevant fields
+  let inputDisplay = toolCall.input;
+  try {
+    const parsed = JSON.parse(toolCall.input);
+    if (toolCall.name === 'Bash' && parsed.command) {
+      // For Bash, just show the command
+      inputDisplay = parsed.command;
+    } else {
+      // For other tools, format as key: value pairs
+      // Filter out verbose/internal fields
+      const verboseFields = ['dangerouslyDisableSandbox', '_simulatedSedEdit', 'timeout', 'run_in_background'];
+      inputDisplay = Object.entries(parsed)
+        .filter(([key]) => !key.startsWith('_') && !verboseFields.includes(key))
+        .map(([key, value]) => {
+          if (typeof value === 'string' && value.length > 100) {
+            return `${key}: ${value.slice(0, 100)}...`;
+          }
+          if (typeof value === 'object' && value !== null) {
+            // Don't show complex objects
+            return null;
+          }
+          return `${key}: ${value}`;
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+  } catch {
+    // If parsing fails, use raw input
+  }
+
+  if (expanded && inputDisplay.length > 2000) {
+    inputDisplay = inputDisplay.slice(0, 2000) + '\n... (truncated)';
+  }
 
   const resultDisplay = result && expanded && result.content.length > 2000
     ? result.content.slice(0, 2000) + '\n... (truncated)'
     : result?.content;
 
-  // Check if this tool produces images (screenshot, etc.)
+  // Compute result summary like web does
+  const getResultSummary = () => {
+    if (!result) return null;
+    if (result.is_error) return '(error)';
+    const isEdit = toolCall.name === 'Edit' || toolCall.name === 'Write';
+    const isRead = toolCall.name === 'Read';
+    const isGlobGrep = toolCall.name === 'Glob' || toolCall.name === 'Grep';
+    if (isEdit) {
+      const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
+      if (match) return `(+${match[1]} -${match[2]})`;
+      return result.content.includes('has been updated') ? '(ok)' : '';
+    }
+    if (isRead) {
+      const lines = result.content.split('\n').length;
+      return `(${lines} lines)`;
+    }
+    if (isGlobGrep) {
+      const lines = result.content.trim().split('\n').filter((l: string) => l.trim()).length;
+      return `(${lines} matches)`;
+    }
+    return null;
+  };
+  const resultSummary = getResultSummary();
+
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(toolCall.input); } catch {}
+
+  const isBash = toolCall.name === 'Bash' || toolCall.name === 'shell_command' || toolCall.name === 'shell' || toolCall.name === 'exec_command' || toolCall.name === 'container.exec';
+  const isEdit = toolCall.name === 'Edit' || toolCall.name === 'file_edit';
   const isScreenshotTool = toolCall.name === 'mcp__claude-in-chrome__computer' && parsedInput.action === 'screenshot';
   const hasImages = images && images.length > 0 && isScreenshotTool;
 
@@ -1085,29 +1172,63 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
     result.content.includes('```')
   );
 
+  // Tools that shouldn't show their input (just noise)
+  // Command is shown in summary, no need to repeat
+  const shouldHideInput = [
+    'Bash',
+    'Read',
+    'Edit',
+    'file_edit',
+    'TaskOutput',
+    'TaskList',
+    'TaskGet',
+    'TaskStop',
+    'TeamDelete',
+    'ExitPlanMode',
+    'Glob',
+    'Grep',
+  ].includes(toolCall.name);
+
   return (
-    <TouchableOpacity onPress={onToggle} style={styles.toolCallContainer} activeOpacity={0.7}>
-      <RNView style={styles.toolCallHeader}>
-        <FontAwesome name={icon} size={12} color={color} style={{ marginRight: 6 }} />
+    <Pressable onPress={onToggle} style={styles.toolCallContainer}>
+      <RNText style={styles.toolCallHeader} numberOfLines={expanded ? undefined : 1}>
         <RNText style={[styles.toolCallName, { color }]}>{formatToolName(toolCall.name)}</RNText>
-        {summary && !expanded ? (
-          <RNText style={styles.toolCallSummary} numberOfLines={1}> {summary}</RNText>
+        {summary ? (
+          <RNText style={styles.toolCallSummary}> {summary}</RNText>
         ) : null}
-        <RNText style={styles.toolCallToggle}>{expanded ? '\u25BC' : '\u25B6'}</RNText>
-      </RNView>
+        {resultSummary ? (
+          <RNText style={[styles.toolCallResultHint, result?.is_error && { color: Theme.red }]}> {resultSummary}</RNText>
+        ) : null}
+      </RNText>
       {expanded && (
-        <RNView style={styles.toolCallContent}>
-          {toolCall.input && toolCall.input.length > 2 && (
+        <RNView style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError]}>
+          {isBash && inputDisplay ? (
+            <RNView style={styles.bashCommandSection}>
+              <RNText style={styles.bashPrompt} selectable>
+                <RNText style={{ color: Theme.green }}>$ </RNText>
+                <RNText style={styles.bashCommand}>{inputDisplay}</RNText>
+              </RNText>
+            </RNView>
+          ) : !shouldHideInput && toolCall.input && toolCall.input.length > 2 ? (
             <RNView style={styles.toolInputSection}>
-              <RNText style={styles.toolSectionLabel}>Input:</RNText>
               <RNText style={styles.toolCallInput} selectable>{inputDisplay}</RNText>
             </RNView>
-          )}
+          ) : null}
+          {isEdit && parsedInput.old_string && parsedInput.new_string ? (
+            <RNView style={styles.diffSection}>
+              <RNView style={styles.diffOld}>
+                <RNText style={styles.diffOldText} selectable>{String(parsedInput.old_string)}</RNText>
+              </RNView>
+              <RNView style={styles.diffNew}>
+                <RNText style={styles.diffNewText} selectable>{String(parsedInput.new_string)}</RNText>
+              </RNView>
+            </RNView>
+          ) : null}
           {result && resultDisplay && (
-            <RNView style={styles.toolResultSection}>
-              <RNText style={[styles.toolSectionLabel, result.is_error && { color: Theme.red }]}>
-                {result.is_error ? 'Error:' : 'Result:'}
-              </RNText>
+            <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
+              {result.is_error && (
+                <RNText style={[styles.toolSectionLabel, { color: Theme.red }]}>Error</RNText>
+              )}
               {isCodeResult ? (
                 <RNView style={styles.codeBlock}>
                   <ScrollView horizontal showsHorizontalScrollIndicator>
@@ -1123,9 +1244,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
                   {resultDisplay}
                 </RNText>
               )}
-            </RNView>
+            </ScrollView>
           )}
-          {expanded && hasImages && images && (
+          {hasImages && images && (
             <RNView style={styles.toolImagesSection}>
               {images.map((img, i) => (
                 <ImageBlock key={i} image={img} />
@@ -1134,7 +1255,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
           )}
         </RNView>
       )}
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
@@ -1150,15 +1271,13 @@ function ThinkingBlock({ content }: { content: string }) {
       activeOpacity={isLong ? 0.7 : 1}
     >
       <RNView style={styles.thinkingHeader}>
-        <FontAwesome name="lightbulb-o" size={11} color={Theme.textMuted0} style={{ marginRight: 5 }} />
-        <RNText style={styles.thinkingLabel}>thinking</RNText>
-        {isLong && (
-          <RNText style={styles.thinkingToggle}>{expanded ? '\u25BC' : '\u25B6'}</RNText>
+        {(isLong || expanded) && (
+          <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={8} color={Theme.textDim} style={{ marginRight: 4, marginTop: 3 }} />
         )}
+        <RNText style={styles.thinkingText} numberOfLines={expanded ? 50 : 2}>
+          {expanded ? content : preview}
+        </RNText>
       </RNView>
-      <RNText style={styles.thinkingText} numberOfLines={expanded ? undefined : 3}>
-        {expanded ? content : preview}
-      </RNText>
     </TouchableOpacity>
   );
 }
@@ -1198,12 +1317,11 @@ function assistantLabel(agentType?: string): string {
   return 'Claude';
 }
 
-const CONTENT_TRUNCATE_LENGTH = 800;
+const CONTENT_TRUNCATE_LENGTH = 1000;
 
 function MessageBubble({ message, agentType, showHeader = true }: { message: Message; agentType?: string; showHeader?: boolean }) {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [contentExpanded, setContentExpanded] = useState(false);
-  const [thinkingExpanded, setThinkingExpanded] = useState(false);
 
   const handleLongPress = () => {
     const messageText = message.content || '';
@@ -1257,14 +1375,21 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
     return null;
   }
 
-  const rawContent = message.content || '';
+  const rawContentRaw = message.content || '';
+  // Strip command/system XML tags from skill prompts
+  const rawContent = rawContentRaw.replace(/<\/?(?:command-(?:name|message|args)|system-reminder|antml:[a-z_]+)[^>]*>/g, '').replace(/\n{3,}/g, '\n\n');
+  const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
+  const hasImages = message.images && message.images.length > 0;
+  const hasThinkingContent = !!message.thinking?.trim();
+
+  // Skip truly empty messages (no content, no tool calls, no images, no thinking)
+  if (!rawContent.trim() && !hasToolCalls && !hasImages && !hasThinkingContent) {
+    return null;
+  }
   const isLongContent = rawContent.length > CONTENT_TRUNCATE_LENGTH;
   const content = (isLongContent && !contentExpanded)
     ? rawContent.slice(0, CONTENT_TRUNCATE_LENGTH)
     : rawContent;
-  const hasThinking = !!message.thinking?.trim();
-  const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
-  const hasImages = message.images && message.images.length > 0;
 
   const toggleTool = (toolId: string) => {
     setExpandedTools(prev => {
@@ -1275,15 +1400,18 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
     });
   };
 
+  // Compact rendering for tool-call-only messages (no text, no thinking, no images)
+  const isToolCallOnly = !isUser && hasToolCalls && !content.trim() && !hasImages;
+
   return (
     <Pressable onLongPress={handleLongPress}>
-      <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-        {showHeader && (
+      <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
+        {showHeader && !isToolCallOnly && (
         <RNView style={styles.bubbleHeader}>
           <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
             {isUser ? 'You' : assistantLabel(agentType)}
           </RNText>
-          <RNText style={styles.bubbleTime}>{formatTimestamp(message.timestamp)}</RNText>
+          <RNText style={[styles.bubbleTime, isUser ? styles.userTime : styles.assistantTime]}>{formatTimestamp(message.timestamp)}</RNText>
         </RNView>
       )}
 
@@ -1297,7 +1425,8 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
       )}
 
       {content ? (
-        <RNView style={styles.bubbleContent}>
+        <>
+        <RNView style={[styles.bubbleContent, isLongContent && !contentExpanded && styles.bubbleContentCollapsed]}>
           {typeof content === 'string' && content.includes('<skill>') ? (
             parseSkillBlocks(content).map((part, idx) => {
               if (part.type === 'skill') {
@@ -1350,22 +1479,23 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
               isUser={isUser}
             />
           )}
-          {isLongContent && (
-            <TouchableOpacity
-              onPress={() => setContentExpanded(!contentExpanded)}
-              style={styles.showMoreButton}
-              activeOpacity={0.7}
-            >
-              <RNText style={styles.showMoreText}>
-                {contentExpanded ? 'Show less' : `Show more (${Math.round(rawContent.length / 1000)}k chars)`}
-              </RNText>
-            </TouchableOpacity>
-          )}
         </RNView>
+        {isLongContent && (
+          <TouchableOpacity
+            onPress={() => setContentExpanded(!contentExpanded)}
+            style={[styles.showMoreButton, { paddingHorizontal: 14 }]}
+            activeOpacity={0.7}
+          >
+            <RNText style={[styles.showMoreText, isUser && { color: 'rgba(255,255,255,0.7)' }]}>
+              {contentExpanded ? 'Show less' : 'Show more...'}
+            </RNText>
+          </TouchableOpacity>
+        )}
+        </>
       ) : null}
 
       {hasToolCalls && (
-        <RNView style={styles.toolCallsContainer}>
+        <RNView style={isToolCallOnly ? styles.toolCallsCompact : styles.toolCallsContainer}>
           {message.tool_calls!.map((tc) => {
             const result = message.tool_results?.find(r => r.tool_use_id === tc.id);
 
@@ -1441,6 +1571,11 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
   ) || [];
 
   const pickImage = async () => {
+    Alert.alert(
+      'Coming Soon',
+      'Image uploads will be available in the next update.',
+      [{ text: 'OK' }]
+    );
     // Temporarily disabled - requires expo-image-picker in dev client
     // try {
     //   const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -1529,7 +1664,7 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
           disabled={isSending}
           activeOpacity={0.7}
         >
-          <FontAwesome name="image" size={20} color={Theme.textMuted} />
+          <FontAwesome name="plus" size={20} color={Theme.textMuted} />
         </TouchableOpacity>
         <TextInput
           style={styles.textInput}
@@ -1763,64 +1898,46 @@ export default function SessionDetailScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
-        <RNView style={styles.sessionHeader}>
-          <RNView style={styles.sessionTitleRow}>
-            <RNView style={{ flex: 1 }}>
-              <RNText style={styles.sessionTitle} numberOfLines={2}>
-                {conversation.title}
-              </RNText>
-              <RNView style={styles.sessionMeta}>
-                {conversation.agent_type && (
-                  <RNText style={styles.metaBadge}>
-                    {formatAgentType(conversation.agent_type)}
-                  </RNText>
-                )}
-                {conversation.model && (
-                  <RNText style={styles.metaBadgeModel}>
-                    {formatModel(conversation.model)}
-                  </RNText>
-                )}
-                <RNText style={styles.messageCountText}>
-                  {conversation.message_count || allMessages.length} msgs
-                </RNText>
-                {isActive && (
-                  <RNView style={styles.activeIndicator}>
-                    <RNView style={styles.activeDot} />
-                    <RNText style={styles.activeText}>Active</RNText>
-                  </RNView>
-                )}
-              </RNView>
-            </RNView>
-            <SessionActions
-              conversationId={id as Id<"conversations">}
-              isFavorite={conversation.is_favorite ?? false}
-              shareToken={conversation.share_token}
-            />
-          </RNView>
-        </RNView>
-
         <FlatList
           ref={flatListRef}
           data={allMessages}
-          renderItem={({ item, index }) => {
-            const prevMessage = index > 0 ? allMessages[index - 1] : null;
-            const showHeader = !prevMessage || prevMessage.role !== item.role;
-            return (
-              <MessageBubble
-                message={item}
-                agentType={conversation.agent_type}
-                showHeader={showHeader}
-              />
-            );
-          }}
-          keyExtractor={(item) => item._id}
-          contentContainerStyle={styles.messageList}
-          showsVerticalScrollIndicator={false}
-          onScroll={handleScroll}
-          scrollEventThrottle={100}
-          maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
           ListHeaderComponent={
             <>
+              <RNView style={styles.sessionHeader}>
+                <RNView style={styles.sessionTitleRow}>
+                  <RNView style={{ flex: 1 }}>
+                    <RNText style={styles.sessionTitle} numberOfLines={2}>
+                      {conversation.title}
+                    </RNText>
+                    <RNView style={styles.sessionMeta}>
+                      {conversation.agent_type && (
+                        <RNText style={styles.metaBadge}>
+                          {formatAgentType(conversation.agent_type)}
+                        </RNText>
+                      )}
+                      {conversation.model && (
+                        <RNText style={styles.metaBadgeModel}>
+                          {formatModel(conversation.model)}
+                        </RNText>
+                      )}
+                      <RNText style={styles.messageCountText}>
+                        {conversation.message_count || allMessages.length} msgs
+                      </RNText>
+                      {isActive && (
+                        <RNView style={styles.activeIndicator}>
+                          <RNView style={styles.activeDot} />
+                          <RNText style={styles.activeText}>Active</RNText>
+                        </RNView>
+                      )}
+                    </RNView>
+                  </RNView>
+                  <SessionActions
+                    conversationId={id as Id<"conversations">}
+                    isFavorite={conversation.is_favorite ?? false}
+                    shareToken={conversation.share_token}
+                  />
+                </RNView>
+              </RNView>
               {hasMoreAbove && (
                 <TouchableOpacity
                   onPress={loadOlderMessages}
@@ -1844,6 +1961,36 @@ export default function SessionDetailScreen() {
               ) : null}
             </>
           }
+          renderItem={({ item, index }) => {
+            // Skip tool result messages when determining header visibility (match web behavior)
+            let prevNonToolResult: Message | null = null;
+            for (let i = index - 1; i >= 0; i--) {
+              const prev = allMessages[i];
+              if (prev.role === 'user' && prev.tool_results && prev.tool_results.length > 0) continue;
+              prevNonToolResult = prev;
+              break;
+            }
+            const showHeader = !prevNonToolResult || prevNonToolResult.role !== item.role;
+
+            // Hide standalone tool result messages (they're shown inline with tool calls)
+            if (item.role === 'user' && item.tool_results && item.tool_results.length > 0 && !item.content?.trim()) {
+              return null;
+            }
+
+            return (
+              <MessageBubble
+                message={item}
+                agentType={conversation.agent_type}
+                showHeader={showHeader}
+              />
+            );
+          }}
+          keyExtractor={(item) => item._id}
+          contentContainerStyle={styles.messageList}
+          showsVerticalScrollIndicator={false}
+          onScroll={handleScroll}
+          scrollEventThrottle={100}
+          maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
         />
 
         <MessageInput conversationId={id as Id<"conversations">} isActive={isActive} />
@@ -1862,7 +2009,7 @@ export default function SessionDetailScreen() {
               style={styles.jumpButton}
               activeOpacity={0.7}
             >
-              <FontAwesome name="arrow-up" size={18} color={Theme.text} />
+              <FontAwesome name="arrow-up" size={14} color={Theme.borderLight} />
             </TouchableOpacity>
           )}
           {userScrolled && (
@@ -1874,7 +2021,7 @@ export default function SessionDetailScreen() {
               style={styles.jumpButton}
               activeOpacity={0.7}
             >
-              <FontAwesome name="arrow-down" size={18} color={Theme.text} />
+              <FontAwesome name="arrow-down" size={14} color={Theme.borderLight} />
             </TouchableOpacity>
           )}
         </RNView>
@@ -2006,7 +2153,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   messageBubble: {
-    marginBottom: 12,
+    marginBottom: 2,
     borderRadius: 12,
     overflow: 'hidden',
   },
@@ -2015,40 +2162,52 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
     maxWidth: '85%',
     borderBottomRightRadius: 4,
+    marginTop: 12,
+    marginBottom: 4,
   },
   assistantBubble: {
-    backgroundColor: Theme.assistantBubble,
+    backgroundColor: 'transparent',
     alignSelf: 'flex-start',
-    maxWidth: '92%',
-    borderBottomLeftRadius: 4,
+    maxWidth: '100%',
+  },
+  assistantBubbleFirst: {
+    marginTop: 8,
   },
   bubbleHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 6,
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 4,
   },
   bubbleRole: {
-    fontSize: 11,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    fontSize: 12,
+    fontWeight: '500',
   },
   userRole: {
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(255,255,255,0.8)',
   },
   assistantRole: {
-    color: 'rgba(253,246,227,0.6)',
+    color: Theme.textMuted0,
   },
   bubbleTime: {
     fontSize: 11,
+  },
+  userTime: {
     color: 'rgba(255,255,255,0.5)',
   },
+  assistantTime: {
+    color: Theme.textDim,
+  },
   bubbleContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingHorizontal: 14,
+    paddingBottom: 10,
+  },
+  bubbleContentCollapsed: {
+    maxHeight: 300,
+    overflow: 'hidden',
   },
   showMoreButton: {
     marginTop: 6,
@@ -2067,19 +2226,33 @@ const styles = StyleSheet.create({
     color: Theme.userBubbleText,
   },
   assistantText: {
-    color: Theme.assistantBubbleText,
+    color: Theme.textSecondary,
   },
   linkText: {
     color: Theme.cyan,
     textDecorationLine: 'underline',
   },
+  linkTextUser: {
+    color: 'rgba(255,255,255,0.9)',
+    textDecorationLine: 'underline',
+  },
   inlineCode: {
     fontFamily: 'SpaceMono',
     fontSize: 13,
-    backgroundColor: 'rgba(0,0,0,0.15)',
-    paddingHorizontal: 4,
+    backgroundColor: 'rgba(0,0,0,0.07)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     borderRadius: 3,
-    color: Theme.cyan,
+    color: Theme.red,
+  },
+  inlineCodeUser: {
+    fontFamily: 'SpaceMono',
+    fontSize: 13,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 3,
+    color: '#fff',
   },
   listContainer: {
     marginVertical: 4,
@@ -2101,19 +2274,35 @@ const styles = StyleSheet.create({
     marginVertical: 6,
     opacity: 0.85,
   },
+  blockquoteUser: {
+    borderLeftWidth: 3,
+    borderLeftColor: 'rgba(255,255,255,0.5)',
+    paddingLeft: 10,
+    marginVertical: 6,
+    opacity: 0.85,
+  },
   blockquoteText: {
     fontStyle: 'italic',
+  },
+  horizontalRule: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Theme.borderLight,
+    marginVertical: 12,
   },
   codeBlock: {
     marginVertical: 8,
     borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: '#073642',
+    backgroundColor: '#002b36',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   codeHeader: {
-    backgroundColor: '#002b36',
+    backgroundColor: 'rgba(0,0,0,0.2)',
     paddingHorizontal: 10,
     paddingVertical: 5,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
   },
   codeLanguage: {
     fontSize: 10,
@@ -2131,51 +2320,21 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     color: '#93a1a1',
   },
-  thinkingToggle: {
-    marginHorizontal: 12,
-    marginBottom: 4,
-  },
-  thinkingHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 4,
-  },
-  thinkingLabel: {
-    fontSize: 11,
-    fontStyle: 'italic',
-    color: Theme.textMuted0,
-    opacity: 0.7,
-  },
   thinkingBlock: {
-    marginHorizontal: 12,
-    marginBottom: 6,
-    padding: 8,
-    backgroundColor: 'rgba(0,0,0,0.15)',
-    borderRadius: 6,
+    marginHorizontal: 14,
+    marginVertical: 2,
+    opacity: 0.5,
   },
   thinkingHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  thinkingLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: 'rgba(253,246,227,0.4)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    flex: 1,
-  },
-  thinkingToggle: {
-    fontSize: 8,
-    color: 'rgba(253,246,227,0.3)',
+    alignItems: 'flex-start',
   },
   thinkingText: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: 'rgba(253,246,227,0.5)',
-    fontStyle: 'italic',
+    fontSize: 11,
+    lineHeight: 15,
+    color: Theme.textDim,
+    fontFamily: 'SpaceMono',
+    flex: 1,
   },
   systemDivider: {
     flexDirection: 'row',
@@ -2209,43 +2368,106 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontStyle: 'italic',
   },
+  toolCallOnlyBubble: {
+    marginBottom: 1,
+  },
+  toolCallsCompact: {
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+    gap: 2,
+  },
   toolCallsContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    gap: 4,
+    paddingHorizontal: 14,
+    paddingBottom: 8,
+    gap: 2,
   },
   toolCallContainer: {
-    backgroundColor: 'rgba(0,0,0,0.2)',
-    borderRadius: 8,
-    overflow: 'hidden',
+    marginVertical: 1,
   },
   toolCallHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 8,
+    fontSize: 12,
+    lineHeight: 18,
   },
   toolCallName: {
     fontSize: 12,
     fontWeight: '600',
+    fontFamily: 'SpaceMono',
   },
   toolCallSummary: {
     fontSize: 11,
-    color: 'rgba(255,255,255,0.4)',
-    flex: 1,
-    marginLeft: 2,
+    color: Theme.textMuted,
+    fontFamily: 'SpaceMono',
+  },
+  toolCallResultHint: {
+    fontSize: 11,
+    color: Theme.textDim,
+    fontFamily: 'SpaceMono',
   },
   toolCallToggle: {
     fontSize: 8,
-    color: 'rgba(255,255,255,0.4)',
+    color: Theme.textDim,
     marginLeft: 6,
   },
   toolCallContent: {
+    marginTop: 4,
     padding: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt,
+    overflow: 'hidden',
+  },
+  toolCallContentError: {
+    borderColor: Theme.red + '40',
+    backgroundColor: Theme.red + '08',
+  },
+  bashCommandSection: {
+    marginBottom: 8,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+  },
+  bashPrompt: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: Theme.textMuted,
+  },
+  bashCommand: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: Theme.text,
+  },
+  diffSection: {
+    gap: 2,
+    marginBottom: 8,
+  },
+  diffOld: {
+    backgroundColor: Theme.red + '12',
+    borderRadius: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  diffOldText: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: Theme.red,
+  },
+  diffNew: {
+    backgroundColor: Theme.green + '12',
+    borderRadius: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  diffNewText: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: Theme.green,
+  },
+  toolResultScroll: {
+    maxHeight: 240,
   },
   toolInputSection: {
-    marginBottom: 12,
+    marginBottom: 8,
   },
   toolResultSection: {
     marginTop: 4,
@@ -2260,12 +2482,12 @@ const styles = StyleSheet.create({
   },
   toolCallInput: {
     fontSize: 11,
-    color: 'rgba(255,255,255,0.6)',
+    color: Theme.textMuted,
     fontFamily: 'SpaceMono',
   },
   toolCallResult: {
     fontSize: 11,
-    color: Theme.text,
+    color: Theme.textSecondary,
     fontFamily: 'SpaceMono',
     lineHeight: 16,
   },
@@ -2273,6 +2495,7 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.bgAlt,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Theme.borderLight,
+    paddingBottom: 34,
   },
   resumeHint: {
     backgroundColor: Theme.bgAlt,
@@ -2363,11 +2586,10 @@ const styles = StyleSheet.create({
   },
   // Specialized tool blocks
   specialToolBlock: {
-    marginVertical: 6,
+    marginVertical: 4,
     paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(0,0,0,0.15)',
-    borderRadius: 8,
+    paddingVertical: 6,
+    borderRadius: 6,
     borderLeftWidth: 3,
   },
   specialToolHeader: {
@@ -2512,13 +2734,7 @@ const styles = StyleSheet.create({
   skillCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: Theme.bgAlt,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: Theme.borderLight,
-    marginVertical: 4,
+    marginVertical: 1,
   },
   skillName: {
     fontSize: 12,
@@ -2531,9 +2747,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    marginVertical: 2,
+    marginVertical: 1,
   },
   taskOpName: {
     fontSize: 11,
@@ -2651,24 +2865,24 @@ const styles = StyleSheet.create({
   // Jump buttons
   jumpButtonsContainer: {
     position: 'absolute',
-    bottom: 90,
+    bottom: 140,
     right: 16,
     flexDirection: 'column',
     gap: 10,
     zIndex: 100,
   },
   jumpButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: Theme.bgAlt,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 3,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.bgHighlight,
   },

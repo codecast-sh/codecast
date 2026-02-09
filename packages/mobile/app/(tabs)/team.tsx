@@ -461,9 +461,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   filterChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: 18,
     backgroundColor: Theme.bgAlt,
     borderWidth: 1,
     borderColor: Theme.borderLight,

@@ -589,6 +589,7 @@ export const getAllMessages = query({
           short_id: fork.short_id,
           started_at: fork.started_at,
           username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
+          parent_message_uuid: fork.parent_message_uuid,
         };
       })
     );
@@ -2261,7 +2262,7 @@ export const searchForCLI = query({
       if (results.length >= limit) break;
 
       const conv = await ctx.db.get(messages[0].conversation_id);
-      if (!conv || conv._id.tableName !== "conversations") continue;
+      if (!conv) continue;
 
       // Check access - user can see their own conversations, or non-private
       // conversations from team members whose team_id matches the effective team
@@ -2997,6 +2998,201 @@ export const forkConversation = mutation({
     });
 
     return newConversationId;
+  },
+});
+
+export const forkFromMessage = mutation({
+  args: {
+    conversation_id: v.string(),
+    message_uuid: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) {
+      throw new Error("Unauthorized");
+    }
+
+    let original = null;
+    try {
+      original = await ctx.db.get(args.conversation_id as Id<"conversations">);
+    } catch {
+      // not a valid Convex ID, try short_id
+    }
+    if (!original) {
+      original = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
+        .first();
+    }
+    if (!original) {
+      throw new Error("Conversation not found");
+    }
+
+    const isOwner = original.user_id.toString() === userId.toString();
+    if (!isOwner) {
+      if (original.is_private !== false) {
+        throw new Error("Access denied");
+      }
+      if (!original.team_id || !(await isTeamMember(ctx, userId, original.team_id))) {
+        throw new Error("Access denied");
+      }
+    }
+
+    const allMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", original!._id)
+      )
+      .order("asc")
+      .collect();
+
+    let messagesToCopy = allMessages;
+    if (args.message_uuid) {
+      const forkIndex = allMessages.findIndex((m) => m.message_uuid === args.message_uuid);
+      if (forkIndex === -1) {
+        throw new Error("Fork point message not found");
+      }
+      messagesToCopy = allMessages.slice(0, forkIndex + 1);
+    }
+
+    const now = Date.now();
+    const newConversationId = await ctx.db.insert("conversations", {
+      user_id: userId,
+      team_id: original.team_id,
+      agent_type: original.agent_type,
+      session_id: `forked-${original.session_id}-${crypto.randomUUID()}`,
+      slug: original.slug,
+      title: original.title ? `Fork: ${original.title}` : undefined,
+      subtitle: original.subtitle,
+      project_hash: original.project_hash,
+      project_path: original.project_path,
+      model: original.model,
+      started_at: now,
+      updated_at: now,
+      message_count: messagesToCopy.length,
+      is_private: true,
+      status: "completed",
+      forked_from: original._id,
+      parent_message_uuid: args.message_uuid,
+    });
+
+    await ctx.db.patch(newConversationId, {
+      short_id: newConversationId.toString().slice(0, 7),
+    });
+
+    for (const msg of messagesToCopy) {
+      await ctx.db.insert("messages", {
+        conversation_id: newConversationId,
+        message_uuid: msg.message_uuid,
+        role: msg.role,
+        content: msg.content,
+        thinking: msg.thinking,
+        tool_calls: msg.tool_calls,
+        tool_results: msg.tool_results,
+        images: msg.images,
+        subtype: msg.subtype,
+        timestamp: msg.timestamp,
+        tokens_used: msg.tokens_used,
+        usage: msg.usage,
+      });
+    }
+
+    const currentForkCount = original.fork_count ?? 0;
+    await ctx.db.patch(original._id, {
+      fork_count: currentForkCount + 1,
+    });
+
+    return {
+      conversation_id: newConversationId,
+      short_id: newConversationId.toString().slice(0, 7),
+    };
+  },
+});
+
+export const getConversationTree = query({
+  args: {
+    conversation_id: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
+    if (!userId) {
+      return { error: "Unauthorized" };
+    }
+
+    let conv = null;
+    try {
+      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
+    } catch {
+      // try short_id
+    }
+    if (!conv) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
+        .first();
+    }
+    if (!conv) {
+      return { error: "Conversation not found" };
+    }
+
+    const isOwner = conv.user_id.toString() === userId.toString();
+    if (!isOwner) {
+      if (conv.is_private !== false) {
+        return { error: "Access denied" };
+      }
+      if (!conv.team_id || !(await isTeamMember(ctx, userId, conv.team_id))) {
+        return { error: "Access denied" };
+      }
+    }
+
+    // Walk up to find root
+    let root = conv;
+    const visited = new Set<string>([root._id.toString()]);
+    while (root.forked_from) {
+      const parent = await ctx.db.get(root.forked_from);
+      if (!parent || visited.has(parent._id.toString())) break;
+      visited.add(parent._id.toString());
+      root = parent;
+    }
+
+    // Recursively build tree from root
+    type TreeNode = {
+      id: string;
+      short_id?: string;
+      title: string;
+      message_count: number;
+      parent_message_uuid?: string;
+      started_at: number;
+      status: string;
+      is_current: boolean;
+      children: TreeNode[];
+    };
+
+    const buildTree = async (node: typeof root): Promise<TreeNode> => {
+      const children = await ctx.db
+        .query("conversations")
+        .withIndex("by_forked_from", (q) => q.eq("forked_from", node._id))
+        .collect();
+
+      const childTrees = await Promise.all(children.map((c) => buildTree(c)));
+
+      return {
+        id: node._id.toString(),
+        short_id: node.short_id,
+        title: node.title || `Session ${node.session_id.slice(0, 8)}`,
+        message_count: node.message_count,
+        parent_message_uuid: node.parent_message_uuid,
+        started_at: node.started_at,
+        status: node.status,
+        is_current: node._id.toString() === conv!._id.toString(),
+        children: childTrees,
+      };
+    };
+
+    const tree = await buildTree(root);
+    return { tree };
   },
 });
 
