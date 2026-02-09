@@ -73,6 +73,12 @@ type Message = {
   tool_results?: ToolResult[];
   images?: ImageData[];
   subtype?: string;
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
 };
 
 export type ConversationData = {
@@ -940,6 +946,11 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
   // Process result content - strip line numbers for Read tool
   const processedContent = result ? (isRead ? stripLineNumbers(result.content) : result.content) : "";
 
+  const isCodeTool = isBash || isEdit || isRead || isGlob || isGrep || isCodeSearch;
+  const isMarkdownResult = result && !isCodeTool && typeof processedContent === 'string' && (
+    processedContent.includes('###') || processedContent.includes('**') || processedContent.includes('```')
+  );
+
   // Extract starting line number from Edit result (format: "   42→content")
   const getStartLine = () => {
     if (!isEdit || !result) return 1;
@@ -1207,6 +1218,10 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
               {isMarkdown && viewMode === 'rendered' ? (
                 <div className="p-3">
                   <MarkdownRenderer content={processedContent} filePath={filePath} />
+                </div>
+              ) : isMarkdownResult ? (
+                <div className="p-2 prose prose-invert prose-sm max-w-none text-xs">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{processedContent}</ReactMarkdown>
                 </div>
               ) : (
                 <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
@@ -1487,8 +1502,13 @@ function PlanModeBlock({ tool }: { tool: ToolCall }) {
   return (
     <div className="my-0.5">
       <div className="flex items-center gap-1.5 text-xs">
-        <span className="font-mono text-sol-violet/80">{tool.name}</span>
-        <span className="text-sol-text-dim">{isEnter ? "Planning..." : "Plan ready"}</span>
+        <svg className="w-3 h-3 text-sol-violet/80" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+        </svg>
+        <span className="font-mono text-sol-violet font-semibold text-[11px]">Plan Mode</span>
+        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-sol-violet/15 text-sol-violet border border-sol-violet/30">
+          {isEnter ? "enter" : "exit"}
+        </span>
       </div>
     </div>
   );
@@ -1570,7 +1590,7 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
 function ThinkingBlock({ content, showContent = true }: { content: string; showContent?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const truncated = truncateLines(content, expanded ? 50 : 2);
-  const isTruncated = truncated.truncated;
+  const isLong = truncated.truncated || content.length > 200;
 
   if (!showContent) {
     return (
@@ -1583,10 +1603,10 @@ function ThinkingBlock({ content, showContent = true }: { content: string; showC
   return (
     <div className="my-0.5 opacity-50">
       <div
-        className={`flex items-start gap-1 ${isTruncated || expanded ? 'cursor-pointer' : ''}`}
-        onClick={() => (isTruncated || expanded) && setExpanded(!expanded)}
+        className={`flex items-start gap-1 ${isLong || expanded ? 'cursor-pointer' : ''}`}
+        onClick={() => (isLong || expanded) && setExpanded(!expanded)}
       >
-        {(isTruncated || expanded) && (
+        {(isLong || expanded) && (
           <svg
             className={`w-3 h-3 mt-0.5 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
             fill="none"
@@ -2712,7 +2732,7 @@ function SystemBlock({ content, subtype, timestamp, messageUuid }: { content: st
         </svg>
         {prNum && <span className="text-sol-violet font-mono font-medium">#{prNum}</span>}
         <span className="text-sol-text-secondary truncate">{prTitle}</span>
-        {timestamp && <span className="text-sol-text-dim ml-auto flex-shrink-0">{formatTimestamp(timestamp)}</span>}
+        {timestamp && <span className="text-sol-text-dim ml-auto flex-shrink-0">{formatRelativeTime(timestamp)}</span>}
       </div>
     );
   }
@@ -2726,7 +2746,7 @@ function SystemBlock({ content, subtype, timestamp, messageUuid }: { content: st
         </svg>
         {sha && <span className="text-emerald-500 font-mono font-medium">{sha}</span>}
         <span className="text-sol-text-secondary truncate">{content}</span>
-        {timestamp && <span className="text-sol-text-dim ml-auto flex-shrink-0">{formatTimestamp(timestamp)}</span>}
+        {timestamp && <span className="text-sol-text-dim ml-auto flex-shrink-0">{formatRelativeTime(timestamp)}</span>}
       </div>
     );
   }
@@ -2954,23 +2974,6 @@ function PlanBlock({ content, timestamp, collapsed, messageId, onStartShareSelec
         document.body
       )}
 
-      {forkChildren && forkChildren.length > 0 && (
-        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-          <svg className="w-3 h-3 text-purple-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-          </svg>
-          {forkChildren.map((fork) => (
-            <Link
-              key={fork._id}
-              href={`/conversation/${fork._id}`}
-              className="text-[10px] text-purple-400 hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded px-1.5 py-0.5 transition-colors max-w-[200px] truncate"
-              title={fork.title}
-            >
-              {fork.short_id ? `${fork.short_id} ${fork.title}` : fork.title}
-            </Link>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -3511,6 +3514,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       latestTodos: state.latestTodos,
       latestUsage: state.latestUsage,
     };
+  }, [messages]);
+
+  const taskStats = useMemo(() => {
+    if (!messages || messages.length === 0) return null;
+    let total = 0;
+    let completed = 0;
+    for (const msg of messages) {
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.name === "TaskCreate") total++;
+          if (tc.name === "TaskUpdate") {
+            try {
+              const inp = JSON.parse(tc.input);
+              if (inp.status === "completed") completed++;
+            } catch {}
+          }
+        }
+      }
+    }
+    return total > 0 ? { total, completed } : null;
   }, [messages]);
 
   const virtualizer = useVirtualizer({
@@ -4198,6 +4221,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </span>
                 )}
 
+                {taskStats && (
+                  <span
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${
+                      taskStats.completed === taskStats.total
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : 'bg-sol-bg-highlight text-sol-text-dim border-sol-border/30'
+                    }`}
+                    title={`Tasks: ${taskStats.completed} completed of ${taskStats.total}`}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    {taskStats.completed}/{taskStats.total}
+                  </span>
+                )}
+
                 {latestTodos && latestTodos.todos.length > 0 && (
                   <span
                     className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${
@@ -4205,7 +4244,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                         : 'bg-sol-bg-highlight text-sol-text-dim border-sol-border/30'
                     }`}
-                    title={`Tasks: ${latestTodos.todos.filter((t: any) => t.status === 'completed').length} completed of ${latestTodos.todos.length}`}
+                    title={`Todos: ${latestTodos.todos.filter((t: any) => t.status === 'completed').length} completed of ${latestTodos.todos.length}`}
                   >
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -4355,9 +4394,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? "s" : ""}
                       </DropdownMenuItem>
                     )}
+                    {taskStats && (
+                      <DropdownMenuItem disabled>
+                        Tasks: {taskStats.completed}/{taskStats.total}
+                      </DropdownMenuItem>
+                    )}
                     {latestTodos && latestTodos.todos.length > 0 && (
                       <DropdownMenuItem disabled>
-                        Tasks: {latestTodos.todos.filter(t => t.status === 'completed').length}/{latestTodos.todos.length}
+                        Todos: {latestTodos.todos.filter(t => t.status === 'completed').length}/{latestTodos.todos.length}
                       </DropdownMenuItem>
                     )}
                     {latestUsage && (
