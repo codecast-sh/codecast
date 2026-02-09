@@ -5,7 +5,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import * as Haptics from 'expo-haptics';
-import * as ImagePicker from 'expo-image-picker';
+// import * as ImagePicker from 'expo-image-picker';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { PermissionCard } from '@/components/PermissionCard';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -1441,27 +1441,28 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
   ) || [];
 
   const pickImage = async () => {
-    try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Please grant photo library access to attach images');
-        return;
-      }
+    // Temporarily disabled - requires expo-image-picker in dev client
+    // try {
+    //   const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    //   if (status !== 'granted') {
+    //     Alert.alert('Permission needed', 'Please grant photo library access to attach images');
+    //     return;
+    //   }
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsMultipleSelection: true,
-        quality: 0.8,
-        base64: true,
-      });
+    //   const result = await ImagePicker.launchImageLibraryAsync({
+    //     mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    //     allowsMultipleSelection: true,
+    //     quality: 0.8,
+    //     base64: true,
+    //   });
 
-      if (!result.canceled && result.assets) {
-        const uris = result.assets.map(asset => asset.uri);
-        setSelectedImages(prev => [...prev, ...uris]);
-      }
-    } catch (err) {
-      console.error('Image picker error:', err);
-    }
+    //   if (!result.canceled && result.assets) {
+    //     const uris = result.assets.map(asset => asset.uri);
+    //     setSelectedImages(prev => [...prev, ...uris]);
+    //   }
+    // } catch (err) {
+    //   console.error('Image picker error:', err);
+    // }
   };
 
   const removeImage = (uri: string) => {
