@@ -1039,12 +1039,11 @@ function SkillBlockCard({ name, description, path }: { name?: string; descriptio
   );
 }
 
-function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
+function ToolCallItem({ toolCall, result, expanded, onToggle }: {
   toolCall: ToolCall;
   result?: ToolResult;
   expanded: boolean;
   onToggle: () => void;
-  images?: ImageData[];
 }) {
   const { icon, color } = toolIcon(toolCall.name);
   const summary = toolSummary(toolCall);
@@ -1055,12 +1054,6 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   const resultDisplay = result && expanded && result.content.length > 2000
     ? result.content.slice(0, 2000) + '\n... (truncated)'
     : result?.content;
-
-  // Check if this tool produces images (screenshot, etc.)
-  let parsedInput: Record<string, any> = {};
-  try { parsedInput = JSON.parse(toolCall.input); } catch {}
-  const isScreenshotTool = toolCall.name === 'mcp__claude-in-chrome__computer' && parsedInput.action === 'screenshot';
-  const hasImages = images && images.length > 0 && isScreenshotTool;
 
   // Check if result looks like code (for Read/Write/Edit tools)
   const isCodeResult = result && (
@@ -1116,13 +1109,6 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
                   {resultDisplay}
                 </RNText>
               )}
-            </RNView>
-          )}
-          {expanded && hasImages && (
-            <RNView style={styles.toolImagesSection}>
-              {images!.map((img, i) => (
-                <ImageBlock key={i} image={img} />
-              ))}
             </RNView>
           )}
         </RNView>
@@ -1391,7 +1377,6 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
             // Default rendering for other tools
             return (
               <ToolCallItem
-                images={message.images}
                 key={tc.id}
                 toolCall={tc}
                 result={result}
@@ -2582,10 +2567,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Theme.textMuted0,
     marginTop: 6,
-  },
-  toolImagesSection: {
-    marginTop: 10,
-    gap: 8,
   },
   // Compaction summary
   compactionBlock: {
