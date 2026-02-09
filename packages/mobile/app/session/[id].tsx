@@ -727,27 +727,28 @@ function TaskToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }
   return (
     <TouchableOpacity
       onPress={() => setExpanded(!expanded)}
-      style={[styles.specialToolBlock, { borderLeftColor: color }]}
+      style={[styles.specialToolBlock, { backgroundColor: color + '15', borderColor: color + '40' }]}
       activeOpacity={0.7}
     >
       <RNView style={styles.specialToolHeader}>
-        <FontAwesome name="code-fork" size={11} color={color} style={{ marginRight: 5 }} />
         <RNText style={[styles.specialToolName, { color }]}>Task</RNText>
         <RNView style={[styles.specialToolBadge, { backgroundColor: color + '20', borderColor: color + '40' }]}>
           <RNText style={[styles.specialToolBadgeText, { color }]}>{subagentType}</RNText>
         </RNView>
+        {description && (
+          <RNText style={[styles.specialToolDesc, { flex: 1, marginBottom: 0 }]} numberOfLines={1}>{description}</RNText>
+        )}
         {model && (
           <RNText style={styles.specialToolMeta}>{model}</RNText>
         )}
         {runInBackground && (
           <RNText style={styles.specialToolMeta}>background</RNText>
         )}
+        <RNText style={[styles.specialToolMeta, { marginLeft: 'auto' }]}>{expanded ? 'collapse' : 'expand'}</RNText>
       </RNView>
-      {description && (
-        <RNText style={styles.specialToolDesc} numberOfLines={1}>{description}</RNText>
-      )}
-      {expanded && (
-        <RNText style={styles.specialToolContent} selectable>{truncatedPrompt}</RNText>
+      <RNText style={styles.specialToolContent} selectable numberOfLines={expanded ? 50 : 3}>{truncatedPrompt}</RNText>
+      {!expanded && prompt.length > 300 && (
+        <RNText style={{ fontSize: 10, color: Theme.textDim, marginTop: 2 }}>show more</RNText>
       )}
       {expanded && result && (
         <RNView style={styles.specialToolResult}>
@@ -1039,7 +1040,7 @@ function SendMessageBlock({ tool }: { tool: ToolCall }) {
 
   return (
     <RNView style={styles.taskOpBlock}>
-      <RNText style={[styles.taskOpName, { color: Theme.accent }]}>SendMessage</RNText>
+      <RNText style={[styles.taskOpName, { color: '#f59e0b' }]}>SendMessage</RNText>
       {type === 'broadcast' ? (
         <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.red + '20', borderColor: Theme.red + '40' }]}>
           <RNText style={[styles.taskOpBadgeText, { color: Theme.red }]}>broadcast</RNText>
@@ -1049,8 +1050,8 @@ function SendMessageBlock({ tool }: { tool: ToolCall }) {
           <RNText style={[styles.taskOpBadgeText, { color: Theme.red }]}>shutdown</RNText>
         </RNView>
       ) : recipient ? (
-        <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.accent + '20', borderColor: Theme.accent + '40' }]}>
-          <RNText style={[styles.taskOpBadgeText, { color: Theme.accent }]}>@{recipient}</RNText>
+        <RNView style={[styles.taskOpBadge, { backgroundColor: '#f59e0b20', borderColor: '#f59e0b33' }]}>
+          <RNText style={[styles.taskOpBadgeText, { color: '#f59e0b' }]}>@{recipient}</RNText>
         </RNView>
       ) : null}
       {summary && (
@@ -1073,7 +1074,7 @@ function TeamCreateBlock({ tool }: { tool: ToolCall }) {
         </RNView>
       )}
       {parsedInput.description && (
-        <RNText style={styles.taskOpText} numberOfLines={1}>{parsedInput.description}</RNText>
+        <RNText style={[styles.taskOpText, { color: Theme.textDim }]} numberOfLines={1}>{String(parsedInput.description).slice(0, 60)}</RNText>
       )}
     </RNView>
   );
@@ -2617,7 +2618,14 @@ export default function SessionDetailScreen() {
             );
           }}
           keyExtractor={(item) => item._id}
-          contentContainerStyle={styles.messageList}
+          contentContainerStyle={[styles.messageList, allMessages.length === 0 && { flex: 1 }]}
+          ListEmptyComponent={
+            <RNView style={styles.emptyState}>
+              <FontAwesome name="comments-o" size={32} color={Theme.textDim} />
+              <RNText style={styles.emptyStateText}>No messages yet</RNText>
+              <RNText style={styles.emptyStateSubtext}>Messages will appear here as the session progresses</RNText>
+            </RNView>
+          }
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={100}
@@ -3341,16 +3349,17 @@ const styles = StyleSheet.create({
   },
   // Specialized tool blocks
   specialToolBlock: {
-    marginVertical: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    borderLeftWidth: 3,
+    marginVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    overflow: 'hidden',
   },
   specialToolHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 6,
   },
   specialToolName: {
     fontSize: 11,
@@ -3383,15 +3392,17 @@ const styles = StyleSheet.create({
   },
   specialToolContent: {
     fontSize: 11,
-    color: Theme.textMuted,
+    color: Theme.textSecondary,
     fontFamily: 'SpaceMono',
-    marginTop: 4,
+    lineHeight: 16,
+    paddingHorizontal: 10,
+    paddingBottom: 8,
   },
   specialToolResult: {
-    marginTop: 6,
-    paddingTop: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Theme.borderLight + '60',
+    borderTopColor: Theme.borderLight + '80',
   },
   specialToolResultLabel: {
     fontSize: 10,
@@ -3646,9 +3657,11 @@ const styles = StyleSheet.create({
   },
   compactionContentWrap: {
     marginTop: 8,
-    paddingLeft: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderLeftWidth: 2,
     borderLeftColor: 'rgba(217,119,6,0.3)',
+    backgroundColor: Theme.bgAlt + '33',
   },
   // Plan block
   planBlock: {
@@ -4008,15 +4021,56 @@ const styles = StyleSheet.create({
   },
   // Jump badge for new messages
   jumpBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
     backgroundColor: Theme.accent,
     borderRadius: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    marginLeft: 4,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   jumpBadgeText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
     color: '#fff',
+  },
+  prCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  prNumber: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: Theme.violet,
+    fontWeight: '600',
+  },
+  prTitle: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    flex: 1,
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+    gap: 10,
+  },
+  emptyStateText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Theme.textMuted,
+  },
+  emptyStateSubtext: {
+    fontSize: 12,
+    color: Theme.textDim,
+    textAlign: 'center',
+    paddingHorizontal: 40,
   },
 });
