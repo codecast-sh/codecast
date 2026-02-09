@@ -547,6 +547,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
   const description = String(parsedInput.description || "");
   const prompt = String(parsedInput.prompt || "");
   const model = parsedInput.model ? String(parsedInput.model) : null;
+  const name = parsedInput.name ? String(parsedInput.name) : null;
   const runInBackground = Boolean(parsedInput.run_in_background);
 
   const subagentColors: Record<string, { bg: string; border: string; text: string }> = {
@@ -583,7 +584,12 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
         )}
         {model && (
           <span className="text-sol-text-dim text-[10px] font-mono">
-            {model}
+            {formatModel(model)}
+          </span>
+        )}
+        {name && (
+          <span className="text-sol-text-dim text-[10px] font-mono">
+            {name}
           </span>
         )}
         {runInBackground && (
@@ -720,9 +726,9 @@ function isPlanWriteToolCall(tc: ToolCall): boolean {
 }
 
 function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, onStartShareSelection, collapsed, timestamp }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean; messageId?: string; onStartShareSelection?: (messageId: string) => void; collapsed?: boolean; timestamp?: number }) {
-  const isEdit = tool.name === "Edit" || tool.name === "Write";
+  const isEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write" || tool.name === "apply_patch";
   const [expanded, setExpanded] = useState(isEdit);
-  const isRead = tool.name === "Read";
+  const isRead = tool.name === "Read" || tool.name === "file_read";
   const isCodexShell = tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec";
   const isBash = tool.name === "Bash" || isCodexShell;
   const isGlob = tool.name === "Glob";
@@ -852,7 +858,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     if (tool.name === "TaskUpdate") {
       const id = parsedInput.taskId ? `#${parsedInput.taskId}` : "";
       const status = parsedInput.status ? String(parsedInput.status) : "";
-      if (id && status) return `${id} -> ${status}`;
+      if (id && status) return `${id} \u2192 ${status}`;
       return id || "Update task";
     }
     if (tool.name === "TaskList") {
@@ -880,6 +886,14 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     if (tool.name === "ExitPlanMode") return "Exit plan";
     if (tool.name === "TaskOutput") return parsedInput.task_id ? `task ${String(parsedInput.task_id).slice(0, 8)}` : "Output";
     if (tool.name === "TaskStop") return parsedInput.task_id ? `stop ${String(parsedInput.task_id).slice(0, 8)}` : "Stop";
+    if (tool.name === "TodoWrite") {
+      const todos = parsedInput.todos as any[];
+      return `${todos?.length || 0} tasks`;
+    }
+    if (tool.name === "AskUserQuestion") {
+      const questions = parsedInput.questions as any[];
+      return questions?.[0]?.question ? truncateStr(String(questions[0].question), 50) : "Question";
+    }
 
     if (tool.name.startsWith("mcp__")) {
       const parts = tool.name.split("__");
@@ -1449,6 +1463,32 @@ function TeamCreateBlock({ tool }: { tool: ToolCall }) {
           </span>
         )}
         {parsedInput.description && <span className="text-sol-text-dim">{String(parsedInput.description).slice(0, 60)}</span>}
+      </div>
+    </div>
+  );
+}
+
+function SkillBlock({ tool }: { tool: ToolCall }) {
+  let parsedInput: { skill?: string; args?: string } = {};
+  try { parsedInput = JSON.parse(tool.input); } catch {}
+  const skillName = parsedInput.skill || "skill";
+  return (
+    <div className="my-0.5">
+      <div className="flex items-center gap-1.5 text-xs">
+        <span className="font-mono text-sol-cyan/80">/{skillName}</span>
+        {parsedInput.args && <span className="text-sol-text-dim">{parsedInput.args}</span>}
+      </div>
+    </div>
+  );
+}
+
+function PlanModeBlock({ tool }: { tool: ToolCall }) {
+  const isEnter = tool.name === "EnterPlanMode";
+  return (
+    <div className="my-0.5">
+      <div className="flex items-center gap-1.5 text-xs">
+        <span className="font-mono text-sol-violet/80">{tool.name}</span>
+        <span className="text-sol-text-dim">{isEnter ? "Planning..." : "Plan ready"}</span>
       </div>
     </div>
   );
@@ -2490,6 +2530,10 @@ function AssistantBlock({
             <SendMessageBlock key={tc.id} tool={tc} />
           ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
             <TeamCreateBlock key={tc.id} tool={tc} />
+          ) : tc.name === "Skill" ? (
+            <SkillBlock key={tc.id} tool={tc} />
+          ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
+            <PlanModeBlock key={tc.id} tool={tc} />
           ) : (
             <ToolBlock
               key={tc.id}
@@ -2633,13 +2677,7 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
   return null;
 }
 
-function SystemBlock({ content, subtype }: { content: string; subtype?: string }) {
-  const subtypeLabels: Record<string, string> = {
-    local_command: "command",
-    stop_hook_summary: "hook",
-    compact_boundary: "compacted",
-  };
-
+function SystemBlock({ content, subtype, timestamp, messageUuid }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string }) {
   if (subtype === "compact_boundary") {
     return (
       <div className="my-6 flex items-center gap-3">
@@ -2655,13 +2693,67 @@ function SystemBlock({ content, subtype }: { content: string; subtype?: string }
     );
   }
 
+  if (subtype === "compaction_summary" && content) {
+    return <CompactionSummaryBlock content={content} />;
+  }
+
+  if (subtype === "plan" && content) {
+    return <PlanBlock content={content} timestamp={timestamp || Date.now()} />;
+  }
+
+  if (subtype === "pull_request" && content) {
+    const prMatch = content.match(/^#(\d+)\s+(.*)/);
+    const prNum = prMatch ? prMatch[1] : "";
+    const prTitle = prMatch ? prMatch[2] : content;
+    return (
+      <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-violet/5 border border-sol-violet/20 rounded text-xs">
+        <svg className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+        </svg>
+        {prNum && <span className="text-sol-violet font-mono font-medium">#{prNum}</span>}
+        <span className="text-sol-text-secondary truncate">{prTitle}</span>
+        {timestamp && <span className="text-sol-text-dim ml-auto flex-shrink-0">{formatTimestamp(timestamp)}</span>}
+      </div>
+    );
+  }
+
+  if (subtype === "commit" && content) {
+    const sha = messageUuid?.slice(0, 7) || "";
+    return (
+      <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-emerald-500/5 border border-emerald-500/20 rounded text-xs">
+        <svg className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m0 0l4-4m6 0v12m0 0l4-4m-4 4l-4-4" />
+        </svg>
+        {sha && <span className="text-emerald-500 font-mono font-medium">{sha}</span>}
+        <span className="text-sol-text-secondary truncate">{content}</span>
+        {timestamp && <span className="text-sol-text-dim ml-auto flex-shrink-0">{formatTimestamp(timestamp)}</span>}
+      </div>
+    );
+  }
+
+  if ((subtype === "stop_hook_summary" || subtype === "local_command") && content) {
+    const label = subtype === "stop_hook_summary" ? "hook" : "command";
+    const trimmed = content.slice(0, 200);
+    return (
+      <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-bg-alt/30 border-l-2 border-sol-border text-xs">
+        <span className="text-[10px] text-sol-text-dim bg-sol-bg-highlight px-1.5 py-0.5 rounded font-mono">{label}</span>
+        <span className="text-sol-text-muted font-mono truncate">{trimmed}</span>
+      </div>
+    );
+  }
+
+  const cleanText = content.replace(/<[^>]+>/g, "").slice(0, 200);
+  if (!cleanText) return null;
+
   return (
     <div className="mb-4 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-sol-border text-xs">
-      <span className="text-sol-text-dim text-[10px] mr-2">
-        {subtypeLabels[subtype || ""] || "system"}
-      </span>
+      {subtype && (
+        <span className="text-sol-text-dim text-[10px] mr-2">
+          {subtype.replace(/_/g, " ")}
+        </span>
+      )}
       <span className="text-sol-text-muted font-mono">
-        {content.replace(/<[^>]+>/g, "").slice(0, 200)}
+        {cleanText}
         {content.length > 200 && "..."}
       </span>
     </div>
@@ -3823,7 +3915,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const msg = item.data as Message;
     if (msg.role === "system") {
       if (collapsed) return null;
-      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} />;
+      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} />;
     }
 
     if (msg.role === "user") {
@@ -4073,6 +4165,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </span>
                 )}
 
+                {conversation.child_conversations && conversation.child_conversations.length > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30"
+                    title={`${conversation.child_conversations.length} subagent${conversation.child_conversations.length > 1 ? 's' : ''}`}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                    {conversation.child_conversations.length}
+                  </span>
+                )}
+
                 {conversation.git_branch && (
                   <span
                     className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
@@ -4107,6 +4211,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                     </svg>
                     {latestTodos.todos.filter((t: any) => t.status === 'completed').length}/{latestTodos.todos.length}
+                  </span>
+                )}
+
+                {latestUsage && (
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-bg-highlight text-sol-text-dim border border-sol-border/30"
+                    title={`Context: ${Math.round((latestUsage.contextSize / 200000) * 100)}% used`}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    {Math.round((latestUsage.contextSize / 200000) * 100)}%
                   </span>
                 )}
 
