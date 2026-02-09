@@ -372,7 +372,21 @@ function formatTimestamp(ts: number): string {
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24) return `${hours}h ago`;
   if (days < 7) return `${days}d ago`;
-  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return new Date(ts).toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function formatFullTimestamp(ts: number): string {
+  return new Date(ts).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 function formatModel(model?: string): string {
@@ -1625,6 +1639,21 @@ function SystemMessage({ message }: { message: Message }) {
     return <PlanBlock content={message.content} />;
   }
 
+  if (message.subtype === 'pull_request' && message.content) {
+    const prContent = message.content;
+    const prMatch = prContent.match(/^#(\d+)\s+(.*)/);
+    const prNum = prMatch ? prMatch[1] : '';
+    const prTitle = prMatch ? prMatch[2] : prContent;
+    return (
+      <RNView style={styles.prCard}>
+        <FontAwesome name="code-fork" size={11} color={Theme.violet} style={{ marginRight: 6 }} />
+        <RNText style={styles.prNumber}>#{prNum}</RNText>
+        <RNText style={styles.prTitle} numberOfLines={1}>{prTitle}</RNText>
+        <RNText style={styles.commitTime}>{formatTimestamp(message.timestamp)}</RNText>
+      </RNView>
+    );
+  }
+
   if (message.subtype === 'commit' && message.content) {
     const sha = message.message_uuid?.slice(0, 7) || '';
     return (
@@ -1818,7 +1847,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           {!isUser && model && showHeader && (
             <RNText style={styles.modelBadge}>{formatModel(model)}</RNText>
           )}
-          <RNText style={[styles.bubbleTime, isUser ? styles.userTime : styles.assistantTime]}>{formatTimestamp(message.timestamp)}</RNText>
+          <Pressable onPress={() => Alert.alert('Timestamp', formatFullTimestamp(message.timestamp))}>
+            <RNText style={[styles.bubbleTime, isUser ? styles.userTime : styles.assistantTime]}>{formatTimestamp(message.timestamp)}</RNText>
+          </Pressable>
         </RNView>
       )}
 
@@ -2201,29 +2232,63 @@ export default function SessionDetailScreen() {
   const commits = useQuery(
     api.commits.getCommitsForConversation,
     id ? { conversation_id: id as Id<"conversations"> } : "skip"
-  ) as Array<{ _id: string; sha: string; message: string; timestamp: number; files_changed: number; insertions: number; deletions: number }> | undefined;
+  ) as Array<{
+    _id: string; sha: string; message: string; timestamp: number;
+    files_changed: number; insertions: number; deletions: number;
+  }> | undefined;
+
+  const pullRequests = useQuery(
+    api.pull_requests.getPRsForConversation,
+    id ? { conversation_id: id as Id<"conversations"> } : "skip"
+  ) as Array<{
+    _id: string; number: number; title: string; state: string;
+    repository: string; additions?: number; deletions?: number;
+    created_at: number; merged_at?: number;
+  }> | undefined;
 
   const hasMoreAbove = olderHasMore && (conversation?.has_more_above !== false);
 
   const allMessages = useMemo(() => {
     const recent = conversation?.messages || [];
-    const msgs = olderMessages.length === 0 ? recent : (() => {
-      const recentIds = new Set(recent.map(m => m._id));
-      return [...olderMessages.filter(m => !recentIds.has(m._id)), ...recent];
-    })();
-    if (!commits || commits.length === 0) return msgs;
-    const commitMsgs: Message[] = commits.map(c => ({
-      _id: `commit-${c._id}`,
-      role: 'system',
-      subtype: 'commit',
-      content: c.message,
-      timestamp: c.timestamp,
-      message_uuid: c.sha,
-    }));
-    const merged = [...msgs, ...commitMsgs];
+    const msgs = olderMessages.length === 0
+      ? recent
+      : (() => {
+          const recentIds = new Set(recent.map((m) => m._id));
+          return [
+            ...olderMessages.filter((m) => !recentIds.has(m._id)),
+            ...recent,
+          ];
+        })();
+    const synthetic: Message[] = [];
+    if (commits && commits.length > 0) {
+      for (const c of commits) {
+        synthetic.push({
+          _id: `commit-${c._id}`,
+          role: 'system',
+          subtype: 'commit',
+          content: c.message,
+          timestamp: c.timestamp,
+          message_uuid: c.sha,
+        });
+      }
+    }
+    if (pullRequests && pullRequests.length > 0) {
+      for (const pr of pullRequests) {
+        synthetic.push({
+          _id: `pr-${pr._id}`,
+          role: 'system',
+          subtype: 'pull_request',
+          content: `#${pr.number} ${pr.title}`,
+          timestamp: pr.merged_at || pr.created_at,
+          message_uuid: `pr-${pr.number}`,
+        });
+      }
+    }
+    if (synthetic.length === 0) return msgs;
+    const merged = [...msgs, ...synthetic];
     merged.sort((a, b) => a.timestamp - b.timestamp);
     return merged;
-  }, [conversation?.messages, olderMessages, commits]);
+  }, [conversation?.messages, olderMessages, commits, pullRequests]);
 
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const router = useRouter();
