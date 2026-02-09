@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -463,6 +463,19 @@ function shortenUrl(url: string): string {
   }
 }
 
+function getFileExtension(filePath: string): string | undefined {
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  const langMap: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+    py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java',
+    cpp: 'cpp', c: 'c', h: 'c', hpp: 'cpp', cs: 'csharp',
+    json: 'json', yaml: 'yaml', yml: 'yaml', md: 'markdown',
+    html: 'html', css: 'css', scss: 'scss', sql: 'sql',
+    sh: 'bash', bash: 'bash', zsh: 'bash', swift: 'swift', kt: 'kotlin',
+  };
+  return ext ? langMap[ext] : undefined;
+}
+
 function getRelativePath(fullPath: string): string {
   const patterns = [
     /\/Users\/[^/]+\/src\/(.+)$/,
@@ -563,7 +576,7 @@ function toolSummary(tc: ToolCall): string {
     const input = String(parsedInput.input || parsedInput.patch || '');
     const fileMatch = input.match(/\*\*\* (?:Update|Add|Delete) File: (.+)/);
     if (fileMatch) return getRelativePath(fileMatch[1].trim());
-    return '';
+    return 'Apply patch';
   }
 
   // MCP Browser tools
@@ -821,7 +834,7 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
         <RNView style={[styles.todoDot, { backgroundColor: Theme.magenta }]} />
         <RNText style={styles.todoTitle}>TodoWrite</RNText>
         <RNText style={styles.todoStats}>
-          {completed}/{todos.length} done{inProgress > 0 && `, ${inProgress} active`}
+          {completed}/{todos.length} done{inProgress > 0 && `, ${inProgress} in progress`}
         </RNText>
       </RNView>
       <RNView style={styles.todoList}>
@@ -837,6 +850,7 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
             <RNText style={[
               styles.todoItemText,
               todo.status === 'completed' && { color: Theme.textDim, textDecorationLine: 'line-through' as const },
+              todo.status === 'in_progress' && { color: Theme.textSecondary },
             ]}>
               {todo.status === 'in_progress' ? (todo.activeForm || todo.content) : todo.content}
             </RNText>
@@ -924,7 +938,6 @@ function SkillCard({ tool }: { tool: ToolCall }) {
 
   return (
     <RNView style={styles.skillCard}>
-      <FontAwesome name="magic" size={12} color={Theme.violet} style={{ marginRight: 6 }} />
       <RNText style={styles.skillName}>/{skillName}</RNText>
     </RNView>
   );
@@ -1013,21 +1026,19 @@ function SendMessageBlock({ tool }: { tool: ToolCall }) {
   return (
     <RNView style={styles.taskOpBlock}>
       <RNText style={[styles.taskOpName, { color: Theme.accent }]}>SendMessage</RNText>
-      {type === 'broadcast' && (
+      {type === 'broadcast' ? (
         <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.red + '20', borderColor: Theme.red + '40' }]}>
           <RNText style={[styles.taskOpBadgeText, { color: Theme.red }]}>broadcast</RNText>
         </RNView>
-      )}
-      {type === 'shutdown_request' && (
+      ) : type === 'shutdown_request' ? (
         <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.red + '20', borderColor: Theme.red + '40' }]}>
           <RNText style={[styles.taskOpBadgeText, { color: Theme.red }]}>shutdown</RNText>
         </RNView>
-      )}
-      {recipient && (
+      ) : recipient ? (
         <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.accent + '20', borderColor: Theme.accent + '40' }]}>
           <RNText style={[styles.taskOpBadgeText, { color: Theme.accent }]}>@{recipient}</RNText>
         </RNView>
-      )}
+      ) : null}
       {summary && (
         <RNText style={styles.taskOpText} numberOfLines={1}>{summary}</RNText>
       )}
@@ -1137,7 +1148,7 @@ function PlanBlock({ content }: { content: string }) {
         <FontAwesome
           name={expanded ? "chevron-down" : "chevron-right"}
           size={10}
-          color={Theme.cyan}
+          color={Theme.textDim}
           style={{ marginLeft: 'auto' }}
         />
       </TouchableOpacity>
@@ -1399,6 +1410,8 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   const hasImages = images && images.length > 0 && isScreenshotTool;
 
   const isWrite = toolCall.name === 'Write' || toolCall.name === 'file_write';
+  const filePath = String(parsedInput.file_path || parsedInput.path || '');
+  const language = filePath ? getFileExtension(filePath) : undefined;
   const isCodeResult = result && (
     isBash ||
     toolCall.name === 'Read' ||
@@ -1468,6 +1481,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
       </RNText>
       {expanded && (
         <RNView style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError]}>
+          {language && !isBash && (
+            <RNText style={styles.languageLabel}>{language}</RNText>
+          )}
           {isBash && inputDisplay ? (
             <RNView style={styles.bashCommandSection}>
               <RNText style={styles.bashPrompt} selectable>
@@ -1662,7 +1678,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     message.tool_calls?.forEach(tc => {
-      if (tc.name === 'Edit' || tc.name === 'Write' || tc.name === 'file_edit' || tc.name === 'file_write') {
+      if (tc.name === 'Edit' || tc.name === 'Write' || tc.name === 'file_edit' || tc.name === 'file_write' || tc.name === 'apply_patch') {
         initial.add(tc.id);
       }
     });
@@ -1849,7 +1865,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             style={[styles.showMoreButton, { paddingHorizontal: 14 }]}
             activeOpacity={0.7}
           >
-            <RNText style={[styles.showMoreText, isUser && { color: 'rgba(255,255,255,0.7)' }]}>
+            <RNText style={styles.showMoreText}>
               {contentExpanded ? 'Show less' : 'Show more...'}
             </RNText>
           </TouchableOpacity>
@@ -1862,6 +1878,15 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           {message.tool_calls!.map((tc) => {
             const result = message.tool_results?.find(r => r.tool_use_id === tc.id);
 
+            // Plan writes rendered as PlanBlock
+            if (tc.name === 'Write') {
+              try {
+                const p = JSON.parse(tc.input);
+                if (String(p.file_path || '').includes('.claude/plans/') && p.content) {
+                  return <PlanBlock key={tc.id} content={String(p.content)} />;
+                }
+              } catch {}
+            }
             // Specialized rendering for specific tools
             if (tc.name === 'Task') {
               return <TaskToolBlock key={tc.id} tool={tc} result={result} />;
@@ -2653,10 +2678,11 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   userBubble: {
-    backgroundColor: Theme.userBubble,
-    alignSelf: 'flex-end',
-    maxWidth: '85%',
-    borderBottomRightRadius: 4,
+    backgroundColor: Theme.userBubble + '26',
+    borderWidth: 1,
+    borderColor: Theme.userBubble + '66',
+    alignSelf: 'stretch',
+    maxWidth: '100%',
     marginTop: 12,
     marginBottom: 4,
   },
@@ -2682,7 +2708,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   userRole: {
-    color: 'rgba(255,255,255,0.8)',
+    color: Theme.userBubble,
   },
   assistantRole: {
     color: Theme.textMuted0,
@@ -2691,7 +2717,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   userTime: {
-    color: 'rgba(255,255,255,0.5)',
+    color: Theme.textDim,
   },
   assistantTime: {
     color: Theme.textDim,
@@ -2718,7 +2744,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   userText: {
-    color: Theme.userBubbleText,
+    color: Theme.text,
   },
   assistantText: {
     color: Theme.text,
@@ -2728,7 +2754,7 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
   linkTextUser: {
-    color: 'rgba(255,255,255,0.9)',
+    color: Theme.userBubble,
     textDecorationLine: 'underline',
   },
   inlineCode: {
@@ -2743,11 +2769,11 @@ const styles = StyleSheet.create({
   inlineCodeUser: {
     fontFamily: 'SpaceMono',
     fontSize: 13,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: Theme.bgHighlight,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 3,
-    color: '#fff',
+    color: Theme.text,
   },
   listContainer: {
     marginVertical: 4,
@@ -3058,6 +3084,15 @@ const styles = StyleSheet.create({
   noOutputText: {
     fontSize: 12,
     color: Theme.textDim,
+    padding: 8,
+  },
+  languageLabel: {
+    fontSize: 10,
+    color: Theme.textDim,
+    paddingHorizontal: 8,
+    paddingTop: 6,
+    paddingBottom: 2,
+    fontFamily: 'SpaceMono',
   },
   toolInputSection: {
     marginBottom: 8,
@@ -3320,32 +3355,36 @@ const styles = StyleSheet.create({
     color: Theme.blue,
   },
   // TodoWrite / TaskList
+  todoDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
   todoBlock: {
     marginVertical: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(0,0,0,0.1)',
-    borderRadius: 8,
   },
   todoHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 6,
+    paddingVertical: 2,
+    gap: 2,
   },
   todoTitle: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
     color: Theme.magenta,
     fontFamily: 'SpaceMono',
-    marginRight: 6,
   },
   todoStats: {
-    fontSize: 10,
-    color: Theme.textMuted0,
+    fontSize: 12,
+    color: Theme.textDim,
     fontFamily: 'SpaceMono',
   },
   todoList: {
-    gap: 4,
+    gap: 2,
+    marginLeft: 14,
+    marginTop: 4,
   },
   todoItem: {
     flexDirection: 'row',
@@ -3385,7 +3424,13 @@ const styles = StyleSheet.create({
   skillCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 1,
+    marginVertical: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight + '66',
   },
   skillName: {
     fontSize: 12,
@@ -3490,21 +3535,21 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: Theme.cyan + '40',
-    backgroundColor: Theme.bgAlt,
+    borderColor: Theme.borderLight + '99',
+    backgroundColor: Theme.bgAlt + '4D',
     overflow: 'hidden',
   },
   planHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
+    borderBottomColor: Theme.borderLight + '66',
   },
   planTitle: {
     fontSize: 12,
-    color: Theme.cyan,
+    color: Theme.textMuted,
     fontWeight: '600',
     flex: 1,
   },
@@ -3602,13 +3647,13 @@ const styles = StyleSheet.create({
   skillBlockCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 6,
     backgroundColor: Theme.bgAlt,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
+    borderColor: Theme.borderLight + '66',
     marginVertical: 4,
   },
   skillBlockName: {
@@ -3747,12 +3792,6 @@ const styles = StyleSheet.create({
     color: Theme.textDim,
     fontFamily: 'SpaceMono',
     marginLeft: 4,
-  },
-  todoDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    marginRight: 5,
   },
   // Commit cards
   commitCard: {
