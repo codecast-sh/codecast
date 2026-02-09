@@ -246,12 +246,16 @@ function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text
     }
 
     if (trimmed.match(/^[-*]\s/) || trimmed.match(/^\d+[.)]\s/)) {
-      const listItems: { text: string; ordered: boolean; num?: number }[] = [];
+      const listItems: { text: string; ordered: boolean; num?: number; checked?: boolean }[] = [];
       while (i < lines.length) {
         const l = lines[i].trim();
+        const checkMatch = l.match(/^[-*]\s+\[([ xX])\]\s+(.*)/);
         const ulMatch = l.match(/^[-*]\s+(.*)/);
         const olMatch = l.match(/^(\d+)[.)]\s+(.*)/);
-        if (ulMatch) {
+        if (checkMatch) {
+          listItems.push({ text: checkMatch[2], ordered: false, checked: checkMatch[1] !== ' ' });
+          i++;
+        } else if (ulMatch) {
           listItems.push({ text: ulMatch[1], ordered: false });
           i++;
         } else if (olMatch) {
@@ -264,9 +268,9 @@ function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text
           {listItems.map((item, j) => (
             <RNView key={j} style={styles.listItem}>
               <RNText style={[baseStyle, styles.listBullet]}>
-                {item.ordered ? `${item.num}.` : '\u2022'}
+                {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : '\u2022'}
               </RNText>
-              <RNText style={[baseStyle, { flex: 1 }]}>
+              <RNText style={[baseStyle, { flex: 1 }, item.checked === true && { textDecorationLine: 'line-through', color: Theme.textMuted0 }]}>
                 {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser)}
               </RNText>
             </RNView>
@@ -490,6 +494,7 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
   if (name === 'AskUserQuestion') return { icon: 'question-circle-o', color: Theme.blue };
   if (name === 'TeamCreate' || name === 'TeamDelete') return { icon: 'users', color: Theme.cyan };
   if (name === 'TaskOutput' || name === 'TaskStop') return { icon: 'tasks', color: '#10b981' };
+  if (name === 'NotebookEdit') return { icon: 'book', color: Theme.orange };
 
   if (name.startsWith('mcp__')) {
     if (name.includes('tabs_context') || name.includes('tabs_create')) {
@@ -813,7 +818,7 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
   return (
     <RNView style={styles.todoBlock}>
       <RNView style={styles.todoHeader}>
-        <FontAwesome name="list" size={11} color={Theme.magenta} style={{ marginRight: 5 }} />
+        <RNView style={[styles.todoDot, { backgroundColor: Theme.magenta }]} />
         <RNText style={styles.todoTitle}>TodoWrite</RNText>
         <RNText style={styles.todoStats}>
           {completed}/{todos.length} done{inProgress > 0 && `, ${inProgress} active`}
@@ -867,7 +872,7 @@ function TaskListBlock({ result }: { result?: ToolResult }) {
   return (
     <RNView style={styles.todoBlock}>
       <RNView style={styles.todoHeader}>
-        <FontAwesome name="list" size={11} color={Theme.green} style={{ marginRight: 5 }} />
+        <RNView style={[styles.todoDot, { backgroundColor: Theme.green }]} />
         <RNText style={[styles.todoTitle, { color: Theme.green }]}>TaskList</RNText>
         <RNText style={styles.todoStats}>
           {completed}/{items.length} done{inProgress > 0 && `, ${inProgress} active`}
@@ -1395,6 +1400,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
 
   const isWrite = toolCall.name === 'Write' || toolCall.name === 'file_write';
   const isCodeResult = result && (
+    isBash ||
     toolCall.name === 'Read' ||
     toolCall.name === 'Write' ||
     toolCall.name === 'Edit' ||
@@ -1577,6 +1583,18 @@ function SystemMessage({ message }: { message: Message }) {
 
   if (message.subtype === 'plan' && message.content) {
     return <PlanBlock content={message.content} />;
+  }
+
+  if (message.subtype === 'commit' && message.content) {
+    const sha = message.message_uuid?.slice(0, 7) || '';
+    return (
+      <RNView style={styles.commitCard}>
+        <FontAwesome name="code-fork" size={11} color={Theme.green} style={{ marginRight: 6, transform: [{ rotate: '180deg' }] }} />
+        <RNText style={styles.commitSha}>{sha}</RNText>
+        <RNText style={styles.commitMessage} numberOfLines={1}>{message.content}</RNText>
+        <RNText style={styles.commitTime}>{formatTimestamp(message.timestamp)}</RNText>
+      </RNView>
+    );
   }
 
   if (message.subtype === 'stop_hook_summary' || message.subtype === 'local_command') {
@@ -2126,15 +2144,32 @@ export default function SessionDetailScreen() {
     id ? { conversation_id: id as Id<"conversations"> } : "skip"
   );
 
+  const commits = useQuery(
+    api.commits.getCommitsForConversation,
+    id ? { conversation_id: id as Id<"conversations"> } : "skip"
+  ) as Array<{ _id: string; sha: string; message: string; timestamp: number; files_changed: number; insertions: number; deletions: number }> | undefined;
+
   const hasMoreAbove = olderHasMore && (conversation?.has_more_above !== false);
 
   const allMessages = useMemo(() => {
     const recent = conversation?.messages || [];
-    if (olderMessages.length === 0) return recent;
-    const recentIds = new Set(recent.map(m => m._id));
-    const uniqueOlder = olderMessages.filter(m => !recentIds.has(m._id));
-    return [...uniqueOlder, ...recent];
-  }, [conversation?.messages, olderMessages]);
+    const msgs = olderMessages.length === 0 ? recent : (() => {
+      const recentIds = new Set(recent.map(m => m._id));
+      return [...olderMessages.filter(m => !recentIds.has(m._id)), ...recent];
+    })();
+    if (!commits || commits.length === 0) return msgs;
+    const commitMsgs: Message[] = commits.map(c => ({
+      _id: `commit-${c._id}`,
+      role: 'system',
+      subtype: 'commit',
+      content: c.message,
+      timestamp: c.timestamp,
+      message_uuid: c.sha,
+    }));
+    const merged = [...msgs, ...commitMsgs];
+    merged.sort((a, b) => a.timestamp - b.timestamp);
+    return merged;
+  }, [conversation?.messages, olderMessages, commits]);
 
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const router = useRouter();
@@ -3712,5 +3747,34 @@ const styles = StyleSheet.create({
     color: Theme.textDim,
     fontFamily: 'SpaceMono',
     marginLeft: 4,
+  },
+  todoDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    marginRight: 5,
+  },
+  // Commit cards
+  commitCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  commitSha: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: Theme.green,
+    fontWeight: '600',
+  },
+  commitMessage: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    flex: 1,
+  },
+  commitTime: {
+    fontSize: 9,
+    color: Theme.textDim,
   },
 });
