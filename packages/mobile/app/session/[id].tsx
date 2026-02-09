@@ -842,6 +842,43 @@ function CompactionSummaryBlock({ content }: { content: string }) {
   );
 }
 
+function PlanBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(true);
+
+  // Extract title from first # heading
+  const titleMatch = content.match(/^#\s+(.+)$/m);
+  const title = titleMatch ? titleMatch[1] : 'Plan';
+
+  return (
+    <RNView style={styles.planBlock}>
+      <TouchableOpacity
+        onPress={() => setExpanded(!expanded)}
+        style={styles.planHeader}
+        activeOpacity={0.7}
+      >
+        <FontAwesome
+          name="clipboard"
+          size={12}
+          color={Theme.cyan}
+          style={{ marginRight: 6 }}
+        />
+        <RNText style={styles.planTitle}>{title}</RNText>
+        <FontAwesome
+          name={expanded ? "chevron-down" : "chevron-right"}
+          size={10}
+          color={Theme.cyan}
+          style={{ marginLeft: 'auto' }}
+        />
+      </TouchableOpacity>
+      {expanded && (
+        <RNView style={styles.planContent}>
+          <MarkdownContent text={content} baseStyle={styles.planText} isUser={false} />
+        </RNView>
+      )}
+    </RNView>
+  );
+}
+
 function ToolCallItem({ toolCall, result, expanded, onToggle }: {
   toolCall: ToolCall;
   result?: ToolResult;
@@ -958,6 +995,10 @@ function SystemMessage({ message }: { message: Message }) {
 
   if (message.subtype === 'compaction_summary' && message.content) {
     return <CompactionSummaryBlock content={message.content} />;
+  }
+
+  if (message.subtype === 'plan' && message.content) {
+    return <PlanBlock content={message.content} />;
   }
 
   const content = message.content?.slice(0, 120) || '';
@@ -2340,6 +2381,38 @@ const styles = StyleSheet.create({
     paddingLeft: 12,
     borderLeftWidth: 2,
     borderLeftColor: Theme.accent + '60',
+  },
+  // Plan block
+  planBlock: {
+    marginVertical: 12,
+    marginHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Theme.cyan + '40',
+    backgroundColor: Theme.bgAlt,
+    overflow: 'hidden',
+  },
+  planHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+  },
+  planTitle: {
+    fontSize: 12,
+    color: Theme.cyan,
+    fontWeight: '600',
+    flex: 1,
+  },
+  planContent: {
+    padding: 12,
+  },
+  planText: {
+    fontSize: 12,
+    color: Theme.text,
+    lineHeight: 18,
   },
   // Jump buttons
   jumpButtonsContainer: {
