@@ -153,6 +153,7 @@ type ConversationData = {
   loaded_start_index?: number;
   child_conversation_map?: Record<string, string>;
   child_conversations?: Array<{ _id: string; title: string }>;
+  short_id?: string;
 };
 
 // --- Markdown rendering ---
@@ -235,7 +236,7 @@ function CodeBlockWithCopy({ content, language }: { content: string; language: s
   return (
     <RNView style={styles.codeBlock}>
       <RNView style={styles.codeHeader}>
-        <RNText style={styles.codeLanguage}>{language}</RNText>
+        <RNText style={styles.codeLanguage}>{language}{lines.length > 1 ? ` \u00b7 ${lines.length} lines` : ''}</RNText>
         <TouchableOpacity onPress={handleCopy} style={styles.codeCopyButton} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           {copied ? (
             <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
@@ -1594,6 +1595,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
 }) {
   const { color } = toolIcon(toolCall.name);
   const summary = toolSummary(toolCall);
+  const [viewMode, setViewMode] = useState<'raw' | 'rendered'>('rendered');
 
   // Format input nicely - parse JSON and extract relevant fields
   let inputDisplay = toolCall.input;
@@ -1699,6 +1701,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
     result.content.includes('```')
   );
 
+  const isMarkdownFile = language === 'markdown' || filePath.endsWith('.plan');
+  const canToggleViewMode = isMarkdownFile && (isRead || isWrite) && result && result.content;
+
   // Tools that shouldn't show their input (just noise)
   // Command is shown in summary, no need to repeat
   const shouldHideInput = [
@@ -1750,7 +1755,19 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
       {expanded && (
         <RNView style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError]}>
           {language && !isBash && (
-            <RNText style={styles.languageLabel}>{language}</RNText>
+            <RNView style={styles.languageLabelRow}>
+              <RNText style={styles.languageLabel}>{language}</RNText>
+              {canToggleViewMode && (
+                <RNView style={styles.viewModeToggle}>
+                  <Pressable onPress={() => setViewMode('raw')} style={[styles.viewModeBtn, viewMode === 'raw' && styles.viewModeBtnActive]}>
+                    <RNText style={[styles.viewModeBtnText, viewMode === 'raw' && styles.viewModeBtnTextActive]}>Raw</RNText>
+                  </Pressable>
+                  <Pressable onPress={() => setViewMode('rendered')} style={[styles.viewModeBtn, viewMode === 'rendered' && styles.viewModeBtnActive]}>
+                    <RNText style={[styles.viewModeBtnText, viewMode === 'rendered' && styles.viewModeBtnTextActive]}>Rendered</RNText>
+                  </Pressable>
+                </RNView>
+              )}
+            </RNView>
           )}
           {isBash && inputDisplay ? (
             <RNView style={styles.bashCommandSection}>
@@ -1810,7 +1827,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
           ) : null}
           {result && resultDisplay && resultDisplay.trim() ? (
             <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
-              {isCodeResult ? (
+              {canToggleViewMode && viewMode === 'rendered' ? (
+                <MarkdownContent text={stripLineNumbers(resultDisplay)} baseStyle={styles.toolCallResult} isUser={false} />
+              ) : isCodeResult ? (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                   <RNText style={[styles.toolCodeText, result.is_error && { color: Theme.red }]} selectable>{resultDisplay}</RNText>
                 </ScrollView>
@@ -1952,6 +1971,7 @@ function assistantLabel(agentType?: string): string {
 }
 
 const CONTENT_TRUNCATE_LENGTH = 3000;
+const ASSISTANT_CONTENT_MAX_HEIGHT = 800;
 
 function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
   const cmdType = getCommandType(content);
@@ -1995,6 +2015,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     return initial;
   });
   const [contentExpanded, setContentExpanded] = useState(false);
+  const [fullscreenVisible, setFullscreenVisible] = useState(false);
+  const [assistantOverflowing, setAssistantOverflowing] = useState(false);
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
   const isBookmarked = useQuery(
     api.bookmarks.isBookmarked,
@@ -2122,7 +2144,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           {!isUser && model && showHeader && (
             <RNText style={styles.modelBadge}>{formatModel(model)}</RNText>
           )}
-          <Pressable onPress={() => Alert.alert('Timestamp', formatFullTimestamp(message.timestamp))}>
+          <Pressable onPress={() => { Clipboard.setString(formatFullTimestamp(message.timestamp)); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast?.('Timestamp copied'); }}>
             <RNText style={[styles.bubbleTime, isUser ? styles.userTime : styles.assistantTime]}>{formatTimestamp(message.timestamp)}</RNText>
           </Pressable>
           {isBookmarked && (
@@ -2146,7 +2168,14 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
 
       {content ? (
         <>
-        <RNView style={[styles.bubbleContent, isLongContent && !contentExpanded && styles.bubbleContentCollapsed]}>
+        <RNView
+          style={[
+            styles.bubbleContent,
+            isLongContent && !contentExpanded && styles.bubbleContentCollapsed,
+            !isUser && !contentExpanded && !isLongContent && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
+          ]}
+          onLayout={!isUser && !isLongContent ? (e) => setAssistantOverflowing(e.nativeEvent.layout.height >= ASSISTANT_CONTENT_MAX_HEIGHT) : undefined}
+        >
           {typeof content === 'string' && content.includes('<skill>') ? (
             parseSkillBlocks(content).map((part, idx) => {
               if (part.type === 'skill') {
@@ -2199,7 +2228,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               isUser={isUser}
             />
           )}
-          {isLongContent && !contentExpanded && (
+          {(isLongContent && !contentExpanded || (!isUser && assistantOverflowing && !contentExpanded)) && (
             <LinearGradient
               colors={[isUser ? Theme.violet + '00' : Theme.bg + '00', isUser ? Theme.violet + '26' : Theme.bg]}
               style={styles.contentGradientOverlay}
@@ -2207,17 +2236,25 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             />
           )}
         </RNView>
-        {isLongContent && (
-          <TouchableOpacity
-            onPress={() => setContentExpanded(!contentExpanded)}
-            style={styles.showMoreButton}
-            activeOpacity={0.7}
-          >
-            <FontAwesome name={contentExpanded ? "chevron-up" : "chevron-down"} size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
-            <RNText style={styles.showMoreText}>
-              {contentExpanded ? 'Collapse' : 'Expand'}
-            </RNText>
-          </TouchableOpacity>
+        {(isLongContent || assistantOverflowing) && (
+          <RNView style={styles.contentActions}>
+            <TouchableOpacity
+              onPress={() => setContentExpanded(!contentExpanded)}
+              style={styles.showMoreButton}
+              activeOpacity={0.7}
+            >
+              <FontAwesome name={contentExpanded ? "chevron-up" : "chevron-down"} size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
+              <RNText style={styles.showMoreText}>
+                {contentExpanded ? 'Collapse' : 'Expand'}
+              </RNText>
+            </TouchableOpacity>
+            {rawContent.length > 500 && (
+              <TouchableOpacity onPress={() => setFullscreenVisible(true)} style={styles.showMoreButton} activeOpacity={0.7}>
+                <FontAwesome name="expand" size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
+                <RNText style={styles.showMoreText}>Fullscreen</RNText>
+              </TouchableOpacity>
+            )}
+          </RNView>
         )}
         </>
       ) : null}
@@ -2308,6 +2345,22 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         </RNView>
       )}
       </RNView>
+      {fullscreenVisible && (
+        <Modal visible={fullscreenVisible} animationType="slide" onRequestClose={() => setFullscreenVisible(false)}>
+          <RNView style={styles.messageFullscreen}>
+            <RNView style={styles.messageFullscreenHeader}>
+              <RNText style={styles.messageFullscreenRole}>{isUser ? (userName || 'You') : assistantLabel(agentType)}</RNText>
+              <RNText style={styles.messageFullscreenTime}>{formatFullTimestamp(message.timestamp)}</RNText>
+              <TouchableOpacity onPress={() => setFullscreenVisible(false)} style={{ padding: 6, marginLeft: 'auto' }} activeOpacity={0.7}>
+                <FontAwesome name="close" size={18} color={Theme.textMuted} />
+              </TouchableOpacity>
+            </RNView>
+            <ScrollView style={styles.messageFullscreenContent} contentContainerStyle={{ paddingBottom: 60 }}>
+              <MarkdownContent text={rawContent} baseStyle={[styles.bubbleText, { fontSize: 15, lineHeight: 24 }, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+            </ScrollView>
+          </RNView>
+        </Modal>
+      )}
     </Pressable>
   );
 }
@@ -2548,6 +2601,8 @@ export default function SessionDetailScreen() {
   }, []);
   const [collapsed, setCollapsed] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchVisible, setSearchVisible] = useState(false);
   const isNearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(0);
 
@@ -2733,6 +2788,29 @@ export default function SessionDetailScreen() {
     showToast('Resume command copied');
   }, [conversation?.session_id, conversation?.agent_type, showToast]);
 
+  const generateShareLink = useMutation(api.conversations.generateShareLink);
+  const handleToolbarShare = useCallback(async () => {
+    if (!conversation) return;
+    let token = conversation.share_token;
+    if (!token) {
+      token = await generateShareLink({ conversation_id: id as Id<"conversations"> });
+    }
+    if (token) {
+      const url = `https://codecast.sh/share/${token}`;
+      Share.share({ message: url, url });
+    }
+  }, [conversation, id, generateShareLink]);
+
+  const searchLower = searchQuery.toLowerCase();
+  const searchMatchIds = useMemo(() => {
+    if (!searchLower) return null;
+    const ids = new Set<string>();
+    for (const msg of allMessages) {
+      if (msg.content && msg.content.toLowerCase().includes(searchLower)) ids.add(msg._id);
+    }
+    return ids;
+  }, [searchLower, allMessages]);
+
   useEffect(() => {
     if (conversation && !initialScrollDone && allMessages.length > 0) {
       setTimeout(() => {
@@ -2908,9 +2986,16 @@ export default function SessionDetailScreen() {
                           </RNText>
                         </Pressable>
                       )}
-                      <RNText style={styles.messageCountText}>
-                        {conversation.message_count || allMessages.length} msgs
-                      </RNText>
+                      {conversation.short_id && (
+                        <Pressable onPress={() => { Clipboard.setString(conversation.short_id!); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast('ID copied'); }}>
+                          <RNText style={styles.shortIdBadge}>{conversation.short_id}</RNText>
+                        </Pressable>
+                      )}
+                      <Pressable onPress={() => { Clipboard.setString(conversation._id); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast('Full ID copied'); }}>
+                        <RNText style={styles.messageCountText}>
+                          {conversation.message_count || allMessages.length} msgs
+                        </RNText>
+                      </Pressable>
                       {conversation.started_at && (
                         <RNText style={styles.durationBadge}>
                           {formatDuration(conversation.started_at)}
@@ -2991,8 +3076,14 @@ export default function SessionDetailScreen() {
                   />
                 </RNView>
                 <RNView style={styles.headerToolbar}>
+                  <TouchableOpacity onPress={() => setSearchVisible(v => !v)} style={styles.toolbarButton} activeOpacity={0.7}>
+                    <FontAwesome name="search" size={12} color={searchVisible ? Theme.cyan : Theme.textDim} />
+                  </TouchableOpacity>
                   <TouchableOpacity onPress={handleCopyAll} style={styles.toolbarButton} activeOpacity={0.7}>
                     <FontAwesome name="clipboard" size={13} color={Theme.textDim} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={handleToolbarShare} style={styles.toolbarButton} activeOpacity={0.7}>
+                    <FontAwesome name="share-alt" size={12} color={Theme.textDim} />
                   </TouchableOpacity>
                   {conversation.session_id && (
                     <TouchableOpacity onPress={handleCopyResume} style={styles.toolbarButton} activeOpacity={0.7}>
@@ -3011,6 +3102,28 @@ export default function SessionDetailScreen() {
                     </TouchableOpacity>
                   )}
                 </RNView>
+                {searchVisible && (
+                  <RNView style={styles.searchBar}>
+                    <FontAwesome name="search" size={12} color={Theme.textDim} style={{ marginRight: 8 }} />
+                    <TextInput
+                      style={styles.searchInput}
+                      value={searchQuery}
+                      onChangeText={setSearchQuery}
+                      placeholder="Search messages..."
+                      placeholderTextColor={Theme.textMuted0}
+                      autoFocus
+                      returnKeyType="search"
+                    />
+                    {searchQuery.length > 0 && (
+                      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <RNText style={styles.searchCount}>{searchMatchIds ? searchMatchIds.size : 0} matches</RNText>
+                        <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7}>
+                          <FontAwesome name="times-circle" size={14} color={Theme.textDim} />
+                        </TouchableOpacity>
+                      </RNView>
+                    )}
+                  </RNView>
+                )}
               </RNView>
               {hasMoreAbove && (
                 <TouchableOpacity
@@ -3073,23 +3186,26 @@ export default function SessionDetailScreen() {
               }
             }
 
+            const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
             return (
-              <MessageBubble
-                message={item}
-                agentType={conversation.agent_type}
-                model={conversation.model}
-                showHeader={showHeader}
-                forkChildren={item.message_uuid ? forkPointMap[item.message_uuid] : undefined}
-                conversationId={conversation._id}
-                onFork={handleForkFromMessage}
-                taskSubjectMap={taskSubjectMap}
-                globalToolResultMap={globalToolResultMap}
-                userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
-                showToast={showToast}
-                collapsed={collapsed}
-                showThinkingGlobal={showThinking}
-                childConversationMap={conversation.child_conversation_map}
-              />
+              <RNView style={isSearchDimmed ? { opacity: 0.25 } : undefined}>
+                <MessageBubble
+                  message={item}
+                  agentType={conversation.agent_type}
+                  model={conversation.model}
+                  showHeader={showHeader}
+                  forkChildren={item.message_uuid ? forkPointMap[item.message_uuid] : undefined}
+                  conversationId={conversation._id}
+                  onFork={handleForkFromMessage}
+                  taskSubjectMap={taskSubjectMap}
+                  globalToolResultMap={globalToolResultMap}
+                  userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
+                  showToast={showToast}
+                  collapsed={collapsed}
+                  showThinkingGlobal={showThinking}
+                  childConversationMap={conversation.child_conversation_map}
+                />
+              </RNView>
             );
           }}
           keyExtractor={(item) => item._id}
@@ -3709,11 +3825,7 @@ const styles = StyleSheet.create({
   languageLabel: {
     fontSize: 10,
     color: Theme.textDim,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
     fontFamily: 'SpaceMono',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight + '33',
   },
   toolInputSection: {
     paddingHorizontal: 8,
@@ -4754,5 +4866,108 @@ const styles = StyleSheet.create({
   treeNodeMeta: {
     fontSize: 10,
     color: Theme.textDim,
+  },
+  // Search bar
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 8,
+    marginHorizontal: 12,
+    marginBottom: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 13,
+    color: Theme.text,
+    paddingVertical: 4,
+    fontFamily: 'SpaceMono',
+  },
+  searchCount: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontFamily: 'SpaceMono',
+  },
+  // Short ID badge
+  shortIdBadge: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontFamily: 'SpaceMono',
+    backgroundColor: Theme.bgHighlight,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 3,
+  },
+  // View mode toggle (Raw/Rendered)
+  languageLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight + '33',
+  },
+  viewModeToggle: {
+    flexDirection: 'row',
+    borderRadius: 4,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
+  viewModeBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  viewModeBtnActive: {
+    backgroundColor: Theme.cyan + '25',
+  },
+  viewModeBtnText: {
+    fontSize: 9,
+    color: Theme.textDim,
+    fontWeight: '500',
+  },
+  viewModeBtnTextActive: {
+    color: Theme.cyan,
+  },
+  // Content actions row (Expand + Fullscreen)
+  contentActions: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingBottom: 4,
+  },
+  // Message fullscreen
+  messageFullscreen: {
+    flex: 1,
+    backgroundColor: Theme.bg,
+  },
+  messageFullscreenHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 60 : 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt,
+  },
+  messageFullscreenRole: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Theme.text,
+  },
+  messageFullscreenTime: {
+    fontSize: 11,
+    color: Theme.textDim,
+    flex: 1,
+  },
+  messageFullscreenContent: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 16,
   },
 });
