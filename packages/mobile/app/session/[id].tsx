@@ -995,6 +995,50 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
+type SkillBlockPart = { type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string };
+
+function parseSkillBlocks(text: string): SkillBlockPart[] {
+  const parts: SkillBlockPart[] = [];
+  const skillRegex = /<skill>([\s\S]*?)<\/skill>/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = skillRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const before = text.slice(lastIndex, match.index).trim();
+      if (before) parts.push({ type: 'text', content: before });
+    }
+    const inner = match[1];
+    const nameMatch = inner.match(/<name>(.*?)<\/name>/);
+    const pathMatch = inner.match(/<path>(.*?)<\/path>/);
+    const descMatch = inner.match(/description:\s*(.+)/);
+    parts.push({
+      type: 'skill',
+      content: match[0],
+      skillName: nameMatch?.[1],
+      skillDesc: descMatch?.[1]?.trim(),
+      skillPath: pathMatch?.[1],
+    });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    const remaining = text.slice(lastIndex).trim();
+    if (remaining) parts.push({ type: 'text', content: remaining });
+  }
+  if (parts.length === 0) parts.push({ type: 'text', content: text });
+  return parts;
+}
+
+function SkillBlockCard({ name, description, path }: { name?: string; description?: string; path?: string }) {
+  const shortPath = path ? path.replace(/^\/Users\/[^/]+\//, "~/") : undefined;
+  return (
+    <RNView style={styles.skillBlockCard}>
+      <RNText style={styles.skillBlockName}>/{name || "skill"}</RNText>
+      {description && <RNText style={styles.skillBlockDesc}>{description}</RNText>}
+      {shortPath && <RNText style={styles.skillBlockPath}>{shortPath}</RNText>}
+    </RNView>
+  );
+}
+
 function ToolCallItem({ toolCall, result, expanded, onToggle }: {
   toolCall: ToolCall;
   result?: ToolResult;
@@ -1233,7 +1277,29 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
 
       {content ? (
         <RNView style={styles.bubbleContent}>
-          {content.includes('<teammate-message') ? (
+          {content.includes('<skill>') ? (
+            parseSkillBlocks(content).map((part, idx) => {
+              if (part.type === 'skill') {
+                return (
+                  <SkillBlockCard
+                    key={idx}
+                    name={part.skillName}
+                    description={part.skillDesc}
+                    path={part.skillPath}
+                  />
+                );
+              } else {
+                return (
+                  <MarkdownContent
+                    key={idx}
+                    text={part.content}
+                    baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}
+                    isUser={isUser}
+                  />
+                );
+              }
+            })
+          ) : content.includes('<teammate-message') ? (
             parseTeammateMessages(content).map((part, idx) => {
               if (part.type === 'text') {
                 return (
@@ -2636,5 +2702,34 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Theme.textMuted,
     fontStyle: 'italic',
+  },
+  // Skill block cards (in content)
+  skillBlockCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    marginVertical: 4,
+  },
+  skillBlockName: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: Theme.violet,
+    fontWeight: '600',
+  },
+  skillBlockDesc: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    flex: 1,
+  },
+  skillBlockPath: {
+    fontSize: 9,
+    color: Theme.textMuted0,
+    fontFamily: 'SpaceMono',
   },
 });
