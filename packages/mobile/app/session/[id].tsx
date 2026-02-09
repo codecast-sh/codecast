@@ -879,6 +879,122 @@ function PlanBlock({ content }: { content: string }) {
   );
 }
 
+type TeammateMessagePart = { type: 'text'; content: string } | { type: 'teammate'; teammateId: string; color?: string; summary?: string; content: string };
+
+function parseTeammateMessages(text: string): TeammateMessagePart[] {
+  const parts: TeammateMessagePart[] = [];
+  const regex = /<teammate-message\s+([^>]*)>([\s\S]*?)<\/teammate-message>/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const before = text.slice(lastIndex, match.index).trim();
+      if (before) parts.push({ type: 'text', content: before });
+    }
+    const attrs = match[1];
+    const inner = match[2].trim();
+    const idMatch = attrs.match(/teammate_id="([^"]+)"/);
+    const colorMatch = attrs.match(/color="([^"]+)"/);
+    const summaryMatch = attrs.match(/summary="([^"]+)"/);
+    parts.push({
+      type: 'teammate',
+      teammateId: idMatch?.[1] || 'agent',
+      color: colorMatch?.[1],
+      summary: summaryMatch?.[1],
+      content: inner,
+    });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    const remaining = text.slice(lastIndex).trim();
+    if (remaining) parts.push({ type: 'text', content: remaining });
+  }
+  return parts;
+}
+
+const agentColors: Record<string, string> = {
+  blue: Theme.blue,
+  red: Theme.red,
+  green: Theme.green,
+  yellow: Theme.yellow,
+  purple: Theme.violet,
+  cyan: Theme.cyan,
+  orange: Theme.orange,
+  pink: '#ec4899',
+};
+
+function TeammateMessageCard({ teammateId, color, summary, content }: { teammateId: string; color?: string; summary?: string; content: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  let parsed: any = null;
+  try { parsed = JSON.parse(content); } catch {}
+
+  const borderColor = agentColors[color || 'blue'] || Theme.blue;
+  const isLong = content.length > 200;
+
+  // Idle notification
+  if (parsed?.type === 'idle_notification') {
+    return (
+      <RNView style={styles.teammateIdle}>
+        <RNView style={[styles.teammateBadge, { backgroundColor: borderColor + '20', borderColor: borderColor + '60' }]}>
+          <RNText style={[styles.teammateBadgeText, { color: borderColor }]}>{teammateId}</RNText>
+        </RNView>
+        <RNText style={styles.teammateIdleText}>{parsed.summary || 'idle'}</RNText>
+      </RNView>
+    );
+  }
+
+  // Task assignment
+  if (parsed?.type === 'task_assignment') {
+    return (
+      <RNView style={styles.teammateIdle}>
+        <RNView style={[styles.teammateBadge, { backgroundColor: borderColor + '20', borderColor: borderColor + '60' }]}>
+          <RNText style={[styles.teammateBadgeText, { color: borderColor }]}>{parsed.assignedBy || teammateId}</RNText>
+        </RNView>
+        <RNText style={styles.teammateIdleText}>
+          assigned #{parsed.taskId} {parsed.subject}
+        </RNText>
+      </RNView>
+    );
+  }
+
+  // Shutdown request
+  if (parsed?.type === 'shutdown_request') {
+    return (
+      <RNView style={styles.teammateIdle}>
+        <RNView style={[styles.teammateBadge, { backgroundColor: Theme.red + '20', borderColor: Theme.red + '60' }]}>
+          <RNText style={[styles.teammateBadgeText, { color: Theme.red }]}>{teammateId}</RNText>
+        </RNView>
+        <RNText style={[styles.teammateIdleText, { color: Theme.red, fontStyle: 'italic' }]}>shutdown request</RNText>
+      </RNView>
+    );
+  }
+
+  // Regular message
+  return (
+    <RNView style={[styles.teammateMessage, { borderLeftColor: borderColor }]}>
+      <RNView style={styles.teammateHeader}>
+        <RNView style={[styles.teammateBadge, { backgroundColor: borderColor + '20', borderColor: borderColor + '60' }]}>
+          <RNText style={[styles.teammateBadgeText, { color: borderColor }]}>{teammateId}</RNText>
+        </RNView>
+        {summary && <RNText style={styles.teammateSummary}>{summary}</RNText>}
+      </RNView>
+      <RNText
+        style={styles.teammateContent}
+        numberOfLines={!expanded && isLong ? 4 : undefined}
+        selectable
+      >
+        {content}
+      </RNText>
+      {isLong && (
+        <TouchableOpacity onPress={() => setExpanded(!expanded)} activeOpacity={0.7}>
+          <RNText style={styles.teammateExpand}>{expanded ? 'Show less' : 'Show more'}</RNText>
+        </TouchableOpacity>
+      )}
+    </RNView>
+  );
+}
+
 function ToolCallItem({ toolCall, result, expanded, onToggle }: {
   toolCall: ToolCall;
   result?: ToolResult;
@@ -1117,11 +1233,36 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
 
       {content ? (
         <RNView style={styles.bubbleContent}>
-          <MarkdownContent
-            text={content}
-            baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}
-            isUser={isUser}
-          />
+          {content.includes('<teammate-message') ? (
+            parseTeammateMessages(content).map((part, idx) => {
+              if (part.type === 'text') {
+                return (
+                  <MarkdownContent
+                    key={idx}
+                    text={part.content}
+                    baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}
+                    isUser={isUser}
+                  />
+                );
+              } else {
+                return (
+                  <TeammateMessageCard
+                    key={idx}
+                    teammateId={part.teammateId}
+                    color={part.color}
+                    summary={part.summary}
+                    content={part.content}
+                  />
+                );
+              }
+            })
+          ) : (
+            <MarkdownContent
+              text={content}
+              baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]}
+              isUser={isUser}
+            />
+          )}
           {isLongContent && (
             <TouchableOpacity
               onPress={() => setContentExpanded(!contentExpanded)}
@@ -2437,5 +2578,63 @@ const styles = StyleSheet.create({
     elevation: 5,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.bgHighlight,
+  },
+  // Teammate messages
+  teammateMessage: {
+    marginVertical: 8,
+    padding: 10,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 8,
+    borderLeftWidth: 3,
+  },
+  teammateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 6,
+  },
+  teammateBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  teammateBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  teammateSummary: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    fontStyle: 'italic',
+    flex: 1,
+  },
+  teammateContent: {
+    fontSize: 12,
+    color: Theme.text,
+    lineHeight: 18,
+  },
+  teammateExpand: {
+    fontSize: 11,
+    color: Theme.accent,
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  teammateIdle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginVertical: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 6,
+  },
+  teammateIdleText: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    fontStyle: 'italic',
   },
 });
