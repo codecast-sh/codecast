@@ -1077,6 +1077,8 @@ function ImageBlock({ image }: { image: ImageData }) {
       ? `data:${image.media_type};base64,${image.data}`
       : undefined;
 
+  const [fullscreen, setFullscreen] = useState(false);
+
   if (!src) {
     return (
       <RNView style={styles.imageLoading}>
@@ -1087,13 +1089,30 @@ function ImageBlock({ image }: { image: ImageData }) {
   }
 
   return (
-    <RNView style={styles.imageContainer}>
-      <Image
-        source={{ uri: src }}
-        style={styles.messageImage}
-        resizeMode="contain"
-      />
-    </RNView>
+    <>
+      <Pressable onPress={() => setFullscreen(true)} style={styles.imageContainer}>
+        <Image
+          source={{ uri: src }}
+          style={styles.messageImage}
+          resizeMode="contain"
+        />
+        <RNView style={styles.imageExpandHint}>
+          <FontAwesome name="expand" size={10} color="rgba(255,255,255,0.8)" />
+        </RNView>
+      </Pressable>
+      <Modal visible={fullscreen} transparent animationType="fade" onRequestClose={() => setFullscreen(false)}>
+        <Pressable style={styles.fullscreenOverlay} onPress={() => setFullscreen(false)}>
+          <TouchableOpacity style={styles.fullscreenClose} onPress={() => setFullscreen(false)} activeOpacity={0.7}>
+            <FontAwesome name="close" size={20} color="#fff" />
+          </TouchableOpacity>
+          <Image
+            source={{ uri: src }}
+            style={styles.fullscreenImage}
+            resizeMode="contain"
+          />
+        </Pressable>
+      </Modal>
+    </>
   );
 }
 
@@ -1256,7 +1275,9 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
     );
   }
 
-  // Regular message
+  // Regular message - render markdown if rich content
+  const hasMarkdown = safeContent.includes('```') || safeContent.includes('**') || safeContent.includes('###');
+
   return (
     <RNView style={[styles.teammateMessage, { borderLeftColor: borderColor }]}>
       <RNView style={styles.teammateHeader}>
@@ -1265,13 +1286,17 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
         </RNView>
         {summary && <RNText style={styles.teammateSummary}>{summary}</RNText>}
       </RNView>
-      <RNText
-        style={styles.teammateContent}
-        numberOfLines={!expanded && isLong ? 4 : undefined}
-        selectable
-      >
-        {safeContent}
-      </RNText>
+      {hasMarkdown && (expanded || !isLong) ? (
+        <MarkdownContent text={safeContent} baseStyle={styles.teammateContent} isUser={false} />
+      ) : (
+        <RNText
+          style={styles.teammateContent}
+          numberOfLines={!expanded && isLong ? 4 : undefined}
+          selectable
+        >
+          {safeContent}
+        </RNText>
+      )}
       {isLong && (
         <TouchableOpacity onPress={() => setExpanded(!expanded)} activeOpacity={0.7}>
           <RNText style={styles.teammateExpand}>{expanded ? 'Show less' : 'Show more'}</RNText>
@@ -1568,9 +1593,8 @@ function ThinkingBlock({ content }: { content: string }) {
       activeOpacity={isLong ? 0.7 : 1}
     >
       <RNView style={styles.thinkingHeader}>
-        {(isLong || expanded) && (
-          <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={8} color={Theme.textDim} style={{ marginRight: 4, marginTop: 3 }} />
-        )}
+        <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={8} color={Theme.textDim} style={{ marginRight: 4, marginTop: 3 }} />
+        <RNText style={styles.thinkingLabel}>Thinking</RNText>
         <RNText style={styles.thinkingText} numberOfLines={expanded ? 50 : 2}>
           {expanded ? content : preview}
         </RNText>
@@ -1781,9 +1805,13 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
         {showHeader && !isToolCallOnly && (
         <RNView style={styles.bubbleHeader}>
-          {!isUser && agentType && (
+          {isUser ? (
+            <RNView style={styles.userAvatar}>
+              <RNText style={styles.userAvatarText}>{(userName || 'Y')[0].toUpperCase()}</RNText>
+            </RNView>
+          ) : agentType ? (
             <RNView style={[styles.agentDot, { backgroundColor: agentType === 'codex' ? '#10b981' : agentType === 'cursor' ? '#60a5fa' : Theme.accent }]} />
-          )}
+          ) : null}
           <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
             {isUser ? (userName || 'You') : assistantLabel(agentType)}
           </RNText>
@@ -2156,6 +2184,7 @@ export default function SessionDetailScreen() {
   const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const isNearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(0);
 
@@ -2274,12 +2303,16 @@ export default function SessionDetailScreen() {
 
   // Auto-scroll when new messages arrive (if near bottom)
   useEffect(() => {
-    const hasNewMessages = allMessages.length > prevMessageCountRef.current;
+    const delta = allMessages.length - prevMessageCountRef.current;
+    const hasNewMessages = delta > 0;
     prevMessageCountRef.current = allMessages.length;
 
     if (hasNewMessages && initialScrollDone && isNearBottomRef.current && allMessages.length > 0) {
       flatListRef.current?.scrollToEnd({ animated: true });
       setUserScrolled(false);
+      setNewMessageCount(0);
+    } else if (hasNewMessages && initialScrollDone && !isNearBottomRef.current) {
+      setNewMessageCount(prev => prev + delta);
     }
   }, [allMessages.length, initialScrollDone]);
 
@@ -2342,9 +2375,26 @@ export default function SessionDetailScreen() {
 
   if (conversation === undefined) {
     return (
-      <RNView style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Theme.textMuted} />
-        <RNText style={styles.loadingText}>Loading...</RNText>
+      <RNView style={styles.container}>
+        <Stack.Screen options={{ title: 'Loading...', headerBackTitle: 'Sessions', headerStyle: { backgroundColor: Theme.bgAlt }, headerTintColor: Theme.text, headerTitleStyle: { color: Theme.text, fontWeight: '600', fontSize: 17 } }} />
+        <RNView style={styles.skeletonContainer}>
+          <RNView style={styles.skeletonHeader}>
+            <RNView style={[styles.skeletonBlock, { width: '60%', height: 18 }]} />
+            <RNView style={[styles.skeletonBlock, { width: '30%', height: 12, marginTop: 8 }]} />
+          </RNView>
+          {[1, 2, 3].map(i => (
+            <RNView key={i} style={styles.skeletonMessage}>
+              <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <RNView style={[styles.skeletonBlock, { width: 18, height: 18, borderRadius: 9 }]} />
+                <RNView style={[styles.skeletonBlock, { width: 60, height: 12 }]} />
+                <RNView style={[styles.skeletonBlock, { width: 40, height: 10 }]} />
+              </RNView>
+              <RNView style={[styles.skeletonBlock, { width: '90%', height: 12, marginBottom: 6 }]} />
+              <RNView style={[styles.skeletonBlock, { width: '70%', height: 12, marginBottom: 6 }]} />
+              <RNView style={[styles.skeletonBlock, { width: '50%', height: 12 }]} />
+            </RNView>
+          ))}
+        </RNView>
       </RNView>
     );
   }
@@ -2533,11 +2583,17 @@ export default function SessionDetailScreen() {
               onPress={() => {
                 flatListRef.current?.scrollToEnd({ animated: true });
                 setUserScrolled(false);
+                setNewMessageCount(0);
               }}
               style={styles.jumpButton}
               activeOpacity={0.7}
             >
               <FontAwesome name="arrow-down" size={14} color={Theme.borderLight} />
+              {newMessageCount > 0 && (
+                <RNView style={styles.jumpBadge}>
+                  <RNText style={styles.jumpBadgeText}>{newMessageCount > 99 ? '99+' : newMessageCount}</RNText>
+                </RNView>
+              )}
             </TouchableOpacity>
           )}
         </RNView>
@@ -3815,5 +3871,87 @@ const styles = StyleSheet.create({
   commitTime: {
     fontSize: 9,
     color: Theme.textDim,
+  },
+  // Fullscreen image
+  imageExpandHint: {
+    position: 'absolute',
+    bottom: 6,
+    right: 6,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 4,
+    padding: 4,
+  },
+  fullscreenOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullscreenClose: {
+    position: 'absolute',
+    top: 60,
+    right: 20,
+    zIndex: 10,
+    padding: 8,
+  },
+  fullscreenImage: {
+    width: Dimensions.get('window').width,
+    height: Dimensions.get('window').height * 0.8,
+  },
+  // Thinking label
+  thinkingLabel: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontWeight: '600',
+    marginRight: 6,
+  },
+  // User avatar
+  userAvatar: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: Theme.userBubble + '40',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 4,
+  },
+  userAvatarText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Theme.userBubble,
+  },
+  // Skeleton loading
+  skeletonContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+  },
+  skeletonHeader: {
+    height: 12,
+    width: '40%',
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 4,
+  },
+  skeletonBlock: {
+    height: 60,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 6,
+  },
+  skeletonMessage: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  // Jump badge for new messages
+  jumpBadge: {
+    backgroundColor: Theme.accent,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: 4,
+  },
+  jumpBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#fff',
   },
 });
