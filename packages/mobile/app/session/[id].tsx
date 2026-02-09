@@ -475,7 +475,7 @@ function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text
 
 // --- Message components ---
 
-function formatTimestamp(ts: number): string {
+function formatRelativeTime(ts: number): string {
   const now = Date.now();
   const diff = now - ts;
   const seconds = Math.floor(diff / 1000);
@@ -490,6 +490,15 @@ function formatTimestamp(ts: number): string {
   return new Date(ts).toLocaleDateString([], {
     month: 'short',
     day: 'numeric',
+  });
+}
+
+function formatTimestamp(ts: number): string {
+  return new Date(ts).toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
@@ -651,6 +660,27 @@ function extractPlanContent(text: string): string | null {
     }
   }
   return null;
+}
+
+function isPlanFile(filePath: string, content: string): boolean {
+  const fileName = filePath.split('/').pop()?.toLowerCase() || '';
+  if (fileName.includes('plan') || fileName === 'plan.md') return true;
+  if (filePath.includes('.claude/plans/')) return true;
+  const planPatterns = [
+    /^#\s*(implementation\s+)?plan/im,
+    /^##\s*(goals?|objectives?|overview)/im,
+    /^##\s*(steps?|phases?|tasks?|approach)/im,
+    /^\d+\.\s+\*\*[^*]+\*\*/m,
+    /^-\s+\[[ x]\]/im,
+  ];
+  let matches = 0;
+  for (const pattern of planPatterns) {
+    if (pattern.test(content)) {
+      matches++;
+      if (matches >= 2) return true;
+    }
+  }
+  return false;
 }
 
 function isPlanWriteToolCall(tc: ToolCall): boolean {
@@ -943,7 +973,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
           <RNText style={[styles.specialToolDesc, { flex: 1, marginBottom: 0 }]} numberOfLines={1}>{description}</RNText>
         )}
         {model && (
-          <RNText style={styles.specialToolMeta}>{model}</RNText>
+          <RNText style={styles.specialToolMeta}>{formatModel(model)}</RNText>
         )}
         {name && (
           <RNText style={styles.specialToolMeta}>{name}</RNText>
@@ -1401,9 +1431,9 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
-const PLAN_MAX_HEIGHT = 600;
+const PLAN_MAX_HEIGHT = 1800;
 
-function PlanBlock({ content, timestamp }: { content: string; timestamp?: number }) {
+function PlanBlock({ content, timestamp, collapsed: collapsedProp }: { content: string; timestamp?: number; collapsed?: boolean }) {
   const [expanded, setExpanded] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
@@ -1411,6 +1441,17 @@ function PlanBlock({ content, timestamp }: { content: string; timestamp?: number
 
   const titleMatch = content.match(/^#\s+(.+)$/m);
   const title = titleMatch ? titleMatch[1] : 'Plan';
+
+  if (collapsedProp) {
+    return (
+      <RNView style={[styles.planBlock, { paddingVertical: 6, paddingHorizontal: 10, marginBottom: 4 }]}>
+        <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <FontAwesome name="clipboard" size={10} color={Theme.cyan} />
+          <RNText style={{ fontSize: 11, color: Theme.textMuted, fontWeight: '500' }} numberOfLines={1}>{title}</RNText>
+        </RNView>
+      </RNView>
+    );
+  }
 
   return (
     <>
@@ -1423,7 +1464,7 @@ function PlanBlock({ content, timestamp }: { content: string; timestamp?: number
         >
           <FontAwesome name="clipboard" size={12} color={Theme.cyan} style={{ marginRight: 6 }} />
           <RNText style={styles.planTitle}>{title}</RNText>
-          {timestamp && <RNText style={{ fontSize: 10, color: Theme.textDim, marginLeft: 4 }}>{formatTimestamp(timestamp)}</RNText>}
+          {timestamp && <RNText style={{ fontSize: 10, color: Theme.textDim, marginLeft: 4 }}>{formatRelativeTime(timestamp)}</RNText>}
           <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={10} color={Theme.textDim} style={{ marginLeft: 'auto' }} />
         </TouchableOpacity>
         {expanded && (
@@ -1766,7 +1807,16 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   );
 
   const isMarkdownFile = language === 'markdown' || filePath.endsWith('.plan');
+  const writeContent = isWrite ? String(parsedInput.content || '') : '';
+  const readContent = isRead ? (result?.content || '') : '';
+  const mdContent = isWrite ? writeContent : readContent;
+  const isPlan = isMarkdownFile && isPlanFile(filePath, mdContent);
   const canToggleViewMode = isMarkdownFile && (isRead || isWrite) && result && result.content;
+
+  const MD_COLLAPSED_HEIGHT = 600;
+  const [mdOverflowing, setMdOverflowing] = useState(false);
+  const [mdExpanded, setMdExpanded] = useState(false);
+  const [mdFullscreen, setMdFullscreen] = useState(false);
 
   // Tools that shouldn't show their input (just noise)
   // Command is shown in summary, no need to repeat
@@ -1821,6 +1871,11 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
           {language && !isBash && (
             <RNView style={styles.languageLabelRow}>
               <RNText style={styles.languageLabel}>{language}</RNText>
+              {isPlan && (
+                <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3, backgroundColor: Theme.bgHighlight }}>
+                  <RNText style={{ fontSize: 9, color: Theme.textMuted, fontWeight: '600', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>PLAN</RNText>
+                </RNView>
+              )}
               {canToggleViewMode && (
                 <RNView style={styles.viewModeToggle}>
                   <Pressable onPress={() => setViewMode('raw')} style={[styles.viewModeBtn, viewMode === 'raw' && styles.viewModeBtnActive]}>
@@ -1877,11 +1932,35 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
               </RNView>
             </RNView>
           ) : isWrite && parsedInput.content ? (
-            <RNView style={styles.diffSection}>
-              <RNView style={styles.diffNew}>
-                <RNText style={styles.diffNewText} selectable>{String(parsedInput.content)}</RNText>
+            isMarkdownFile && viewMode === 'rendered' ? (
+              <>
+                <RNView
+                  style={!mdExpanded && mdOverflowing ? { maxHeight: MD_COLLAPSED_HEIGHT, overflow: 'hidden' } : undefined}
+                  onLayout={(e) => { if (!mdExpanded) setMdOverflowing(e.nativeEvent.layout.height >= MD_COLLAPSED_HEIGHT); }}
+                >
+                  <MarkdownContent text={String(parsedInput.content)} baseStyle={styles.toolCallResult} isUser={false} />
+                  {!mdExpanded && mdOverflowing && (
+                    <LinearGradient colors={[Theme.bg + '00', Theme.bg]} style={styles.planGradientOverlay} pointerEvents="none" />
+                  )}
+                </RNView>
+                {(mdOverflowing || mdExpanded) && (
+                  <RNView style={{ flexDirection: 'row', gap: 12, paddingTop: 4, paddingHorizontal: 4 }}>
+                    <TouchableOpacity onPress={() => setMdExpanded(!mdExpanded)} activeOpacity={0.7}>
+                      <RNText style={styles.planActionText}>{mdExpanded ? 'Collapse' : 'Expand'}</RNText>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setMdFullscreen(true)} activeOpacity={0.7}>
+                      <RNText style={styles.planActionText}>Fullscreen</RNText>
+                    </TouchableOpacity>
+                  </RNView>
+                )}
+              </>
+            ) : (
+              <RNView style={styles.diffSection}>
+                <RNView style={styles.diffNew}>
+                  <RNText style={styles.diffNewText} selectable>{String(parsedInput.content)}</RNText>
+                </RNView>
               </RNView>
-            </RNView>
+            )
           ) : toolCall.name === 'apply_patch' && (parsedInput.input || parsedInput.patch) ? (
             <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -1916,6 +1995,22 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
             </RNView>
           )}
         </RNView>
+      )}
+      {mdFullscreen && (
+        <Modal visible={mdFullscreen} animationType="slide" onRequestClose={() => setMdFullscreen(false)}>
+          <RNView style={styles.planFullscreen}>
+            <RNView style={styles.planFullscreenHeader}>
+              <FontAwesome name="file-text-o" size={14} color={Theme.cyan} style={{ marginRight: 8 }} />
+              <RNText style={styles.planFullscreenTitle} numberOfLines={1}>{filePath.split('/').pop() || 'Markdown'}</RNText>
+              <TouchableOpacity onPress={() => setMdFullscreen(false)} style={{ padding: 6 }} activeOpacity={0.7}>
+                <FontAwesome name="close" size={18} color={Theme.textMuted} />
+              </TouchableOpacity>
+            </RNView>
+            <ScrollView style={styles.planFullscreenContent} contentContainerStyle={{ paddingBottom: 60 }}>
+              <MarkdownContent text={String(parsedInput.content || resultDisplay || '')} baseStyle={styles.planFullscreenText} isUser={false} />
+            </ScrollView>
+          </RNView>
+        </Modal>
       )}
     </Pressable>
   );
@@ -2072,7 +2167,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
 
   return (
     <RNView style={styles.commandStatusLine}>
-      <RNText style={styles.commandStatusTime}>{formatTimestamp(timestamp)}</RNText>
+      <RNText style={styles.commandStatusTime}>{formatRelativeTime(timestamp)}</RNText>
       <RNView style={styles.commandStatusBadge}>
         <RNText style={styles.commandStatusBadgeText}>{cmdType}</RNText>
       </RNView>
@@ -2112,6 +2207,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const [assistantOverflowing, setAssistantOverflowing] = useState(false);
   const [userOverflowing, setUserOverflowing] = useState(false);
   const [userContentExpanded, setUserContentExpanded] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  useEffect(() => { setLocalExpanded(false); }, [globalCollapsed]);
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
   const isBookmarked = useQuery(
     api.bookmarks.isBookmarked,
@@ -2197,9 +2294,10 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   if (!rawContent.trim() && !hasToolCalls && !hasImages && !hasThinkingContent) {
     return null;
   }
+  const effectiveCollapsed = globalCollapsed && !localExpanded;
   const isLongContent = rawContent.length > CONTENT_TRUNCATE_LENGTH;
   const COLLAPSED_LINES = 2;
-  const isCollapseTruncated = globalCollapsed && !isUser && rawContent.length > 150 && rawContent.split('\n').length > COLLAPSED_LINES;
+  const isCollapseTruncated = effectiveCollapsed && rawContent.length > 150 && rawContent.split('\n').length > COLLAPSED_LINES;
   const content = isCollapseTruncated
     ? rawContent.split('\n').slice(0, COLLAPSED_LINES).join('\n').slice(0, 200) + '...'
     : (isLongContent && !contentExpanded)
@@ -2219,13 +2317,20 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const isToolCallOnly = !isUser && hasToolCalls && !content.trim() && !hasImages;
   const hasPlanWrite = hasToolCalls && message.tool_calls?.some(isPlanWriteToolCall);
 
-  // When globally collapsed, hide tool-only messages (unless they have plan writes)
-  if (globalCollapsed && isToolCallOnly && !hasPlanWrite) {
+  // When effectively collapsed, hide tool-only messages (unless they have plan writes)
+  if (effectiveCollapsed && isToolCallOnly && !hasPlanWrite) {
     return null;
   }
 
+  const handleTapToExpand = () => {
+    if (globalCollapsed && !localExpanded) {
+      setLocalExpanded(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+  };
+
   return (
-    <Pressable onLongPress={handleLongPress}>
+    <Pressable onLongPress={handleLongPress} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : undefined}>
       <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
         {showHeader && !isToolCallOnly && (
         <RNView style={styles.bubbleHeader}>
@@ -2243,7 +2348,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             <RNText style={styles.modelBadge}>{formatModel(model)}</RNText>
           )}
           <Pressable onPress={() => { Clipboard.setString(formatFullTimestamp(message.timestamp)); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast?.('Timestamp copied'); }}>
-            <RNText style={[styles.bubbleTime, isUser ? styles.userTime : styles.assistantTime]}>{formatTimestamp(message.timestamp)}</RNText>
+            <RNText style={[styles.bubbleTime, isUser ? styles.userTime : styles.assistantTime]}>{formatRelativeTime(message.timestamp)}</RNText>
           </Pressable>
           {isBookmarked && (
             <FontAwesome name="bookmark" size={10} color="#d97706" style={{ marginLeft: 2 }} />
@@ -2383,7 +2488,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               try {
                 const p = JSON.parse(tc.input);
                 if (p.content) {
-                  return <PlanBlock key={tc.id} content={String(p.content)} timestamp={message.timestamp} />;
+                  return <PlanBlock key={tc.id} content={String(p.content)} timestamp={message.timestamp} collapsed={effectiveCollapsed} />;
                 }
               } catch {}
             }
@@ -3279,7 +3384,7 @@ export default function SessionDetailScreen() {
                       {conversation.started_at && (
                         <Pressable onPress={() => Alert.alert('Started', formatFullTimestamp(conversation.started_at!))}>
                           <RNText style={styles.messageCountText}>
-                            {formatTimestamp(conversation.started_at)}
+                            {formatRelativeTime(conversation.started_at)}
                           </RNText>
                         </Pressable>
                       )}
