@@ -496,6 +496,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
     "code-reviewer": { bg: "bg-sol-red/20", border: "border-sol-red/50", text: "text-sol-red" },
     "code-explorer": { bg: "bg-sol-cyan/20", border: "border-sol-cyan/50", text: "text-sol-cyan" },
     "code-architect": { bg: "bg-sol-magenta/20", border: "border-sol-magenta/50", text: "text-sol-magenta" },
+    "code-simplifier": { bg: "bg-sol-cyan/20", border: "border-sol-cyan/50", text: "text-sol-cyan" },
   };
 
   const colors = subagentColors[subagentType] || { bg: "bg-sol-bg-alt/60", border: "border-sol-border/50", text: "text-sol-text-muted" };
@@ -576,7 +577,7 @@ function getFileExtension(filePath: string): string | undefined {
     cpp: "cpp", c: "c", h: "c", hpp: "cpp", cs: "csharp",
     json: "json", yaml: "yaml", yml: "yaml", md: "markdown",
     html: "html", css: "css", scss: "scss", sql: "sql",
-    sh: "bash", bash: "bash", zsh: "bash",
+    sh: "bash", bash: "bash", zsh: "bash", swift: "swift", kt: "kotlin",
   };
   return ext ? langMap[ext] : undefined;
 }

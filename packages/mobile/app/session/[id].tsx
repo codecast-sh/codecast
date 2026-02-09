@@ -104,6 +104,8 @@ type ForkChild = {
   title: string;
   short_id?: string;
   parent_message_uuid?: string;
+  started_at?: number;
+  username?: string;
 };
 
 type TreeNode = {
@@ -145,7 +147,12 @@ type ConversationData = {
   user?: { name?: string; email?: string } | null;
   git_branch?: string | null;
   git_remote_url?: string | null;
+  git_status?: string | null;
+  git_diff?: string | null;
+  git_diff_staged?: string | null;
+  loaded_start_index?: number;
   child_conversation_map?: Record<string, string>;
+  child_conversations?: Array<{ _id: string; title: string }>;
 };
 
 // --- Markdown rendering ---
@@ -2928,9 +2935,28 @@ export default function SessionDetailScreen() {
                         </Pressable>
                       )}
                       {conversation.git_branch && (
-                        <RNView style={styles.gitBranchBadge}>
+                        <Pressable
+                          onPress={() => {
+                            if (conversation.git_remote_url) {
+                              const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
+                              if (match) {
+                                Linking.openURL(`https://github.com/${match[1]}/tree/${conversation.git_branch}`);
+                                return;
+                              }
+                            }
+                          }}
+                          style={styles.gitBranchBadge}
+                        >
                           <FontAwesome name="code-fork" size={9} color={Theme.green} />
                           <RNText style={styles.gitBranchText} numberOfLines={1}>{conversation.git_branch}</RNText>
+                        </Pressable>
+                      )}
+                      {conversation.child_conversations && conversation.child_conversations.length > 0 && (
+                        <RNView style={[styles.metaBadgeIcon, { borderColor: Theme.cyan + '40' }]}>
+                          <FontAwesome name="users" size={9} color={Theme.cyan} />
+                          <RNText style={{ fontSize: 10, color: Theme.cyan, fontFamily: 'SpaceMono' }}>
+                            {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? 's' : ''}
+                          </RNText>
                         </RNView>
                       )}
                     </RNView>
@@ -2944,9 +2970,18 @@ export default function SessionDetailScreen() {
                       </Pressable>
                     )}
                     {conversation.forked_from_details && (
-                      <RNText style={styles.forkedFromText}>
-                        Forked from @{conversation.forked_from_details.username}
-                      </RNText>
+                      <Pressable onPress={() => {
+                        const details = conversation.forked_from_details!;
+                        if (details.share_token) {
+                          Linking.openURL(`https://codecast.sh/share/${details.share_token}`);
+                        } else {
+                          router.push(`/session/${details.conversation_id}`);
+                        }
+                      }}>
+                        <RNText style={[styles.forkedFromText, { textDecorationLine: 'underline' }]}>
+                          Forked from @{conversation.forked_from_details.username}
+                        </RNText>
+                      </Pressable>
                     )}
                   </RNView>
                   <SessionActions
@@ -2990,6 +3025,15 @@ export default function SessionDetailScreen() {
                     <RNText style={styles.loadMoreText}>Load older messages</RNText>
                   )}
                 </TouchableOpacity>
+              )}
+              {conversation.parent_conversation_id && !hasMoreAbove && (
+                <Pressable
+                  onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 8 }}
+                >
+                  <FontAwesome name="level-up" size={10} color={Theme.cyan} style={{ opacity: 0.7 }} />
+                  <RNText style={{ fontSize: 11, color: Theme.cyan, opacity: 0.7 }}>Spawned from parent session</RNText>
+                </Pressable>
               )}
               {pendingPermissions && pendingPermissions.length > 0 ? (
                 <RNView style={styles.permissionsContainer}>
