@@ -106,12 +106,25 @@ type ForkChild = {
   parent_message_uuid?: string;
 };
 
+type TreeNode = {
+  id: string;
+  short_id?: string;
+  title: string;
+  message_count: number;
+  parent_message_uuid?: string;
+  started_at: number;
+  status: string;
+  is_current: boolean;
+  children: TreeNode[];
+};
+
 type ConversationData = {
   _id: string;
   title: string;
   status: string;
   is_favorite?: boolean;
   share_token?: string | null;
+  session_id?: string;
   messages: Message[];
   has_more_above?: boolean;
   oldest_timestamp?: number | null;
@@ -130,6 +143,9 @@ type ConversationData = {
     share_token?: string;
   };
   user?: { name?: string; email?: string } | null;
+  git_branch?: string | null;
+  git_remote_url?: string | null;
+  child_conversation_map?: Record<string, string>;
 };
 
 // --- Markdown rendering ---
@@ -465,7 +481,7 @@ function formatModel(model?: string): string {
 }
 
 function formatAgentType(agentType?: string): string {
-  if (!agentType) return '';
+  if (!agentType) return 'Unknown';
   if (agentType === 'claude_code') return 'Claude Code';
   if (agentType === 'codex') return 'Codex';
   if (agentType === 'cursor') return 'Cursor';
@@ -683,6 +699,15 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
     if (name.includes('update_plan')) {
       return { icon: 'chrome', color: Theme.cyan };
     }
+    if (name.includes('upload_image')) {
+      return { icon: 'upload', color: Theme.blue };
+    }
+    if (name.includes('resize_window')) {
+      return { icon: 'arrows-alt', color: Theme.textDim };
+    }
+    if (name.includes('shortcuts')) {
+      return { icon: 'bolt', color: Theme.violet };
+    }
     return { icon: 'plug', color: Theme.cyan };
   }
 
@@ -829,8 +854,9 @@ function toolSummary(tc: ToolCall): string {
 
 // Specialized tool rendering components
 
-function TaskToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; result?: ToolResult; childConversationId?: string }) {
   const [expanded, setExpanded] = useState(false);
+  const router = useRouter();
 
   let parsedInput: Record<string, unknown> = {};
   try {
@@ -882,6 +908,11 @@ function TaskToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }
         )}
         {runInBackground && (
           <RNText style={styles.specialToolMeta}>background</RNText>
+        )}
+        {childConversationId && (
+          <Pressable onPress={() => router.push(`/session/${childConversationId}`)}>
+            <RNText style={[styles.specialToolMeta, { color: Theme.cyan, textDecorationLine: 'underline' }]}>view</RNText>
+          </Pressable>
         )}
         <RNText style={[styles.specialToolMeta, { marginLeft: 'auto' }]}>{expanded ? 'collapse' : 'expand'}</RNText>
       </RNView>
@@ -1602,7 +1633,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
     if (!result) return null;
     if (result.is_error) return '(error)';
     const isEditOrWrite = toolCall.name === 'Edit' || toolCall.name === 'Write' || toolCall.name === 'file_edit' || toolCall.name === 'file_write' || toolCall.name === 'apply_patch';
-    const isGlobGrep = toolCall.name === 'Glob' || toolCall.name === 'Grep' || toolCall.name === 'code_search';
+    const isGlobGrep = toolCall.name === 'Glob' || toolCall.name === 'Grep' || toolCall.name === 'code_search' || toolCall.name === 'code_analysis';
     if (isEditOrWrite) {
       const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
       if (match) return `(+${match[1]} -${match[2]})`;
@@ -1615,6 +1646,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
     if (isGlobGrep) {
       const lines = result.content.trim().split('\n').filter((l: string) => l.trim()).length;
       return `(${lines} matches)`;
+    }
+    if (isBash && result.content) {
+      const lines = result.content.trim().split('\n').length;
+      if (lines > 1) return `(${lines} lines)`;
     }
     if (toolCall.name === 'TaskList') {
       const taskLines = result.content.split('\n').filter((l: string) => l.match(/#\d+\s+\[/));
@@ -1646,7 +1681,8 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
     toolCall.name === 'file_write' ||
     toolCall.name === 'file_edit' ||
     toolCall.name === 'apply_patch' ||
-    toolCall.name === 'code_search'
+    toolCall.name === 'code_search' ||
+    toolCall.name === 'code_analysis'
   );
 
   // Check if result is markdown-like (contains ### or **)
@@ -1925,7 +1961,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, userName, showToast }: {
+function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap }: {
   message: Message;
   agentType?: string;
   model?: string;
@@ -1937,6 +1973,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   globalToolResultMap?: Record<string, ToolResult>;
   userName?: string;
   showToast?: (msg: string) => void;
+  collapsed?: boolean;
+  showThinkingGlobal?: boolean;
+  childConversationMap?: Record<string, string>;
 }) {
   const router = useRouter();
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
@@ -1950,14 +1989,18 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   });
   const [contentExpanded, setContentExpanded] = useState(false);
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+  const isBookmarked = useQuery(
+    api.bookmarks.isBookmarked,
+    message._id ? { message_id: message._id as Id<"messages"> } : "skip"
+  );
 
   const handleLongPress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const messageText = message.content || '';
     const canFork = !message.role?.startsWith('system') && message.message_uuid && onFork;
     const canBookmark = !!conversationId;
-    const options = ['Copy Text', 'Share Message'];
-    if (canBookmark) options.push('Bookmark');
+    const options = ['Copy Text', 'Copy Link', 'Share Message'];
+    if (canBookmark) options.push(isBookmarked ? 'Remove Bookmark' : 'Bookmark');
     if (canFork) options.push('Fork from Here');
     options.push('Cancel');
     const cancelButtonIndex = options.length - 1;
@@ -1968,16 +2011,21 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         Clipboard.setString(messageText);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         showToast?.('Copied to clipboard');
+      } else if (label === 'Copy Link') {
+        const url = `https://codecast.sh/conversation/${conversationId}#msg-${message._id}`;
+        Clipboard.setString(url);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        showToast?.('Link copied');
       } else if (label === 'Share Message') {
         Share.share({ message: messageText });
-      } else if (label === 'Bookmark') {
+      } else if (label === 'Bookmark' || label === 'Remove Bookmark') {
         try {
-          await toggleBookmark({
+          const result = await toggleBookmark({
             conversation_id: conversationId as Id<"conversations">,
             message_id: message._id as Id<"messages">,
           });
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          showToast?.('Bookmarked');
+          showToast?.(result ? 'Bookmarked' : 'Bookmark removed');
         } catch {}
       } else if (label === 'Fork from Here' && message.message_uuid) {
         onFork!(message.message_uuid);
@@ -2020,6 +2068,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
   const hasImages = message.images && message.images.length > 0;
   const hasThinkingContent = !!message.thinking?.trim();
+  const visibleThinking = hasThinkingContent && (showThinkingGlobal ?? false);
 
   // Skip truly empty messages (no content, no tool calls, no images, no thinking)
   if (!rawContent.trim() && !hasToolCalls && !hasImages && !hasThinkingContent) {
@@ -2041,6 +2090,12 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
 
   // Compact rendering for tool-call-only messages (no text, no thinking, no images)
   const isToolCallOnly = !isUser && hasToolCalls && !content.trim() && !hasImages;
+  const hasPlanWrite = hasToolCalls && message.tool_calls?.some(isPlanWriteToolCall);
+
+  // When globally collapsed, hide tool-only messages (unless they have plan writes)
+  if (globalCollapsed && isToolCallOnly && !hasPlanWrite) {
+    return null;
+  }
 
   return (
     <Pressable onLongPress={handleLongPress}>
@@ -2063,6 +2118,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           <Pressable onPress={() => Alert.alert('Timestamp', formatFullTimestamp(message.timestamp))}>
             <RNText style={[styles.bubbleTime, isUser ? styles.userTime : styles.assistantTime]}>{formatTimestamp(message.timestamp)}</RNText>
           </Pressable>
+          {isBookmarked && (
+            <FontAwesome name="bookmark" size={10} color="#d97706" style={{ marginLeft: 2 }} />
+          )}
         </RNView>
       )}
 
@@ -2075,7 +2133,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         </RNView>
       )}
 
-      {hasThinkingContent && (
+      {visibleThinking && (
         <ThinkingBlock content={message.thinking!} />
       )}
 
@@ -2173,7 +2231,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             }
             // Specialized rendering for specific tools
             if (tc.name === 'Task') {
-              return <TaskToolBlock key={tc.id} tool={tc} result={result} />;
+              return <TaskToolBlock key={tc.id} tool={tc} result={result} childConversationId={message.message_uuid && childConversationMap ? childConversationMap[message.message_uuid] : undefined} />;
             }
             if (tc.name === 'AskUserQuestion') {
               return <AskUserQuestionBlock key={tc.id} tool={tc} result={result} />;
@@ -2445,6 +2503,24 @@ function SessionActions({ conversationId, isFavorite, shareToken }: {
 
 // --- Main screen with pagination ---
 
+function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeNode; depth: number; router: any; currentId: string; onClose: () => void }) {
+  const isCurrent = node.id === currentId || node.is_current;
+  const date = new Date(node.started_at);
+  const timeStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return (
+    <>
+      <Pressable onPress={() => { if (!isCurrent) { onClose(); router.push(`/session/${node.id}`); } }} style={[styles.treeNode, { paddingLeft: depth * 16 + 12 }, isCurrent && styles.treeNodeCurrent]}>
+        {depth > 0 && <RNText style={styles.treeNodePrefix}>+-</RNText>}
+        {isCurrent && <FontAwesome name="circle" size={6} color={Theme.violet} style={{ marginRight: 4 }} />}
+        <RNText style={[styles.treeNodeTitle, isCurrent && { color: Theme.violet }]} numberOfLines={1}>{node.title}</RNText>
+        <RNText style={styles.treeNodeMeta}>{node.message_count} msgs</RNText>
+        <RNText style={styles.treeNodeMeta}>{timeStr}</RNText>
+      </Pressable>
+      {node.children.map(child => (<TreeNodeView key={child.id} node={child} depth={depth + 1} router={router} currentId={currentId} onClose={onClose} />))}
+    </>
+  );
+}
+
 export default function SessionDetailScreen() {
   const { id } = useLocalSearchParams();
   const convex = useConvex();
@@ -2463,6 +2539,8 @@ export default function SessionDetailScreen() {
     setToastMessage(msg);
     setToastKey(k => k + 1);
   }, []);
+  const [collapsed, setCollapsed] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
   const isNearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(0);
 
@@ -2492,6 +2570,11 @@ export default function SessionDetailScreen() {
     repository: string; additions?: number; deletions?: number;
     created_at: number; merged_at?: number;
   }> | undefined;
+
+  const treeResult = useQuery(
+    api.conversations.getConversationTree,
+    id ? { conversation_id: id as string } : "skip"
+  ) as { tree: TreeNode } | { error: string } | null | undefined;
 
   const hasMoreAbove = olderHasMore && (conversation?.has_more_above !== false);
 
@@ -2606,6 +2689,42 @@ export default function SessionDetailScreen() {
       Alert.alert('Fork failed', e?.message || 'Could not fork conversation');
     }
   }, [id, forkFromMessage, router]);
+
+  const [treeModalVisible, setTreeModalVisible] = useState(false);
+
+  const handleCopyAll = useCallback(async () => {
+    if (!allMessages.length) return;
+    const formatted = allMessages
+      .filter(msg => {
+        if (msg.role === 'system') return false;
+        if (msg.role === 'user' && msg.tool_results) return false;
+        if (msg.role === 'user' && msg.content && isCommandMessage(msg.content)) return false;
+        return msg.content && msg.content.trim().length > 0;
+      })
+      .map(msg => {
+        const ts = new Date(msg.timestamp).toLocaleString();
+        const label = msg.role === 'user' ? 'User' : 'Assistant';
+        return `[${ts}] ${label}:\n${msg.content}\n`;
+      })
+      .join('\n');
+    Clipboard.setString(formatted);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    showToast('Conversation copied');
+  }, [allMessages, showToast]);
+
+  const handleCopyResume = useCallback(async () => {
+    if (!conversation?.session_id) return;
+    const agentType = conversation.agent_type;
+    let cmd: string;
+    if (agentType === 'codex') {
+      cmd = `codex resume ${conversation.session_id}`;
+    } else {
+      cmd = `claude --resume ${conversation.session_id}`;
+    }
+    Clipboard.setString(cmd);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    showToast('Resume command copied');
+  }, [conversation?.session_id, conversation?.agent_type, showToast]);
 
   useEffect(() => {
     if (conversation && !initialScrollDone && allMessages.length > 0) {
@@ -2797,15 +2916,21 @@ export default function SessionDetailScreen() {
                         </RNView>
                       )}
                       {(conversation.fork_count ?? 0) > 0 && (
-                        <RNView style={styles.forkBadge}>
+                        <Pressable onPress={() => setTreeModalVisible(true)} style={styles.forkBadge}>
                           <FontAwesome name="code-fork" size={9} color={Theme.violet} />
                           <RNText style={styles.forkBadgeText}>{conversation.fork_count}</RNText>
-                        </RNView>
+                        </Pressable>
                       )}
                       {(conversation.compaction_count ?? 0) > 0 && (
-                        <RNView style={styles.compactionBadge}>
+                        <Pressable onPress={() => Alert.alert('Context Compaction', `This conversation was compacted ${conversation.compaction_count} time${(conversation.compaction_count ?? 0) > 1 ? 's' : ''}. Compaction summarizes earlier messages to free up context window space.`)} style={styles.compactionBadge}>
                           <FontAwesome name="compress" size={9} color="#d97706" />
                           <RNText style={styles.compactionBadgeText}>{conversation.compaction_count}</RNText>
+                        </Pressable>
+                      )}
+                      {conversation.git_branch && (
+                        <RNView style={styles.gitBranchBadge}>
+                          <FontAwesome name="code-fork" size={9} color={Theme.green} />
+                          <RNText style={styles.gitBranchText} numberOfLines={1}>{conversation.git_branch}</RNText>
                         </RNView>
                       )}
                     </RNView>
@@ -2829,6 +2954,27 @@ export default function SessionDetailScreen() {
                     isFavorite={conversation.is_favorite ?? false}
                     shareToken={conversation.share_token}
                   />
+                </RNView>
+                <RNView style={styles.headerToolbar}>
+                  <TouchableOpacity onPress={handleCopyAll} style={styles.toolbarButton} activeOpacity={0.7}>
+                    <FontAwesome name="clipboard" size={13} color={Theme.textDim} />
+                  </TouchableOpacity>
+                  {conversation.session_id && (
+                    <TouchableOpacity onPress={handleCopyResume} style={styles.toolbarButton} activeOpacity={0.7}>
+                      <FontAwesome name="terminal" size={12} color={Theme.textDim} />
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity onPress={() => setCollapsed(c => !c)} style={styles.toolbarButton} activeOpacity={0.7}>
+                    <FontAwesome name={collapsed ? "expand" : "compress"} size={13} color={collapsed ? Theme.cyan : Theme.textDim} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => setShowThinking(s => !s)} style={styles.toolbarButton} activeOpacity={0.7}>
+                    <FontAwesome name="lightbulb-o" size={14} color={showThinking ? Theme.accent : Theme.textDim} />
+                  </TouchableOpacity>
+                  {treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0 && (
+                    <TouchableOpacity onPress={() => setTreeModalVisible(true)} style={styles.toolbarButton} activeOpacity={0.7}>
+                      <FontAwesome name="sitemap" size={12} color={Theme.violet} />
+                    </TouchableOpacity>
+                  )}
                 </RNView>
               </RNView>
               {hasMoreAbove && (
@@ -2896,6 +3042,9 @@ export default function SessionDetailScreen() {
                 globalToolResultMap={globalToolResultMap}
                 userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
                 showToast={showToast}
+                collapsed={collapsed}
+                showThinkingGlobal={showThinking}
+                childConversationMap={conversation.child_conversation_map}
               />
             );
           }}
@@ -2954,6 +3103,23 @@ export default function SessionDetailScreen() {
         </RNView>
       </KeyboardAvoidingView>
       <Toast key={toastKey} message={toastMessage} visible={!!toastMessage && toastKey > 0} />
+      <Modal visible={treeModalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setTreeModalVisible(false)}>
+        <RNView style={styles.treeModal}>
+          <RNView style={styles.treeModalHeader}>
+            <RNText style={styles.treeModalTitle}>Fork Tree</RNText>
+            <TouchableOpacity onPress={() => setTreeModalVisible(false)}>
+              <FontAwesome name="times" size={18} color={Theme.textMuted} />
+            </TouchableOpacity>
+          </RNView>
+          <ScrollView style={styles.treeModalContent}>
+            {treeResult && !('error' in treeResult) && treeResult.tree ? (
+              <TreeNodeView node={treeResult.tree} depth={0} router={router} currentId={id as string} onClose={() => setTreeModalVisible(false)} />
+            ) : (
+              <RNText style={{ color: Theme.textMuted, padding: 16 }}>No fork tree available</RNText>
+            )}
+          </ScrollView>
+        </RNView>
+      </Modal>
     </>
   );
 }
@@ -4463,5 +4629,86 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: Theme.cyan,
+  },
+  headerToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+  },
+  toolbarButton: {
+    width: 32,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: Theme.bgHighlight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gitBranchBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: Theme.green + '12',
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.green + '30',
+    maxWidth: 120,
+  },
+  gitBranchText: {
+    fontSize: 10,
+    color: Theme.green,
+    fontWeight: '500',
+    fontFamily: 'SpaceMono',
+  },
+  treeModal: {
+    flex: 1,
+    backgroundColor: Theme.bg,
+  },
+  treeModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 60 : 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt,
+  },
+  treeModalTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: Theme.text,
+  },
+  treeModalContent: {
+    flex: 1,
+    paddingVertical: 8,
+  },
+  treeNode: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingRight: 12,
+  },
+  treeNodeCurrent: {
+    backgroundColor: Theme.violet + '15',
+  },
+  treeNodePrefix: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontFamily: 'SpaceMono',
+  },
+  treeNodeTitle: {
+    fontSize: 13,
+    color: Theme.text,
+    flex: 1,
+  },
+  treeNodeMeta: {
+    fontSize: 10,
+    color: Theme.textDim,
   },
 });
