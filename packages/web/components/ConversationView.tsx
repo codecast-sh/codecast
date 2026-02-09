@@ -1570,6 +1570,14 @@ function ImageBlock({ image }: { image: ImageData }) {
     api.images.getImageUrl,
     image.storage_id ? { storageId: image.storage_id as Id<"_storage"> } : "skip"
   );
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [fullscreen]);
 
   const src = image.storage_id
     ? storageUrl ?? undefined
@@ -1586,13 +1594,35 @@ function ImageBlock({ image }: { image: ImageData }) {
   }
 
   return (
-    <div className="my-2">
-      <img
-        src={src}
-        alt="User provided image"
-        className="max-w-md rounded border border-sol-border"
-      />
-    </div>
+    <>
+      <div className="my-2 cursor-pointer" onClick={() => setFullscreen(true)}>
+        <img
+          src={src}
+          alt="User provided image"
+          className="max-w-md rounded border border-sol-border hover:border-sol-blue/50 transition-colors"
+        />
+      </div>
+      {fullscreen && createPortal(
+        <div className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center" onClick={() => setFullscreen(false)}>
+          <button
+            onClick={() => setFullscreen(false)}
+            className="absolute top-4 right-4 text-white/70 hover:text-white p-2 transition-colors"
+            title="Close (Esc)"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <img
+            src={src}
+            alt="User provided image"
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded"
+            onClick={e => e.stopPropagation()}
+          />
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
@@ -1672,6 +1702,9 @@ function SkillCard({ name, description, path }: { name?: string; description?: s
 type TeammateMessagePart = { type: 'text'; content: string } | { type: 'teammate'; teammateId: string; color?: string; summary?: string; content: string; };
 
 function parseTeammateMessages(text: string): TeammateMessagePart[] {
+  if (!text || typeof text !== 'string') {
+    return [{ type: 'text', content: String(text || '') }];
+  }
   const parts: TeammateMessagePart[] = [];
   const regex = /<teammate-message\s+([^>]*)>([\s\S]*?)<\/teammate-message>/g;
   let lastIndex = 0;
@@ -1727,8 +1760,9 @@ const agentBorderMap: Record<string, string> = {
 function TeammateMessageCard({ teammateId, color, summary, content }: { teammateId: string; color?: string; summary?: string; content: string }) {
   const [expanded, setExpanded] = useState(false);
 
+  const safeContent = content || '';
   let parsed: any = null;
-  try { parsed = JSON.parse(content); } catch {}
+  try { if (safeContent) parsed = JSON.parse(safeContent); } catch {}
 
   if (parsed?.type === "idle_notification") {
     const idleSummary = parsed.summary;
@@ -1972,6 +2006,11 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         >
           {formatRelativeTime(timestamp)}
         </a>
+        {isBookmarked && (
+          <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+          </svg>
+        )}
       </div>
       <div
         ref={contentRef}
@@ -2092,9 +2131,10 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
             <Link
               key={fork._id}
               href={`/conversation/${fork._id}`}
-              className="text-[10px] text-purple-400 hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded px-1.5 py-0.5 transition-colors"
+              className="text-[10px] text-purple-400 hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded px-1.5 py-0.5 transition-colors max-w-[200px] truncate"
+              title={fork.title}
             >
-              {fork.title}
+              {fork.short_id ? `${fork.short_id} ${fork.title}` : fork.title}
             </Link>
           ))}
         </div>
@@ -2177,6 +2217,7 @@ function AssistantBlock({
   taskSubjectMap,
   onForkFromMessage,
   forkChildren,
+  model,
 }: {
   content?: string;
   timestamp: number;
@@ -2206,6 +2247,7 @@ function AssistantBlock({
   taskSubjectMap?: Record<string, string>;
   onForkFromMessage?: (messageUuid: string) => void;
   forkChildren?: Array<{ _id: string; title: string; short_id?: string }>;
+  model?: string;
 }) {
   const COLLAPSED_LINES = 2;
   const CONTENT_MAX_HEIGHT = 1800;
@@ -2403,6 +2445,9 @@ function AssistantBlock({
         <div className="flex items-center gap-2 mb-2">
           <AssistantIcon agentType={agentType} />
           <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
+          {model && (
+            <span className="text-sol-text-dim text-[10px] font-mono">{formatModel(model)}</span>
+          )}
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
@@ -2411,6 +2456,11 @@ function AssistantBlock({
           >
             {formatRelativeTime(timestamp)}
           </a>
+          {isBookmarked && (
+            <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+            </svg>
+          )}
         </div>
       )}
 
@@ -2821,9 +2871,10 @@ function PlanBlock({ content, timestamp, collapsed, messageId, onStartShareSelec
             <Link
               key={fork._id}
               href={`/conversation/${fork._id}`}
-              className="text-[10px] text-purple-400 hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded px-1.5 py-0.5 transition-colors"
+              className="text-[10px] text-purple-400 hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded px-1.5 py-0.5 transition-colors max-w-[200px] truncate"
+              title={fork.title}
             >
-              {fork.title}
+              {fork.short_id ? `${fork.short_id} ${fork.title}` : fork.title}
             </Link>
           ))}
         </div>
@@ -3944,6 +3995,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           taskSubjectMap={taskSubjectMap}
           onForkFromMessage={handleForkFromMessage}
           forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined}
+          model={conversation?.model}
         />
       );
     }
@@ -4018,6 +4070,43 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
                     </svg>
                     {conversation.forked_from_details ? "fork" : (conversation.fork_count || conversation.fork_children?.length || 0)}
+                  </span>
+                )}
+
+                {conversation.git_branch && (
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
+                    title={conversation.git_branch}
+                    onClick={() => {
+                      if (conversation.git_remote_url) {
+                        const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
+                        if (match) {
+                          window.open(`https://github.com/${match[1]}/tree/${conversation.git_branch}`, '_blank');
+                        }
+                      }
+                    }}
+                    style={conversation.git_remote_url ? { cursor: 'pointer' } : undefined}
+                  >
+                    <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                    </svg>
+                    <span className="truncate">{conversation.git_branch}</span>
+                  </span>
+                )}
+
+                {latestTodos && latestTodos.todos.length > 0 && (
+                  <span
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${
+                      latestTodos.todos.filter((t: any) => t.status === 'completed').length === latestTodos.todos.length
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : 'bg-sol-bg-highlight text-sol-text-dim border-sol-border/30'
+                    }`}
+                    title={`Tasks: ${latestTodos.todos.filter((t: any) => t.status === 'completed').length} completed of ${latestTodos.todos.length}`}
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
+                    {latestTodos.todos.filter((t: any) => t.status === 'completed').length}/{latestTodos.todos.length}
                   </span>
                 )}
 
