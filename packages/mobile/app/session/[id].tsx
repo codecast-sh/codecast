@@ -76,7 +76,7 @@ type ConversationData = {
 
 function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false): React.ReactNode[] {
   const result: React.ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+))/g;
+  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+))/g;
   let lastIndex = 0;
   let match;
   let key = 0;
@@ -99,15 +99,19 @@ function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUs
       result.push(
         <RNText key={`${keyPrefix}i${key++}`} style={{ fontStyle: 'italic' }}>{match[3]}</RNText>
       );
-    } else if (match[4] && match[5]) {
-      const url = match[5];
+    } else if (match[4] !== undefined) {
+      result.push(
+        <RNText key={`${keyPrefix}s${key++}`} style={{ textDecorationLine: 'line-through', color: Theme.textMuted0 }}>{match[4]}</RNText>
+      );
+    } else if (match[5] && match[6]) {
+      const url = match[6];
       result.push(
         <RNText key={`${keyPrefix}l${key++}`} style={isUser ? styles.linkTextUser : styles.linkText} onPress={() => Linking.openURL(url)}>
-          {match[4]}
+          {match[5]}
         </RNText>
       );
-    } else if (match[6]) {
-      const url = match[6];
+    } else if (match[7]) {
+      const url = match[7];
       result.push(
         <RNText key={`${keyPrefix}u${key++}`} style={isUser ? styles.linkTextUser : styles.linkText} onPress={() => Linking.openURL(url)}>
           {url}
@@ -273,7 +277,18 @@ function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text
 // --- Message components ---
 
 function formatTimestamp(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const now = Date.now();
+  const diff = now - ts;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (seconds < 60) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 function formatModel(model?: string): string {
@@ -384,7 +399,7 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
   if (name === 'Read' || name === 'file_read') return { icon: 'file-code-o', color: Theme.blue };
   if (name === 'Glob' || name === 'Grep') return { icon: 'search', color: Theme.violet };
   if (name === 'Edit' || name === 'Write' || name === 'file_write' || name === 'file_edit' || name === 'apply_patch') return { icon: 'pencil', color: Theme.orange };
-  if (name === 'WebSearch' || name === 'web_search' || name === 'code_search') return { icon: 'globe', color: Theme.violet };
+  if (name === 'WebSearch' || name === 'web_search' || name === 'code_search' || name === 'code_analysis') return { icon: 'globe', color: Theme.violet };
   if (name === 'WebFetch' || name === 'web_fetch') return { icon: 'globe', color: Theme.cyan };
   if (name === 'Task') return { icon: 'code-fork', color: Theme.cyan };
   if (name === 'TaskCreate' || name === 'TaskUpdate' || name === 'TaskList' || name === 'TaskGet') return { icon: 'tasks', color: '#10b981' };
@@ -450,7 +465,8 @@ function toolSummary(tc: ToolCall): string {
   // Search tools
   if (tc.name === 'Glob' && parsedInput.pattern) return String(parsedInput.pattern);
   if (tc.name === 'Grep' && parsedInput.pattern) return String(parsedInput.pattern);
-  if (tc.name === 'WebSearch') return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : '';
+  if (tc.name === 'WebSearch' || tc.name === 'web_search' || tc.name === 'code_search') return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : '';
+  if (tc.name === 'WebFetch' || tc.name === 'web_fetch') return parsedInput.url ? shortenUrl(String(parsedInput.url)) : '';
 
   // Patch tool
   if (tc.name === 'apply_patch') {
@@ -685,7 +701,7 @@ function TodoWriteBlock({ tool }: { tool: ToolCall }) {
             )}
             <RNText style={[
               styles.todoItemText,
-              todo.status === 'completed' && styles.todoItemCompleted
+              todo.status === 'completed' && { color: Theme.textDim, textDecorationLine: 'line-through' as const },
             ]}>
               {todo.status === 'in_progress' ? (todo.activeForm || todo.content) : todo.content}
             </RNText>
@@ -700,11 +716,17 @@ function TaskListBlock({ result }: { result?: ToolResult }) {
   if (!result) return null;
 
   const lines = result.content.split('\n');
-  const items: Array<{ id: string; status: string; subject: string }> = [];
+  const items: Array<{ id: string; status: string; subject: string; owner?: string; blockedBy?: string[] }> = [];
   for (const line of lines) {
-    const match = line.match(/#(\d+)\s+\[(\w+)]\s+(.+?)(?:\s+\(|$)/);
+    const match = line.match(/#(\d+)\s+\[(\w+)]\s+(.+?)(?:\s+\(([^)]+)\))?(?:\s+\[blocked by ([^\]]+)])?$/);
     if (match) {
-      items.push({ id: match[1], status: match[2], subject: match[3].trim() });
+      items.push({
+        id: match[1],
+        status: match[2],
+        subject: match[3].trim(),
+        owner: match[4]?.trim(),
+        blockedBy: match[5]?.split(',').map((s: string) => s.trim().replace('#', '')),
+      });
     }
   }
   if (items.length === 0) return null;
@@ -722,18 +744,38 @@ function TaskListBlock({ result }: { result?: ToolResult }) {
         </RNText>
       </RNView>
       <RNView style={styles.todoList}>
-        {items.map((task, i) => (
-          <RNView key={i} style={styles.todoItem}>
-            {task.status === 'completed' ? (
-              <FontAwesome name="check-circle" size={14} color={Theme.green} style={{ marginRight: 6 }} />
-            ) : task.status === 'in_progress' ? (
-              <FontAwesome name="clock-o" size={14} color={Theme.accent} style={{ marginRight: 6 }} />
-            ) : (
-              <FontAwesome name="circle-o" size={14} color={Theme.textMuted0} style={{ marginRight: 6 }} />
-            )}
-            <RNText style={styles.todoItemText}>#{task.id} {task.subject}</RNText>
-          </RNView>
-        ))}
+        {items.map((task, i) => {
+          const isBlocked = task.blockedBy && task.blockedBy.length > 0;
+          return (
+            <RNView key={i} style={[styles.todoItem, isBlocked && { opacity: 0.5 }]}>
+              {task.status === 'completed' ? (
+                <FontAwesome name="check-circle" size={14} color={Theme.green} style={{ marginRight: 6 }} />
+              ) : task.status === 'in_progress' ? (
+                <FontAwesome name="clock-o" size={14} color={Theme.accent} style={{ marginRight: 6 }} />
+              ) : isBlocked ? (
+                <FontAwesome name="lock" size={12} color={Theme.textDim} style={{ marginRight: 7, marginLeft: 1 }} />
+              ) : (
+                <FontAwesome name="circle-o" size={14} color={Theme.textMuted0} style={{ marginRight: 6 }} />
+              )}
+              <RNText style={[styles.todoId, task.status === 'completed' && { textDecorationLine: 'line-through' }]}>#{task.id}</RNText>
+              <RNText style={[
+                styles.todoItemText,
+                task.status === 'completed' && { color: Theme.textDim, textDecorationLine: 'line-through' },
+                task.status === 'in_progress' && { color: Theme.textSecondary },
+              ]} numberOfLines={2}>
+                {task.subject}
+              </RNText>
+              {task.owner ? (
+                <RNView style={styles.todoOwnerBadge}>
+                  <RNText style={styles.todoOwnerText}>@{task.owner}</RNText>
+                </RNView>
+              ) : null}
+              {isBlocked ? (
+                <RNText style={styles.todoBlockedText}>blocked by {task.blockedBy!.map(id => `#${id}`).join(', ')}</RNText>
+              ) : null}
+            </RNView>
+          );
+        })}
       </RNView>
     </RNView>
   );
@@ -753,7 +795,7 @@ function SkillCard({ tool }: { tool: ToolCall }) {
   );
 }
 
-function TaskCreateUpdateBlock({ tool }: { tool: ToolCall }) {
+function TaskCreateUpdateBlock({ tool, result, taskSubjectMap }: { tool: ToolCall; result?: ToolResult; taskSubjectMap?: Record<string, string> }) {
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
@@ -762,6 +804,15 @@ function TaskCreateUpdateBlock({ tool }: { tool: ToolCall }) {
   const taskId = parsedInput.taskId;
   const status = parsedInput.status;
   const owner = parsedInput.owner;
+  const activeForm = parsedInput.activeForm;
+
+  let resultId = '';
+  if (result) {
+    const idMatch = result.content.match(/Task #(\d+)/);
+    if (idMatch) resultId = idMatch[1];
+  }
+
+  const resolvedSubject = subject || (taskId && taskSubjectMap?.[taskId]);
 
   const statusColors: Record<string, string> = {
     completed: Theme.green,
@@ -770,24 +821,47 @@ function TaskCreateUpdateBlock({ tool }: { tool: ToolCall }) {
     pending: Theme.textMuted0,
   };
 
+  if (!isCreate && resolvedSubject) {
+    return (
+      <RNView style={styles.taskOpBlock}>
+        <RNText style={styles.taskOpText} numberOfLines={1}>{String(resolvedSubject).slice(0, 60)}</RNText>
+        {status && (
+          <RNView style={[styles.taskOpBadge, { backgroundColor: (statusColors[status] || Theme.textMuted0) + '20', borderColor: (statusColors[status] || Theme.textMuted0) + '40' }]}>
+            <RNText style={[styles.taskOpBadgeText, { color: statusColors[status] || Theme.textMuted0 }]}>{status}</RNText>
+          </RNView>
+        )}
+        {owner && (
+          <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.blue + '20', borderColor: Theme.blue + '40' }]}>
+            <RNText style={[styles.taskOpBadgeText, { color: Theme.blue }]}>@{owner}</RNText>
+          </RNView>
+        )}
+      </RNView>
+    );
+  }
+
   return (
     <RNView style={styles.taskOpBlock}>
       <RNText style={[styles.taskOpName, { color: Theme.green }]}>{tool.name}</RNText>
-      {isCreate && subject && (
-        <RNText style={styles.taskOpText} numberOfLines={1}>{subject}</RNText>
-      )}
-      {!isCreate && taskId && (
-        <RNText style={styles.taskOpId}>#{taskId}</RNText>
-      )}
-      {status && (
-        <RNView style={[styles.taskOpBadge, { backgroundColor: statusColors[status] + '20', borderColor: statusColors[status] + '40' }]}>
-          <RNText style={[styles.taskOpBadgeText, { color: statusColors[status] }]}>{status}</RNText>
-        </RNView>
-      )}
-      {owner && (
-        <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.blue + '20', borderColor: Theme.blue + '40' }]}>
-          <RNText style={[styles.taskOpBadgeText, { color: Theme.blue }]}>@{owner}</RNText>
-        </RNView>
+      {isCreate ? (
+        <>
+          {resultId ? <RNText style={styles.taskOpId}>#{resultId}</RNText> : null}
+          {subject ? <RNText style={styles.taskOpText} numberOfLines={1}>{subject}</RNText> : null}
+          {activeForm ? <RNText style={{ fontSize: 10, color: Theme.textDim, fontStyle: 'italic' }}>({activeForm})</RNText> : null}
+        </>
+      ) : (
+        <>
+          {taskId ? <RNText style={styles.taskOpId}>#{taskId}</RNText> : null}
+          {status && (
+            <RNView style={[styles.taskOpBadge, { backgroundColor: (statusColors[status] || Theme.textMuted0) + '20', borderColor: (statusColors[status] || Theme.textMuted0) + '40' }]}>
+              <RNText style={[styles.taskOpBadgeText, { color: statusColors[status] || Theme.textMuted0 }]}>{status}</RNText>
+            </RNView>
+          )}
+          {owner && (
+            <RNView style={[styles.taskOpBadge, { backgroundColor: Theme.blue + '20', borderColor: Theme.blue + '40' }]}>
+              <RNText style={[styles.taskOpBadgeText, { color: Theme.blue }]}>@{owner}</RNText>
+            </RNView>
+          )}
+        </>
       )}
     </RNView>
   );
@@ -1162,8 +1236,8 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   const getResultSummary = () => {
     if (!result) return null;
     if (result.is_error) return '(error)';
-    const isEditOrWrite = toolCall.name === 'Edit' || toolCall.name === 'Write';
-    const isGlobGrep = toolCall.name === 'Glob' || toolCall.name === 'Grep';
+    const isEditOrWrite = toolCall.name === 'Edit' || toolCall.name === 'Write' || toolCall.name === 'file_edit' || toolCall.name === 'file_write' || toolCall.name === 'apply_patch';
+    const isGlobGrep = toolCall.name === 'Glob' || toolCall.name === 'Grep' || toolCall.name === 'code_search';
     if (isEditOrWrite) {
       const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
       if (match) return `(+${match[1]} -${match[2]})`;
@@ -1225,13 +1299,20 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
     'TaskStop',
     'TeamDelete',
     'ExitPlanMode',
+    'EnterPlanMode',
     'Glob',
     'Grep',
+    'WebSearch',
+    'WebFetch',
+    'web_search',
+    'web_fetch',
+    'code_search',
+    'code_analysis',
     'shell_command',
     'shell',
     'exec_command',
     'container.exec',
-  ].includes(toolCall.name);
+  ].includes(toolCall.name) || toolCall.name.startsWith('mcp__');
 
   return (
     <Pressable onPress={onToggle} style={styles.toolCallContainer}>
@@ -1272,7 +1353,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
             <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
               {isCodeResult ? (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <RNText style={styles.toolCodeText} selectable>{resultDisplay}</RNText>
+                  <RNText style={[styles.toolCodeText, result.is_error && { color: Theme.red }]} selectable>{resultDisplay}</RNText>
                 </ScrollView>
               ) : isMarkdownResult ? (
                 <MarkdownContent text={resultDisplay} baseStyle={styles.toolCallResult} isUser={false} />
@@ -1358,16 +1439,25 @@ function assistantLabel(agentType?: string): string {
 
 const CONTENT_TRUNCATE_LENGTH = 1000;
 
-function MessageBubble({ message, agentType, showHeader = true, forkChildren, conversationId, onFork }: {
+function MessageBubble({ message, agentType, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap }: {
   message: Message;
   agentType?: string;
   showHeader?: boolean;
   forkChildren?: ForkChild[];
   conversationId?: string;
   onFork?: (messageUuid: string) => void;
+  taskSubjectMap?: Record<string, string>;
 }) {
   const router = useRouter();
-  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
+    const initial = new Set<string>();
+    message.tool_calls?.forEach(tc => {
+      if (tc.name === 'Edit' || tc.name === 'Write' || tc.name === 'file_edit' || tc.name === 'file_write') {
+        initial.add(tc.id);
+      }
+    });
+    return initial;
+  });
   const [contentExpanded, setContentExpanded] = useState(false);
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
@@ -1565,13 +1655,13 @@ function MessageBubble({ message, agentType, showHeader = true, forkChildren, co
             if (tc.name === 'TaskList' && result) {
               return <TaskListBlock key={tc.id} result={result} />;
             }
-            if (tc.name === 'TaskCreate' || tc.name === 'TaskUpdate') {
-              return <TaskCreateUpdateBlock key={tc.id} tool={tc} />;
+            if (tc.name === 'TaskCreate' || tc.name === 'TaskUpdate' || tc.name === 'TaskGet') {
+              return <TaskCreateUpdateBlock key={tc.id} tool={tc} result={result} taskSubjectMap={taskSubjectMap} />;
             }
             if (tc.name === 'SendMessage') {
               return <SendMessageBlock key={tc.id} tool={tc} />;
             }
-            if (tc.name === 'TeamCreate') {
+            if (tc.name === 'TeamCreate' || tc.name === 'TeamDelete') {
               return <TeamCreateBlock key={tc.id} tool={tc} />;
             }
             if (tc.name === 'Skill') {
@@ -1860,6 +1950,32 @@ export default function SessionDetailScreen() {
     return map;
   }, [conversation?.fork_children]);
 
+  const taskSubjectMap = useMemo(() => {
+    const createInputs: Record<string, string> = {};
+    const idMap: Record<string, string> = {};
+    for (const msg of allMessages) {
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.name === 'TaskCreate') {
+            try {
+              const inp = JSON.parse(tc.input);
+              if (inp.subject) createInputs[tc.id] = String(inp.subject);
+            } catch {}
+          }
+        }
+      }
+      if (msg.role === 'user' && msg.tool_results) {
+        for (const tr of msg.tool_results) {
+          if (createInputs[tr.tool_use_id]) {
+            const m = tr.content.match(/Task #(\d+)/);
+            if (m) idMap[m[1]] = createInputs[tr.tool_use_id];
+          }
+        }
+      }
+    }
+    return idMap;
+  }, [allMessages]);
+
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     if (!id) return;
     try {
@@ -2105,6 +2221,7 @@ export default function SessionDetailScreen() {
                 forkChildren={item.message_uuid ? forkPointMap[item.message_uuid] : undefined}
                 conversationId={conversation._id}
                 onFork={handleForkFromMessage}
+                taskSubjectMap={taskSubjectMap}
               />
             );
           }}
@@ -2338,18 +2455,18 @@ const styles = StyleSheet.create({
   },
   showMoreText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '500',
     color: Theme.cyan,
   },
   bubbleText: {
-    fontSize: 15,
-    lineHeight: 21,
+    fontSize: 14,
+    lineHeight: 20,
   },
   userText: {
     color: Theme.userBubbleText,
   },
   assistantText: {
-    color: Theme.textSecondary,
+    color: Theme.text,
   },
   linkText: {
     color: Theme.cyan,
@@ -2547,10 +2664,10 @@ const styles = StyleSheet.create({
     marginTop: -10,
     marginBottom: 8,
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
-    backgroundColor: 'rgba(0,0,0,0.08)',
+    backgroundColor: Theme.bgHighlight + '4D',
   },
   bashPrompt: {
     fontSize: 11,
@@ -2592,7 +2709,7 @@ const styles = StyleSheet.create({
     maxHeight: 320,
   },
   noOutputText: {
-    fontSize: 11,
+    fontSize: 12,
     color: Theme.textDim,
   },
   toolInputSection: {
@@ -2855,15 +2972,36 @@ const styles = StyleSheet.create({
   todoItem: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    gap: 4,
+  },
+  todoId: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontFamily: 'SpaceMono',
+    marginTop: 2,
   },
   todoItemText: {
     fontSize: 12,
     color: Theme.textMuted,
     flex: 1,
   },
-  todoItemCompleted: {
-    color: Theme.textMuted0,
-    textDecorationLine: 'line-through',
+  todoOwnerBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 3,
+    backgroundColor: 'rgba(38,139,210,0.15)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(38,139,210,0.2)',
+  },
+  todoOwnerText: {
+    fontSize: 10,
+    color: Theme.blue,
+    fontFamily: 'SpaceMono',
+  },
+  todoBlockedText: {
+    fontSize: 10,
+    color: Theme.textDim,
+    marginTop: 2,
   },
   // Skill card
   skillCard: {
