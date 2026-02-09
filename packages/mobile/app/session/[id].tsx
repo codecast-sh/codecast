@@ -70,6 +70,7 @@ type ConversationData = {
     username: string;
     share_token?: string;
   };
+  user?: { name?: string; email?: string } | null;
 };
 
 // --- Markdown rendering ---
@@ -255,10 +256,45 @@ function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text
       continue;
     }
 
+    if (trimmed.includes('|') && i + 1 < lines.length && lines[i + 1]?.trim().match(/^\|?\s*[-:]+[-| :]*$/)) {
+      const tableLines: string[] = [];
+      while (i < lines.length && lines[i].trim().includes('|')) {
+        tableLines.push(lines[i].trim());
+        i++;
+      }
+      const headerCells = tableLines[0].split('|').map(c => c.trim()).filter(Boolean);
+      const bodyRows = tableLines.slice(2).map(row => row.split('|').map(c => c.trim()).filter(Boolean));
+      elements.push(
+        <ScrollView key={`${blockKey}tbl${elKey++}`} horizontal showsHorizontalScrollIndicator style={{ marginVertical: 6 }}>
+          <RNView>
+            <RNView style={styles.tableRow}>
+              {headerCells.map((cell, ci) => (
+                <RNView key={ci} style={styles.tableHeaderCell}>
+                  <RNText style={[baseStyle, styles.tableHeaderText]}>{cell}</RNText>
+                </RNView>
+              ))}
+            </RNView>
+            {bodyRows.map((row, ri) => (
+              <RNView key={ri} style={[styles.tableRow, ri % 2 === 1 && styles.tableRowAlt]}>
+                {row.map((cell, ci) => (
+                  <RNView key={ci} style={styles.tableCell}>
+                    <RNText style={[baseStyle, styles.tableCellText]}>
+                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser)}
+                    </RNText>
+                  </RNView>
+                ))}
+              </RNView>
+            ))}
+          </RNView>
+        </ScrollView>
+      );
+      continue;
+    }
+
     const paraLines: string[] = [];
     while (i < lines.length) {
       const l = lines[i].trim();
-      if (!l || l.match(/^#{1,3}\s/) || l.match(/^[-*]\s/) || l.match(/^\d+[.)]\s/) || l.startsWith('> ')) break;
+      if (!l || l.match(/^#{1,3}\s/) || l.match(/^[-*]\s/) || l.match(/^\d+[.)]\s/) || l.startsWith('> ') || (l.includes('|') && i + 1 < lines.length && lines[i + 1]?.trim().match(/^\|?\s*[-:]+[-| :]*$/))) break;
       paraLines.push(lines[i]);
       i++;
     }
@@ -612,14 +648,14 @@ function TaskToolBlock({ tool }: { tool: ToolCall }) {
 }
 
 function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
-  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string }> }>; answers?: Record<string, string> } = {};
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
   const questions = parsedInput.questions || [];
   if (questions.length === 0) return null;
 
   let answers: Record<string, string> = {};
-  if (parsedInput.answers) {
+  if (parsedInput.answers && typeof parsedInput.answers === 'object') {
     answers = parsedInput.answers;
   } else if (result?.content) {
     const regex = /"([^"]+)"="([^"]+)"/g;
@@ -633,15 +669,21 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
     <RNView style={styles.askQuestionBlock}>
       {questions.map((q, i) => {
         const answer = answers[q.question];
+        const isCustom = answer !== undefined && !q.options.some(
+          o => o.label === answer || o.label.replace(' (Recommended)', '') === answer
+        );
         return (
           <RNView key={i} style={styles.questionItem}>
             {q.header && (
-              <RNText style={styles.questionHeader}>{q.header}</RNText>
+              <RNView style={styles.questionHeaderBadge}>
+                <RNText style={styles.questionHeaderText}>{q.header}</RNText>
+              </RNView>
             )}
             <RNText style={styles.questionText}>{q.question}</RNText>
             <RNView style={styles.optionsRow}>
               {q.options.map((opt, j) => {
-                const isSelected = answer === opt.label || answer === opt.label.replace(' (Recommended)', '');
+                const cleanLabel = opt.label.replace(' (Recommended)', '');
+                const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
                 return (
                   <RNView
                     key={j}
@@ -662,6 +704,12 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
                   </RNView>
                 );
               })}
+              {isCustom && (
+                <RNView style={styles.optionPillCustom}>
+                  <FontAwesome name="comment-o" size={10} color={Theme.blue} style={{ marginRight: 4 }} />
+                  <RNText style={styles.optionPillCustomText}>{answer}</RNText>
+                </RNView>
+              )}
             </RNView>
           </RNView>
         );
@@ -970,9 +1018,9 @@ function CompactionSummaryBlock({ content }: { content: string }) {
         <RNText style={styles.compactionTitle}>Previous context summary</RNText>
       </TouchableOpacity>
       {expanded && (
-        <RNText style={styles.compactionContent} selectable>
-          {content}
-        </RNText>
+        <RNView style={styles.compactionContentWrap}>
+          <MarkdownContent text={content} baseStyle={styles.compactionContent} isUser={false} />
+        </RNView>
       )}
     </RNView>
   );
@@ -1405,10 +1453,13 @@ function ThinkingBlock({ content }: { content: string }) {
 function SystemMessage({ message }: { message: Message }) {
   if (message.subtype === 'compact_boundary') {
     return (
-      <RNView style={styles.systemDivider}>
-        <RNView style={styles.systemDividerLine} />
-        <RNText style={styles.systemDividerText}>context compacted</RNText>
-        <RNView style={styles.systemDividerLine} />
+      <RNView style={styles.compactBoundary}>
+        <RNView style={styles.compactBoundaryLine} />
+        <RNView style={styles.compactBoundaryPill}>
+          <FontAwesome name="compress" size={10} color="#d97706" style={{ marginRight: 5 }} />
+          <RNText style={styles.compactBoundaryText}>Context compacted</RNText>
+        </RNView>
+        <RNView style={styles.compactBoundaryLine} />
       </RNView>
     );
   }
@@ -1439,7 +1490,7 @@ function assistantLabel(agentType?: string): string {
 
 const CONTENT_TRUNCATE_LENGTH = 1000;
 
-function MessageBubble({ message, agentType, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap }: {
+function MessageBubble({ message, agentType, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, userName }: {
   message: Message;
   agentType?: string;
   showHeader?: boolean;
@@ -1447,6 +1498,7 @@ function MessageBubble({ message, agentType, showHeader = true, forkChildren, co
   conversationId?: string;
   onFork?: (messageUuid: string) => void;
   taskSubjectMap?: Record<string, string>;
+  userName?: string;
 }) {
   const router = useRouter();
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
@@ -1551,8 +1603,11 @@ function MessageBubble({ message, agentType, showHeader = true, forkChildren, co
       <RNView style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
         {showHeader && !isToolCallOnly && (
         <RNView style={styles.bubbleHeader}>
+          {!isUser && agentType && (
+            <RNView style={[styles.agentDot, { backgroundColor: agentType === 'codex' ? '#10b981' : agentType === 'cursor' ? '#60a5fa' : Theme.accent }]} />
+          )}
           <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
-            {isUser ? 'You' : assistantLabel(agentType)}
+            {isUser ? (userName || 'You') : assistantLabel(agentType)}
           </RNText>
           <RNText style={[styles.bubbleTime, isUser ? styles.userTime : styles.assistantTime]}>{formatTimestamp(message.timestamp)}</RNText>
         </RNView>
@@ -2222,6 +2277,7 @@ export default function SessionDetailScreen() {
                 conversationId={conversation._id}
                 onFork={handleForkFromMessage}
                 taskSubjectMap={taskSubjectMap}
+                userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
               />
             );
           }}
@@ -2574,6 +2630,33 @@ const styles = StyleSheet.create({
     fontFamily: 'SpaceMono',
     flex: 1,
   },
+  compactBoundary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 20,
+    paddingHorizontal: 8,
+  },
+  compactBoundaryLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(217,119,6,0.4)',
+  },
+  compactBoundaryPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(217,119,6,0.1)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(217,119,6,0.3)',
+    marginHorizontal: 8,
+  },
+  compactBoundaryText: {
+    fontSize: 11,
+    color: '#d97706',
+    fontWeight: '500',
+  },
   systemDivider: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2894,20 +2977,22 @@ const styles = StyleSheet.create({
   questionItem: {
     marginBottom: 10,
   },
-  questionHeader: {
+  questionHeaderBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    backgroundColor: Theme.violet + '20',
+    borderRadius: 3,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.violet + '30',
+    marginBottom: 4,
+  },
+  questionHeaderText: {
     fontSize: 9,
-    fontWeight: '700',
+    fontWeight: '600',
     color: Theme.violet + 'cc',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginBottom: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    backgroundColor: Theme.violet + '20',
-    borderRadius: 3,
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: Theme.violet + '40',
   },
   questionText: {
     fontSize: 11,
@@ -2917,17 +3002,16 @@ const styles = StyleSheet.create({
   optionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 6,
+    gap: 4,
   },
   optionPill: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Theme.borderLight,
-    backgroundColor: 'rgba(0,0,0,0.1)',
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight + '60',
   },
   optionPillSelected: {
     backgroundColor: Theme.green + '20',
@@ -2935,11 +3019,25 @@ const styles = StyleSheet.create({
   },
   optionPillText: {
     fontSize: 11,
-    color: Theme.textMuted0,
+    color: Theme.textDim,
   },
   optionPillTextSelected: {
     color: Theme.green,
     fontWeight: '500',
+  },
+  optionPillCustom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: Theme.blue + '20',
+    borderColor: Theme.blue + '60',
+  },
+  optionPillCustomText: {
+    fontSize: 11,
+    color: Theme.blue,
   },
   // TodoWrite / TaskList
   todoBlock: {
@@ -3098,6 +3196,9 @@ const styles = StyleSheet.create({
   compactionContent: {
     fontSize: 11,
     color: Theme.textMuted,
+    lineHeight: 16,
+  },
+  compactionContentWrap: {
     marginTop: 8,
     paddingLeft: 12,
     borderLeftWidth: 2,
@@ -3299,5 +3400,45 @@ const styles = StyleSheet.create({
     color: Theme.textMuted0,
     marginTop: 4,
     fontStyle: 'italic',
+  },
+  // Agent dot
+  agentDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 4,
+  },
+  // Table
+  tableRow: {
+    flexDirection: 'row',
+  },
+  tableRowAlt: {
+    backgroundColor: Theme.bgHighlight,
+  },
+  tableHeaderCell: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.borderLight,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: Theme.borderLight,
+    minWidth: 80,
+    backgroundColor: Theme.bgAlt,
+  },
+  tableHeaderText: {
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  tableCell: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: Theme.borderLight,
+    minWidth: 80,
+  },
+  tableCellText: {
+    fontSize: 11,
   },
 });
