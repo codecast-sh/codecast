@@ -665,6 +665,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
   const isBash = tool.name === "Bash" || isCodexShell;
   const isGlob = tool.name === "Glob";
   const isGrep = tool.name === "Grep";
+  const isCodeSearch = tool.name === "code_search" || tool.name === "code_analysis";
 
   const { selectedChangeIndex, rangeStart, rangeEnd, selectChange, selectRange } = useDiffViewerStore();
 
@@ -728,6 +729,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     }
     if (isGlob && parsedInput.pattern) return String(parsedInput.pattern);
     if (isGrep && parsedInput.pattern) return String(parsedInput.pattern);
+    if (isCodeSearch && parsedInput.query) return truncateStr(String(parsedInput.query), 40);
 
     if (tool.name === "apply_patch") {
       const input = String(parsedInput.input || parsedInput.patch || "");
@@ -817,6 +819,13 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
       return "Message";
     }
 
+    if (tool.name === "WebSearch") return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : "Search";
+    if (tool.name === "WebFetch") return parsedInput.url ? shortenUrl(String(parsedInput.url)) : "Fetch";
+    if (tool.name === "NotebookEdit") return parsedInput.notebook_path ? getRelativePath(String(parsedInput.notebook_path)) : "Notebook";
+    if (tool.name === "Skill") return parsedInput.skill ? `/${String(parsedInput.skill)}` : "Skill";
+    if (tool.name === "EnterPlanMode") return "Plan mode";
+    if (tool.name === "ExitPlanMode") return "Exit plan";
+
     if (tool.name.startsWith("mcp__")) {
       const parts = tool.name.split("__");
       const method = parts[2] || "";
@@ -841,7 +850,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
       const lines = result.content.split("\n").length;
       return `(${lines} lines)`;
     }
-    if (isGlob || isGrep) {
+    if (isGlob || isGrep || isCodeSearch) {
       const lines = result.content.trim().split("\n").filter(l => l.trim()).length;
       return `(${lines} matches)`;
     }
@@ -878,6 +887,12 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     TeamDelete: "text-sol-cyan/80",
     SendMessage: "text-amber-500/80",
     TodoWrite: "text-sol-magenta/80",
+    WebSearch: "text-sol-violet/80",
+    WebFetch: "text-sol-cyan/80",
+    NotebookEdit: "text-sol-orange/80",
+    Skill: "text-sol-cyan/80",
+    EnterPlanMode: "text-sol-violet/80",
+    ExitPlanMode: "text-sol-violet/80",
     "mcp__claude-in-chrome__computer": "text-sol-orange/80",
     "mcp__claude-in-chrome__navigate": "text-sol-blue/80",
     "mcp__claude-in-chrome__read_page": "text-sol-blue/80",
@@ -905,6 +920,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     web_search: "text-sol-violet/80",
     web_fetch: "text-sol-cyan/80",
     code_search: "text-sol-violet/80",
+    code_analysis: "text-sol-violet/80",
   };
 
   const getMcpColor = (name: string) => {
