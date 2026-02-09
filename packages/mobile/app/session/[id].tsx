@@ -1337,6 +1337,36 @@ function CompactionSummaryBlock({ content }: { content: string }) {
   );
 }
 
+function GitDiffView({ diff }: { diff: string }) {
+  const lines = diff.split('\n');
+  return (
+    <ScrollView horizontal>
+      <RNView style={{ padding: 8 }}>
+        {lines.map((line, i) => {
+          let color = Theme.textMuted;
+          let bg = 'transparent';
+          if (line.startsWith('+') && !line.startsWith('+++')) {
+            color = Theme.green;
+            bg = Theme.green + '12';
+          } else if (line.startsWith('-') && !line.startsWith('---')) {
+            color = Theme.red;
+            bg = Theme.red + '12';
+          } else if (line.startsWith('@@')) {
+            color = Theme.blue;
+          } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
+            color = Theme.textSecondary;
+          }
+          return (
+            <RNText key={i} style={{ fontFamily: 'SpaceMono', fontSize: 11, color, backgroundColor: bg, lineHeight: 16 }}>
+              {line}
+            </RNText>
+          );
+        })}
+      </RNView>
+    </ScrollView>
+  );
+}
+
 const PLAN_MAX_HEIGHT = 600;
 
 function PlanBlock({ content, timestamp }: { content: string; timestamp?: number }) {
@@ -2603,6 +2633,11 @@ export default function SessionDetailScreen() {
   const [showThinking, setShowThinking] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchVisible, setSearchVisible] = useState(false);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
+  const [diffExpanded, setDiffExpanded] = useState(false);
+  const [shareSelectionMode, setShareSelectionMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const scrollProgressAnim = useRef(new Animated.Value(0)).current;
   const isNearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(0);
 
@@ -2811,6 +2846,86 @@ export default function SessionDetailScreen() {
     return ids;
   }, [searchLower, allMessages]);
 
+  const searchMatchList = useMemo(() => {
+    if (!searchLower) return [];
+    return allMessages.filter(msg => msg.content && msg.content.toLowerCase().includes(searchLower)).map(m => m._id);
+  }, [searchLower, allMessages]);
+
+  useEffect(() => { setCurrentMatchIndex(0); }, [searchQuery]);
+
+  const goToNextMatch = useCallback(() => {
+    if (searchMatchList.length === 0) return;
+    const nextIndex = (currentMatchIndex + 1) % searchMatchList.length;
+    setCurrentMatchIndex(nextIndex);
+    const idx = allMessages.findIndex(m => m._id === searchMatchList[nextIndex]);
+    if (idx >= 0) flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.3 });
+  }, [searchMatchList, currentMatchIndex, allMessages]);
+
+  const goToPrevMatch = useCallback(() => {
+    if (searchMatchList.length === 0) return;
+    const prevIndex = currentMatchIndex === 0 ? searchMatchList.length - 1 : currentMatchIndex - 1;
+    setCurrentMatchIndex(prevIndex);
+    const idx = allMessages.findIndex(m => m._id === searchMatchList[prevIndex]);
+    if (idx >= 0) flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.3 });
+  }, [searchMatchList, currentMatchIndex, allMessages]);
+
+  const taskStats = useMemo(() => {
+    let total = 0;
+    let completed = 0;
+    for (const msg of allMessages) {
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.name === 'TaskCreate') total++;
+          if (tc.name === 'TaskUpdate') {
+            try {
+              const inp = JSON.parse(tc.input);
+              if (inp.status === 'completed') completed++;
+            } catch {}
+          }
+        }
+      }
+    }
+    return total > 0 ? { total, completed } : null;
+  }, [allMessages]);
+
+  const handleStartShareSelection = useCallback(() => {
+    setShareSelectionMode(true);
+    setSelectedMessageIds(new Set());
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, []);
+
+  const handleToggleMessageSelection = useCallback((msgId: string) => {
+    setSelectedMessageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(msgId)) next.delete(msgId);
+      else next.add(msgId);
+      return next;
+    });
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, []);
+
+  const handleCancelShareSelection = useCallback(() => {
+    setShareSelectionMode(false);
+    setSelectedMessageIds(new Set());
+  }, []);
+
+  const handleConfirmShareSelection = useCallback(async () => {
+    if (selectedMessageIds.size === 0) return;
+    const selected = allMessages
+      .filter(m => selectedMessageIds.has(m._id))
+      .sort((a, b) => a.timestamp - b.timestamp);
+    const text = selected.map(m => {
+      const ts = new Date(m.timestamp).toLocaleString();
+      const label = m.role === 'user' ? 'User' : 'Assistant';
+      return `[${ts}] ${label}:\n${m.content || ''}`;
+    }).join('\n\n');
+    Clipboard.setString(text);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    showToast(`${selected.length} message${selected.length > 1 ? 's' : ''} copied`);
+    setShareSelectionMode(false);
+    setSelectedMessageIds(new Set());
+  }, [selectedMessageIds, allMessages, showToast]);
+
   useEffect(() => {
     if (conversation && !initialScrollDone && allMessages.length > 0) {
       setTimeout(() => {
@@ -2889,6 +3004,9 @@ export default function SessionDetailScreen() {
 
     // Check if near top
     setIsNearTop(scrollTop < 300);
+
+    const progress = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0;
+    scrollProgressAnim.setValue(progress);
 
     // Set userScrolled if scrolling away from bottom
     if (!isNearBottom) {
@@ -3019,6 +3137,14 @@ export default function SessionDetailScreen() {
                           <RNText style={styles.compactionBadgeText}>{conversation.compaction_count}</RNText>
                         </Pressable>
                       )}
+                      {taskStats && (
+                        <RNView style={styles.taskStatsBadge}>
+                          <FontAwesome name="check-square-o" size={9} color={taskStats.completed === taskStats.total ? Theme.green : Theme.textDim} />
+                          <RNText style={[styles.taskStatsText, taskStats.completed === taskStats.total && { color: Theme.green }]}>
+                            {taskStats.completed}/{taskStats.total}
+                          </RNText>
+                        </RNView>
+                      )}
                       {conversation.git_branch && (
                         <Pressable
                           onPress={() => {
@@ -3096,12 +3222,42 @@ export default function SessionDetailScreen() {
                   <TouchableOpacity onPress={() => setShowThinking(s => !s)} style={styles.toolbarButton} activeOpacity={0.7}>
                     <FontAwesome name="lightbulb-o" size={14} color={showThinking ? Theme.accent : Theme.textDim} />
                   </TouchableOpacity>
+                  {conversation.git_branch && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
+                    <TouchableOpacity onPress={() => setDiffExpanded(d => !d)} style={styles.toolbarButton} activeOpacity={0.7}>
+                      <FontAwesome name="code" size={12} color={diffExpanded ? Theme.green : Theme.textDim} />
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity onPress={shareSelectionMode ? handleCancelShareSelection : handleStartShareSelection} style={styles.toolbarButton} activeOpacity={0.7}>
+                    <FontAwesome name="check-square-o" size={12} color={shareSelectionMode ? Theme.cyan : Theme.textDim} />
+                  </TouchableOpacity>
                   {treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0 && (
                     <TouchableOpacity onPress={() => setTreeModalVisible(true)} style={styles.toolbarButton} activeOpacity={0.7}>
                       <FontAwesome name="sitemap" size={12} color={Theme.violet} />
                     </TouchableOpacity>
                   )}
                 </RNView>
+                {diffExpanded && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
+                  <RNView style={styles.gitDiffPanel}>
+                    {conversation.git_diff_staged && conversation.git_diff_staged.trim().length > 0 && (
+                      <RNView style={{ marginBottom: 8 }}>
+                        <RNText style={{ fontSize: 10, color: Theme.green, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Staged</RNText>
+                        <RNView style={styles.gitDiffContent}>
+                          <GitDiffView diff={conversation.git_diff_staged} />
+                        </RNView>
+                      </RNView>
+                    )}
+                    {conversation.git_diff && conversation.git_diff.trim().length > 0 && (
+                      <RNView>
+                        {conversation.git_diff_staged && conversation.git_diff_staged.trim().length > 0 && (
+                          <RNText style={{ fontSize: 10, color: Theme.orange, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Unstaged</RNText>
+                        )}
+                        <RNView style={styles.gitDiffContent}>
+                          <GitDiffView diff={conversation.git_diff} />
+                        </RNView>
+                      </RNView>
+                    )}
+                  </RNView>
+                )}
                 {searchVisible && (
                   <RNView style={styles.searchBar}>
                     <FontAwesome name="search" size={12} color={Theme.textDim} style={{ marginRight: 8 }} />
@@ -3115,9 +3271,22 @@ export default function SessionDetailScreen() {
                       returnKeyType="search"
                     />
                     {searchQuery.length > 0 && (
-                      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <RNText style={styles.searchCount}>{searchMatchIds ? searchMatchIds.size : 0} matches</RNText>
-                        <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7}>
+                      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        {searchMatchList.length > 0 && (
+                          <>
+                            <RNText style={styles.searchCount}>{currentMatchIndex + 1}/{searchMatchList.length}</RNText>
+                            <TouchableOpacity onPress={goToPrevMatch} style={{ padding: 4 }} activeOpacity={0.7}>
+                              <FontAwesome name="chevron-up" size={10} color={Theme.textDim} />
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={goToNextMatch} style={{ padding: 4 }} activeOpacity={0.7}>
+                              <FontAwesome name="chevron-down" size={10} color={Theme.textDim} />
+                            </TouchableOpacity>
+                          </>
+                        )}
+                        {searchMatchList.length === 0 && (
+                          <RNText style={styles.searchCount}>0 matches</RNText>
+                        )}
+                        <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7} style={{ padding: 4 }}>
                           <FontAwesome name="times-circle" size={14} color={Theme.textDim} />
                         </TouchableOpacity>
                       </RNView>
@@ -3126,18 +3295,23 @@ export default function SessionDetailScreen() {
                 )}
               </RNView>
               {hasMoreAbove && (
-                <TouchableOpacity
-                  onPress={loadOlderMessages}
-                  style={styles.loadMoreButton}
-                  activeOpacity={0.7}
-                  disabled={loadingOlder}
-                >
+                <RNView style={styles.loadMoreIndicator}>
                   {loadingOlder ? (
-                    <ActivityIndicator size="small" color={Theme.textMuted} />
+                    <RNView style={styles.loadMorePill}>
+                      <ActivityIndicator size="small" color={Theme.textMuted} />
+                      <RNText style={styles.loadMorePillText}>Loading older messages...</RNText>
+                    </RNView>
                   ) : (
-                    <RNText style={styles.loadMoreText}>Load older messages</RNText>
+                    <Pressable onPress={loadOlderMessages} style={styles.loadMorePill}>
+                      <FontAwesome name="chevron-up" size={10} color={Theme.textMuted0} />
+                      <RNText style={styles.loadMorePillText}>
+                        {conversation.message_count && allMessages.length < conversation.message_count
+                          ? `${conversation.message_count - allMessages.length} earlier messages`
+                          : 'Load older messages'}
+                      </RNText>
+                    </Pressable>
                   )}
-                </TouchableOpacity>
+                </RNView>
               )}
               {conversation.parent_conversation_id && !hasMoreAbove && (
                 <Pressable
@@ -3188,7 +3362,19 @@ export default function SessionDetailScreen() {
 
             const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
             return (
-              <RNView style={isSearchDimmed ? { opacity: 0.25 } : undefined}>
+              <RNView style={[isSearchDimmed ? { opacity: 0.25 } : undefined, shareSelectionMode && { paddingLeft: 28 }]}>
+                {shareSelectionMode && (
+                  <Pressable
+                    onPress={() => handleToggleMessageSelection(item._id)}
+                    style={styles.selectionCheckbox}
+                  >
+                    <FontAwesome
+                      name={selectedMessageIds.has(item._id) ? "check-square" : "square-o"}
+                      size={16}
+                      color={selectedMessageIds.has(item._id) ? Theme.cyan : Theme.textDim}
+                    />
+                  </Pressable>
+                )}
                 <MessageBubble
                   message={item}
                   agentType={conversation.agent_type}
@@ -3217,6 +3403,25 @@ export default function SessionDetailScreen() {
               <RNText style={styles.emptyStateSubtext}>Messages will appear here as the session progresses</RNText>
             </RNView>
           }
+          ListFooterComponent={
+            conversation.child_conversations && conversation.child_conversations.length > 0 ? (
+              <RNView style={styles.subagentLinksContainer}>
+                <RNText style={styles.subagentLinksLabel}>SUBAGENTS</RNText>
+                <RNView style={styles.subagentLinksRow}>
+                  {conversation.child_conversations.map(child => (
+                    <Pressable
+                      key={child._id}
+                      onPress={() => router.push(`/session/${child._id}`)}
+                      style={styles.subagentLink}
+                    >
+                      <FontAwesome name="arrow-right" size={8} color={Theme.cyan} style={{ opacity: 0.7 }} />
+                      <RNText style={styles.subagentLinkText} numberOfLines={1}>{child.title}</RNText>
+                    </Pressable>
+                  ))}
+                </RNView>
+              </RNView>
+            ) : null
+          }
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={100}
@@ -3227,6 +3432,16 @@ export default function SessionDetailScreen() {
 
         {/* Jump arrows */}
         <RNView style={styles.jumpButtonsContainer}>
+          {allMessages.length > 150 && (userScrolled || !isNearBottomRef.current) && (
+            <RNView style={styles.scrollProgressTrack}>
+              <Animated.View style={[styles.scrollProgressFill, {
+                height: scrollProgressAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: ['0%', '100%'],
+                }),
+              }]} />
+            </RNView>
+          )}
           {(!isNearTop || hasMoreAbove) && (
             <TouchableOpacity
               onPress={() => {
@@ -3263,6 +3478,24 @@ export default function SessionDetailScreen() {
         </RNView>
       </KeyboardAvoidingView>
       <Toast key={toastKey} message={toastMessage} visible={!!toastMessage && toastKey > 0} />
+      {shareSelectionMode && (
+        <RNView style={styles.shareSelectionBar}>
+          <RNText style={styles.shareSelectionCount}>
+            {selectedMessageIds.size} selected
+          </RNText>
+          <TouchableOpacity onPress={handleCancelShareSelection} style={styles.shareSelectionCancel} activeOpacity={0.7}>
+            <RNText style={{ fontSize: 13, color: Theme.textDim }}>Cancel</RNText>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleConfirmShareSelection}
+            style={[styles.shareSelectionConfirm, selectedMessageIds.size === 0 && { opacity: 0.5 }]}
+            activeOpacity={0.7}
+            disabled={selectedMessageIds.size === 0}
+          >
+            <RNText style={{ fontSize: 13, color: '#fff', fontWeight: '600' }}>Copy</RNText>
+          </TouchableOpacity>
+        </RNView>
+      )}
       <Modal visible={treeModalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setTreeModalVisible(false)}>
         <RNView style={styles.treeModal}>
           <RNView style={styles.treeModalHeader}>
@@ -4969,5 +5202,145 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 16,
     paddingTop: 16,
+  },
+  gitDiffPanel: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt + '30',
+    paddingVertical: 8,
+    maxHeight: 300,
+  },
+  gitDiffContent: {
+    marginHorizontal: 12,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight + '30',
+  },
+  loadMoreIndicator: {
+    alignItems: 'center',
+    paddingVertical: 10,
+    marginBottom: 4,
+  },
+  loadMorePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
+  loadMorePillText: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+  },
+  subagentLinksContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  subagentLinksLabel: {
+    fontSize: 10,
+    color: Theme.textDim,
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  subagentLinksRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  subagentLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    backgroundColor: Theme.cyan + '10',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.cyan + '20',
+    maxWidth: 200,
+  },
+  subagentLinkText: {
+    fontSize: 11,
+    color: Theme.cyan,
+    opacity: 0.7,
+  },
+  scrollProgressTrack: {
+    width: 3,
+    height: 48,
+    borderRadius: 1.5,
+    backgroundColor: Theme.bgHighlight,
+    overflow: 'hidden',
+    marginBottom: 6,
+  },
+  scrollProgressFill: {
+    width: '100%',
+    borderRadius: 1.5,
+    backgroundColor: Theme.cyan,
+  },
+  taskStatsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 4,
+  },
+  taskStatsText: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontWeight: '500',
+    fontFamily: 'SpaceMono',
+  },
+  selectionCheckbox: {
+    position: 'absolute',
+    left: 0,
+    top: 8,
+    width: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  shareSelectionBar: {
+    position: 'absolute',
+    bottom: 100,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 200,
+  },
+  shareSelectionCount: {
+    fontSize: 13,
+    color: Theme.textSecondary,
+    flex: 1,
+  },
+  shareSelectionCancel: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  shareSelectionConfirm: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    backgroundColor: Theme.cyan,
+    borderRadius: 6,
   },
 });
