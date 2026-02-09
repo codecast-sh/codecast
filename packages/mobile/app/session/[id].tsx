@@ -9,6 +9,29 @@ import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { PermissionCard } from '@/components/PermissionCard';
 import { Theme, Spacing } from '@/constants/Theme';
+import { LinearGradient } from 'expo-linear-gradient';
+
+function Toast({ message, visible }: { message: string; visible: boolean }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 1, duration: 150, useNativeDriver: true }),
+        Animated.delay(1200),
+        Animated.timing(opacity, { toValue: 0, duration: 300, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible, message]);
+
+  if (!visible) return null;
+
+  return (
+    <Animated.View style={[styles.toast, { opacity }]} pointerEvents="none">
+      <RNText style={styles.toastText}>{message}</RNText>
+    </Animated.View>
+  );
+}
 
 type ToolCall = {
   id: string;
@@ -149,9 +172,17 @@ function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUs
       );
     } else if (match[7]) {
       const url = match[7];
+      let displayUrl = url;
+      if (url.length > 50) {
+        try {
+          const parsed = new URL(url);
+          const path = parsed.pathname.length > 1 ? parsed.pathname.slice(0, 20) + '...' : '';
+          displayUrl = parsed.hostname + path;
+        } catch { displayUrl = url.slice(0, 40) + '...'; }
+      }
       result.push(
         <RNText key={`${keyPrefix}u${key++}`} style={isUser ? styles.linkTextUser : styles.linkText} onPress={() => Linking.openURL(url)}>
-          {url}
+          {displayUrl}
         </RNText>
       );
     }
@@ -164,6 +195,53 @@ function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUs
   }
 
   return result;
+}
+
+function CodeBlockWithCopy({ content, language }: { content: string; language: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    Clipboard.setString(content);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  const lines = content.split('\n');
+  const showLineNumbers = lines.length > 3;
+
+  return (
+    <RNView style={styles.codeBlock}>
+      <RNView style={styles.codeHeader}>
+        <RNText style={styles.codeLanguage}>{language}</RNText>
+        <TouchableOpacity onPress={handleCopy} style={styles.codeCopyButton} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          {copied ? (
+            <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <FontAwesome name="check" size={10} color={Theme.green} />
+              <RNText style={{ fontSize: 9, color: Theme.green, fontFamily: 'SpaceMono' }}>Copied</RNText>
+            </RNView>
+          ) : (
+            <FontAwesome name="clipboard" size={11} color={Theme.textDim} />
+          )}
+        </TouchableOpacity>
+      </RNView>
+      <ScrollView horizontal showsHorizontalScrollIndicator>
+        <RNView style={styles.codeContent}>
+          {showLineNumbers ? (
+            <RNView style={{ flexDirection: 'row' }}>
+              <RNView style={styles.lineNumberGutter}>
+                {lines.map((_, i) => (
+                  <RNText key={i} style={styles.lineNumber}>{i + 1}</RNText>
+                ))}
+              </RNView>
+              <RNText style={styles.codeText} selectable>{content}</RNText>
+            </RNView>
+          ) : (
+            <RNText style={styles.codeText} selectable>{content}</RNText>
+          )}
+        </RNView>
+      </ScrollView>
+    </RNView>
+  );
 }
 
 function MarkdownContent({ text, baseStyle, isUser }: { text: string; baseStyle: any; isUser: boolean }) {
@@ -193,24 +271,7 @@ function MarkdownContent({ text, baseStyle, isUser }: { text: string; baseStyle:
       {blocks.map((block, idx) => {
         if (block.type === 'code') {
           return (
-            <RNView key={idx} style={styles.codeBlock}>
-              <RNView style={styles.codeHeader}>
-                <RNText style={styles.codeLanguage}>{block.language}</RNText>
-                <TouchableOpacity
-                  onPress={() => { Clipboard.setString(block.content); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
-                  style={styles.codeCopyButton}
-                  activeOpacity={0.6}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <FontAwesome name="clipboard" size={11} color={Theme.textDim} />
-                </TouchableOpacity>
-              </RNView>
-              <ScrollView horizontal showsHorizontalScrollIndicator>
-                <RNView style={styles.codeContent}>
-                  <RNText style={styles.codeText} selectable>{block.content}</RNText>
-                </RNView>
-              </ScrollView>
-            </RNView>
+            <CodeBlockWithCopy key={idx} content={block.content} language={block.language || 'plaintext'} />
           );
         }
 
@@ -392,15 +453,15 @@ function formatFullTimestamp(ts: number): string {
 function formatModel(model?: string): string {
   if (!model) return '';
   if (model.includes('claude-sonnet')) {
-    return model.replace('claude-sonnet-', 'sonnet-').replace('-20', '-\'').slice(0, 12);
+    return model.replace('claude-sonnet-', 'sonnet-').replace('-20', "-'");
   }
   if (model.includes('claude-opus')) {
-    return model.replace('claude-opus-', 'opus-').replace('-20', '-\'').slice(0, 12);
+    return model.replace('claude-opus-', 'opus-').replace('-20', "-'");
   }
   if (model.includes('claude-haiku')) {
-    return model.replace('claude-haiku-', 'haiku-').replace('-20', '-\'').slice(0, 12);
+    return model.replace('claude-haiku-', 'haiku-').replace('-20', "-'");
   }
-  return model.slice(0, 12);
+  return model;
 }
 
 function formatAgentType(agentType?: string): string {
@@ -409,6 +470,30 @@ function formatAgentType(agentType?: string): string {
   if (agentType === 'codex') return 'Codex';
   if (agentType === 'cursor') return 'Cursor';
   return agentType;
+}
+
+function agentTypeColor(agentType?: string): string {
+  if (agentType === 'codex') return '#10b981';
+  if (agentType === 'cursor') return '#60a5fa';
+  return Theme.accent;
+}
+
+function agentTypeIcon(agentType?: string): string {
+  if (agentType === 'codex') return 'terminal';
+  if (agentType === 'cursor') return 'mouse-pointer';
+  return 'bolt';
+}
+
+function formatDuration(startTs: number): string {
+  const diff = Date.now() - startTs;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return '<1m';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainMin = minutes % 60;
+  if (hours < 24) return remainMin ? `${hours}h ${remainMin}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
 }
 
 const mcpToolNames: Record<string, string> = {
@@ -475,6 +560,43 @@ function shortenUrl(url: string): string {
   } catch {
     return truncateStr(url, 40);
   }
+}
+
+function hasRichMarkdown(text: string): boolean {
+  const markers = [
+    /^#{1,3}\s+\S/m,
+    /\|.+\|.+\|/,
+    /^```\w*/m,
+    /^\d+\.\s+\*\*[^*]+\*\*/m,
+    /^-\s+\[[ x]\]/im,
+  ];
+  let hits = 0;
+  for (const m of markers) {
+    if (m.test(text)) hits++;
+    if (hits >= 2) return true;
+  }
+  return false;
+}
+
+const PLAN_PREFIXES = [
+  /^implement\s+the\s+following\s+plan\s*:\s*/i,
+  /^implement\s+this\s+plan\s*:\s*/i,
+  /^here(?:'s| is)\s+the\s+plan\s*:\s*/i,
+  /^plan\s*:\s*\n/i,
+];
+
+function extractPlanContent(text: string): string | null {
+  const trimmed = text.trim();
+  for (const prefix of PLAN_PREFIXES) {
+    const match = trimmed.match(prefix);
+    if (match) {
+      const rest = trimmed.slice(match[0].length).trim();
+      if (rest.length > 200 && hasRichMarkdown(rest)) {
+        return rest;
+      }
+    }
+  }
+  return null;
 }
 
 function getFileExtension(filePath: string): string | undefined {
@@ -719,6 +841,7 @@ function TaskToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }
     'code-reviewer': Theme.red,
     'code-explorer': Theme.cyan,
     'code-architect': Theme.magenta,
+    'code-simplifier': Theme.cyan,
   };
 
   const color = subagentColors[subagentType] || Theme.textMuted;
@@ -1158,40 +1281,77 @@ function CompactionSummaryBlock({ content }: { content: string }) {
   );
 }
 
+const PLAN_MAX_HEIGHT = 600;
+
 function PlanBlock({ content }: { content: string }) {
   const [expanded, setExpanded] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [contentExpanded, setContentExpanded] = useState(false);
 
-  // Extract title from first # heading
   const titleMatch = content.match(/^#\s+(.+)$/m);
   const title = titleMatch ? titleMatch[1] : 'Plan';
 
   return (
+    <>
     <RNView style={styles.planBlock}>
-      <TouchableOpacity
-        onPress={() => setExpanded(!expanded)}
-        style={styles.planHeader}
-        activeOpacity={0.7}
-      >
-        <FontAwesome
-          name="clipboard"
-          size={12}
-          color={Theme.cyan}
-          style={{ marginRight: 6 }}
-        />
-        <RNText style={styles.planTitle}>{title}</RNText>
-        <FontAwesome
-          name={expanded ? "chevron-down" : "chevron-right"}
-          size={10}
-          color={Theme.textDim}
-          style={{ marginLeft: 'auto' }}
-        />
-      </TouchableOpacity>
+      <RNView style={styles.planHeader}>
+        <TouchableOpacity
+          onPress={() => setExpanded(!expanded)}
+          style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+          activeOpacity={0.7}
+        >
+          <FontAwesome name="clipboard" size={12} color={Theme.cyan} style={{ marginRight: 6 }} />
+          <RNText style={styles.planTitle}>{title}</RNText>
+          <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={10} color={Theme.textDim} style={{ marginLeft: 'auto' }} />
+        </TouchableOpacity>
+        {expanded && (
+          <TouchableOpacity onPress={() => setFullscreen(true)} style={{ padding: 4, marginLeft: 8 }} activeOpacity={0.6}>
+            <FontAwesome name="expand" size={12} color={Theme.textDim} />
+          </TouchableOpacity>
+        )}
+      </RNView>
       {expanded && (
-        <RNView style={styles.planContent}>
+        <RNView
+          style={[styles.planContent, !contentExpanded && { maxHeight: PLAN_MAX_HEIGHT, overflow: 'hidden' }]}
+          onLayout={(e) => setIsOverflowing(e.nativeEvent.layout.height >= PLAN_MAX_HEIGHT)}
+        >
           <MarkdownContent text={content} baseStyle={styles.planText} isUser={false} />
+          {!contentExpanded && isOverflowing && (
+            <LinearGradient
+              colors={['rgba(0,43,54,0)', Theme.bgAlt]}
+              style={styles.planGradientOverlay}
+              pointerEvents="none"
+            />
+          )}
+        </RNView>
+      )}
+      {expanded && (isOverflowing || contentExpanded) && (
+        <RNView style={styles.planActions}>
+          <TouchableOpacity onPress={() => setContentExpanded(!contentExpanded)} activeOpacity={0.7}>
+            <RNText style={styles.planActionText}>{contentExpanded ? 'Collapse' : 'Expand'}</RNText>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.7}>
+            <RNText style={styles.planActionText}>Fullscreen</RNText>
+          </TouchableOpacity>
         </RNView>
       )}
     </RNView>
+    <Modal visible={fullscreen} animationType="slide" onRequestClose={() => setFullscreen(false)}>
+      <RNView style={styles.planFullscreen}>
+        <RNView style={styles.planFullscreenHeader}>
+          <FontAwesome name="clipboard" size={14} color={Theme.cyan} style={{ marginRight: 8 }} />
+          <RNText style={styles.planFullscreenTitle}>{title}</RNText>
+          <TouchableOpacity onPress={() => setFullscreen(false)} style={{ padding: 6 }} activeOpacity={0.7}>
+            <FontAwesome name="close" size={18} color={Theme.textMuted} />
+          </TouchableOpacity>
+        </RNView>
+        <ScrollView style={styles.planFullscreenContent} contentContainerStyle={{ paddingBottom: 60 }}>
+          <MarkdownContent text={content} baseStyle={styles.planFullscreenText} isUser={false} />
+        </ScrollView>
+      </RNView>
+    </Modal>
+    </>
   );
 }
 
@@ -1254,12 +1414,13 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
 
   // Idle notification
   if (parsed?.type === 'idle_notification') {
+    const idleSummary = parsed.summary;
     return (
-      <RNView style={styles.teammateIdle}>
+      <RNView style={[styles.teammateIdle, !idleSummary && { opacity: 0.5 }]}>
         <RNView style={[styles.teammateBadge, { backgroundColor: borderColor + '20', borderColor: borderColor + '60' }]}>
           <RNText style={[styles.teammateBadgeText, { color: borderColor }]}>{teammateId}</RNText>
         </RNView>
-        <RNText style={styles.teammateIdleText}>{parsed.summary || 'idle'}</RNText>
+        <RNText style={styles.teammateIdleText}>{idleSummary || 'idle'}</RNText>
       </RNView>
     );
   }
@@ -1437,6 +1598,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
       const lines = result.content.trim().split('\n').filter((l: string) => l.trim()).length;
       return `(${lines} matches)`;
     }
+    if (toolCall.name === 'TaskList') {
+      const taskLines = result.content.split('\n').filter((l: string) => l.match(/#\d+\s+\[/));
+      if (taskLines.length > 0) return `(${taskLines.length} tasks)`;
+    }
     return null;
   };
   const resultSummary = getResultSummary();
@@ -1506,6 +1671,8 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
     'NotebookEdit',
     'Skill',
     'TeamCreate',
+    'TaskCreate',
+    'TaskUpdate',
   ].includes(toolCall.name) || toolCall.name.startsWith('mcp__');
 
   return (
@@ -1527,8 +1694,8 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
           {isBash && inputDisplay ? (
             <RNView style={styles.bashCommandSection}>
               <RNText style={styles.bashPrompt} selectable>
-                <RNText style={{ color: Theme.green }}>$ </RNText>
-                <RNText style={styles.bashCommand}>{inputDisplay}</RNText>
+                <RNText>$ </RNText>
+                <RNText>{inputDisplay}</RNText>
               </RNText>
             </RNView>
           ) : !shouldHideInput && toolCall.input && toolCall.input.length > 2 ? (
@@ -1540,16 +1707,30 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
             <RNView style={styles.diffSection}>
               <RNView style={styles.diffOld}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <RNText style={styles.diffOldText} selectable>
-                    {String(parsedInput.old_string).split('\n').map(l => `- ${l}`).join('\n')}
-                  </RNText>
+                  <RNView style={{ flexDirection: 'row' }}>
+                    <RNView style={styles.diffLineNumbers}>
+                      {String(parsedInput.old_string).split('\n').map((_, i) => (
+                        <RNText key={i} style={styles.diffLineNum}>{i + 1}</RNText>
+                      ))}
+                    </RNView>
+                    <RNText style={styles.diffOldText} selectable>
+                      {String(parsedInput.old_string).split('\n').map(l => `- ${l}`).join('\n')}
+                    </RNText>
+                  </RNView>
                 </ScrollView>
               </RNView>
               <RNView style={styles.diffNew}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <RNText style={styles.diffNewText} selectable>
-                    {String(parsedInput.new_string).split('\n').map(l => `+ ${l}`).join('\n')}
-                  </RNText>
+                  <RNView style={{ flexDirection: 'row' }}>
+                    <RNView style={styles.diffLineNumbers}>
+                      {String(parsedInput.new_string).split('\n').map((_, i) => (
+                        <RNText key={i} style={styles.diffLineNum}>{i + 1}</RNText>
+                      ))}
+                    </RNView>
+                    <RNText style={styles.diffNewText} selectable>
+                      {String(parsedInput.new_string).split('\n').map(l => `+ ${l}`).join('\n')}
+                    </RNText>
+                  </RNView>
                 </ScrollView>
               </RNView>
             </RNView>
@@ -1596,10 +1777,18 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   );
 }
 
-function ThinkingBlock({ content }: { content: string }) {
+function ThinkingBlock({ content, showContent = true }: { content: string; showContent?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const preview = content.split('\n').slice(0, 2).join('\n');
   const isLong = content.split('\n').length > 2 || content.length > 200;
+
+  if (!showContent) {
+    return (
+      <RNView style={[styles.thinkingBlock, { opacity: 0.3 }]}>
+        <RNText style={[styles.thinkingText, { fontStyle: 'italic' }]}>thinking...</RNText>
+      </RNView>
+    );
+  }
 
   return (
     <TouchableOpacity
@@ -1608,10 +1797,11 @@ function ThinkingBlock({ content }: { content: string }) {
       activeOpacity={isLong ? 0.7 : 1}
     >
       <RNView style={styles.thinkingHeader}>
-        <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={8} color={Theme.textDim} style={{ marginRight: 4, marginTop: 3 }} />
-        <RNText style={styles.thinkingLabel}>Thinking</RNText>
+        {isLong && (
+          <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={8} color={Theme.textDim} style={{ marginRight: 4, marginTop: 3 }} />
+        )}
         <RNText style={styles.thinkingText} numberOfLines={expanded ? 50 : 2}>
-          {expanded ? content : preview}
+          {expanded ? content : preview}{!expanded && isLong ? '...' : ''}
         </RNText>
       </RNView>
     </TouchableOpacity>
@@ -1717,7 +1907,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, userName }: {
+function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, userName, showToast }: {
   message: Message;
   agentType?: string;
   model?: string;
@@ -1726,7 +1916,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   conversationId?: string;
   onFork?: (messageUuid: string) => void;
   taskSubjectMap?: Record<string, string>;
+  globalToolResultMap?: Record<string, ToolResult>;
   userName?: string;
+  showToast?: (msg: string) => void;
 }) {
   const router = useRouter();
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
@@ -1757,6 +1949,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       if (label === 'Copy Text') {
         Clipboard.setString(messageText);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        showToast?.('Copied to clipboard');
       } else if (label === 'Share Message') {
         Share.share({ message: messageText });
       } else if (label === 'Bookmark') {
@@ -1766,6 +1959,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             message_id: message._id as Id<"messages">,
           });
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          showToast?.('Bookmarked');
         } catch {}
       } else if (label === 'Fork from Here' && message.message_uuid) {
         onFork!(message.message_uuid);
@@ -1863,6 +2057,10 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         </RNView>
       )}
 
+      {hasThinkingContent && (
+        <ThinkingBlock content={message.thinking!} />
+      )}
+
       {content ? (
         <>
         <RNView style={[styles.bubbleContent, isLongContent && !contentExpanded && styles.bubbleContentCollapsed]}>
@@ -1918,15 +2116,23 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               isUser={isUser}
             />
           )}
+          {isLongContent && !contentExpanded && (
+            <LinearGradient
+              colors={[isUser ? 'rgba(108,113,196,0)' : 'rgba(0,43,54,0)', isUser ? 'rgba(108,113,196,0.15)' : Theme.bg]}
+              style={styles.contentGradientOverlay}
+              pointerEvents="none"
+            />
+          )}
         </RNView>
         {isLongContent && (
           <TouchableOpacity
             onPress={() => setContentExpanded(!contentExpanded)}
-            style={[styles.showMoreButton, { paddingHorizontal: 14 }]}
+            style={styles.showMoreButton}
             activeOpacity={0.7}
           >
+            <FontAwesome name={contentExpanded ? "chevron-up" : "chevron-down"} size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
             <RNText style={styles.showMoreText}>
-              {contentExpanded ? 'Show less' : 'Show more...'}
+              {contentExpanded ? 'Collapse' : 'Expand'}
             </RNText>
           </TouchableOpacity>
         )}
@@ -1936,7 +2142,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       {hasToolCalls && (
         <RNView style={isToolCallOnly ? styles.toolCallsCompact : styles.toolCallsContainer}>
           {message.tool_calls!.map((tc) => {
-            const result = message.tool_results?.find(r => r.tool_use_id === tc.id);
+            const result = message.tool_results?.find(r => r.tool_use_id === tc.id) || globalToolResultMap?.[tc.id];
 
             // Plan writes rendered as PlanBlock
             if (tc.name === 'Write') {
@@ -1971,6 +2177,22 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             }
             if (tc.name === 'Skill') {
               return <SkillCard key={tc.id} tool={tc} />;
+            }
+            if (tc.name === 'EnterPlanMode') {
+              return (
+                <RNView key={tc.id} style={styles.taskOpBlock}>
+                  <RNText style={[styles.taskOpName, { color: Theme.violet }]}>EnterPlanMode</RNText>
+                  <RNText style={styles.taskOpText}>Planning...</RNText>
+                </RNView>
+              );
+            }
+            if (tc.name === 'ExitPlanMode') {
+              return (
+                <RNView key={tc.id} style={styles.taskOpBlock}>
+                  <RNText style={[styles.taskOpName, { color: Theme.violet }]}>ExitPlanMode</RNText>
+                  <RNText style={styles.taskOpText}>Plan ready</RNText>
+                </RNView>
+              );
             }
 
             // Default rendering for other tools
@@ -2217,6 +2439,12 @@ export default function SessionDetailScreen() {
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
   const [newMessageCount, setNewMessageCount] = useState(0);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastKey, setToastKey] = useState(0);
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setToastKey(k => k + 1);
+  }, []);
   const isNearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(0);
 
@@ -2331,6 +2559,18 @@ export default function SessionDetailScreen() {
       }
     }
     return idMap;
+  }, [allMessages]);
+
+  const globalToolResultMap = useMemo(() => {
+    const map: Record<string, ToolResult> = {};
+    for (const msg of allMessages) {
+      if (msg.role === 'user' && msg.tool_results) {
+        for (const tr of msg.tool_results) {
+          map[tr.tool_use_id] = tr;
+        }
+      }
+    }
+    return map;
   }, [allMessages]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
@@ -2505,9 +2745,12 @@ export default function SessionDetailScreen() {
                     </RNText>
                     <RNView style={styles.sessionMeta}>
                       {conversation.agent_type && (
-                        <RNText style={styles.metaBadge}>
-                          {formatAgentType(conversation.agent_type)}
-                        </RNText>
+                        <RNView style={[styles.metaBadgeIcon, { borderColor: agentTypeColor(conversation.agent_type) + '40' }]}>
+                          <FontAwesome name={agentTypeIcon(conversation.agent_type) as any} size={9} color={agentTypeColor(conversation.agent_type)} />
+                          <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
+                            {formatAgentType(conversation.agent_type)}
+                          </RNText>
+                        </RNView>
                       )}
                       {conversation.model && (
                         <RNText style={styles.metaBadgeModel}>
@@ -2515,13 +2758,20 @@ export default function SessionDetailScreen() {
                         </RNText>
                       )}
                       {conversation.started_at && (
-                        <RNText style={styles.messageCountText}>
-                          {formatTimestamp(conversation.started_at)}
-                        </RNText>
+                        <Pressable onPress={() => Alert.alert('Started', formatFullTimestamp(conversation.started_at!))}>
+                          <RNText style={styles.messageCountText}>
+                            {formatTimestamp(conversation.started_at)}
+                          </RNText>
+                        </Pressable>
                       )}
                       <RNText style={styles.messageCountText}>
                         {conversation.message_count || allMessages.length} msgs
                       </RNText>
+                      {conversation.started_at && (
+                        <RNText style={styles.durationBadge}>
+                          {formatDuration(conversation.started_at)}
+                        </RNText>
+                      )}
                       {isActive && (
                         <RNView style={styles.activeIndicator}>
                           <RNView style={styles.activeDot} />
@@ -2603,6 +2853,18 @@ export default function SessionDetailScreen() {
               return null;
             }
 
+            // Detect plan content in user messages (like web)
+            if (item.role === 'user' && item.content) {
+              const planContent = extractPlanContent(item.content);
+              if (planContent) {
+                return <PlanBlock content={planContent} />;
+              }
+              // User message following compact_boundary -> render as compaction summary
+              if (prevNonToolResult?.role === 'system' && prevNonToolResult?.subtype === 'compact_boundary') {
+                return <CompactionSummaryBlock content={item.content} />;
+              }
+            }
+
             return (
               <MessageBubble
                 message={item}
@@ -2613,7 +2875,9 @@ export default function SessionDetailScreen() {
                 conversationId={conversation._id}
                 onFork={handleForkFromMessage}
                 taskSubjectMap={taskSubjectMap}
+                globalToolResultMap={globalToolResultMap}
                 userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
+                showToast={showToast}
               />
             );
           }}
@@ -2671,6 +2935,7 @@ export default function SessionDetailScreen() {
           )}
         </RNView>
       </KeyboardAvoidingView>
+      <Toast key={toastKey} message={toastMessage} visible={!!toastMessage && toastKey > 0} />
     </>
   );
 }
@@ -2729,12 +2994,7 @@ const styles = StyleSheet.create({
   },
   metaBadge: {
     fontSize: 10,
-    color: Theme.text,
     fontWeight: '600',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 4,
   },
   metaBadgeModel: {
     fontSize: 10,
@@ -2860,8 +3120,11 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   showMoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginTop: 6,
     paddingVertical: 4,
+    paddingHorizontal: 14,
   },
   showMoreText: {
     fontSize: 12,
@@ -3134,7 +3397,7 @@ const styles = StyleSheet.create({
     fontFamily: 'SpaceMono',
   },
   toolCallSummary: {
-    fontSize: 11,
+    fontSize: 12,
     color: Theme.textMuted,
     fontFamily: 'SpaceMono',
   },
@@ -3183,27 +3446,26 @@ const styles = StyleSheet.create({
   },
   diffSection: {
     gap: 2,
-    marginBottom: 8,
   },
   diffOld: {
     backgroundColor: Theme.red + '12',
     borderRadius: 3,
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
     paddingVertical: 4,
   },
   diffOldText: {
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: 'SpaceMono',
     color: Theme.red,
   },
   diffNew: {
     backgroundColor: Theme.green + '12',
     borderRadius: 3,
-    paddingHorizontal: 6,
+    paddingHorizontal: 8,
     paddingVertical: 4,
   },
   diffNewText: {
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: 'SpaceMono',
     color: Theme.green,
   },
@@ -3213,18 +3475,21 @@ const styles = StyleSheet.create({
   noOutputText: {
     fontSize: 12,
     color: Theme.textDim,
-    padding: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
   },
   languageLabel: {
     fontSize: 10,
     color: Theme.textDim,
     paddingHorizontal: 8,
-    paddingTop: 6,
-    paddingBottom: 2,
+    paddingVertical: 4,
     fontFamily: 'SpaceMono',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight + '33',
   },
   toolInputSection: {
-    marginBottom: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
   toolResultSection: {
     marginTop: 4,
@@ -3238,21 +3503,23 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   toolCallInput: {
-    fontSize: 11,
-    color: Theme.textMuted,
+    fontSize: 12,
+    color: Theme.textSecondary,
     fontFamily: 'SpaceMono',
   },
   toolCallResult: {
-    fontSize: 11,
+    fontSize: 12,
     color: Theme.textSecondary,
     fontFamily: 'SpaceMono',
-    lineHeight: 16,
+    lineHeight: 17,
+    padding: 8,
   },
   toolCodeText: {
-    fontSize: 11,
+    fontSize: 12,
     color: Theme.textSecondary,
     fontFamily: 'SpaceMono',
-    lineHeight: 16,
+    lineHeight: 17,
+    padding: 8,
   },
   inputContainer: {
     backgroundColor: Theme.bgAlt,
@@ -3362,33 +3629,29 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   specialToolName: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
     fontFamily: 'SpaceMono',
-    marginRight: 6,
   },
   specialToolBadge: {
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
     borderWidth: 1,
-    marginRight: 6,
   },
   specialToolBadgeText: {
-    fontSize: 9,
-    fontWeight: '600',
+    fontSize: 10,
+    fontWeight: '500',
     fontFamily: 'SpaceMono',
   },
   specialToolMeta: {
-    fontSize: 9,
-    color: Theme.textMuted0,
+    fontSize: 10,
+    color: Theme.textDim,
     fontFamily: 'SpaceMono',
-    marginLeft: 'auto',
   },
   specialToolDesc: {
     fontSize: 11,
     color: Theme.textMuted,
-    marginBottom: 4,
   },
   specialToolContent: {
     fontSize: 11,
@@ -3442,7 +3705,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   questionText: {
-    fontSize: 11,
+    fontSize: 12,
     color: Theme.textMuted,
     marginBottom: 6,
   },
@@ -3465,7 +3728,7 @@ const styles = StyleSheet.create({
     borderColor: Theme.green + '60',
   },
   optionPillText: {
-    fontSize: 11,
+    fontSize: 12,
     color: Theme.textDim,
   },
   optionPillTextSelected: {
@@ -3476,14 +3739,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
     backgroundColor: Theme.blue + '20',
     borderColor: Theme.blue + '60',
   },
   optionPillCustomText: {
-    fontSize: 11,
+    fontSize: 12,
     color: Theme.blue,
   },
   // TodoWrite / TaskList
@@ -3705,33 +3968,32 @@ const styles = StyleSheet.create({
     zIndex: 100,
   },
   jumpButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.6)',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Theme.bgAlt,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 4,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.bgHighlight,
+    borderColor: Theme.borderLight,
   },
   // Teammate messages
   teammateMessage: {
-    marginVertical: 8,
-    padding: 10,
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 8,
-    borderLeftWidth: 3,
+    marginVertical: 6,
+    paddingLeft: 12,
+    paddingVertical: 4,
+    borderLeftWidth: 2,
   },
   teammateHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 6,
-    gap: 6,
+    marginBottom: 4,
+    gap: 8,
   },
   teammateBadge: {
     paddingHorizontal: 6,
@@ -3741,36 +4003,32 @@ const styles = StyleSheet.create({
   },
   teammateBadgeText: {
     fontSize: 10,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    fontFamily: 'SpaceMono',
+    fontWeight: '500',
   },
   teammateSummary: {
-    fontSize: 11,
+    fontSize: 12,
     color: Theme.textMuted,
     fontStyle: 'italic',
     flex: 1,
   },
   teammateContent: {
-    fontSize: 12,
-    color: Theme.text,
-    lineHeight: 18,
+    fontSize: 13,
+    color: Theme.textSecondary,
+    lineHeight: 19,
   },
   teammateExpand: {
     fontSize: 11,
-    color: Theme.accent,
+    color: Theme.textDim,
     marginTop: 4,
     fontWeight: '500',
   },
   teammateIdle: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginVertical: 4,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 6,
+    gap: 8,
+    marginVertical: 2,
+    paddingVertical: 4,
   },
   teammateIdleText: {
     fontSize: 11,
@@ -4072,5 +4330,120 @@ const styles = StyleSheet.create({
     color: Theme.textDim,
     textAlign: 'center',
     paddingHorizontal: 40,
+  },
+  toast: {
+    position: 'absolute',
+    bottom: 100,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    zIndex: 1000,
+  },
+  toastText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  contentGradientOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 80,
+  },
+  metaBadgeIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  durationBadge: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontFamily: 'SpaceMono',
+  },
+  lineNumberGutter: {
+    paddingRight: 8,
+    marginRight: 8,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: Theme.borderLight,
+  },
+  lineNumber: {
+    fontSize: 10,
+    fontFamily: 'SpaceMono',
+    color: Theme.textDim,
+    lineHeight: 18,
+    textAlign: 'right',
+    minWidth: 24,
+  },
+  diffLineNumbers: {
+    paddingRight: 6,
+    marginRight: 6,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: 'rgba(255,255,255,0.1)',
+  },
+  diffLineNum: {
+    fontSize: 9,
+    fontFamily: 'SpaceMono',
+    color: 'rgba(255,255,255,0.3)',
+    lineHeight: 16,
+    textAlign: 'right',
+    minWidth: 20,
+  },
+  planFullscreen: {
+    flex: 1,
+    backgroundColor: Theme.bg,
+  },
+  planFullscreenHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 60 : 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt,
+  },
+  planFullscreenTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Theme.text,
+    flex: 1,
+  },
+  planFullscreenContent: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+  planFullscreenText: {
+    fontSize: 14,
+    color: Theme.text,
+    lineHeight: 22,
+  },
+  planGradientOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 80,
+  },
+  planActions: {
+    flexDirection: 'row',
+    gap: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight + '66',
+  },
+  planActionText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.cyan,
   },
 });
