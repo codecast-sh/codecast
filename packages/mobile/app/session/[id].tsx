@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -422,7 +422,7 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
     return { icon: 'plug', color: Theme.cyan };
   }
 
-  return { icon: 'cog', color: Theme.textMuted };
+  return { icon: 'cog', color: Theme.textDim };
 }
 
 function toolSummary(tc: ToolCall): string {
@@ -1271,13 +1271,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
           {result && resultDisplay && resultDisplay.trim() ? (
             <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
               {isCodeResult ? (
-                <RNView style={styles.codeBlock}>
-                  <ScrollView horizontal showsHorizontalScrollIndicator>
-                    <RNView style={styles.codeContent}>
-                      <RNText style={styles.codeText} selectable>{resultDisplay}</RNText>
-                    </RNView>
-                  </ScrollView>
-                </RNView>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <RNText style={styles.toolCodeText} selectable>{resultDisplay}</RNText>
+                </ScrollView>
               ) : isMarkdownResult ? (
                 <MarkdownContent text={resultDisplay} baseStyle={styles.toolCallResult} isUser={false} />
               ) : (
@@ -1389,7 +1385,7 @@ function MessageBubble({ message, agentType, showHeader = true, forkChildren, co
     const handleAction = async (buttonIndex: number) => {
       const label = options[buttonIndex];
       if (label === 'Copy Text') {
-        await Clipboard.setStringAsync(messageText);
+        Clipboard.setString(messageText);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else if (label === 'Share Message') {
         Share.share({ message: messageText });
@@ -2619,6 +2615,12 @@ const styles = StyleSheet.create({
     fontFamily: 'SpaceMono',
   },
   toolCallResult: {
+    fontSize: 11,
+    color: Theme.textSecondary,
+    fontFamily: 'SpaceMono',
+    lineHeight: 16,
+  },
+  toolCodeText: {
     fontSize: 11,
     color: Theme.textSecondary,
     fontFamily: 'SpaceMono',
