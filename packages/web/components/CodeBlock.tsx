@@ -30,7 +30,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
       </div>
       {language && (
         <div className="text-xs px-3 py-1 text-sol-text-dim bg-sol-bg-highlight/50 border-b border-sol-border/20">
-          {language}
+          {language}{code.split('\n').length > 1 ? ` \u00b7 ${code.split('\n').length} lines` : ''}
         </div>
       )}
       <pre className="!m-0 !p-3 !border-0 overflow-x-auto text-sm bg-sol-bg-alt">

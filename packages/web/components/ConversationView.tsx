@@ -95,6 +95,7 @@ export type ConversationData = {
   git_diff?: string | null;
   git_diff_staged?: string | null;
   git_remote_url?: string | null;
+  short_id?: string;
   status?: "active" | "completed";
   fork_count?: number;
   forked_from?: string;
@@ -254,6 +255,18 @@ function formatTimestamp(ts: number) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatDuration(startTs: number): string {
+  const diff = Date.now() - startTs;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return '<1m';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainMin = minutes % 60;
+  if (hours < 24) return remainMin ? `${hours}h ${remainMin}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
 }
 
 function hasRichMarkdown(text: string): boolean {
@@ -419,12 +432,16 @@ function ConversationMetadata({
   agentType,
   model,
   startedAt,
-  messageCount
+  messageCount,
+  shortId,
+  conversationId,
 }: {
   agentType?: string;
   model?: string;
   startedAt?: number;
   messageCount?: number;
+  shortId?: string;
+  conversationId?: string;
 }) {
   if (!agentType && !model && !startedAt && !messageCount) return null;
 
@@ -440,20 +457,39 @@ function ConversationMetadata({
       )}
       {model && (
         <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
-          <span className="text-sol-text-dim hidden sm:inline">•</span>
+          <span className="text-sol-text-dim hidden sm:inline">&middot;</span>
           <span className="font-mono truncate max-w-[120px] sm:max-w-none" title={model}>{formatModel(model)}</span>
         </div>
       )}
+      {shortId && (
+        <button
+          className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0 font-mono bg-sol-bg-highlight px-1 py-0.5 rounded hover:bg-sol-border/40 transition-colors cursor-pointer"
+          title="Copy short ID"
+          onClick={() => { copyToClipboard(shortId).then(() => toast.success("ID copied")); }}
+        >
+          {shortId}
+        </button>
+      )}
       {startedAt && (
         <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
-          <span className="text-sol-text-dim hidden sm:inline">•</span>
+          <span className="text-sol-text-dim hidden sm:inline">&middot;</span>
           <span title={formatFullTimestamp(startedAt)}>{formatRelativeTime(startedAt)}</span>
         </div>
       )}
       {messageCount !== undefined && messageCount > 0 && (
-        <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
-          <span className="text-sol-text-dim hidden sm:inline">•</span>
+        <button
+          className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0 hover:text-sol-text-muted transition-colors cursor-pointer"
+          title="Copy conversation ID"
+          onClick={() => { if (conversationId) copyToClipboard(conversationId).then(() => toast.success("ID copied")); }}
+        >
+          <span className="text-sol-text-dim hidden sm:inline">&middot;</span>
           <span>{messageCount} {messageCount === 1 ? "msg" : "msgs"}</span>
+        </button>
+      )}
+      {startedAt && (
+        <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
+          <span className="text-sol-text-dim hidden sm:inline">&middot;</span>
+          <span>{formatDuration(startedAt)}</span>
         </div>
       )}
     </div>
@@ -1894,7 +1930,8 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         <a
           href={`#msg-${messageId}`}
           className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
-          title={formatFullTimestamp(timestamp)}
+          title={`${formatFullTimestamp(timestamp)} (click to copy)`}
+          onClick={(e) => { e.preventDefault(); copyToClipboard(formatFullTimestamp(timestamp)).then(() => toast.success("Timestamp copied")); }}
         >
           {formatRelativeTime(timestamp)}
         </a>
@@ -2331,7 +2368,8 @@ function AssistantBlock({
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
-            title={formatFullTimestamp(timestamp)}
+            title={`${formatFullTimestamp(timestamp)} (click to copy)`}
+            onClick={(e) => { e.preventDefault(); copyToClipboard(formatFullTimestamp(timestamp)).then(() => toast.success("Timestamp copied")); }}
           >
             {formatRelativeTime(timestamp)}
           </a>
@@ -3895,6 +3933,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   model={conversation.model}
                   startedAt={conversation.started_at}
                   messageCount={conversation.message_count}
+                  shortId={conversation.short_id}
+                  conversationId={conversation._id}
                 />
 
                 {conversation.parent_conversation_id && (
@@ -3908,6 +3948,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </svg>
                     Parent
                   </Link>
+                )}
+
+                {conversation.status === 'active' && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Active
+                  </span>
                 )}
 
                 {(conversation.compaction_count ?? 0) > 0 && (
@@ -3998,7 +4045,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   <button
                     onClick={async () => {
                       try {
-                        await copyToClipboard(`claude --resume ${conversation.session_id}`);
+                        const cmd = conversation.agent_type === 'codex'
+                          ? `codex resume ${conversation.session_id}`
+                          : `claude --resume ${conversation.session_id}`;
+                        await copyToClipboard(cmd);
                         toast.success("Resume command copied");
                       } catch {
                         toast.error("Failed to copy");
@@ -4149,6 +4199,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             {virtualizer.getVirtualItems().map((virtualItem) => {
               const item = timeline[virtualItem.index];
               const content = renderItem(item, virtualItem.index);
+              const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
               return (
                 <div
                   key={virtualItem.key}
@@ -4163,7 +4214,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"}`}>
+                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isSearchDimmed ? "opacity-25" : ""} transition-opacity`}>
                       {content}
                     </div>
                   )}
