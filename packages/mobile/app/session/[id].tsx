@@ -882,6 +882,9 @@ function PlanBlock({ content }: { content: string }) {
 type TeammateMessagePart = { type: 'text'; content: string } | { type: 'teammate'; teammateId: string; color?: string; summary?: string; content: string };
 
 function parseTeammateMessages(text: string): TeammateMessagePart[] {
+  if (!text || typeof text !== 'string') {
+    return [{ type: 'text', content: String(text || '') }];
+  }
   const parts: TeammateMessagePart[] = [];
   const regex = /<teammate-message\s+([^>]*)>([\s\S]*?)<\/teammate-message>/g;
   let lastIndex = 0;
@@ -926,11 +929,12 @@ const agentColors: Record<string, string> = {
 function TeammateMessageCard({ teammateId, color, summary, content }: { teammateId: string; color?: string; summary?: string; content: string }) {
   const [expanded, setExpanded] = useState(false);
 
+  const safeContent = content || '';
   let parsed: any = null;
-  try { parsed = JSON.parse(content); } catch {}
+  try { if (safeContent) parsed = JSON.parse(safeContent); } catch {}
 
   const borderColor = agentColors[color || 'blue'] || Theme.blue;
-  const isLong = content.length > 200;
+  const isLong = safeContent.length > 200;
 
   // Idle notification
   if (parsed?.type === 'idle_notification') {
@@ -984,7 +988,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
         numberOfLines={!expanded && isLong ? 4 : undefined}
         selectable
       >
-        {content}
+        {safeContent}
       </RNText>
       {isLong && (
         <TouchableOpacity onPress={() => setExpanded(!expanded)} activeOpacity={0.7}>
@@ -998,6 +1002,9 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
 type SkillBlockPart = { type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string };
 
 function parseSkillBlocks(text: string): SkillBlockPart[] {
+  if (!text || typeof text !== 'string') {
+    return [{ type: 'text', content: String(text || '') }];
+  }
   const parts: SkillBlockPart[] = [];
   const skillRegex = /<skill>([\s\S]*?)<\/skill>/g;
   let lastIndex = 0;
@@ -1039,11 +1046,12 @@ function SkillBlockCard({ name, description, path }: { name?: string; descriptio
   );
 }
 
-function ToolCallItem({ toolCall, result, expanded, onToggle }: {
+function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   toolCall: ToolCall;
   result?: ToolResult;
   expanded: boolean;
   onToggle: () => void;
+  images?: ImageData[];
 }) {
   const { icon, color } = toolIcon(toolCall.name);
   const summary = toolSummary(toolCall);
@@ -1055,6 +1063,12 @@ function ToolCallItem({ toolCall, result, expanded, onToggle }: {
     ? result.content.slice(0, 2000) + '\n... (truncated)'
     : result?.content;
 
+  // Check if this tool produces images (screenshot, etc.)
+  let parsedInput: Record<string, any> = {};
+  try { parsedInput = JSON.parse(toolCall.input); } catch {}
+  const isScreenshotTool = toolCall.name === 'mcp__claude-in-chrome__computer' && parsedInput.action === 'screenshot';
+  const hasImages = images && images.length > 0 && isScreenshotTool;
+
   // Check if result looks like code (for Read/Write/Edit tools)
   const isCodeResult = result && (
     toolCall.name === 'Read' ||
@@ -1065,7 +1079,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle }: {
   );
 
   // Check if result is markdown-like (contains ### or **)
-  const isMarkdownResult = result && !isCodeResult && (
+  const isMarkdownResult = result && !isCodeResult && typeof result.content === 'string' && (
     result.content.includes('###') ||
     result.content.includes('**') ||
     result.content.includes('```')
@@ -1109,6 +1123,13 @@ function ToolCallItem({ toolCall, result, expanded, onToggle }: {
                   {resultDisplay}
                 </RNText>
               )}
+            </RNView>
+          )}
+          {expanded && hasImages && images && (
+            <RNView style={styles.toolImagesSection}>
+              {images.map((img, i) => (
+                <ImageBlock key={i} image={img} />
+              ))}
             </RNView>
           )}
         </RNView>
@@ -1277,7 +1298,7 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
 
       {content ? (
         <RNView style={styles.bubbleContent}>
-          {content.includes('<skill>') ? (
+          {typeof content === 'string' && content.includes('<skill>') ? (
             parseSkillBlocks(content).map((part, idx) => {
               if (part.type === 'skill') {
                 return (
@@ -1299,7 +1320,7 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
                 );
               }
             })
-          ) : content.includes('<teammate-message') ? (
+          ) : typeof content === 'string' && content.includes('<teammate-message') ? (
             parseTeammateMessages(content).map((part, idx) => {
               if (part.type === 'text') {
                 return (
@@ -1377,6 +1398,7 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
             // Default rendering for other tools
             return (
               <ToolCallItem
+                images={message.images}
                 key={tc.id}
                 toolCall={tc}
                 result={result}
@@ -2567,6 +2589,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Theme.textMuted0,
     marginTop: 6,
+  },
+  toolImagesSection: {
+    marginTop: 10,
+    gap: 8,
   },
   // Compaction summary
   compactionBlock: {
