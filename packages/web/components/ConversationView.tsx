@@ -269,6 +269,32 @@ function formatDuration(startTs: number): string {
   return `${days}d ${hours % 24}h`;
 }
 
+function stripSystemTags(content: string): string {
+  return content
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
+    .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '')
+    .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, '')
+    .replace(/^\s*Caveat:.*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+function truncateStr(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + "..." : s;
+}
+
+function shortenUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    const path = parsed.pathname;
+    if (path === "/" || path === "") return host;
+    return host + (path.length > 25 ? path.slice(0, 22) + "..." : path);
+  } catch {
+    return truncateStr(url, 40);
+  }
+}
+
 function hasRichMarkdown(text: string): boolean {
   const markers = [
     /^#{1,3}\s+\S/m,           // headers
@@ -744,19 +770,6 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [mdFullscreen]);
 
-  const truncateStr = (s: string, max: number) => s.length > max ? s.slice(0, max) + "..." : s;
-  const shortenUrl = (url: string) => {
-    try {
-      const parsed = new URL(url);
-      const host = parsed.hostname.replace(/^www\./, "");
-      const path = parsed.pathname;
-      if (path === "/" || path === "") return host;
-      return host + (path.length > 25 ? path.slice(0, 22) + "..." : path);
-    } catch {
-      return truncateStr(url, 40);
-    }
-  };
-
   const getToolSummary = () => {
     if (isEdit || isRead) return relativePath;
     if (isBash) {
@@ -830,6 +843,10 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
       return parsedInput.urlPattern ? `Filter: ${String(parsedInput.urlPattern)}` : "Network";
     }
     if (tool.name === "mcp__claude-in-chrome__get_page_text") return "Extract text";
+    if (tool.name === "mcp__claude-in-chrome__upload_image") return parsedInput.filename ? String(parsedInput.filename) : "Upload";
+    if (tool.name === "mcp__claude-in-chrome__resize_window") return parsedInput.width && parsedInput.height ? `${parsedInput.width}x${parsedInput.height}` : "Resize";
+    if (tool.name === "mcp__claude-in-chrome__shortcuts_list") return "List shortcuts";
+    if (tool.name === "mcp__claude-in-chrome__shortcuts_execute") return parsedInput.command ? `/${String(parsedInput.command)}` : "Shortcut";
 
     if (tool.name === "TaskCreate") return parsedInput.subject ? truncateStr(String(parsedInput.subject), 50) : "New task";
     if (tool.name === "TaskUpdate") {
@@ -855,12 +872,14 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
       return "Message";
     }
 
-    if (tool.name === "WebSearch") return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : "Search";
-    if (tool.name === "WebFetch") return parsedInput.url ? shortenUrl(String(parsedInput.url)) : "Fetch";
+    if (tool.name === "WebSearch" || tool.name === "web_search") return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : "Search";
+    if (tool.name === "WebFetch" || tool.name === "web_fetch") return parsedInput.url ? shortenUrl(String(parsedInput.url)) : "Fetch";
     if (tool.name === "NotebookEdit") return parsedInput.notebook_path ? getRelativePath(String(parsedInput.notebook_path)) : "Notebook";
     if (tool.name === "Skill") return parsedInput.skill ? `/${String(parsedInput.skill)}` : "Skill";
     if (tool.name === "EnterPlanMode") return "Plan mode";
     if (tool.name === "ExitPlanMode") return "Exit plan";
+    if (tool.name === "TaskOutput") return parsedInput.task_id ? `task ${String(parsedInput.task_id).slice(0, 8)}` : "Output";
+    if (tool.name === "TaskStop") return parsedInput.task_id ? `stop ${String(parsedInput.task_id).slice(0, 8)}` : "Stop";
 
     if (tool.name.startsWith("mcp__")) {
       const parts = tool.name.split("__");
@@ -889,6 +908,14 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     if (isGlob || isGrep || isCodeSearch) {
       const lines = result.content.trim().split("\n").filter(l => l.trim()).length;
       return `(${lines} matches)`;
+    }
+    if (isBash && result.content) {
+      const lines = result.content.trim().split("\n").length;
+      if (lines > 1) return `(${lines} lines)`;
+    }
+    if (tool.name === "TaskList") {
+      const taskLines = result.content.split("\n").filter((l: string) => l.match(/#\d+\s+\[/));
+      if (taskLines.length > 0) return `(${taskLines.length} tasks)`;
     }
     return null;
   };
@@ -919,6 +946,9 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     TaskUpdate: "text-emerald-500/80",
     TaskList: "text-emerald-500/80",
     TaskGet: "text-emerald-500/80",
+    TaskOutput: "text-emerald-500/80",
+    TaskStop: "text-emerald-500/80",
+    AskUserQuestion: "text-sol-blue/80",
     TeamCreate: "text-sol-cyan/80",
     TeamDelete: "text-sol-cyan/80",
     SendMessage: "text-amber-500/80",
@@ -942,6 +972,10 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     "mcp__claude-in-chrome__read_console_messages": "text-sol-green/80",
     "mcp__claude-in-chrome__read_network_requests": "text-sol-green/80",
     "mcp__claude-in-chrome__get_page_text": "text-sol-blue/80",
+    "mcp__claude-in-chrome__upload_image": "text-sol-blue/80",
+    "mcp__claude-in-chrome__resize_window": "text-sol-text-dim",
+    "mcp__claude-in-chrome__shortcuts_list": "text-sol-violet/80",
+    "mcp__claude-in-chrome__shortcuts_execute": "text-sol-violet/80",
   };
 
   const codexToolColors: Record<string, string> = {
@@ -1591,6 +1625,9 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
 const USER_CONTENT_MAX_HEIGHT = 1800;
 
 function parseSkillBlocks(text: string): { parts: Array<{ type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string }>} {
+  if (!text || typeof text !== 'string') {
+    return { parts: [{ type: 'text', content: String(text || '') }] };
+  }
   const parts: Array<{ type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string }> = [];
   const skillRegex = /<skill>([\s\S]*?)<\/skill>/g;
   let lastIndex = 0;
@@ -2178,7 +2215,8 @@ function AssistantBlock({
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const hasContent = content && content.trim().length > 0;
+  const displayContent = content ? stripSystemTags(content) : content;
+  const hasContent = displayContent && displayContent.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images && images.length > 0;
@@ -2225,17 +2263,17 @@ function AssistantBlock({
     return null;
   }
 
-  const lines = content ? content.split("\n") : [];
+  const lines = displayContent ? displayContent.split("\n") : [];
   const getCollapsedContent = () => {
-    if (!collapsed || !content) return { text: content || "", wasTruncated: false };
-    if (lines.length <= COLLAPSED_LINES) return { text: content, wasTruncated: false };
+    if (!collapsed || !displayContent) return { text: displayContent || "", wasTruncated: false };
+    if (lines.length <= COLLAPSED_LINES) return { text: displayContent, wasTruncated: false };
     return { text: lines.slice(0, COLLAPSED_LINES).join("\n"), wasTruncated: true };
   };
   const { text: truncatedContent } = getCollapsedContent();
 
   const handleCopy = async () => {
     try {
-      await copyToClipboard(content || "");
+      await copyToClipboard(displayContent || "");
       toast.success("Copied!");
     } catch (err) {
       toast.error("Failed to copy");
@@ -2451,7 +2489,7 @@ function AssistantBlock({
                       },
                     }}
                   >
-                    {content}
+                    {displayContent}
                   </ReactMarkdown>
                 </div>
               )}
@@ -2510,7 +2548,7 @@ function AssistantBlock({
                     },
                   }}
                 >
-                  {content}
+                  {displayContent}
                 </ReactMarkdown>
               </div>
             </div>
