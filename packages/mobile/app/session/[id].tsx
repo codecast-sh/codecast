@@ -2735,6 +2735,31 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontStyle: 'italic',
   },
+  systemCommandBlock: {
+    marginVertical: 4,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  systemCommandBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 3,
+    backgroundColor: Theme.bgHighlight,
+    marginTop: 1,
+  },
+  systemCommandBadgeText: {
+    fontSize: 9,
+    color: Theme.textMuted0,
+    fontWeight: '600',
+    fontFamily: 'SpaceMono',
+  },
+  systemCommandText: {
+    fontSize: 11,
+    color: Theme.textDim,
+    flex: 1,
+  },
   toolCallOnlyBubble: {
     marginBottom: 1,
   },
