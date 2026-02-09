@@ -62,6 +62,20 @@ type Message = {
   images?: ImageData[];
   subtype?: string;
   message_uuid?: string;
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+};
+
+type UsageData = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreation: number;
+  cacheRead: number;
+  contextSize: number;
 };
 
 const COMMAND_PATTERNS = [
@@ -97,6 +111,16 @@ function cleanCommandContent(content: string): string {
     .replace(/<[^>]+>/g, '')
     .replace(/^\s*Caveat:.*$/gm, '')
     .trim();
+}
+
+function stripSystemTags(content: string): string {
+  return content
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
+    .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '')
+    .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, '')
+    .replace(/^\s*Caveat:.*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n');
 }
 
 type ForkChild = {
@@ -2000,8 +2024,37 @@ function assistantLabel(agentType?: string): string {
   return 'Claude';
 }
 
+function formatTokenCount(n: number): string {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return n.toString();
+}
+
+function UsageBar({ usage }: { usage: UsageData }) {
+  const CONTEXT_LIMIT = 200000;
+  const contextPercent = (usage.contextSize / CONTEXT_LIMIT) * 100;
+  const isWarning = contextPercent > 80;
+
+  return (
+    <RNView style={styles.usageBar}>
+      <RNText style={styles.usageLabel}>In: <RNText style={styles.usageValue}>{formatTokenCount(usage.inputTokens)}</RNText></RNText>
+      <RNText style={styles.usageLabel}>Out: <RNText style={styles.usageValue}>{formatTokenCount(usage.outputTokens)}</RNText></RNText>
+      {(usage.cacheCreation > 0 || usage.cacheRead > 0) && (
+        <RNText style={styles.usageLabel}>Cache: <RNText style={[styles.usageValue, { color: Theme.cyan }]}>{formatTokenCount(usage.cacheRead)}</RNText></RNText>
+      )}
+      <RNView style={styles.usageContextRow}>
+        <RNText style={styles.usageLabel}>Ctx:</RNText>
+        <RNView style={styles.usageContextBar}>
+          <RNView style={[styles.usageContextFill, { width: `${Math.min(100, contextPercent)}%` as any, backgroundColor: isWarning ? '#ef4444' : Theme.green }]} />
+        </RNView>
+        <RNText style={[styles.usageValue, isWarning && { color: '#ef4444' }]}>{Math.round(contextPercent)}%</RNText>
+      </RNView>
+    </RNView>
+  );
+}
+
 const CONTENT_TRUNCATE_LENGTH = 3000;
-const ASSISTANT_CONTENT_MAX_HEIGHT = 800;
+const ASSISTANT_CONTENT_MAX_HEIGHT = 1800;
 
 function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
   const cmdType = getCommandType(content);
@@ -2122,8 +2175,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   }
 
   const rawContentRaw = message.content || '';
-  // Strip command/system XML tags from skill prompts
-  const rawContent = rawContentRaw.replace(/<\/?(?:command-(?:name|message|args)|system-reminder|antml:[a-z_]+)[^>]*>/g, '').replace(/\n{3,}/g, '\n\n');
+  const rawContent = stripSystemTags(rawContentRaw);
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
   const hasImages = message.images && message.images.length > 0;
   const hasThinkingContent = !!message.thinking?.trim();
@@ -2134,9 +2186,13 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     return null;
   }
   const isLongContent = rawContent.length > CONTENT_TRUNCATE_LENGTH;
-  const content = (isLongContent && !contentExpanded)
-    ? rawContent.slice(0, CONTENT_TRUNCATE_LENGTH)
-    : rawContent;
+  const COLLAPSED_LINES = 2;
+  const isCollapseTruncated = globalCollapsed && !isUser && rawContent.length > 150 && rawContent.split('\n').length > COLLAPSED_LINES;
+  const content = isCollapseTruncated
+    ? rawContent.split('\n').slice(0, COLLAPSED_LINES).join('\n').slice(0, 200)
+    : (isLongContent && !contentExpanded)
+      ? rawContent.slice(0, CONTENT_TRUNCATE_LENGTH)
+      : rawContent;
 
   const toggleTool = (toolId: string) => {
     setExpandedTools(prev => {
@@ -2266,6 +2322,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             />
           )}
         </RNView>
+        {isCollapseTruncated && (
+          <RNText style={{ color: Theme.textDim, fontSize: 11, marginTop: 2, paddingHorizontal: 12 }}>...</RNText>
+        )}
         {(isLongContent || assistantOverflowing) && (
           <RNView style={styles.contentActions}>
             <TouchableOpacity
@@ -2369,7 +2428,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               onPress={() => router.push(`/session/${fork._id}`)}
               style={styles.forkChildBadge}
             >
-              <RNText style={styles.forkChildText} numberOfLines={1}>{fork.title}</RNText>
+              <RNText style={styles.forkChildText} numberOfLines={1}>{fork.short_id ? `${fork.short_id} ${fork.title}` : fork.title}</RNText>
             </Pressable>
           ))}
         </RNView>
@@ -2612,7 +2671,7 @@ function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeN
 }
 
 export default function SessionDetailScreen() {
-  const { id } = useLocalSearchParams();
+  const { id, message: highlightMessageParam } = useLocalSearchParams<{ id: string; message?: string }>();
   const convex = useConvex();
   const flatListRef = useRef<FlatList>(null);
   const [olderMessages, setOlderMessages] = useState<Message[]>([]);
@@ -2640,6 +2699,9 @@ export default function SessionDetailScreen() {
   const scrollProgressAnim = useRef(new Animated.Value(0)).current;
   const isNearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(0);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(highlightMessageParam || null);
+  const [usageExpanded, setUsageExpanded] = useState(false);
+  const activePulse = useRef(new Animated.Value(1)).current;
 
   const conversation = useQuery(
     api.conversations.getAllMessages,
@@ -2853,6 +2915,18 @@ export default function SessionDetailScreen() {
 
   useEffect(() => { setCurrentMatchIndex(0); }, [searchQuery]);
 
+  useEffect(() => {
+    if (highlightedMessageId && allMessages.length > 0) {
+      const idx = allMessages.findIndex(m => m._id === highlightedMessageId);
+      if (idx >= 0) {
+        setTimeout(() => {
+          flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.3 });
+        }, 500);
+        setTimeout(() => setHighlightedMessageId(null), 3000);
+      }
+    }
+  }, [highlightedMessageId, allMessages.length]);
+
   const goToNextMatch = useCallback(() => {
     if (searchMatchList.length === 0) return;
     const nextIndex = (currentMatchIndex + 1) % searchMatchList.length;
@@ -2886,6 +2960,29 @@ export default function SessionDetailScreen() {
       }
     }
     return total > 0 ? { total, completed } : null;
+  }, [allMessages]);
+
+  const latestUsage = useMemo(() => {
+    let latest: UsageData | null = null;
+    let latestTs = 0;
+    for (const msg of allMessages) {
+      if (msg.role === 'assistant' && msg.usage) {
+        const u = msg.usage;
+        if (msg.timestamp > latestTs) {
+          const cacheCreation = u.cache_creation_input_tokens || 0;
+          const cacheRead = u.cache_read_input_tokens || 0;
+          latest = {
+            inputTokens: u.input_tokens || 0,
+            outputTokens: u.output_tokens || 0,
+            cacheCreation,
+            cacheRead,
+            contextSize: cacheCreation + cacheRead + (u.input_tokens || 0),
+          };
+          latestTs = msg.timestamp;
+        }
+      }
+    }
+    return latest;
   }, [allMessages]);
 
   const handleStartShareSelection = useCallback(() => {
@@ -3019,6 +3116,21 @@ export default function SessionDetailScreen() {
     }
   }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone]);
 
+  const isActive = conversation?.status === 'active';
+
+  useEffect(() => {
+    if (isActive) {
+      const pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(activePulse, { toValue: 0.3, duration: 1000, useNativeDriver: true }),
+          Animated.timing(activePulse, { toValue: 1, duration: 1000, useNativeDriver: true }),
+        ])
+      );
+      pulse.start();
+      return () => pulse.stop();
+    }
+  }, [isActive]);
+
   if (conversation === undefined) {
     return (
       <RNView style={styles.container}>
@@ -3053,7 +3165,6 @@ export default function SessionDetailScreen() {
     );
   }
 
-  const isActive = conversation.status === 'active';
   const totalCount = allMessages.length + (conversation.has_more_above ? '+' as any : 0);
 
   return (
@@ -3121,7 +3232,7 @@ export default function SessionDetailScreen() {
                       )}
                       {isActive && (
                         <RNView style={styles.activeIndicator}>
-                          <RNView style={styles.activeDot} />
+                          <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
                           <RNText style={styles.activeText}>Active</RNText>
                         </RNView>
                       )}
@@ -3144,6 +3255,16 @@ export default function SessionDetailScreen() {
                             {taskStats.completed}/{taskStats.total}
                           </RNText>
                         </RNView>
+                      )}
+                      {latestUsage && (
+                        <Pressable onPress={() => setUsageExpanded(!usageExpanded)}>
+                          <RNView style={styles.usageBadge}>
+                            <FontAwesome name="bar-chart" size={9} color={Theme.textDim} />
+                            <RNText style={styles.usageBadgeText}>
+                              {Math.round((latestUsage.contextSize / 200000) * 100)}%
+                            </RNText>
+                          </RNView>
+                        </Pressable>
                       )}
                       {conversation.git_branch && (
                         <Pressable
@@ -3171,6 +3292,9 @@ export default function SessionDetailScreen() {
                         </RNView>
                       )}
                     </RNView>
+                    {usageExpanded && latestUsage && (
+                      <UsageBar usage={latestUsage} />
+                    )}
                     {conversation.parent_conversation_id && (
                       <Pressable
                         onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
@@ -3361,8 +3485,14 @@ export default function SessionDetailScreen() {
             }
 
             const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
+            const isCurrentSearchMatch = searchMatchList.length > 0 && searchMatchList[currentMatchIndex] === item._id;
+            const isHighlighted = highlightedMessageId === item._id;
             return (
-              <RNView style={[isSearchDimmed ? { opacity: 0.25 } : undefined, shareSelectionMode && { paddingLeft: 28 }]}>
+              <RNView style={[
+                isSearchDimmed ? { opacity: 0.25 } : undefined,
+                (isCurrentSearchMatch || isHighlighted) && styles.searchHighlight,
+                shareSelectionMode && { paddingLeft: 28 },
+              ]}>
                 {shareSelectionMode && (
                   <Pressable
                     onPress={() => handleToggleMessageSelection(item._id)}
@@ -5342,5 +5472,62 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     backgroundColor: Theme.cyan,
     borderRadius: 6,
+  },
+  searchHighlight: {
+    borderWidth: 2,
+    borderColor: Theme.accent,
+    borderRadius: 8,
+    shadowColor: Theme.accent,
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  usageBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: 'rgba(147, 161, 161, 0.1)',
+    borderWidth: 0.5,
+    borderColor: 'rgba(147, 161, 161, 0.2)',
+  },
+  usageBadgeText: {
+    fontSize: 9,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    color: Theme.textDim,
+  },
+  usageBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  usageLabel: {
+    fontSize: 10,
+    color: Theme.textDim,
+  },
+  usageValue: {
+    fontSize: 10,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    color: Theme.textMuted,
+  },
+  usageContextRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  usageContextBar: {
+    width: 50,
+    height: 4,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  usageContextFill: {
+    height: '100%',
+    borderRadius: 2,
   },
 });
