@@ -62,6 +62,7 @@ type ConversationData = {
   started_at?: number;
   message_count?: number;
   fork_count?: number;
+  compaction_count?: number;
   fork_children?: ForkChild[];
   parent_conversation_id?: string | null;
   forked_from?: string;
@@ -577,6 +578,7 @@ function toolSummary(tc: ToolCall): string {
     const todos = parsedInput.todos as any[];
     return `${todos?.length || 0} tasks`;
   }
+  if (tc.name === 'TaskGet') return parsedInput.taskId ? `#${parsedInput.taskId}` : '';
   if (tc.name === 'TaskList') return '';
   if (tc.name === 'TaskCreate') return parsedInput.subject ? truncateStr(String(parsedInput.subject), 40) : '';
   if (tc.name === 'TaskUpdate') {
@@ -586,11 +588,23 @@ function toolSummary(tc: ToolCall): string {
     return id || '';
   }
   if (tc.name === 'SendMessage') {
+    if (parsedInput.summary) return truncateStr(String(parsedInput.summary), 40);
+    if (parsedInput.recipient) return `to ${String(parsedInput.recipient)}`;
     if (parsedInput.type === 'broadcast') return 'broadcast';
-    return parsedInput.recipient ? `to ${parsedInput.recipient}` : '';
+    return '';
   }
   if (tc.name === 'TeamCreate') return parsedInput.team_name ? String(parsedInput.team_name) : '';
+  if (tc.name === 'TeamDelete') return 'Cleanup';
   if (tc.name === 'Skill') return `/${parsedInput.skill || ''}`;
+
+  if (tc.name.startsWith('mcp__')) {
+    const parts = tc.name.split('__');
+    const method = parts[2] || '';
+    const displayMethod = method.replace(/_/g, ' ');
+    if (parsedInput.url) return shortenUrl(String(parsedInput.url));
+    if (parsedInput.query) return truncateStr(String(parsedInput.query), 30);
+    return displayMethod || parts[1] || '';
+  }
 
   return '';
 }
@@ -1012,7 +1026,7 @@ function CompactionSummaryBlock({ content }: { content: string }) {
         <FontAwesome
           name={expanded ? "chevron-down" : "chevron-right"}
           size={10}
-          color={Theme.accent}
+          color="#d97706"
           style={{ marginRight: 6 }}
         />
         <RNText style={styles.compactionTitle}>Previous context summary</RNText>
@@ -1307,7 +1321,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   try { parsedInput = JSON.parse(toolCall.input); } catch {}
 
   const isBash = toolCall.name === 'Bash' || toolCall.name === 'shell_command' || toolCall.name === 'shell' || toolCall.name === 'exec_command' || toolCall.name === 'container.exec';
-  const isEdit = toolCall.name === 'Edit' || toolCall.name === 'file_edit';
+  const isEdit = toolCall.name === 'Edit' || toolCall.name === 'file_edit' || toolCall.name === 'apply_patch';
   const isScreenshotTool = toolCall.name === 'mcp__claude-in-chrome__computer' && parsedInput.action === 'screenshot';
   const hasImages = images && images.length > 0 && isScreenshotTool;
 
@@ -1396,6 +1410,18 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
                 <RNText style={styles.diffNewText} selectable>{String(parsedInput.new_string)}</RNText>
               </RNView>
             </RNView>
+          ) : isWrite && parsedInput.content ? (
+            <RNView style={styles.diffSection}>
+              <RNView style={styles.diffNew}>
+                <RNText style={styles.diffNewText} selectable>{String(parsedInput.content)}</RNText>
+              </RNView>
+            </RNView>
+          ) : toolCall.name === 'apply_patch' && (parsedInput.input || parsedInput.patch) ? (
+            <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <RNText style={styles.toolCodeText} selectable>{String(parsedInput.input || parsedInput.patch)}</RNText>
+              </ScrollView>
+            </ScrollView>
           ) : null}
           {result && resultDisplay && resultDisplay.trim() ? (
             <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
@@ -1470,6 +1496,20 @@ function SystemMessage({ message }: { message: Message }) {
 
   if (message.subtype === 'plan' && message.content) {
     return <PlanBlock content={message.content} />;
+  }
+
+  if (message.subtype === 'stop_hook_summary' || message.subtype === 'local_command') {
+    const label = message.subtype === 'stop_hook_summary' ? 'hook' : 'command';
+    const content = message.content?.slice(0, 200) || '';
+    if (!content) return null;
+    return (
+      <RNView style={styles.systemCommandBlock}>
+        <RNView style={styles.systemCommandBadge}>
+          <RNText style={styles.systemCommandBadgeText}>{label}</RNText>
+        </RNView>
+        <RNText style={styles.systemCommandText} numberOfLines={3}>{content}</RNText>
+      </RNView>
+    );
   }
 
   const content = message.content?.slice(0, 120) || '';
@@ -2204,6 +2244,12 @@ export default function SessionDetailScreen() {
                         <RNView style={styles.forkBadge}>
                           <FontAwesome name="code-fork" size={9} color={Theme.violet} />
                           <RNText style={styles.forkBadgeText}>{conversation.fork_count}</RNText>
+                        </RNView>
+                      )}
+                      {(conversation.compaction_count ?? 0) > 0 && (
+                        <RNView style={styles.compactionBadge}>
+                          <FontAwesome name="compress" size={9} color="#d97706" />
+                          <RNText style={styles.compactionBadgeText}>{conversation.compaction_count}</RNText>
                         </RNView>
                       )}
                     </RNView>
@@ -3191,7 +3237,7 @@ const styles = StyleSheet.create({
   },
   compactionTitle: {
     fontSize: 11,
-    color: Theme.accent + 'b0',
+    color: 'rgba(217,119,6,0.7)',
   },
   compactionContent: {
     fontSize: 11,
@@ -3202,7 +3248,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingLeft: 12,
     borderLeftWidth: 2,
-    borderLeftColor: Theme.accent + '60',
+    borderLeftColor: 'rgba(217,119,6,0.3)',
   },
   // Plan block
   planBlock: {
@@ -3382,6 +3428,22 @@ const styles = StyleSheet.create({
   forkBadgeText: {
     fontSize: 10,
     color: Theme.violet,
+    fontWeight: '600',
+  },
+  compactionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: 'rgba(217,119,6,0.1)',
+    borderRadius: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(217,119,6,0.3)',
+  },
+  compactionBadgeText: {
+    fontSize: 10,
+    color: '#d97706',
     fontWeight: '600',
   },
   parentLink: {
