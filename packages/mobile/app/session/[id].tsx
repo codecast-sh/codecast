@@ -113,6 +113,12 @@ function cleanCommandContent(content: string): string {
     .trim();
 }
 
+function truncateLines(text: string, maxLines: number): { text: string; truncated: boolean; totalLines: number } {
+  const lines = text.split('\n');
+  if (lines.length <= maxLines) return { text, truncated: false, totalLines: lines.length };
+  return { text: lines.slice(0, maxLines).join('\n'), truncated: true, totalLines: lines.length };
+}
+
 function stripSystemTags(content: string): string {
   return content
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
@@ -836,6 +842,10 @@ function toolSummary(tc: ToolCall): string {
     return parsedInput.urlPattern ? `Filter: ${String(parsedInput.urlPattern)}` : '';
   }
   if (tc.name === 'mcp__claude-in-chrome__get_page_text') return 'Extract text';
+  if (tc.name === 'mcp__claude-in-chrome__upload_image') return parsedInput.filename ? String(parsedInput.filename) : 'Upload';
+  if (tc.name === 'mcp__claude-in-chrome__resize_window') return parsedInput.width && parsedInput.height ? `${parsedInput.width}x${parsedInput.height}` : 'Resize';
+  if (tc.name === 'mcp__claude-in-chrome__shortcuts_list') return 'List shortcuts';
+  if (tc.name === 'mcp__claude-in-chrome__shortcuts_execute') return parsedInput.command ? `/${String(parsedInput.command)}` : 'Shortcut';
 
   // Task tools
   if (tc.name === 'Task') return parsedInput.description ? truncateStr(String(parsedInput.description), 40) : '';
@@ -1913,8 +1923,8 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
 
 function ThinkingBlock({ content, showContent = true }: { content: string; showContent?: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const preview = content.split('\n').slice(0, 2).join('\n');
-  const isLong = content.split('\n').length > 2 || content.length > 200;
+  const truncated = truncateLines(content, expanded ? 50 : 2);
+  const isLong = truncated.truncated || content.length > 200;
 
   if (!showContent) {
     return (
@@ -1935,7 +1945,7 @@ function ThinkingBlock({ content, showContent = true }: { content: string; showC
           <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={8} color={Theme.textDim} style={{ marginRight: 4, marginTop: 3 }} />
         )}
         <RNText style={styles.thinkingText} numberOfLines={expanded ? 50 : 2}>
-          {expanded ? content : preview}{!expanded && isLong ? '...' : ''}
+          {expanded ? content : truncated.text}{!expanded && truncated.truncated ? '...' : ''}
         </RNText>
       </RNView>
     </TouchableOpacity>
@@ -2100,6 +2110,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const [contentExpanded, setContentExpanded] = useState(false);
   const [fullscreenVisible, setFullscreenVisible] = useState(false);
   const [assistantOverflowing, setAssistantOverflowing] = useState(false);
+  const [userOverflowing, setUserOverflowing] = useState(false);
+  const [userContentExpanded, setUserContentExpanded] = useState(false);
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
   const isBookmarked = useQuery(
     api.bookmarks.isBookmarked,
@@ -2189,7 +2201,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const COLLAPSED_LINES = 2;
   const isCollapseTruncated = globalCollapsed && !isUser && rawContent.length > 150 && rawContent.split('\n').length > COLLAPSED_LINES;
   const content = isCollapseTruncated
-    ? rawContent.split('\n').slice(0, COLLAPSED_LINES).join('\n').slice(0, 200)
+    ? rawContent.split('\n').slice(0, COLLAPSED_LINES).join('\n').slice(0, 200) + '...'
     : (isLongContent && !contentExpanded)
       ? rawContent.slice(0, CONTENT_TRUNCATE_LENGTH)
       : rawContent;
@@ -2259,8 +2271,12 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             styles.bubbleContent,
             isLongContent && !contentExpanded && styles.bubbleContentCollapsed,
             !isUser && !contentExpanded && !isLongContent && { maxHeight: ASSISTANT_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const },
+            isUser && !userContentExpanded && !isLongContent && { maxHeight: 1800, overflow: 'hidden' as const },
           ]}
-          onLayout={!isUser && !isLongContent ? (e) => setAssistantOverflowing(e.nativeEvent.layout.height >= ASSISTANT_CONTENT_MAX_HEIGHT) : undefined}
+          onLayout={!isLongContent ? (e) => {
+            if (isUser && !userContentExpanded) setUserOverflowing(e.nativeEvent.layout.height >= 1800);
+            else if (!isUser && !contentExpanded) setAssistantOverflowing(e.nativeEvent.layout.height >= ASSISTANT_CONTENT_MAX_HEIGHT);
+          } : undefined}
         >
           {typeof content === 'string' && content.includes('<skill>') ? (
             parseSkillBlocks(content).map((part, idx) => {
@@ -2314,7 +2330,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               isUser={isUser}
             />
           )}
-          {(isLongContent && !contentExpanded || (!isUser && assistantOverflowing && !contentExpanded)) && (
+          {(isLongContent && !contentExpanded || (!isUser && assistantOverflowing && !contentExpanded) || (isUser && userOverflowing && !userContentExpanded)) && (
             <LinearGradient
               colors={[isUser ? Theme.violet + '00' : Theme.bg + '00', isUser ? Theme.violet + '26' : Theme.bg]}
               style={styles.contentGradientOverlay}
@@ -2322,10 +2338,19 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             />
           )}
         </RNView>
-        {isCollapseTruncated && (
-          <RNText style={{ color: Theme.textDim, fontSize: 11, marginTop: 2, paddingHorizontal: 12 }}>...</RNText>
+        {isUser && userOverflowing && (
+          <RNView style={styles.contentActions}>
+            <TouchableOpacity onPress={() => setUserContentExpanded(!userContentExpanded)} style={styles.showMoreButton} activeOpacity={0.7}>
+              <FontAwesome name={userContentExpanded ? "chevron-up" : "chevron-down"} size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
+              <RNText style={styles.showMoreText}>{userContentExpanded ? 'Collapse' : 'Expand'}</RNText>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setFullscreenVisible(true)} style={styles.showMoreButton} activeOpacity={0.7}>
+              <FontAwesome name="expand" size={10} color={Theme.cyan} style={{ marginRight: 5 }} />
+              <RNText style={styles.showMoreText}>Fullscreen</RNText>
+            </TouchableOpacity>
+          </RNView>
         )}
-        {(isLongContent || assistantOverflowing) && (
+        {!isUser && (isLongContent || assistantOverflowing) && (
           <RNView style={styles.contentActions}>
             <TouchableOpacity
               onPress={() => setContentExpanded(!contentExpanded)}
@@ -2389,17 +2414,23 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             }
             if (tc.name === 'EnterPlanMode') {
               return (
-                <RNView key={tc.id} style={styles.taskOpBlock}>
-                  <RNText style={[styles.taskOpName, { color: Theme.violet }]}>EnterPlanMode</RNText>
-                  <RNText style={styles.taskOpText}>Planning...</RNText>
+                <RNView key={tc.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 }}>
+                  <FontAwesome name="map-o" size={10} color={Theme.violet} />
+                  <RNText style={{ fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
+                  <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(108, 113, 196, 0.15)', borderWidth: 0.5, borderColor: 'rgba(108, 113, 196, 0.3)' }}>
+                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>enter</RNText>
+                  </RNView>
                 </RNView>
               );
             }
             if (tc.name === 'ExitPlanMode') {
               return (
-                <RNView key={tc.id} style={styles.taskOpBlock}>
-                  <RNText style={[styles.taskOpName, { color: Theme.violet }]}>ExitPlanMode</RNText>
-                  <RNText style={styles.taskOpText}>Plan ready</RNText>
+                <RNView key={tc.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 }}>
+                  <FontAwesome name="map-o" size={10} color={Theme.violet} />
+                  <RNText style={{ fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
+                  <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(108, 113, 196, 0.15)', borderWidth: 0.5, borderColor: 'rgba(108, 113, 196, 0.3)' }}>
+                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>exit</RNText>
+                  </RNView>
                 </RNView>
               );
             }
@@ -2445,7 +2476,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               </TouchableOpacity>
             </RNView>
             <ScrollView style={styles.messageFullscreenContent} contentContainerStyle={{ paddingBottom: 60 }}>
-              <MarkdownContent text={rawContent} baseStyle={[styles.bubbleText, { fontSize: 15, lineHeight: 24 }, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
+              <MarkdownContent text={stripSystemTags(rawContentRaw)} baseStyle={[styles.bubbleText, { fontSize: 15, lineHeight: 24 }, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
             </ScrollView>
           </RNView>
         </Modal>
@@ -2468,6 +2499,7 @@ type PendingMessage = {
 function MessageInput({ conversationId, isActive }: { conversationId: Id<"conversations">; isActive: boolean }) {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [lastStatus, setLastStatus] = useState<'delivered' | 'failed' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
 
@@ -2527,9 +2559,12 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
       await sendMessage({ conversation_id: conversationId, content: trimmedMessage || '📷' });
       setMessage('');
       setSelectedImages([]);
+      setLastStatus('delivered');
+      setTimeout(() => setLastStatus(null), 2000);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
+      setLastStatus('failed');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setIsSending(false);
@@ -2539,8 +2574,10 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
   return (
     <RNView style={styles.inputContainer}>
       {!isActive && (
-        <RNView style={styles.resumeHint}>
-          <RNText style={styles.resumeHintText}>Session inactive. Sending will auto-resume it.</RNText>
+        <RNView style={styles.inactiveSessionBanner}>
+          <RNText style={styles.inactiveSessionText}>
+            This session is inactive. Sending a message will auto-resume it in a new terminal.
+          </RNText>
         </RNView>
       )}
       {error && (
@@ -2593,7 +2630,19 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
           disabled={(!message.trim() && selectedImages.length === 0) || isSending}
           activeOpacity={0.7}
         >
-          <FontAwesome name="arrow-up" size={16} color="#fff" />
+          {isSending ? (
+            <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <ActivityIndicator size="small" color="#fff" />
+              <RNText style={styles.sendButtonText}>Sending</RNText>
+            </RNView>
+          ) : lastStatus === 'delivered' ? (
+            <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <FontAwesome name="check" size={12} color="#fff" />
+              <RNText style={styles.sendButtonText}>Sent</RNText>
+            </RNView>
+          ) : (
+            <FontAwesome name="arrow-up" size={16} color="#fff" />
+          )}
         </TouchableOpacity>
       </RNView>
     </RNView>
@@ -2962,6 +3011,25 @@ export default function SessionDetailScreen() {
     return total > 0 ? { total, completed } : null;
   }, [allMessages]);
 
+  const latestTodos = useMemo(() => {
+    let latest: { todos: Array<{ content: string; status: string; activeForm?: string }>; timestamp: number } | null = null;
+    for (const msg of allMessages) {
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.name === 'TodoWrite') {
+            try {
+              const parsed = JSON.parse(tc.input);
+              if (parsed.todos && (!latest || msg.timestamp > latest.timestamp)) {
+                latest = { todos: parsed.todos, timestamp: msg.timestamp };
+              }
+            } catch {}
+          }
+        }
+      }
+    }
+    return latest;
+  }, [allMessages]);
+
   const latestUsage = useMemo(() => {
     let latest: UsageData | null = null;
     let latestTs = 0;
@@ -3256,6 +3324,19 @@ export default function SessionDetailScreen() {
                           </RNText>
                         </RNView>
                       )}
+                      {latestTodos && latestTodos.todos.length > 0 && (() => {
+                        const todoDone = latestTodos.todos.filter(t => t.status === 'completed').length;
+                        const todoAll = latestTodos.todos.length;
+                        const allComplete = todoDone === todoAll;
+                        return (
+                          <RNView style={[styles.taskStatsBadge, allComplete && { borderColor: 'rgba(16, 185, 129, 0.3)', borderWidth: 0.5 }]}>
+                            <FontAwesome name="list-ul" size={9} color={allComplete ? Theme.green : Theme.textDim} />
+                            <RNText style={[styles.taskStatsText, allComplete && { color: Theme.green }]}>
+                              {todoDone}/{todoAll}
+                            </RNText>
+                          </RNView>
+                        );
+                      })()}
                       {latestUsage && (
                         <Pressable onPress={() => setUsageExpanded(!usageExpanded)}>
                           <RNView style={styles.usageBadge}>
@@ -3558,7 +3639,14 @@ export default function SessionDetailScreen() {
           maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
         />
 
-        <MessageInput conversationId={id as Id<"conversations">} isActive={isActive} />
+        <RNView>
+          <LinearGradient
+            colors={['transparent', Theme.bg]}
+            style={{ height: 20, position: 'absolute', top: -20, left: 0, right: 0 }}
+            pointerEvents="none"
+          />
+          <MessageInput conversationId={id as Id<"conversations">} isActive={isActive} />
+        </RNView>
 
         {/* Jump arrows */}
         <RNView style={styles.jumpButtonsContainer}>
@@ -4230,14 +4318,19 @@ const styles = StyleSheet.create({
     borderTopColor: Theme.borderLight,
     paddingBottom: 34,
   },
-  resumeHint: {
-    backgroundColor: Theme.bgAlt,
-    paddingHorizontal: 16,
+  inactiveSessionBanner: {
+    marginHorizontal: 12,
+    marginBottom: 8,
+    paddingHorizontal: 12,
     paddingVertical: 8,
+    backgroundColor: 'rgba(38, 139, 210, 0.1)',
+    borderWidth: 0.5,
+    borderColor: 'rgba(38, 139, 210, 0.3)',
+    borderRadius: 8,
   },
-  resumeHintText: {
-    color: Theme.textMuted0,
-    fontSize: 12,
+  inactiveSessionText: {
+    fontSize: 11,
+    color: Theme.textSecondary,
   },
   errorBanner: {
     backgroundColor: Theme.red,
@@ -4308,14 +4401,20 @@ const styles = StyleSheet.create({
   },
   sendButton: {
     backgroundColor: Theme.blue,
-    width: 40,
+    minWidth: 40,
     height: 40,
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 12,
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
+  },
+  sendButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
   },
   // Specialized tool blocks
   specialToolBlock: {
