@@ -2261,7 +2261,7 @@ export const searchForCLI = query({
     for (const [, messages] of conversationMatches) {
       if (results.length >= limit) break;
 
-      const conv = await ctx.db.get(messages[0].conversation_id);
+      const conv = await ctx.db.get(messages[0].conversation_id) as any;
       if (!conv) continue;
 
       // Check access - user can see their own conversations, or non-private

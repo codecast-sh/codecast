@@ -1,5 +1,5 @@
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable } from 'react-native';
-import { useLocalSearchParams, Stack } from 'expo-router';
+import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
@@ -38,6 +38,14 @@ type Message = {
   tool_results?: ToolResult[];
   images?: ImageData[];
   subtype?: string;
+  message_uuid?: string;
+};
+
+type ForkChild = {
+  _id: string;
+  title: string;
+  short_id?: string;
+  parent_message_uuid?: string;
 };
 
 type ConversationData = {
@@ -53,6 +61,15 @@ type ConversationData = {
   agent_type?: string;
   started_at?: number;
   message_count?: number;
+  fork_count?: number;
+  fork_children?: ForkChild[];
+  parent_conversation_id?: string | null;
+  forked_from?: string;
+  forked_from_details?: {
+    conversation_id: string;
+    username: string;
+    share_token?: string;
+  };
 };
 
 // --- Markdown rendering ---
@@ -331,6 +348,10 @@ function truncateStr(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "..." : s;
 }
 
+function stripLineNumbers(content: string): string {
+  return content.split("\n").map(line => line.replace(/^\s*\d+→/, "")).join("\n");
+}
+
 function shortenUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -343,9 +364,19 @@ function shortenUrl(url: string): string {
   }
 }
 
-function getRelativePath(filePath: string): string {
-  // Simple relative path - remove common prefixes
-  return filePath.replace(/^\/Users\/[^/]+\//, "~/").replace(/^\/home\/[^/]+\//, "~/");
+function getRelativePath(fullPath: string): string {
+  const patterns = [
+    /\/Users\/[^/]+\/src\/(.+)$/,
+    /\/Users\/[^/]+\/(.+)$/,
+    /\/home\/[^/]+\/(?:src|projects|code)\/(.+)$/,
+    /\/home\/[^/]+\/(.+)$/,
+  ];
+  for (const pattern of patterns) {
+    const match = fullPath.match(pattern);
+    if (match) return match[1];
+  }
+  const parts = fullPath.split("/").filter(Boolean);
+  return parts.slice(-3).join("/");
 }
 
 function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome>['name']; color: string } {
@@ -353,7 +384,8 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
   if (name === 'Read' || name === 'file_read') return { icon: 'file-code-o', color: Theme.blue };
   if (name === 'Glob' || name === 'Grep') return { icon: 'search', color: Theme.violet };
   if (name === 'Edit' || name === 'Write' || name === 'file_write' || name === 'file_edit' || name === 'apply_patch') return { icon: 'pencil', color: Theme.orange };
-  if (name === 'WebSearch' || name === 'WebFetch') return { icon: 'globe', color: Theme.blue };
+  if (name === 'WebSearch' || name === 'web_search' || name === 'code_search') return { icon: 'globe', color: Theme.violet };
+  if (name === 'WebFetch' || name === 'web_fetch') return { icon: 'globe', color: Theme.cyan };
   if (name === 'Task') return { icon: 'code-fork', color: Theme.cyan };
   if (name === 'TaskCreate' || name === 'TaskUpdate' || name === 'TaskList' || name === 'TaskGet') return { icon: 'tasks', color: '#10b981' };
   if (name === 'SendMessage') return { icon: 'comment', color: '#f59e0b' };
@@ -412,7 +444,7 @@ function toolSummary(tc: ToolCall): string {
   // Shell/Terminal tools
   if (tc.name === 'Bash' || tc.name === 'shell_command' || tc.name === 'shell' || tc.name === 'exec_command' || tc.name === 'container.exec') {
     const cmd = String(parsedInput.command || parsedInput.cmd || '');
-    return cmd ? truncateStr(cmd, 60) : '';
+    return cmd ? truncateStr(cmd, 100) : '';
   }
 
   // Search tools
@@ -1120,18 +1152,19 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
     inputDisplay = inputDisplay.slice(0, 2000) + '\n... (truncated)';
   }
 
-  const resultDisplay = result && expanded && result.content.length > 2000
-    ? result.content.slice(0, 2000) + '\n... (truncated)'
-    : result?.content;
+  const isRead = toolCall.name === 'Read' || toolCall.name === 'file_read';
+  const processedResult = result?.content ? (isRead ? stripLineNumbers(result.content) : result.content) : '';
+  const resultDisplay = result && expanded && processedResult.length > 2000
+    ? processedResult.slice(0, 2000) + '\n... (truncated)'
+    : (processedResult || undefined);
 
   // Compute result summary like web does
   const getResultSummary = () => {
     if (!result) return null;
     if (result.is_error) return '(error)';
-    const isEdit = toolCall.name === 'Edit' || toolCall.name === 'Write';
-    const isRead = toolCall.name === 'Read';
+    const isEditOrWrite = toolCall.name === 'Edit' || toolCall.name === 'Write';
     const isGlobGrep = toolCall.name === 'Glob' || toolCall.name === 'Grep';
-    if (isEdit) {
+    if (isEditOrWrite) {
       const match = result.content.match(/with (\d+) additions? and (\d+) removals?/);
       if (match) return `(+${match[1]} -${match[2]})`;
       return result.content.includes('has been updated') ? '(ok)' : '';
@@ -1156,13 +1189,16 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   const isScreenshotTool = toolCall.name === 'mcp__claude-in-chrome__computer' && parsedInput.action === 'screenshot';
   const hasImages = images && images.length > 0 && isScreenshotTool;
 
-  // Check if result looks like code (for Read/Write/Edit tools)
+  const isWrite = toolCall.name === 'Write' || toolCall.name === 'file_write';
   const isCodeResult = result && (
     toolCall.name === 'Read' ||
     toolCall.name === 'Write' ||
     toolCall.name === 'Edit' ||
     toolCall.name === 'Grep' ||
-    toolCall.name === 'Glob'
+    toolCall.name === 'Glob' ||
+    toolCall.name === 'file_read' ||
+    toolCall.name === 'file_write' ||
+    toolCall.name === 'file_edit'
   );
 
   // Check if result is markdown-like (contains ### or **)
@@ -1177,8 +1213,12 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
   const shouldHideInput = [
     'Bash',
     'Read',
+    'Write',
     'Edit',
     'file_edit',
+    'file_read',
+    'file_write',
+    'apply_patch',
     'TaskOutput',
     'TaskList',
     'TaskGet',
@@ -1187,6 +1227,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
     'ExitPlanMode',
     'Glob',
     'Grep',
+    'shell_command',
+    'shell',
+    'exec_command',
+    'container.exec',
   ].includes(toolCall.name);
 
   return (
@@ -1224,11 +1268,8 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
               </RNView>
             </RNView>
           ) : null}
-          {result && resultDisplay && (
+          {result && resultDisplay && resultDisplay.trim() ? (
             <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
-              {result.is_error && (
-                <RNText style={[styles.toolSectionLabel, { color: Theme.red }]}>Error</RNText>
-              )}
               {isCodeResult ? (
                 <RNView style={styles.codeBlock}>
                   <ScrollView horizontal showsHorizontalScrollIndicator>
@@ -1245,7 +1286,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
                 </RNText>
               )}
             </ScrollView>
-          )}
+          ) : result && (!resultDisplay || !resultDisplay.trim()) ? (
+            <RNText style={styles.noOutputText}>No output</RNText>
+          ) : null}
           {hasImages && images && (
             <RNView style={styles.toolImagesSection}>
               {images.map((img, i) => (
@@ -1319,47 +1362,61 @@ function assistantLabel(agentType?: string): string {
 
 const CONTENT_TRUNCATE_LENGTH = 1000;
 
-function MessageBubble({ message, agentType, showHeader = true }: { message: Message; agentType?: string; showHeader?: boolean }) {
+function MessageBubble({ message, agentType, showHeader = true, forkChildren, conversationId, onFork }: {
+  message: Message;
+  agentType?: string;
+  showHeader?: boolean;
+  forkChildren?: ForkChild[];
+  conversationId?: string;
+  onFork?: (messageUuid: string) => void;
+}) {
+  const router = useRouter();
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [contentExpanded, setContentExpanded] = useState(false);
+  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
   const handleLongPress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const messageText = message.content || '';
-    const options = ['Share Message', 'Copy Text', 'Cancel'];
-    const cancelButtonIndex = 2;
+    const canFork = !message.role?.startsWith('system') && message.message_uuid && onFork;
+    const canBookmark = !!conversationId;
+    const options = ['Copy Text', 'Share Message'];
+    if (canBookmark) options.push('Bookmark');
+    if (canFork) options.push('Fork from Here');
+    options.push('Cancel');
+    const cancelButtonIndex = options.length - 1;
+
+    const handleAction = async (buttonIndex: number) => {
+      const label = options[buttonIndex];
+      if (label === 'Copy Text') {
+        await Clipboard.setStringAsync(messageText);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else if (label === 'Share Message') {
+        Share.share({ message: messageText });
+      } else if (label === 'Bookmark') {
+        try {
+          await toggleBookmark({
+            conversation_id: conversationId as Id<"conversations">,
+            message_id: message._id as Id<"messages">,
+          });
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        } catch {}
+      } else if (label === 'Fork from Here' && message.message_uuid) {
+        onFork!(message.message_uuid);
+      }
+    };
 
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options,
-          cancelButtonIndex,
-        },
-        (buttonIndex) => {
-          if (buttonIndex === 0) {
-            // Share
-            Share.share({ message: messageText });
-          } else if (buttonIndex === 1) {
-            // Copy - would need Clipboard API
-            Alert.alert('Copy', 'Text copied to clipboard');
-          }
-        }
+        { options, cancelButtonIndex },
+        (buttonIndex) => { handleAction(buttonIndex); }
       );
     } else {
-      // For Android, use Alert
-      Alert.alert(
-        'Message Actions',
-        'Choose an action',
-        [
-          {
-            text: 'Share',
-            onPress: () => Share.share({ message: messageText }),
-          },
-          {
-            text: 'Copy',
-            onPress: () => Alert.alert('Copy', 'Text copied to clipboard'),
-          },
-          { text: 'Cancel', style: 'cancel' },
-        ]
+      Alert.alert('Message Actions', undefined,
+        options.slice(0, -1).map((label, i) => ({
+          text: label,
+          onPress: () => handleAction(i),
+        })).concat([{ text: 'Cancel', onPress: async () => {} }])
       );
     }
   };
@@ -1537,6 +1594,21 @@ function MessageBubble({ message, agentType, showHeader = true }: { message: Mes
               />
             );
           })}
+        </RNView>
+      )}
+
+      {forkChildren && forkChildren.length > 0 && (
+        <RNView style={styles.forkChildrenRow}>
+          <FontAwesome name="code-fork" size={10} color={Theme.violet} />
+          {forkChildren.map((fork) => (
+            <Pressable
+              key={fork._id}
+              onPress={() => router.push(`/session/${fork._id}`)}
+              style={styles.forkChildBadge}
+            >
+              <RNText style={styles.forkChildText} numberOfLines={1}>{fork.title}</RNText>
+            </Pressable>
+          ))}
         </RNView>
       )}
       </RNView>
@@ -1776,6 +1848,38 @@ export default function SessionDetailScreen() {
     return [...uniqueOlder, ...recent];
   }, [conversation?.messages, olderMessages]);
 
+  const forkFromMessage = useMutation(api.conversations.forkFromMessage);
+  const router = useRouter();
+
+  const forkPointMap = useMemo(() => {
+    const map: Record<string, ForkChild[]> = {};
+    if (conversation?.fork_children) {
+      for (const fork of conversation.fork_children) {
+        if (fork.parent_message_uuid) {
+          if (!map[fork.parent_message_uuid]) map[fork.parent_message_uuid] = [];
+          map[fork.parent_message_uuid].push(fork);
+        }
+      }
+    }
+    return map;
+  }, [conversation?.fork_children]);
+
+  const handleForkFromMessage = useCallback(async (messageUuid: string) => {
+    if (!id) return;
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const result = await forkFromMessage({
+        conversation_id: id as string,
+        message_uuid: messageUuid,
+      });
+      if (result?.conversation_id) {
+        router.push(`/session/${result.conversation_id}`);
+      }
+    } catch (e: any) {
+      Alert.alert('Fork failed', e?.message || 'Could not fork conversation');
+    }
+  }, [id, forkFromMessage, router]);
+
   useEffect(() => {
     if (conversation && !initialScrollDone && allMessages.length > 0) {
       setTimeout(() => {
@@ -1929,7 +2033,27 @@ export default function SessionDetailScreen() {
                           <RNText style={styles.activeText}>Active</RNText>
                         </RNView>
                       )}
+                      {(conversation.fork_count ?? 0) > 0 && (
+                        <RNView style={styles.forkBadge}>
+                          <FontAwesome name="code-fork" size={9} color={Theme.violet} />
+                          <RNText style={styles.forkBadgeText}>{conversation.fork_count}</RNText>
+                        </RNView>
+                      )}
                     </RNView>
+                    {conversation.parent_conversation_id && (
+                      <Pressable
+                        onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
+                        style={styles.parentLink}
+                      >
+                        <FontAwesome name="level-up" size={10} color={Theme.violet} />
+                        <RNText style={styles.parentLinkText}>View parent conversation</RNText>
+                      </Pressable>
+                    )}
+                    {conversation.forked_from_details && (
+                      <RNText style={styles.forkedFromText}>
+                        Forked from @{conversation.forked_from_details.username}
+                      </RNText>
+                    )}
                   </RNView>
                   <SessionActions
                     conversationId={id as Id<"conversations">}
@@ -1982,6 +2106,9 @@ export default function SessionDetailScreen() {
                 message={item}
                 agentType={conversation.agent_type}
                 showHeader={showHeader}
+                forkChildren={item.message_uuid ? forkPointMap[item.message_uuid] : undefined}
+                conversationId={conversation._id}
+                onFork={handleForkFromMessage}
               />
             );
           }}
@@ -2306,10 +2433,8 @@ const styles = StyleSheet.create({
   },
   codeLanguage: {
     fontSize: 10,
-    color: Theme.textMuted0,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    color: Theme.textDim,
+    fontWeight: '500',
   },
   codeContent: {
     padding: 10,
@@ -2422,10 +2547,14 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.red + '08',
   },
   bashCommandSection: {
+    marginHorizontal: -10,
+    marginTop: -10,
     marginBottom: 8,
-    paddingBottom: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
+    backgroundColor: 'rgba(0,0,0,0.08)',
   },
   bashPrompt: {
     fontSize: 11,
@@ -2435,7 +2564,7 @@ const styles = StyleSheet.create({
   bashCommand: {
     fontSize: 11,
     fontFamily: 'SpaceMono',
-    color: Theme.text,
+    color: Theme.green,
   },
   diffSection: {
     gap: 2,
@@ -2464,7 +2593,11 @@ const styles = StyleSheet.create({
     color: Theme.green,
   },
   toolResultScroll: {
-    maxHeight: 240,
+    maxHeight: 320,
+  },
+  noOutputText: {
+    fontSize: 11,
+    color: Theme.textDim,
   },
   toolInputSection: {
     marginBottom: 8,
@@ -2972,5 +3105,59 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: Theme.textMuted0,
     fontFamily: 'SpaceMono',
+  },
+  // Fork UI
+  forkChildrenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingBottom: 8,
+    flexWrap: 'wrap',
+  },
+  forkChildBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    backgroundColor: Theme.violet + '15',
+    borderWidth: 1,
+    borderColor: Theme.violet + '30',
+    maxWidth: 160,
+  },
+  forkChildText: {
+    fontSize: 10,
+    color: Theme.violet,
+    fontWeight: '500',
+  },
+  forkBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: Theme.violet + '15',
+    borderRadius: 4,
+  },
+  forkBadgeText: {
+    fontSize: 10,
+    color: Theme.violet,
+    fontWeight: '600',
+  },
+  parentLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 6,
+  },
+  parentLinkText: {
+    fontSize: 11,
+    color: Theme.violet,
+    fontWeight: '500',
+  },
+  forkedFromText: {
+    fontSize: 10,
+    color: Theme.textMuted0,
+    marginTop: 4,
+    fontStyle: 'italic',
   },
 });
