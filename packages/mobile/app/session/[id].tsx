@@ -599,6 +599,16 @@ function extractPlanContent(text: string): string | null {
   return null;
 }
 
+function isPlanWriteToolCall(tc: ToolCall): boolean {
+  if (tc.name !== 'Write') return false;
+  try {
+    const parsed = JSON.parse(tc.input);
+    return String(parsed.file_path || '').includes('.claude/plans/');
+  } catch {
+    return false;
+  }
+}
+
 function getFileExtension(filePath: string): string | undefined {
   const ext = filePath.split('.').pop()?.toLowerCase();
   const langMap: Record<string, string> = {
@@ -781,6 +791,8 @@ function toolSummary(tc: ToolCall): string {
     return `${todos?.length || 0} tasks`;
   }
   if (tc.name === 'TaskGet') return parsedInput.taskId ? `#${parsedInput.taskId}` : '';
+  if (tc.name === 'TaskOutput') return parsedInput.task_id ? `task ${String(parsedInput.task_id).slice(0, 8)}` : '';
+  if (tc.name === 'TaskStop') return parsedInput.task_id ? `stop ${String(parsedInput.task_id).slice(0, 8)}` : '';
   if (tc.name === 'TaskList') return '';
   if (tc.name === 'TaskCreate') return parsedInput.subject ? truncateStr(String(parsedInput.subject), 40) : '';
   if (tc.name === 'TaskUpdate') {
@@ -829,6 +841,7 @@ function TaskToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }
   const description = String(parsedInput.description || '');
   const prompt = String(parsedInput.prompt || '');
   const model = parsedInput.model ? String(parsedInput.model) : null;
+  const name = parsedInput.name ? String(parsedInput.name) : null;
 
   const runInBackground = Boolean(parsedInput.run_in_background);
 
@@ -863,6 +876,9 @@ function TaskToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }
         )}
         {model && (
           <RNText style={styles.specialToolMeta}>{model}</RNText>
+        )}
+        {name && (
+          <RNText style={styles.specialToolMeta}>{name}</RNText>
         )}
         {runInBackground && (
           <RNText style={styles.specialToolMeta}>background</RNText>
@@ -1069,7 +1085,7 @@ function TaskListBlock({ result }: { result?: ToolResult }) {
 }
 
 function SkillCard({ tool }: { tool: ToolCall }) {
-  let parsedInput: { skill?: string } = {};
+  let parsedInput: { skill?: string; args?: string } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
   const skillName = parsedInput.skill || 'skill';
@@ -1077,6 +1093,7 @@ function SkillCard({ tool }: { tool: ToolCall }) {
   return (
     <RNView style={styles.skillCard}>
       <RNText style={styles.skillName}>/{skillName}</RNText>
+      {parsedInput.args && <RNText style={{ fontSize: 11, color: Theme.textMuted, marginLeft: 6 }}>{parsedInput.args}</RNText>}
     </RNView>
   );
 }
@@ -1283,7 +1300,7 @@ function CompactionSummaryBlock({ content }: { content: string }) {
 
 const PLAN_MAX_HEIGHT = 600;
 
-function PlanBlock({ content }: { content: string }) {
+function PlanBlock({ content, timestamp }: { content: string; timestamp?: number }) {
   const [expanded, setExpanded] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
@@ -1303,6 +1320,7 @@ function PlanBlock({ content }: { content: string }) {
         >
           <FontAwesome name="clipboard" size={12} color={Theme.cyan} style={{ marginRight: 6 }} />
           <RNText style={styles.planTitle}>{title}</RNText>
+          {timestamp && <RNText style={{ fontSize: 10, color: Theme.textDim, marginLeft: 4 }}>{formatTimestamp(timestamp)}</RNText>}
           <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={10} color={Theme.textDim} style={{ marginLeft: 'auto' }} />
         </TouchableOpacity>
         {expanded && (
@@ -1319,7 +1337,7 @@ function PlanBlock({ content }: { content: string }) {
           <MarkdownContent text={content} baseStyle={styles.planText} isUser={false} />
           {!contentExpanded && isOverflowing && (
             <LinearGradient
-              colors={['rgba(0,43,54,0)', Theme.bgAlt]}
+              colors={[Theme.bgAlt + '00', Theme.bgAlt]}
               style={styles.planGradientOverlay}
               pointerEvents="none"
             />
@@ -1827,7 +1845,7 @@ function SystemMessage({ message }: { message: Message }) {
   }
 
   if (message.subtype === 'plan' && message.content) {
-    return <PlanBlock content={message.content} />;
+    return <PlanBlock content={message.content} timestamp={message.timestamp} />;
   }
 
   if (message.subtype === 'pull_request' && message.content) {
@@ -2118,7 +2136,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
           )}
           {isLongContent && !contentExpanded && (
             <LinearGradient
-              colors={[isUser ? 'rgba(108,113,196,0)' : 'rgba(0,43,54,0)', isUser ? 'rgba(108,113,196,0.15)' : Theme.bg]}
+              colors={[isUser ? Theme.violet + '00' : Theme.bg + '00', isUser ? Theme.violet + '26' : Theme.bg]}
               style={styles.contentGradientOverlay}
               pointerEvents="none"
             />
@@ -2145,11 +2163,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             const result = message.tool_results?.find(r => r.tool_use_id === tc.id) || globalToolResultMap?.[tc.id];
 
             // Plan writes rendered as PlanBlock
-            if (tc.name === 'Write') {
+            if (isPlanWriteToolCall(tc)) {
               try {
                 const p = JSON.parse(tc.input);
-                if (String(p.file_path || '').includes('.claude/plans/') && p.content) {
-                  return <PlanBlock key={tc.id} content={String(p.content)} />;
+                if (p.content) {
+                  return <PlanBlock key={tc.id} content={String(p.content)} timestamp={message.timestamp} />;
                 }
               } catch {}
             }
@@ -2857,7 +2875,7 @@ export default function SessionDetailScreen() {
             if (item.role === 'user' && item.content) {
               const planContent = extractPlanContent(item.content);
               if (planContent) {
-                return <PlanBlock content={planContent} />;
+                return <PlanBlock content={planContent} timestamp={item.timestamp} />;
               }
               // User message following compact_boundary -> render as compaction summary
               if (prevNonToolResult?.role === 'system' && prevNonToolResult?.subtype === 'compact_boundary') {
