@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchExport } from "./jsonlGenerator.js";
+import { fetchExport, generateClaudeCodeJsonl, type ExportResult } from "./jsonlGenerator.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -184,5 +184,36 @@ describe("fetchExport", () => {
     const result = await fetchExport("https://example.site", "token", "conv5");
     expect(result.messages).toHaveLength(1);
     expect(calls).toBe(3);
+  });
+});
+
+describe("generateClaudeCodeJsonl", () => {
+  test("does not emit thinking blocks (cannot generate valid thinking signatures)", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv",
+        title: "t",
+        session_id: "session",
+        agent_type: "codex",
+        project_path: "/tmp/project",
+        model: "claude-opus-4-5-20251101",
+        message_count: 2,
+        started_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "hi", timestamp: "2026-01-01T00:00:00.000Z" },
+        { role: "assistant", content: "hello", thinking: "secret", timestamp: "2026-01-01T00:00:00.100Z" },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data);
+    expect(jsonl).not.toContain('"signature":"placeholder"');
+
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+    const assistant = lines.find((l) => l.type === "assistant") as any;
+    expect(assistant?.message?.role).toBe("assistant");
+    expect(Array.isArray(assistant?.message?.content)).toBe(true);
+    expect(assistant.message.content.some((b: any) => b?.type === "thinking")).toBe(false);
   });
 });

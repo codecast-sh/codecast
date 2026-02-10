@@ -321,7 +321,6 @@ export function generateClaudeCodeJsonl(data: ExportResult): { jsonl: string; se
       parentUuid = uuid;
     } else if (msg.role === "assistant") {
       const contentBlocks: any[] = [];
-      if (msg.thinking) contentBlocks.push({ type: "thinking", thinking: msg.thinking, signature: "placeholder" });
       if (msg.content) contentBlocks.push({ type: "text", text: msg.content });
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
