@@ -154,6 +154,7 @@ type ConversationData = {
   _id: string;
   title: string;
   status: string;
+  updated_at?: number;
   is_favorite?: boolean;
   share_token?: string | null;
   session_id?: string;
@@ -2601,7 +2602,7 @@ type PendingMessage = {
   retry_count: number;
 };
 
-function MessageInput({ conversationId, isActive, onHeightChange }: { conversationId: Id<"conversations">; isActive: boolean; onHeightChange?: (height: number) => void }) {
+function MessageInput({ conversationId, isActive }: { conversationId: Id<"conversations">; isActive: boolean }) {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [lastStatus, setLastStatus] = useState<'delivered' | 'failed' | null>(null);
@@ -2677,17 +2678,7 @@ function MessageInput({ conversationId, isActive, onHeightChange }: { conversati
   };
 
   return (
-    <RNView
-      style={styles.inputContainer}
-      onLayout={(event) => onHeightChange?.(event.nativeEvent.layout.height)}
-    >
-      {!isActive && (
-        <RNView style={styles.inactiveSessionBanner}>
-          <RNText style={styles.inactiveSessionText}>
-            This session is inactive. Sending a message will auto-resume it in a new terminal.
-          </RNText>
-        </RNView>
-      )}
+    <RNView style={styles.inputContainer}>
       {error && (
         <RNView style={styles.errorBanner}>
           <RNText style={styles.errorBannerText}>{error}</RNText>
@@ -2711,6 +2702,13 @@ function MessageInput({ conversationId, isActive, onHeightChange }: { conversati
             </RNView>
           ))}
         </ScrollView>
+      )}
+      {!isActive && (
+        <RNView style={styles.inactiveSessionBanner}>
+          <RNText style={styles.inactiveSessionCompactText} numberOfLines={1}>
+            Session inactive. Send to auto-resume.
+          </RNText>
+        </RNView>
       )}
       <RNView style={styles.inputRow}>
         <TouchableOpacity
@@ -2757,56 +2755,6 @@ function MessageInput({ conversationId, isActive, onHeightChange }: { conversati
   );
 }
 
-// --- Session actions ---
-
-function SessionActions({ conversationId, isFavorite, shareToken }: {
-  conversationId: Id<"conversations">;
-  isFavorite: boolean;
-  shareToken: string | null | undefined;
-}) {
-  const [sharing, setSharing] = useState(false);
-  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
-  const generateShareLink = useMutation(api.conversations.generateShareLink);
-
-  const handleFavorite = useCallback(async () => {
-    try {
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      await toggleFavorite({ conversation_id: conversationId });
-    } catch {}
-  }, [conversationId, toggleFavorite]);
-
-  const handleShare = useCallback(async () => {
-    setSharing(true);
-    try {
-      let token = shareToken;
-      if (!token) {
-        token = await generateShareLink({ conversation_id: conversationId });
-      }
-      if (token) {
-        const url = `https://codecast.sh/share/${token}`;
-        await Share.share({ message: url, url });
-      }
-    } catch {} finally {
-      setSharing(false);
-    }
-  }, [conversationId, shareToken, generateShareLink]);
-
-  return (
-    <RNView style={styles.actionsRow}>
-      <TouchableOpacity onPress={handleFavorite} style={styles.actionButton} activeOpacity={0.7}>
-        <FontAwesome
-          name={isFavorite ? "star" : "star-o"}
-          size={15}
-          color={isFavorite ? Theme.accent : Theme.textMuted0}
-        />
-      </TouchableOpacity>
-      <TouchableOpacity onPress={handleShare} style={styles.actionButton} activeOpacity={0.7} disabled={sharing}>
-        <FontAwesome name="share-alt" size={14} color={Theme.textMuted0} />
-      </TouchableOpacity>
-    </RNView>
-  );
-}
-
 // --- Main screen with pagination ---
 
 function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeNode; depth: number; router: any; currentId: string; onClose: () => void }) {
@@ -2846,7 +2794,6 @@ export default function SessionDetailScreen() {
     setToastKey(k => k + 1);
   }, []);
   const [collapsed, setCollapsed] = useState(false);
-  const [showThinking, setShowThinking] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchVisible, setSearchVisible] = useState(false);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
@@ -2855,13 +2802,13 @@ export default function SessionDetailScreen() {
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const scrollProgressAnim = useRef(new Animated.Value(0)).current;
   const isNearBottomRef = useRef(true);
-  const prevMessageCountRef = useRef(0);
+  const prevMessageIdsRef = useRef<Set<string>>(new Set());
+  const openedAtLastMessageTsRef = useRef<number | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(highlightMessageParam || null);
-  const [composerHeight, setComposerHeight] = useState(120);
   const [jumpingToStart, setJumpingToStart] = useState(false);
   const [floatingHeaderHeight, setFloatingHeaderHeight] = useState(152);
   const floatingHeaderY = useRef(new Animated.Value(0)).current;
-  const floatingHeaderVisibleRef = useRef(true);
+  const floatingHeaderOffsetRef = useRef(0);
   const lastScrollYRef = useRef(0);
   const activePulse = useRef(new Animated.Value(1)).current;
 
@@ -3047,6 +2994,31 @@ export default function SessionDetailScreen() {
     showToast('Resume command copied');
   }, [conversation?.session_id, conversation?.agent_type, showToast]);
 
+  const toggleFavoriteConversation = useMutation(api.conversations.toggleFavorite);
+  const generateShareLink = useMutation(api.conversations.generateShareLink);
+
+  const handleToggleFavorite = useCallback(async () => {
+    if (!id) return;
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await toggleFavoriteConversation({ conversation_id: id as Id<"conversations"> });
+    } catch {}
+  }, [id, toggleFavoriteConversation]);
+
+  const handleShareConversation = useCallback(async () => {
+    if (!conversation || !id) return;
+    try {
+      let token = conversation.share_token;
+      if (!token) {
+        token = await generateShareLink({ conversation_id: id as Id<"conversations"> });
+      }
+      if (token) {
+        const url = `https://codecast.sh/share/${token}`;
+        await Share.share({ message: url, url });
+      }
+    } catch {}
+  }, [conversation, id, generateShareLink]);
+
   const searchLower = searchQuery.toLowerCase();
   const searchMatchIds = useMemo(() => {
     if (!searchLower) return null;
@@ -3136,6 +3108,39 @@ export default function SessionDetailScreen() {
     setSelectedMessageIds(new Set());
   }, []);
 
+  const handleCopyMenu = useCallback(() => {
+    const openMessageSelect = () => {
+      if (shareSelectionMode) return;
+      handleStartShareSelection();
+      showToast('Select messages to copy');
+    };
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ['Copy whole conversation', 'Select messages', 'Cancel'],
+          cancelButtonIndex: 2,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 0) {
+            handleCopyAll();
+            return;
+          }
+          if (buttonIndex === 1) {
+            openMessageSelect();
+          }
+        }
+      );
+      return;
+    }
+
+    Alert.alert('Copy', undefined, [
+      { text: 'Copy whole conversation', onPress: handleCopyAll },
+      { text: 'Select messages', onPress: openMessageSelect },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [handleCopyAll, handleStartShareSelection, shareSelectionMode, showToast]);
+
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
     const selected = allMessages
@@ -3153,27 +3158,21 @@ export default function SessionDetailScreen() {
     setSelectedMessageIds(new Set());
   }, [selectedMessageIds, allMessages, showToast]);
 
-  const handleComposerHeightChange = useCallback((height: number) => {
-    setComposerHeight(prev => (Math.abs(prev - height) < 1 ? prev : height));
-  }, []);
-
-  const setFloatingHeaderVisible = useCallback((visible: boolean) => {
-    if (floatingHeaderVisibleRef.current === visible) return;
-    floatingHeaderVisibleRef.current = visible;
-    Animated.timing(floatingHeaderY, {
-      toValue: visible ? 0 : -(floatingHeaderHeight + 8),
-      duration: visible ? 90 : 120,
-      useNativeDriver: true,
-    }).start();
-  }, [floatingHeaderHeight, floatingHeaderY]);
-
   const handleFloatingHeaderLayout = useCallback((height: number) => {
     setFloatingHeaderHeight(prev => (Math.abs(prev - height) < 1 ? prev : height));
-    floatingHeaderY.setValue(floatingHeaderVisibleRef.current ? 0 : -(height + 8));
+    const maxOffset = height;
+    floatingHeaderOffsetRef.current = Math.max(0, Math.min(floatingHeaderOffsetRef.current, maxOffset));
+    floatingHeaderY.setValue(-floatingHeaderOffsetRef.current);
   }, [floatingHeaderY]);
 
   useEffect(() => {
     if (conversation && !initialScrollDone && allMessages.length > 0) {
+      if (openedAtLastMessageTsRef.current === null) {
+        openedAtLastMessageTsRef.current = allMessages[allMessages.length - 1]?.timestamp ?? Date.now();
+      }
+      if (prevMessageIdsRef.current.size === 0) {
+        prevMessageIdsRef.current = new Set(allMessages.map((message) => message._id));
+      }
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: false });
         setInitialScrollDone(true);
@@ -3187,26 +3186,46 @@ export default function SessionDetailScreen() {
     setOlderOldestTs(null);
     setInitialScrollDone(false);
     setUserScrolled(false);
-    prevMessageCountRef.current = 0;
+    prevMessageIdsRef.current = new Set();
+    openedAtLastMessageTsRef.current = null;
     lastScrollYRef.current = 0;
-    floatingHeaderVisibleRef.current = true;
+    floatingHeaderOffsetRef.current = 0;
     floatingHeaderY.setValue(0);
   }, [id, floatingHeaderHeight, floatingHeaderY]);
 
+  useEffect(() => {
+    if (!searchVisible) return;
+    floatingHeaderOffsetRef.current = 0;
+    floatingHeaderY.setValue(0);
+  }, [searchVisible, floatingHeaderY]);
+
   // Auto-scroll when new messages arrive (if near bottom)
   useEffect(() => {
-    const delta = allMessages.length - prevMessageCountRef.current;
-    const hasNewMessages = delta > 0;
-    prevMessageCountRef.current = allMessages.length;
+    const prevIds = prevMessageIdsRef.current;
+    const addedMessages = allMessages.filter((message) => !prevIds.has(message._id));
+    prevMessageIdsRef.current = new Set(allMessages.map((message) => message._id));
 
-    if (hasNewMessages && initialScrollDone && isNearBottomRef.current && allMessages.length > 0) {
+    if (!initialScrollDone || addedMessages.length === 0) {
+      return;
+    }
+
+    const openBoundaryTs = openedAtLastMessageTsRef.current ?? 0;
+    const incomingMessages = addedMessages.filter(
+      (message) => message.timestamp > openBoundaryTs && message.role !== 'system'
+    );
+
+    if (incomingMessages.length === 0) {
+      return;
+    }
+
+    if (isNearBottomRef.current && allMessages.length > 0) {
       flatListRef.current?.scrollToEnd({ animated: true });
       setUserScrolled(false);
       setNewMessageCount(0);
-    } else if (hasNewMessages && initialScrollDone && !isNearBottomRef.current) {
-      setNewMessageCount(prev => prev + delta);
+    } else if (!isNearBottomRef.current) {
+      setNewMessageCount((prev) => prev + incomingMessages.length);
     }
-  }, [allMessages.length, initialScrollDone]);
+  }, [allMessages, initialScrollDone]);
 
   const loadOlderMessages = useCallback(async () => {
     if (loadingOlder || !id) return;
@@ -3315,7 +3334,7 @@ export default function SessionDetailScreen() {
     isNearBottomRef.current = isNearBottom;
 
     // Check if near top
-    setIsNearTop(scrollTop < 300);
+    setIsNearTop(scrollTop < 96);
 
     const progress = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0;
     scrollProgressAnim.setValue(progress);
@@ -3325,21 +3344,32 @@ export default function SessionDetailScreen() {
       setUserScrolled(true);
     }
 
-    if (scrollTop < 8) {
-      setFloatingHeaderVisible(true);
-    } else if (deltaY > 0.5) {
-      setFloatingHeaderVisible(false);
-    } else if (deltaY < -0.5) {
-      setFloatingHeaderVisible(true);
+    if (searchVisible) {
+      floatingHeaderOffsetRef.current = 0;
+      floatingHeaderY.setValue(0);
+    } else if (scrollTop <= 0) {
+      floatingHeaderOffsetRef.current = 0;
+      floatingHeaderY.setValue(0);
+    } else if (Math.abs(deltaY) > 0.5) {
+      const maxOffset = floatingHeaderHeight;
+      const nextOffset = Math.max(0, Math.min(floatingHeaderOffsetRef.current + deltaY, maxOffset));
+      if (Math.abs(nextOffset - floatingHeaderOffsetRef.current) > 0.1) {
+        floatingHeaderOffsetRef.current = nextOffset;
+        floatingHeaderY.setValue(-nextOffset);
+      }
     }
 
     // Load older messages when near top
     if (scrollTop < 100 && hasMoreAbove && !loadingOlder && initialScrollDone) {
       loadOlderMessages();
     }
-  }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone, setFloatingHeaderVisible]);
+  }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible]);
 
-  const isActive = conversation?.status === 'active';
+  const lastMessageAt = conversation?.messages?.length
+    ? conversation.messages[conversation.messages.length - 1]?.timestamp
+    : undefined;
+  const activityAt = lastMessageAt ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
+  const isActive = conversation?.status === 'active' && (Date.now() - activityAt) < 5 * 60 * 1000;
 
   useEffect(() => {
     if (isActive) {
@@ -3401,7 +3431,7 @@ export default function SessionDetailScreen() {
     <>
       <Stack.Screen
         options={{
-          title: 'Conversation',
+          title: conversation.title || 'Conversation',
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
           headerTitleStyle: { color: Theme.text, fontWeight: '600', fontSize: 17 },
@@ -3420,7 +3450,11 @@ export default function SessionDetailScreen() {
           onLayout={(event) => handleFloatingHeaderLayout(event.nativeEvent.layout.height)}
         >
             <RNView style={styles.floatingSessionCard}>
-              <RNView style={styles.sessionMeta}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.sessionMeta}
+              >
                 {conversation.agent_type && (
                   <RNView style={[styles.metaBadgeIcon, { borderColor: agentTypeColor(conversation.agent_type) + '40' }]}>
                     <FontAwesome name={agentTypeIcon(conversation.agent_type) as any} size={9} color={agentTypeColor(conversation.agent_type)} />
@@ -3432,19 +3466,13 @@ export default function SessionDetailScreen() {
                 {conversation.model && (
                   <RNText style={styles.metaBadgeModel}>{formatModel(conversation.model)}</RNText>
                 )}
-                {conversation.started_at && (
-                  <RNText style={styles.messageCountText}>{formatRelativeTime(conversation.started_at)}</RNText>
+                {activityAt > 0 && (
+                  <RNText style={styles.messageCountText}>{formatRelativeTime(activityAt)}</RNText>
                 )}
-              {conversation.short_id && (
-                <Pressable onPress={() => { Clipboard.setString(conversation.short_id!); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast('ID copied'); }}>
-                  <RNText style={styles.shortIdBadge}>{conversation.short_id}</RNText>
-                </Pressable>
-              )}
-                <RNText style={styles.messageCountText}>{conversation.message_count || allMessages.length} msgs</RNText>
                 {isActive && (
                   <RNView style={styles.activeIndicator}>
                     <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
-                    <RNText style={styles.activeText}>Active</RNText>
+                    <RNText style={styles.activeText}>Live</RNText>
                   </RNView>
                 )}
                 {(conversation.fork_count ?? 0) > 0 && (
@@ -3477,41 +3505,47 @@ export default function SessionDetailScreen() {
                     </RNText>
                   </RNView>
                 )}
-              </RNView>
-              {(conversation.parent_conversation_id || conversation.forked_from_details) && (
-                <RNView style={styles.floatingLinksRow}>
-                  {conversation.parent_conversation_id && (
-                    <Pressable
-                      onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
-                      style={styles.floatingLinkPill}
-                    >
-                      <FontAwesome name="level-up" size={10} color={Theme.violet} />
-                      <RNText style={styles.floatingLinkText}>Parent</RNText>
-                    </Pressable>
-                  )}
-                  {conversation.forked_from_details && (
-                    <Pressable
-                      onPress={() => {
-                        const details = conversation.forked_from_details!;
-                        if (details.share_token) {
-                          Linking.openURL(`https://codecast.sh/share/${details.share_token}`);
-                        } else {
-                          router.push(`/session/${details.conversation_id}`);
-                        }
-                      }}
-                      style={styles.floatingLinkPill}
-                    >
-                      <FontAwesome name="code-fork" size={9} color={Theme.cyan} />
-                      <RNText style={styles.floatingLinkText}>@{conversation.forked_from_details.username}</RNText>
-                    </Pressable>
-                  )}
-                </RNView>
-              )}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.headerToolbar}>
+                {conversation.parent_conversation_id && (
+                  <Pressable
+                    onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
+                    style={styles.floatingLinkPill}
+                  >
+                    <FontAwesome name="level-up" size={10} color={Theme.violet} />
+                    <RNText style={styles.floatingLinkText}>Parent</RNText>
+                  </Pressable>
+                )}
+                {conversation.forked_from_details && (
+                  <Pressable
+                    onPress={() => {
+                      const details = conversation.forked_from_details!;
+                      if (details.share_token) {
+                        Linking.openURL(`https://codecast.sh/share/${details.share_token}`);
+                      } else {
+                        router.push(`/session/${details.conversation_id}`);
+                      }
+                    }}
+                    style={styles.floatingLinkPill}
+                  >
+                    <FontAwesome name="code-fork" size={9} color={Theme.cyan} />
+                    <RNText style={styles.floatingLinkText}>@{conversation.forked_from_details.username}</RNText>
+                  </Pressable>
+                )}
+              </ScrollView>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.headerToolbar}
+            >
+              <TouchableOpacity onPress={handleToggleFavorite} style={[styles.toolbarButton, conversation.is_favorite && styles.toolbarButtonActive]} activeOpacity={0.7}>
+                <FontAwesome name={conversation.is_favorite ? "star" : "star-o"} size={13} color={conversation.is_favorite ? Theme.accent : Theme.textDim} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleShareConversation} style={styles.toolbarButton} activeOpacity={0.7}>
+                <FontAwesome name="share-alt" size={12} color={Theme.textDim} />
+              </TouchableOpacity>
               <TouchableOpacity onPress={() => setSearchVisible(v => !v)} style={styles.toolbarButton} activeOpacity={0.7}>
                 <FontAwesome name="search" size={12} color={searchVisible ? Theme.cyan : Theme.textDim} />
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleCopyAll} style={styles.toolbarButton} activeOpacity={0.7}>
+              <TouchableOpacity onPress={handleCopyMenu} style={[styles.toolbarButton, shareSelectionMode && styles.toolbarButtonActive]} activeOpacity={0.7}>
                 <FontAwesome name="clipboard" size={13} color={Theme.textDim} />
               </TouchableOpacity>
               {conversation.session_id && (
@@ -3522,27 +3556,16 @@ export default function SessionDetailScreen() {
               <TouchableOpacity onPress={() => setCollapsed(c => !c)} style={[styles.toolbarButton, collapsed && styles.toolbarButtonActive]} activeOpacity={0.7}>
                 <FontAwesome name={collapsed ? "expand" : "compress"} size={13} color={collapsed ? Theme.cyan : Theme.textDim} />
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setShowThinking(s => !s)} style={[styles.toolbarButton, showThinking && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                <FontAwesome name="lightbulb-o" size={14} color={showThinking ? Theme.accent : Theme.textDim} />
-              </TouchableOpacity>
               {conversation.git_branch && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
                 <TouchableOpacity onPress={() => setDiffExpanded(d => !d)} style={[styles.toolbarButton, diffExpanded && styles.toolbarButtonActive]} activeOpacity={0.7}>
                   <FontAwesome name="code" size={12} color={diffExpanded ? Theme.green : Theme.textDim} />
                 </TouchableOpacity>
               )}
-              <TouchableOpacity onPress={shareSelectionMode ? handleCancelShareSelection : handleStartShareSelection} style={[styles.toolbarButton, shareSelectionMode && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                <FontAwesome name="check-square-o" size={12} color={shareSelectionMode ? Theme.cyan : Theme.textDim} />
-              </TouchableOpacity>
               {treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0 && (
                 <TouchableOpacity onPress={() => setTreeModalVisible(true)} style={styles.toolbarButton} activeOpacity={0.7}>
                   <FontAwesome name="sitemap" size={12} color={Theme.violet} />
                 </TouchableOpacity>
               )}
-              <SessionActions
-                conversationId={id as Id<"conversations">}
-                isFavorite={conversation.is_favorite ?? false}
-                shareToken={conversation.share_token}
-              />
             </ScrollView>
             {searchVisible && (
               <RNView style={[styles.searchBar, styles.floatingSearchBar]}>
@@ -3606,7 +3629,7 @@ export default function SessionDetailScreen() {
           data={allMessages}
           ListHeaderComponent={
             <>
-              <RNView style={{ height: floatingHeaderHeight + 8 }} />
+              <RNView style={{ height: floatingHeaderHeight }} />
               {hasMoreAbove && (
                 <RNView style={styles.loadMoreIndicator}>
                   {loadingOlder ? (
@@ -3707,16 +3730,15 @@ export default function SessionDetailScreen() {
                   userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
                   showToast={showToast}
                   collapsed={collapsed}
-                  showThinkingGlobal={showThinking}
-                  childConversationMap={conversation.child_conversation_map}
-                />
+                childConversationMap={conversation.child_conversation_map}
+              />
               </RNView>
             );
           }}
           keyExtractor={(item) => item._id}
           contentContainerStyle={[
             styles.messageList,
-            { paddingBottom: composerHeight + 12 },
+            { paddingBottom: 12 },
             allMessages.length === 0 && { flex: 1 },
           ]}
           ListEmptyComponent={
@@ -3755,7 +3777,6 @@ export default function SessionDetailScreen() {
           <MessageInput
             conversationId={id as Id<"conversations">}
             isActive={isActive}
-            onHeightChange={handleComposerHeightChange}
           />
         </RNView>
 
@@ -3773,20 +3794,30 @@ export default function SessionDetailScreen() {
               </RNView>
             </RNView>
           )}
-          {(!isNearTop || hasMoreAbove) && (
-            <RNView style={styles.jumpTopButtonWrap}>
+          {((!isNearTop && allMessages.length > 0) || hasMoreAbove) && (
+            <Animated.View
+              style={[
+                styles.jumpTopButtonWrap,
+                {
+                  top: floatingHeaderHeight + 4,
+                  transform: [{ translateY: floatingHeaderY }],
+                },
+              ]}
+            >
               <TouchableOpacity
                 onPress={handleJumpToStart}
                 style={styles.jumpButton}
                 activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Jump to first message"
               >
                 {jumpingToStart ? (
                   <ActivityIndicator size="small" color={Theme.textDim} />
                 ) : (
-                  <FontAwesome name="chevron-up" size={13} color={Theme.textDim} />
+                  <FontAwesome name="angle-up" size={18} color={Theme.textDim} />
                 )}
               </TouchableOpacity>
-            </RNView>
+            </Animated.View>
           )}
           {(userScrolled || !isNearBottomRef.current) && (
             <RNView style={styles.jumpBottomButtonWrap}>
@@ -3798,8 +3829,10 @@ export default function SessionDetailScreen() {
                 }}
                 style={styles.jumpButton}
                 activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Jump to latest message"
               >
-                <FontAwesome name="chevron-down" size={13} color={Theme.textDim} />
+                <FontAwesome name="angle-down" size={18} color={Theme.textDim} />
                 {newMessageCount > 0 && (
                   <RNView style={styles.jumpBadge}>
                     <RNText style={styles.jumpBadgeText}>{newMessageCount > 99 ? '99+' : newMessageCount}</RNText>
@@ -3884,27 +3917,29 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 60,
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 0,
+    paddingTop: 0,
   },
   floatingSessionCard: {
     backgroundColor: Theme.bgAlt,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
-    borderRadius: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 6,
-    elevation: 4,
+    borderRadius: 0,
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
   },
   sessionMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    flexWrap: 'wrap',
+    gap: 12,
+    flexWrap: 'nowrap',
+    marginBottom: 2,
+    paddingRight: 8,
   },
   floatingLinksRow: {
     flexDirection: 'row',
@@ -3934,19 +3969,21 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   metaBadgeModel: {
+    fontSize: 9,
+    color: Theme.textDim,
+    fontWeight: '500',
+    fontFamily: 'SpaceMono',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 5,
+    opacity: 0.9,
+  },
+  messageCountText: {
     fontSize: 10,
     color: Theme.textMuted,
     fontWeight: '500',
-    fontFamily: 'SpaceMono',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 4,
-  },
-  messageCountText: {
-    fontSize: 11,
-    color: Theme.textSecondary,
-    fontWeight: '500',
+    letterSpacing: 0.2,
   },
   activeIndicator: {
     flexDirection: 'row',
@@ -3964,24 +4001,9 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
   activeText: {
-    fontSize: 13,
-    color: Theme.greenBright,
+    fontSize: 12,
+    color: Theme.green + 'CC',
     fontWeight: '500',
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  actionButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    backgroundColor: Theme.bgHighlight,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   loadMoreButton: {
     alignItems: 'center',
@@ -3995,6 +4017,7 @@ const styles = StyleSheet.create({
   },
   messageList: {
     padding: 16,
+    flexGrow: 1,
   },
   permissionsContainer: {
     marginBottom: 16,
@@ -4463,17 +4486,17 @@ const styles = StyleSheet.create({
   },
   inactiveSessionBanner: {
     marginHorizontal: 12,
-    marginBottom: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(38, 139, 210, 0.1)',
-    borderWidth: 0.5,
-    borderColor: 'rgba(38, 139, 210, 0.3)',
-    borderRadius: 8,
+    marginBottom: 4,
+    paddingHorizontal: 4,
+    paddingTop: 6,
+    paddingBottom: 2,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight,
   },
-  inactiveSessionText: {
+  inactiveSessionCompactText: {
     fontSize: 11,
-    color: Theme.textSecondary,
+    color: Theme.textDim,
+    textAlign: 'center',
   },
   errorBanner: {
     backgroundColor: Theme.red,
@@ -4914,29 +4937,32 @@ const styles = StyleSheet.create({
   },
   jumpTopButtonWrap: {
     position: 'absolute',
-    top: 6,
-    right: 10,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
   jumpBottomButtonWrap: {
     position: 'absolute',
-    bottom: 6,
-    right: 10,
+    bottom: 20,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
   jumpButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: Theme.bgAlt + 'CC',
-    opacity: 0.86,
+    backgroundColor: Theme.bgAlt + 'B3',
+    opacity: 0.72,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 2,
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+    elevation: 1,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
+    borderColor: Theme.borderLight + '99',
   },
   // Teammate messages
   teammateMessage: {
@@ -5388,14 +5414,15 @@ const styles = StyleSheet.create({
   headerToolbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingTop: 6,
-    paddingBottom: 1,
-    paddingRight: 2,
+    flexWrap: 'nowrap',
+    gap: 5,
+    paddingTop: 7,
+    paddingBottom: 2,
+    paddingRight: 8,
   },
   toolbarButton: {
-    width: 30,
-    height: 30,
+    width: 42,
+    height: 34,
     borderRadius: 10,
     backgroundColor: Theme.bgHighlight,
     borderWidth: StyleSheet.hairlineWidth,
@@ -5500,16 +5527,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: Theme.textDim,
     fontFamily: 'SpaceMono',
-  },
-  // Short ID badge
-  shortIdBadge: {
-    fontSize: 10,
-    color: Theme.textDim,
-    fontFamily: 'SpaceMono',
-    backgroundColor: Theme.bgHighlight,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 3,
   },
   // View mode toggle (Raw/Rendered)
   languageLabelRow: {
