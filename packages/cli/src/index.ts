@@ -3138,13 +3138,31 @@ program
       }
     }
 
+    const extractGoalFromPreview = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
+      if (!preview) return undefined;
+      const firstUser = preview.find((m) => m.role === "user");
+      return firstUser?.content;
+    };
+
+    const extractPreviewText = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
+      if (!preview || preview.length === 0) return undefined;
+      const firstNonEmpty = preview.find((m) => m.content && m.content.trim().length > 0);
+      return firstNonEmpty?.content;
+    };
+
+    const enrichResumeConversations = (convs: any[]): any[] => convs.map((conv: any) => ({
+      ...conv,
+      preview: extractPreviewText(conv.preview),
+      goal: extractGoalFromPreview(conv.preview),
+    }));
+
     const fetchResumePage = async (offset: number): Promise<{ conversations: any[]; hasMore: boolean }> => {
       const response = await fetch(`${siteUrl}/cli/feed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
-          limit,
+          limit: limit + 1,
           offset,
           query,
           project_path: projectPath,
@@ -3172,8 +3190,10 @@ program
         console.error(`Error: ${result.error}`);
         process.exit(1);
       }
-      const conversations = result.conversations || [];
-      return { conversations, hasMore: conversations.length >= limit };
+      const raw = result.conversations || [];
+      const hasMore = raw.length > limit;
+      const pageItems = hasMore ? raw.slice(0, limit) : raw;
+      return { conversations: enrichResumeConversations(pageItems), hasMore };
     };
 
     try {
@@ -3182,27 +3202,7 @@ program
 
       // Fetch the first page once so we can keep "single result" behavior.
       page = await fetchResumePage(offset);
-
-      const extractGoalFromPreview = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
-        if (!preview) return undefined;
-        const firstUser = preview.find((m) => m.role === "user");
-        return firstUser?.content;
-      };
-
-      const extractPreviewText = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
-        if (!preview || preview.length === 0) return undefined;
-        const firstNonEmpty = preview.find((m) => m.content && m.content.trim().length > 0);
-        return firstNonEmpty?.content;
-      };
-
-      const rawConversations = (page.conversations || []).map((conv) => ({
-        ...conv,
-        preview: extractPreviewText(conv.preview),
-        goal: extractGoalFromPreview(conv.preview),
-      }));
-
-      // Trust the feed endpoint's search results - it already filters by message content
-      const conversations = rawConversations;
+      const conversations = page.conversations || [];
 
       if (conversations.length === 0) {
         console.log(`No sessions found matching "${query}"`);
@@ -3242,7 +3242,56 @@ program
         process.exit(0);
       }
 
-      // Interactive picker with pagination.
+      const getAgentLabel = (agentType?: string): string | null => {
+        if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
+        if (agentType === "codex" || agentType === "codex_cli") return "Codex";
+        if (agentType === "cursor") return "Cursor";
+        return agentType;
+      };
+
+      const formatResumeChoice = (conv: any): string => {
+        const title = conv.title || "Untitled";
+        const relTime = formatRelativeTime(conv.updated_at);
+        const meta: string[] = [
+          `${c.dim}${relTime}${c.reset}`,
+          `${c.dim}${conv.message_count} msgs${c.reset}`,
+        ];
+        if (conv.user) {
+          const name = conv.user.name || conv.user.email || "team member";
+          meta.push(`${c.magenta}${name}${c.reset}`);
+        }
+        const label = getAgentLabel(conv.agent_type);
+        if (label) meta.push(`${c.yellow}${label}${c.reset}`);
+        if (conv.project_path) meta.push(`${c.dim}${truncatePath(conv.project_path)}${c.reset}`);
+
+        const lines: string[] = [];
+        lines.push(`${c.bold}${title}${c.reset}`);
+        lines.push(`  ${meta.join(" | ")}`);
+
+        const firstMessage = conv.goal || conv.preview;
+        if (firstMessage) {
+          const msgLine = String(firstMessage).split("\n")[0].trim();
+          const maxLen = 85;
+          lines.push(`  ${c.green}>${c.reset} ${msgLine.length > maxLen ? msgLine.slice(0, maxLen) + "..." : msgLine}`);
+        }
+
+        if (conv.subtitle) {
+          const subtitleLines = String(conv.subtitle).split("\n").filter((l) => l.trim());
+          const maxLines = 2;
+          const maxLineLen = 83;
+          for (let j = 0; j < Math.min(subtitleLines.length, maxLines); j++) {
+            const rawLine = subtitleLines[j].trim();
+            lines.push(`    ${rawLine.length > maxLineLen ? rawLine.slice(0, maxLineLen) + "..." : rawLine}`);
+          }
+          if (subtitleLines.length > maxLines) {
+            lines.push(`    ${c.dim}... (${subtitleLines.length - maxLines} more)${c.reset}`);
+          }
+        }
+
+        return lines.join("\n");
+      };
+
+      // Interactive picker with pagination + rich session cards.
       while (true) {
         const current = page?.conversations || [];
         if (current.length === 0) {
@@ -3251,10 +3300,8 @@ program
         }
 
         const choices: Array<{ name: string; value: string }> = current.map((conv: any) => {
-          const agent = conv.agent_type === "claude_code" ? "claude" : (conv.agent_type || "claude");
           const sid = conv.session_id ? String(conv.session_id).slice(0, 8) : "unknown";
-          const title = conv.title || "(untitled)";
-          return { name: `[${agent}] ${title} ${fmt.muted(`(${sid})`)}`, value: String(conv.id) };
+          return { name: `${formatResumeChoice(conv)}\n${fmt.muted(`  id: ${sid}`)}`, value: String(conv.id) };
         });
 
         if (offset > 0) choices.push({ name: fmt.muted("Prev page"), value: "__prev__" });
