@@ -2975,6 +2975,7 @@ program
   .option("--here", "Open session in current directory (don't switch to session's project)")
   .option("--as <agent>", "Resume in a different agent (claude or codex)")
   .option("--claude-args <args>", "Additional args to pass to claude (overrides config)")
+  .option("--claude-tail <n>", "When converting to Claude, keep only the last N messages (+ a truncation notice)")
   .action(async (queryWords: string[], options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -3110,6 +3111,7 @@ program
                 targetAgent,
                 config,
                 options.claudeArgs,
+                options.claudeTail,
                 false,
                 options.here ? undefined : matched.project_path,
               );
@@ -3205,7 +3207,7 @@ program
         const sourceAgent = conv.agent_type || "claude_code";
         const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
         if (targetAgent && targetAgent !== normalizedSource) {
-          await convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, false, options.here ? undefined : conv.project_path);
+          await convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, options.claudeTail, false, options.here ? undefined : conv.project_path);
         } else {
           const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
           const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
@@ -3265,7 +3267,7 @@ program
           const sourceAgent = conv.agent_type || "claude_code";
           const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
           if (targetAgent && targetAgent !== normalizedSource) {
-            convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, false, options.here ? undefined : conv.project_path);
+            convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, options.claudeTail, false, options.here ? undefined : conv.project_path);
           } else {
             const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
             const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
@@ -3293,6 +3295,7 @@ async function convertAndLaunch(
   targetAgent: string,
   config: Config,
   extraArgs?: string,
+  claudeTail?: string,
   showArgsHint?: boolean,
   projectPath?: string | null,
 ): Promise<void> {
@@ -3308,7 +3311,10 @@ async function convertAndLaunch(
     const resolvedArgs = extraArgs ?? config.codex_args;
     launchCodex(sessionId, resolvedArgs, showArgsHint, projectPath);
   } else {
-    const { jsonl, sessionId } = generateClaudeCodeJsonl(data);
+    const tailN = claudeTail ? parseInt(claudeTail, 10) : undefined;
+    const { jsonl, sessionId } = generateClaudeCodeJsonl(data, {
+      tailMessages: Number.isFinite(tailN as number) ? (tailN as number) : undefined,
+    });
     writeClaudeCodeSession(jsonl, sessionId, projectPath || undefined);
     console.log(`  Written Claude Code session: ${sessionId}`);
     const resolvedArgs = extraArgs ?? config.claude_args;

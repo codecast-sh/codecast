@@ -278,7 +278,14 @@ function truncate(text: string, max = 2000): string {
 
 // ── Claude Code JSONL ──────────────────────────────────────
 
-export function generateClaudeCodeJsonl(data: ExportResult): { jsonl: string; sessionId: string } {
+export interface GenerateClaudeCodeJsonlOptions {
+  tailMessages?: number;
+}
+
+export function generateClaudeCodeJsonl(
+  data: ExportResult,
+  options: GenerateClaudeCodeJsonlOptions = {}
+): { jsonl: string; sessionId: string } {
   const lines: string[] = [];
   const sessionId = uuidv4();
   const cwd = data.conversation.project_path || process.cwd();
@@ -292,7 +299,31 @@ export function generateClaudeCodeJsonl(data: ExportResult): { jsonl: string; se
     isSnapshotUpdate: false,
   }));
 
-  for (const msg of data.messages) {
+  let messages = data.messages;
+  const tailMessages = typeof options.tailMessages === "number" ? options.tailMessages : undefined;
+  if (tailMessages && tailMessages > 0 && messages.length > tailMessages) {
+    const cutoffIndex = messages.length - tailMessages;
+    const firstUserIndex = messages.findIndex((m) => m.role === "user");
+    const firstUser = firstUserIndex >= 0 ? messages[firstUserIndex] : null;
+    const tail = messages.slice(-tailMessages);
+
+    const notice: ExportedMessage = {
+      role: "user",
+      timestamp: data.conversation.started_at,
+      content:
+        `[Codecast import] This Claude session was truncated to avoid overly-long context (which can break Claude Code /compact).\n` +
+        `Original: ${messages.length} messages. Included: last ${tailMessages} messages` +
+        (firstUser && firstUserIndex < cutoffIndex ? " + first user message." : "."),
+    };
+
+    messages = [notice];
+    if (firstUser && firstUserIndex < cutoffIndex) {
+      messages.push(firstUser);
+    }
+    messages.push(...tail);
+  }
+
+  for (const msg of messages) {
     const uuid = msg.message_uuid || uuidv4();
 
     if (msg.role === "user") {

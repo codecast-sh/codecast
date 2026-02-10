@@ -216,4 +216,43 @@ describe("generateClaudeCodeJsonl", () => {
     expect(Array.isArray(assistant?.message?.content)).toBe(true);
     expect(assistant.message.content.some((b: any) => b?.type === "thinking")).toBe(false);
   });
+
+  test("can truncate to tail messages for Claude imports", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv",
+        title: "t",
+        session_id: "session",
+        agent_type: "codex",
+        project_path: "/tmp/project",
+        model: "claude-opus-4-5-20251101",
+        message_count: 10,
+        started_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "u1", timestamp: "2026-01-01T00:00:00.000Z" },
+        { role: "assistant", content: "a1", timestamp: "2026-01-01T00:00:00.100Z" },
+        { role: "user", content: "u2", timestamp: "2026-01-01T00:00:00.200Z" },
+        { role: "assistant", content: "a2", timestamp: "2026-01-01T00:00:00.300Z" },
+        { role: "user", content: "u3", timestamp: "2026-01-01T00:00:00.400Z" },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data, { tailMessages: 2 });
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+    const chat = lines.filter((l) => l.type === "user" || l.type === "assistant");
+
+    expect(chat[0].type).toBe("user");
+    expect(chat[0].message?.content).toContain("[Codecast import]");
+    expect(chat.some((l) => l.type === "user" && l.message?.content === "u1")).toBe(true);
+
+    // Tail is the last 2 messages: a2, u3
+    expect(chat.some((l) => l.type === "assistant" && l.message?.content?.[0]?.text === "a2")).toBe(true);
+    expect(chat.some((l) => l.type === "user" && l.message?.content === "u3")).toBe(true);
+
+    // Mid history should be omitted.
+    expect(chat.some((l) => l.type === "assistant" && l.message?.content?.[0]?.text === "a1")).toBe(false);
+    expect(chat.some((l) => l.type === "user" && l.message?.content === "u2")).toBe(false);
+  });
 });
