@@ -13,6 +13,7 @@ type Conversation = {
   subtitle?: string | null;
   started_at: number;
   updated_at: number;
+  duration_ms?: number;
   message_count?: number;
   is_active: boolean;
   author_name: string;
@@ -60,6 +61,17 @@ function formatRelativeTime(timestamp: number): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 60000) return "<1m";
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
 function agentLabel(agentType: string): string {
   switch (agentType) {
     case "claude_code": return "Claude";
@@ -91,6 +103,7 @@ function ConversationItem({ conversation, onPress, onLongPress }: {
 }) {
   const project = projectName(conversation.project_path ?? undefined);
   const agent = agentLabel(conversation.agent_type ?? "");
+  const durationMs = conversation.duration_ms ?? (conversation.updated_at - conversation.started_at);
 
   return (
     <TouchableOpacity
@@ -107,9 +120,16 @@ function ConversationItem({ conversation, onPress, onLongPress }: {
               {conversation.title || 'Untitled'}
             </RNText>
           </RNView>
-          <RNText style={styles.messageCount}>
-            {conversation.message_count ?? 0}
-          </RNText>
+          <RNView style={styles.rightMeta}>
+            <RNText style={styles.messageCount}>
+              {conversation.message_count ?? 0}
+            </RNText>
+            {durationMs > 60000 && (
+              <RNText style={styles.durationText}>
+                {formatDuration(durationMs)}
+              </RNText>
+            )}
+          </RNView>
         </RNView>
 
         {conversation.subtitle && (
@@ -502,6 +522,18 @@ const styles = StyleSheet.create({
   },
   messageCount: {
     fontSize: 11,
+    color: Theme.textMuted0,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '400',
+  },
+  rightMeta: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 2,
+    marginLeft: Spacing.sm,
+  },
+  durationText: {
+    fontSize: 10,
     color: Theme.textMuted0,
     fontVariant: ['tabular-nums'],
     fontWeight: '400',
