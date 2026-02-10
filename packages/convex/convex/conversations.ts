@@ -981,6 +981,7 @@ export const listConversations = query({
     filter: v.union(v.literal("my"), v.literal("team")),
     limit: v.optional(v.number()),
     cursor: v.optional(v.string()),
+    include_message_previews: v.optional(v.boolean()),
     memberId: v.optional(v.id("users")),
     activeTeamId: v.optional(v.id("teams")),
   },
@@ -995,25 +996,25 @@ export const listConversations = query({
     }
 
     const limit = args.limit ?? 50;
+    const includeMessagePreviews = args.include_message_previews ?? true;
     const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
-    const effectiveTeamId = args.activeTeamId || user.active_team_id;
+    const effectiveTeamId = args.filter === "team" ? (args.activeTeamId || user.active_team_id) : undefined;
 
-    // Get team members for the effective team
-    const teamUsers = effectiveTeamId
+    const teamUsers = args.filter === "team" && effectiveTeamId
       ? await ctx.db
           .query("users")
           .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
           .collect()
       : [];
-    // Also get members via team_memberships for multi-team support
-    const teamMemberships = effectiveTeamId
+
+    const teamMemberships = args.filter === "team" && effectiveTeamId
       ? await ctx.db
           .query("team_memberships")
           .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
           .collect()
       : [];
-    const membershipUserIds = new Set(teamMemberships.map(m => m.user_id.toString()));
+
     const additionalUsers = await Promise.all(
       teamMemberships
         .filter(m => !teamUsers.some(u => u._id.toString() === m.user_id.toString()))
@@ -1140,7 +1141,10 @@ export const listConversations = query({
 
     const conversationsWithUsers = await Promise.all(
       resultConversations.map(async (c) => {
-        const conversationUser = await ctx.db.get(c.user_id);
+        const conversationUser =
+          c.user_id.toString() === userId.toString()
+            ? user
+            : teamUserMap.get(c.user_id.toString()) || await ctx.db.get(c.user_id);
 
         type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
 
@@ -1182,6 +1186,7 @@ export const listConversations = query({
             updated_at: c.updated_at,
             started_at: c.started_at,
             duration_ms: durationMs,
+            message_count: c.message_count,
             activity_summary: `1 agent in ${projectName}`,
             project_path: c.project_path || null,
             git_root: c.git_root || null,
@@ -1202,10 +1207,53 @@ export const listConversations = query({
             updated_at: c.updated_at,
             started_at: c.started_at,
             duration_ms: durationMs,
+            message_count: c.message_count,
             project_path: c.project_path || null,
             git_root: c.git_root || null,
             tool_names: [],
             subagent_types: [],
+          };
+        }
+
+        if (!includeMessagePreviews) {
+          const fullTitle = c.title || `Session ${c.session_id.slice(0, 8)}`;
+          return {
+            _id: c._id,
+            user_id: c.user_id,
+            visibility_mode: visibilityMode,
+            title: fullTitle,
+            subtitle: (visibilityMode === "full" || visibilityMode === "detailed") ? (c.subtitle || null) : null,
+            first_user_message: null,
+            first_assistant_message: null,
+            message_alternates: [],
+            tool_names: [],
+            subagent_types: [],
+            agent_type: c.agent_type,
+            model: c.model || null,
+            slug: visibilityMode === "full" ? (c.slug || null) : null,
+            started_at: c.started_at,
+            updated_at: c.updated_at,
+            duration_ms: durationMs,
+            message_count: c.message_count,
+            ai_message_count: 0,
+            tool_call_count: 0,
+            is_active: isActive,
+            author_name: authorName,
+            author_avatar: authorAvatar,
+            is_own: c.user_id.toString() === userId.toString(),
+            parent_conversation_id: null,
+            parent_title: null,
+            latest_todos: undefined,
+            project_path: c.project_path || null,
+            git_root: c.git_root || null,
+            git_branch: c.git_branch || null,
+            git_remote_url: c.git_remote_url || null,
+            is_favorite: c.is_favorite || false,
+            fork_count: c.fork_count || 0,
+            forked_from: c.forked_from || null,
+            is_private: c.is_private,
+            team_visibility: c.team_visibility || null,
+            auto_shared: c.auto_shared || false,
           };
         }
 
