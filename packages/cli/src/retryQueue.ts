@@ -244,7 +244,7 @@ export class RetryQueue {
 
     if (op.attempts >= this.maxAttempts) {
       this.log(
-        `DROPPED: ${op.type} after ${op.attempts} attempts. Last error: ${error}. Session: ${op.params.sessionId || 'unknown'}`,
+        `Max retries reached. DROPPED: ${op.type} after ${op.attempts} attempts. Last error: ${error}. Session: ${op.params.sessionId || 'unknown'}`,
         "error"
       );
       this.recordDroppedOperation(op);
