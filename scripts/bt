@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./scripts/bt [auth=NAME|--auth NAME] [--base-port N] <command> [args...]
+
+Examples:
+  ./scripts/bt auth=admin start
+  ./scripts/bt auth=admin nav http://local.codecast.sh/dashboard
+  ./scripts/bt auth=admin eval 'document.title'
+  ./scripts/bt auth=admin screenshot
+  ./scripts/bt kill
+
+Notes:
+  - auth=NAME uses a persistent Chrome profile at ~/.cache/browser-tools/auth/NAME
+    so you only log in once per identity.
+  - The DevTools port is derived from agent identity (see agent-browser-port).
+EOF
+}
+
+auth_name=""
+base_port="${BROWSER_PORT_BASE:-9300}"
+args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    auth=*)
+      auth_name="${1#auth=}"
+      ;;
+    --auth)
+      shift
+      auth_name="${1:-}"
+      ;;
+    --base-port)
+      shift
+      base_port="${1:-}"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      args+=("$1")
+      ;;
+  esac
+  shift
+done
+
+if [[ ${#args[@]} -eq 0 ]]; then
+  usage >&2
+  exit 1
+fi
+
+cmd="${args[0]}"
+rest=()
+if ((${#args[@]} > 1)); then
+  rest=("${args[@]:1}")
+fi
+
+if [[ -n "$base_port" && ! "$base_port" =~ ^[0-9]+$ ]]; then
+  echo "error: --base-port expects an integer" >&2
+  exit 1
+fi
+
+export BROWSER_PORT_BASE="$base_port"
+eval "$(agent-browser-port --env)"
+
+auth_tag="${auth_name:-default}"
+profile_dir="$HOME/.cache/browser-tools/$AGENT_BROWSER_PORT"
+if [[ -n "$auth_name" ]]; then
+  profile_dir="$HOME/.cache/browser-tools/auth/$auth_name"
+  override_file="$HOME/.codecast/browser-auth/${auth_name}.profile-dir"
+  if [[ -f "$override_file" ]]; then
+    profile_dir="$(tr -d '\n' <"$override_file")"
+    profile_dir="${profile_dir/#\~/$HOME}"
+  fi
+fi
+
+auth_state_dir="$HOME/.cache/browser-tools"
+mkdir -p "$auth_state_dir"
+auth_state_file="$auth_state_dir/port-$AGENT_BROWSER_PORT.auth"
+
+port_listening() {
+  lsof -n -iTCP:"$AGENT_BROWSER_PORT" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+ensure_browser_started() {
+  if port_listening; then
+    current_auth="$(cat "$auth_state_file" 2>/dev/null || true)"
+    if [[ -n "$current_auth" && "$current_auth" != "$auth_tag" ]]; then
+      browser-tools kill --ports "$AGENT_BROWSER_PORT" --force >/dev/null 2>&1 || true
+      rm -f "$auth_state_file"
+    fi
+  fi
+
+  if ! port_listening; then
+    mkdir -p "$profile_dir"
+    browser-tools start --port "$AGENT_BROWSER_PORT" --profile-dir "$profile_dir" >/dev/null
+    printf '%s' "$auth_tag" >"$auth_state_file"
+  fi
+}
+
+case "$cmd" in
+  start)
+    ensure_browser_started
+    ;;
+  kill)
+    browser-tools kill --ports "$AGENT_BROWSER_PORT" --force
+    rm -f "$auth_state_file" >/dev/null 2>&1 || true
+    ;;
+  screenshot)
+    ensure_browser_started
+    if ((${#rest[@]})); then
+      browser-tools-screenshot --port "$AGENT_BROWSER_PORT" "${rest[@]}"
+    else
+      browser-tools-screenshot --port "$AGENT_BROWSER_PORT"
+    fi
+    ;;
+  console|cookies|eval|inspect|nav|pick)
+    ensure_browser_started
+    if ((${#rest[@]})); then
+      browser-tools "$cmd" --port "$AGENT_BROWSER_PORT" "${rest[@]}"
+    else
+      browser-tools "$cmd" --port "$AGENT_BROWSER_PORT"
+    fi
+    ;;
+  *)
+    # Pass-through for commands that don't use the live DevTools connection
+    # (e.g. `content`, `search`, `help`).
+    if ((${#rest[@]})); then
+      browser-tools "$cmd" "${rest[@]}"
+    else
+      browser-tools "$cmd"
+    fi
+    ;;
+esac
