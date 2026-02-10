@@ -2811,6 +2811,8 @@ export default function SessionDetailScreen() {
   const floatingHeaderOffsetRef = useRef(0);
   const lastScrollYRef = useRef(0);
   const activePulse = useRef(new Animated.Value(1)).current;
+  const didInitialScrollRef = useRef(false);
+  const initialScrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const conversation = useQuery(
     api.conversations.getAllMessages,
@@ -3166,25 +3168,25 @@ export default function SessionDetailScreen() {
   }, [floatingHeaderY]);
 
   useEffect(() => {
-    if (conversation && !initialScrollDone && allMessages.length > 0) {
-      if (openedAtLastMessageTsRef.current === null) {
-        openedAtLastMessageTsRef.current = allMessages[allMessages.length - 1]?.timestamp ?? Date.now();
-      }
-      if (prevMessageIdsRef.current.size === 0) {
-        prevMessageIdsRef.current = new Set(allMessages.map((message) => message._id));
-      }
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
-        setInitialScrollDone(true);
-      }, 150);
+    if (!conversation || allMessages.length === 0) return;
+    if (openedAtLastMessageTsRef.current === null) {
+      openedAtLastMessageTsRef.current = allMessages[allMessages.length - 1]?.timestamp ?? Date.now();
     }
-  }, [conversation?._id, allMessages.length > 0]);
+    if (prevMessageIdsRef.current.size === 0) {
+      prevMessageIdsRef.current = new Set(allMessages.map((message) => message._id));
+    }
+  }, [conversation?._id, allMessages]);
 
   useEffect(() => {
     setOlderMessages([]);
     setOlderHasMore(true);
     setOlderOldestTs(null);
     setInitialScrollDone(false);
+    didInitialScrollRef.current = false;
+    if (initialScrollDebounceRef.current) {
+      clearTimeout(initialScrollDebounceRef.current);
+      initialScrollDebounceRef.current = null;
+    }
     setUserScrolled(false);
     prevMessageIdsRef.current = new Set();
     openedAtLastMessageTsRef.current = null;
@@ -3192,6 +3194,15 @@ export default function SessionDetailScreen() {
     floatingHeaderOffsetRef.current = 0;
     floatingHeaderY.setValue(0);
   }, [id, floatingHeaderHeight, floatingHeaderY]);
+
+  useEffect(() => {
+    return () => {
+      if (initialScrollDebounceRef.current) {
+        clearTimeout(initialScrollDebounceRef.current);
+        initialScrollDebounceRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!searchVisible) return;
@@ -3627,6 +3638,25 @@ export default function SessionDetailScreen() {
         <FlatList
           ref={flatListRef}
           data={allMessages}
+          onContentSizeChange={() => {
+            if (!conversation || allMessages.length === 0) return;
+            if (highlightMessageParam || highlightedMessageId) return;
+            if (userScrolled) return;
+            if (initialScrollDone) return;
+
+            didInitialScrollRef.current = true;
+            flatListRef.current?.scrollToEnd({ animated: false });
+            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 60);
+
+            if (initialScrollDebounceRef.current) {
+              clearTimeout(initialScrollDebounceRef.current);
+            }
+            initialScrollDebounceRef.current = setTimeout(() => {
+              setInitialScrollDone(true);
+              initialScrollDebounceRef.current = null;
+              setUserScrolled(false);
+            }, 350);
+          }}
           ListHeaderComponent={
             <>
               <RNView style={{ height: floatingHeaderHeight }} />
@@ -3770,7 +3800,7 @@ export default function SessionDetailScreen() {
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={16}
-          maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
+          maintainVisibleContentPosition={initialScrollDone ? { minIndexForVisible: 1 } : undefined}
         />
 
         <RNView>
