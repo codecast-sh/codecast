@@ -10,7 +10,24 @@ Run dev server:
 ```
 
 ## Test Credentials
-For testing the web app locally see email and password in packages/web/.env.local as TEST_USER_EMAIL and TEST_USER_PASSWORD.
+For testing the web app locally:
+- Prefer `TEST_USER_EMAIL` / `TEST_USER_PASSWORD` env vars when running e2e.
+- E2e tests fall back to `test@example.com` / `testpass123` if unset.
+- If `packages/web/.env.local` defines `TEST_USER_EMAIL` / `TEST_USER_PASSWORD`, use those.
+
+## Browser Tools Auth
+Use `./scripts/bt` to keep a persistent, named Chrome profile per identity so you only log in once.
+
+```bash
+./scripts/bt auth=admin start
+./scripts/bt auth=admin nav http://local.codecast.sh/dashboard
+./scripts/bt auth=admin screenshot
+./scripts/bt auth=admin eval 'document.title'
+```
+
+Profiles live at `~/.cache/browser-tools/auth/<name>`. To switch identities on the same port: `./scripts/bt kill` then rerun with a different `auth=...`.
+
+Optional override: if `~/.codecast/browser-auth/<name>.profile-dir` exists, `./scripts/bt auth=<name>` will use that directory instead.
 
 ## CLI Commands
 
