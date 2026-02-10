@@ -38,6 +38,61 @@ export interface ExportResult {
   messages: ExportedMessage[];
 }
 
+function estimateTokensFromText(text: string): number {
+  if (!text) return 0;
+  // Rough heuristic: ~4 chars/token for English-ish text and code.
+  return Math.ceil(text.length / 4);
+}
+
+function estimateTokensForMessage(msg: ExportedMessage): number {
+  let tokens = 0;
+
+  if (msg.content) tokens += estimateTokensFromText(msg.content);
+  if (msg.tool_calls) {
+    for (const tc of msg.tool_calls) {
+      if (tc.name) tokens += estimateTokensFromText(tc.name);
+      if (tc.input) tokens += estimateTokensFromText(tc.input);
+    }
+  }
+  if (msg.tool_results) {
+    for (const tr of msg.tool_results) {
+      // Claude session JSONL truncates tool results; mirror that to avoid over-trimming.
+      const text = truncate(tr.content || "", 2000);
+      tokens += estimateTokensFromText(text);
+    }
+  }
+
+  return tokens;
+}
+
+export function estimateClaudeImportTokens(data: ExportResult): number {
+  let total = 0;
+  for (const msg of data.messages) total += estimateTokensForMessage(msg);
+  // Add rough overhead for JSONL structure / tool wrappers.
+  return Math.ceil(total * 1.1);
+}
+
+export function chooseClaudeTailMessagesForTokenBudget(data: ExportResult, budgetTokens: number): number {
+  if (budgetTokens <= 0) return 0;
+  const messages = data.messages;
+  if (messages.length === 0) return 0;
+
+  // Reserve a little space for the truncation notice + first user message.
+  const reserved = estimateTokensFromText("[Codecast import]") + 512;
+  const budget = Math.max(0, budgetTokens - reserved);
+
+  let used = 0;
+  let count = 0;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const t = estimateTokensForMessage(messages[i]);
+    if (count > 0 && used + t > budget) break;
+    used += t;
+    count += 1;
+  }
+
+  return Math.max(1, count);
+}
+
 interface ExportPageResult extends ExportResult {
   next_cursor?: string | null;
   done?: boolean;

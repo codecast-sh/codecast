@@ -16,7 +16,15 @@ import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
-import { fetchExport, generateClaudeCodeJsonl, generateCodexJsonl, writeClaudeCodeSession, writeCodexSession } from "./jsonlGenerator.js";
+import {
+  fetchExport,
+  generateClaudeCodeJsonl,
+  generateCodexJsonl,
+  writeClaudeCodeSession,
+  writeCodexSession,
+  estimateClaudeImportTokens,
+  chooseClaudeTailMessagesForTokenBudget,
+} from "./jsonlGenerator.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { checkbox, confirm, select } from "@inquirer/prompts";
 
@@ -2976,6 +2984,7 @@ program
   .option("--as <agent>", "Resume in a different agent (claude or codex)")
   .option("--claude-args <args>", "Additional args to pass to claude (overrides config)")
   .option("--claude-tail <n>", "When converting to Claude, keep only the last N messages (+ a truncation notice)")
+  .option("--claude-full", "When converting to Claude, do not auto-trim (may create a session too large for /compact)")
   .action(async (queryWords: string[], options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -3001,53 +3010,53 @@ program
 
         if (total === 0) process.exit(0);
 
-        const readline = await import("readline");
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const choices: Array<{ name: string; value: string }> = sessions.map((p, idx) => {
+          const agent = p.agentType === "claude_code" ? "claude" : "codex";
+          const id = p.sessionId.startsWith("unknown") ? `PID ${p.pid}` : p.sessionId.slice(0, 8);
+          const where = p.tmuxSession ? `tmux:${p.tmuxSession}` : p.tty;
+          return { name: `[${agent}] ${id} ${fmt.muted(`(${where})`)}`, value: String(idx) };
+        });
 
-        const promptForSession = (): void => {
-          rl.question("> ", async (answer) => {
-            const trimmed = answer.trim().toLowerCase();
-            if (trimmed === "q" || trimmed === "quit" || trimmed === "exit" || trimmed === "") {
-              rl.close();
-              process.exit(0);
-            }
-            if (trimmed === "n" || trimmed === "next") {
-              if (hasMore) {
-                rl.close();
-                currentOffset += pageSize;
-                await showPage();
-              } else {
-                console.log("No more sessions");
-                promptForSession();
-              }
-              return;
-            }
-            const num = parseInt(trimmed);
-            if (isNaN(num) || num < 1 || num > sessions.length) {
-              const validOpts = hasMore ? `1-${sessions.length}, n, or q` : `1-${sessions.length} or q`;
-              console.log(`Enter ${validOpts}`);
-              promptForSession();
-              return;
-            }
-            rl.close();
-            const p = sessions[num - 1];
-            if (p.tmuxSession) {
-              console.log(`\nAttaching to tmux session: ${p.tmuxSession}`);
-              try {
-                spawnSync("tmux", ["attach-session", "-t", p.tmuxSession], { stdio: "inherit" });
-              } catch (err) {
-                console.error(`Failed to attach: ${err instanceof Error ? err.message : err}`);
-              }
-            } else if (!p.sessionId.startsWith("unknown")) {
-              console.log(`\nResuming: ${p.sessionId.slice(0, 8)}`);
-              const extraArgs = resolveAgentArgs(p.agentType, options.claudeArgs, config);
-              launchSession(p.sessionId, p.agentType, extraArgs, !extraArgs);
-            } else {
-              console.log(`\nSession PID ${p.pid} on ${p.tty} -- attach manually or use tmux`);
-            }
-          });
-        };
-        promptForSession();
+        if (currentOffset > 0) choices.push({ name: fmt.muted("Prev page"), value: "__prev__" });
+        if (hasMore) choices.push({ name: fmt.muted("Next page"), value: "__next__" });
+        choices.push({ name: fmt.muted("Quit"), value: "__quit__" });
+
+        const selected = await select({
+          message: "Select a live session:",
+          choices,
+          pageSize: Math.min(12, choices.length),
+        });
+
+        if (selected === "__quit__") process.exit(0);
+        if (selected === "__next__") {
+          currentOffset += pageSize;
+          await showPage();
+          return;
+        }
+        if (selected === "__prev__") {
+          currentOffset = Math.max(0, currentOffset - pageSize);
+          await showPage();
+          return;
+        }
+
+        const idx = parseInt(selected, 10);
+        const p = sessions[idx];
+        if (!p) process.exit(0);
+
+        if (p.tmuxSession) {
+          console.log(`\nAttaching to tmux session: ${p.tmuxSession}`);
+          try {
+            spawnSync("tmux", ["attach-session", "-t", p.tmuxSession], { stdio: "inherit" });
+          } catch (err) {
+            console.error(`Failed to attach: ${err instanceof Error ? err.message : err}`);
+          }
+        } else if (!p.sessionId.startsWith("unknown")) {
+          console.log(`\nResuming: ${p.sessionId.slice(0, 8)}`);
+          const extraArgs = resolveAgentArgs(p.agentType, options.claudeArgs, config);
+          launchSession(p.sessionId, p.agentType, extraArgs, !extraArgs);
+        } else {
+          console.log(`\nSession PID ${p.pid} on ${p.tty} -- attach manually or use tmux`);
+        }
       };
 
       await showPage();
@@ -3112,6 +3121,7 @@ program
                 config,
                 options.claudeArgs,
                 options.claudeTail,
+                options.claudeFull,
                 false,
                 options.here ? undefined : matched.project_path,
               );
@@ -3128,14 +3138,14 @@ program
       }
     }
 
-    try {
+    const fetchResumePage = async (offset: number): Promise<{ conversations: any[]; hasMore: boolean }> => {
       const response = await fetch(`${siteUrl}/cli/feed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
-          limit: limit * 3,
-          offset: 0,
+          limit,
+          offset,
           query,
           project_path: projectPath,
         }),
@@ -3162,6 +3172,16 @@ program
         console.error(`Error: ${result.error}`);
         process.exit(1);
       }
+      const conversations = result.conversations || [];
+      return { conversations, hasMore: conversations.length >= limit };
+    };
+
+    try {
+      let offset = 0;
+      let page: { conversations: any[]; hasMore: boolean } | null = null;
+
+      // Fetch the first page once so we can keep "single result" behavior.
+      page = await fetchResumePage(offset);
 
       const extractGoalFromPreview = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
         if (!preview) return undefined;
@@ -3175,14 +3195,14 @@ program
         return firstNonEmpty?.content;
       };
 
-      const rawConversations = (result.conversations || []).map((conv) => ({
+      const rawConversations = (page.conversations || []).map((conv) => ({
         ...conv,
         preview: extractPreviewText(conv.preview),
         goal: extractGoalFromPreview(conv.preview),
       }));
 
       // Trust the feed endpoint's search results - it already filters by message content
-      const conversations = rawConversations.slice(0, limit);
+      const conversations = rawConversations;
 
       if (conversations.length === 0) {
         console.log(`No sessions found matching "${query}"`);
@@ -3207,7 +3227,7 @@ program
         const sourceAgent = conv.agent_type || "claude_code";
         const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
         if (targetAgent && targetAgent !== normalizedSource) {
-          await convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, options.claudeTail, false, options.here ? undefined : conv.project_path);
+          await convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, options.claudeTail, options.claudeFull, false, options.here ? undefined : conv.project_path);
         } else {
           const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
           const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
@@ -3216,67 +3236,85 @@ program
         return;
       }
 
-      const { formatResumeResults } = await import("./formatter.js");
-      console.log(formatResumeResults({ conversations: enrichedConversations, query }));
-
       if (options.dryRun) {
+        const { formatResumeResults } = await import("./formatter.js");
+        console.log(formatResumeResults({ conversations: enrichedConversations, query }));
         process.exit(0);
       }
 
-      const readline = await import("readline");
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-      });
+      // Interactive picker with pagination.
+      while (true) {
+        const current = page?.conversations || [];
+        if (current.length === 0) {
+          console.log(`No sessions found matching "${query}"`);
+          process.exit(0);
+        }
 
-      const promptForSelection = (): void => {
-        rl.question("> ", (answer) => {
-          const trimmed = answer.trim().toLowerCase();
-
-          if (trimmed === "q" || trimmed === "quit" || trimmed === "exit" || trimmed === "") {
-            rl.close();
-            process.exit(0);
-          }
-
-          const selectMatch = trimmed.match(/^(\d+)(?:\s*(c|x|claude|codex))?$/);
-          if (!selectMatch) {
-            console.log(`Enter 1-${conversations.length}, optionally with c/x (e.g. 2x), or q to quit`);
-            promptForSelection();
-            return;
-          }
-
-          const num = parseInt(selectMatch[1], 10);
-          if (isNaN(num) || num < 1 || num > conversations.length) {
-            console.log(`Enter 1-${conversations.length}, optionally with c/x (e.g. 2x), or q to quit`);
-            promptForSelection();
-            return;
-          }
-
-          rl.close();
-          const conv = conversations[num - 1];
-          const sessionId = conv.session_id;
-          if (!sessionId) {
-            console.error("Session ID not found");
-            process.exit(1);
-          }
-          console.log(`\nOpening: ${conv.title}`);
-          const selectionAgent = selectMatch[2];
-          const targetAgent = selectionAgent
-            ? (selectionAgent === "c" || selectionAgent === "claude" ? "claude" : "codex")
-            : options.as?.toLowerCase();
-          const sourceAgent = conv.agent_type || "claude_code";
-          const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
-          if (targetAgent && targetAgent !== normalizedSource) {
-            convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, options.claudeTail, false, options.here ? undefined : conv.project_path);
-          } else {
-            const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
-            const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
-            launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
-          }
+        const choices: Array<{ name: string; value: string }> = current.map((conv: any) => {
+          const agent = conv.agent_type === "claude_code" ? "claude" : (conv.agent_type || "claude");
+          const sid = conv.session_id ? String(conv.session_id).slice(0, 8) : "unknown";
+          const title = conv.title || "(untitled)";
+          return { name: `[${agent}] ${title} ${fmt.muted(`(${sid})`)}`, value: String(conv.id) };
         });
-      };
 
-      promptForSelection();
+        if (offset > 0) choices.push({ name: fmt.muted("Prev page"), value: "__prev__" });
+        if (page?.hasMore) choices.push({ name: fmt.muted("Next page"), value: "__next__" });
+        choices.push({ name: fmt.muted("Quit"), value: "__quit__" });
+
+        const selectedId = await select({
+          message: `Select a session (${offset + 1}-${offset + current.length}${page?.hasMore ? "+" : ""}):`,
+          choices,
+          pageSize: Math.min(12, choices.length),
+        });
+
+        if (selectedId === "__quit__") process.exit(0);
+        if (selectedId === "__next__") {
+          offset += limit;
+          page = await fetchResumePage(offset);
+          continue;
+        }
+        if (selectedId === "__prev__") {
+          offset = Math.max(0, offset - limit);
+          page = await fetchResumePage(offset);
+          continue;
+        }
+
+        const conv = current.find((c: any) => String(c.id) === selectedId) || conversations.find((c: any) => String(c.id) === selectedId);
+        if (!conv) {
+          console.error("Selected session not found");
+          process.exit(1);
+        }
+
+        const sessionId = conv.session_id;
+        if (!sessionId) {
+          console.error("Session ID not found");
+          process.exit(1);
+        }
+
+        const sourceAgent = conv.agent_type || "claude_code";
+        const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
+
+        const targetAgent =
+          options.as?.toLowerCase() ||
+          await select({
+            message: "Resume in:",
+            choices: [
+              { name: "claude", value: "claude" },
+              { name: "codex", value: "codex" },
+            ],
+            default: normalizedSource === "codex" ? "codex" : "claude",
+          });
+
+        console.log(`\nOpening: ${conv.title}`);
+        if (targetAgent && targetAgent !== normalizedSource) {
+          await convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, options.claudeTail, options.claudeFull, false, options.here ? undefined : conv.project_path);
+        } else {
+          const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
+          const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
+          launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
+        }
+        return;
+      }
     } catch (error) {
       console.error("Resume failed:", error instanceof Error ? error.message : error);
       process.exit(1);
@@ -3296,6 +3334,7 @@ async function convertAndLaunch(
   config: Config,
   extraArgs?: string,
   claudeTail?: string,
+  claudeFull?: boolean,
   showArgsHint?: boolean,
   projectPath?: string | null,
 ): Promise<void> {
@@ -3311,10 +3350,33 @@ async function convertAndLaunch(
     const resolvedArgs = extraArgs ?? config.codex_args;
     launchCodex(sessionId, resolvedArgs, showArgsHint, projectPath);
   } else {
-    const tailN = claudeTail ? parseInt(claudeTail, 10) : undefined;
-    const { jsonl, sessionId } = generateClaudeCodeJsonl(data, {
-      tailMessages: Number.isFinite(tailN as number) ? (tailN as number) : undefined,
-    });
+    const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
+    const AUTO_TRIM_THRESHOLD_TOKENS = 150_000;
+    const AUTO_TRIM_TARGET_TOKENS = 120_000;
+
+    const estimatedTokens = estimateClaudeImportTokens(data);
+    let tailMessages: number | undefined;
+    let noTrim = !!claudeFull;
+
+    if (claudeTail != null) {
+      const n = parseInt(String(claudeTail), 10);
+      if (Number.isFinite(n) && n > 0) {
+        tailMessages = n;
+        console.log(`  Trimming Claude import to last ${tailMessages} messages (--claude-tail)`);
+      } else {
+        noTrim = true;
+        console.log(`  Claude import trimming disabled (--claude-tail ${claudeTail})`);
+      }
+    } else if (!noTrim && estimatedTokens > AUTO_TRIM_THRESHOLD_TOKENS) {
+      tailMessages = chooseClaudeTailMessagesForTokenBudget(data, AUTO_TRIM_TARGET_TOKENS);
+      console.log(
+        `  Claude context window is ~${CLAUDE_CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens; import estimates ~${estimatedTokens.toLocaleString()} tokens.\n` +
+        `  Auto-trimming to last ${tailMessages} messages (target ~${AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
+        `  Disable with --claude-full (or --claude-tail 0).`
+      );
+    }
+
+    const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { tailMessages });
     writeClaudeCodeSession(jsonl, sessionId, projectPath || undefined);
     console.log(`  Written Claude Code session: ${sessionId}`);
     const resolvedArgs = extraArgs ?? config.claude_args;
@@ -5058,6 +5120,8 @@ program
   .option("--resume", "Open forked conversation in Claude/Codex after creating")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
   .option("--claude-args <args>", "Additional args to pass to claude")
+  .option("--claude-tail <n>", "When resuming in Claude, keep only the last N messages (+ a truncation notice)")
+  .option("--claude-full", "When resuming in Claude, do not auto-trim (may create a session too large for /compact)")
   .action(async (id: string | undefined, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -5181,7 +5245,33 @@ program
           console.log(`\nResume command:\n  ${cmd}`);
           openInNewTab(cmd, data.conversation.project_path);
         } else {
-          const { jsonl, sessionId } = generateClaudeCodeJsonl(data);
+          const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
+          const AUTO_TRIM_THRESHOLD_TOKENS = 150_000;
+          const AUTO_TRIM_TARGET_TOKENS = 120_000;
+
+          const estimatedTokens = estimateClaudeImportTokens(data);
+          let tailMessages: number | undefined;
+          let noTrim = !!options.claudeFull;
+
+          if (options.claudeTail != null) {
+            const n = parseInt(String(options.claudeTail), 10);
+            if (Number.isFinite(n) && n > 0) {
+              tailMessages = n;
+              console.log(`  Trimming Claude import to last ${tailMessages} messages (--claude-tail)`);
+            } else {
+              noTrim = true;
+              console.log(`  Claude import trimming disabled (--claude-tail ${options.claudeTail})`);
+            }
+          } else if (!noTrim && estimatedTokens > AUTO_TRIM_THRESHOLD_TOKENS) {
+            tailMessages = chooseClaudeTailMessagesForTokenBudget(data, AUTO_TRIM_TARGET_TOKENS);
+            console.log(
+              `  Claude context window is ~${CLAUDE_CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens; import estimates ~${estimatedTokens.toLocaleString()} tokens.\n` +
+              `  Auto-trimming to last ${tailMessages} messages (target ~${AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
+              `  Disable with --claude-full (or --claude-tail 0).`
+            );
+          }
+
+          const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { tailMessages });
           writeClaudeCodeSession(jsonl, sessionId, data.conversation.project_path || undefined);
           const resolvedArgs = options.claudeArgs ?? config.claude_args ?? "";
           const cmd = `claude --resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
