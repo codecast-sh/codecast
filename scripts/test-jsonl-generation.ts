@@ -130,15 +130,6 @@ function generateClaudeCodeJsonl(data: ExportResult): string {
     } else if (msg.role === "assistant") {
       const contentBlocks: any[] = [];
 
-      // Add thinking if present
-      if (msg.thinking) {
-        contentBlocks.push({
-          type: "thinking",
-          thinking: msg.thinking,
-          signature: "placeholder",
-        });
-      }
-
       // Add text content
       if (msg.content) {
         contentBlocks.push({ type: "text", text: msg.content });
