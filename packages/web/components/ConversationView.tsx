@@ -89,6 +89,7 @@ export type ConversationData = {
   agent_type?: string;
   model?: string;
   started_at?: number;
+  updated_at?: number;
   share_token?: string;
   message_count?: number;
   messages: Message[];
@@ -3848,6 +3849,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const title = conversation?.title || `Session ${conversation?.session_id?.slice(0, 8) || "..."}`;
   const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
+  const latestMessageTimestamp = useMemo(() => {
+    if (!conversation?.messages || conversation.messages.length === 0) return undefined;
+    for (let i = conversation.messages.length - 1; i >= 0; i--) {
+      const message = conversation.messages[i];
+      if (message.role !== "system") return message.timestamp;
+    }
+    return conversation.messages[conversation.messages.length - 1]?.timestamp;
+  }, [conversation?.messages]);
+  const lastActivityAt = latestMessageTimestamp ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
+  const isConversationLive = !!conversation && conversation.status === "active" && (Date.now() - lastActivityAt) < 5 * 60 * 1000;
 
   useEffect(() => {
     if (conversation) {
@@ -4180,10 +4191,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </Link>
                 )}
 
-                {conversation.status === 'active' && (
+                {isConversationLive && (
                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Active
+                    Live
                   </span>
                 )}
 
