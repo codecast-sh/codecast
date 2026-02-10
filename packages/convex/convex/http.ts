@@ -548,16 +548,18 @@ http.route({
     };
     try {
       const body = await request.json();
-      const { api_token, conversation_id } = body;
+      const { api_token, conversation_id, cursor, limit } = body;
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
           status: 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
       }
-      const result = await ctx.runQuery(api.conversations.exportConversationMessages, {
+      const result = await ctx.runQuery(api.conversations.exportConversationMessagesPage, {
         api_token,
         conversation_id,
+        cursor: typeof cursor === "string" ? cursor : undefined,
+        limit: typeof limit === "number" ? limit : undefined,
       });
       if (result.error) {
         return new Response(JSON.stringify({ error: result.error }), {

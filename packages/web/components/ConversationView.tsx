@@ -3501,6 +3501,31 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   };
 
+  const buildResumeCommand = useCallback((targetAgent: "claude" | "codex"): string | null => {
+    if (!conversation?.session_id) return null;
+    const sourceAgent = conversation.agent_type === "codex" ? "codex" : "claude";
+    if (targetAgent === sourceAgent) {
+      return targetAgent === "codex"
+        ? `codex resume ${conversation.session_id}`
+        : `claude --resume ${conversation.session_id}`;
+    }
+    return `codecast resume ${conversation.session_id} --as ${targetAgent}`;
+  }, [conversation?.session_id, conversation?.agent_type]);
+
+  const handleCopyResumeCommand = useCallback(async (targetAgent: "claude" | "codex") => {
+    try {
+      const cmd = buildResumeCommand(targetAgent);
+      if (!cmd) {
+        toast.error("No session to resume");
+        return;
+      }
+      await copyToClipboard(cmd);
+      toast.success(`Resume command copied (${targetAgent})`);
+    } catch {
+      toast.error("Failed to copy");
+    }
+  }, [buildResumeCommand]);
+
   // Extract todos and usage from messages using reducer
   const { latestTodos, latestUsage } = useMemo(() => {
     if (!messages || messages.length === 0) {
@@ -4324,25 +4349,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </button>
 
                 {conversation?.session_id && (
-                  <button
-                    onClick={async () => {
-                      try {
-                        const cmd = conversation.agent_type === 'codex'
-                          ? `codex resume ${conversation.session_id}`
-                          : `claude --resume ${conversation.session_id}`;
-                        await copyToClipboard(cmd);
-                        toast.success("Resume command copied");
-                      } catch {
-                        toast.error("Failed to copy");
-                      }
-                    }}
-                    className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
-                    title="Copy resume command"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+                        title="Copy resume command"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => handleCopyResumeCommand("claude")}>
+                        Copy Claude resume
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleCopyResumeCommand("codex")}>
+                        Copy Codex resume
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
 
                 <DropdownMenu>

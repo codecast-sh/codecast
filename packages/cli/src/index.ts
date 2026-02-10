@@ -2965,6 +2965,7 @@ program
     "  codecast resume                          # list live sessions\n" +
     "  codecast resume logo design              # search: 'logo' AND 'design'\n" +
     "  codecast resume \"logo design\"            # exact phrase\n" +
+    "  codecast resume <session-id> --as codex  # convert/resume by exact session id\n" +
     "  codecast resume auth --as codex          # resume Claude session in Codex"
   )
   .argument("[query...]", "Search terms (AND-ed, use quotes for exact phrase)")
@@ -2985,6 +2986,7 @@ program
       console.error(`Invalid --as value: "${options.as}". Use "claude" or "codex".`);
       process.exit(1);
     }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     // No query: show live sessions
     if (!queryWords || queryWords.length === 0) {
@@ -3054,7 +3056,75 @@ program
     const query = queryWords.join(" ");
     const limit = parseInt(options.limit);
     const projectPath = options.global ? undefined : getRealCwd();
-    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const exactSessionId = queryWords.length === 1 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(queryWords[0])
+      ? queryWords[0]
+      : null;
+
+    if (exactSessionId) {
+      try {
+        const sessionLookupResponse = await fetch(`${siteUrl}/cli/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            session_ids: [exactSessionId],
+          }),
+        });
+
+        if (sessionLookupResponse.ok) {
+          const sessionLookup = await sessionLookupResponse.json() as {
+            error?: string;
+            conversations?: Array<{
+              conversation_id?: string;
+              session_id: string;
+              title: string;
+              agent_type: string | null;
+              project_path: string | null;
+            }>;
+          };
+
+          const matched = sessionLookup.conversations?.find((conv) => conv.session_id === exactSessionId);
+          if (matched && matched.conversation_id) {
+            const targetAgent = options.as?.toLowerCase();
+            const sourceAgent = matched.agent_type || "claude_code";
+            const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
+
+            if (options.dryRun) {
+              if (targetAgent && targetAgent !== normalizedSource) {
+                console.log(`Would convert ${normalizedSource} session ${exactSessionId} to ${targetAgent}`);
+              } else {
+                const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
+                const cmd = effectiveAgent === "codex"
+                  ? `codex resume ${exactSessionId}`
+                  : `claude --resume ${exactSessionId}`;
+                console.log(`Would run: ${cmd}`);
+              }
+              return;
+            }
+
+            console.log(`Opening: ${matched.title}`);
+            if (targetAgent && targetAgent !== normalizedSource) {
+              await convertAndLaunch(
+                matched.conversation_id,
+                normalizedSource,
+                targetAgent,
+                config,
+                options.claudeArgs,
+                false,
+                options.here ? undefined : matched.project_path,
+              );
+            } else {
+              const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
+              const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
+              launchSession(exactSessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : matched.project_path);
+            }
+            return;
+          }
+        }
+      } catch {
+        // Fall through to regular search path.
+      }
+    }
 
     try {
       const response = await fetch(`${siteUrl}/cli/feed`, {
@@ -3166,9 +3236,16 @@ program
             process.exit(0);
           }
 
-          const num = parseInt(trimmed);
+          const selectMatch = trimmed.match(/^(\d+)(?:\s*(c|x|claude|codex))?$/);
+          if (!selectMatch) {
+            console.log(`Enter 1-${conversations.length}, optionally with c/x (e.g. 2x), or q to quit`);
+            promptForSelection();
+            return;
+          }
+
+          const num = parseInt(selectMatch[1], 10);
           if (isNaN(num) || num < 1 || num > conversations.length) {
-            console.log(`Enter 1-${conversations.length}, or q to quit`);
+            console.log(`Enter 1-${conversations.length}, optionally with c/x (e.g. 2x), or q to quit`);
             promptForSelection();
             return;
           }
@@ -3181,7 +3258,10 @@ program
             process.exit(1);
           }
           console.log(`\nOpening: ${conv.title}`);
-          const targetAgent = options.as?.toLowerCase();
+          const selectionAgent = selectMatch[2];
+          const targetAgent = selectionAgent
+            ? (selectionAgent === "c" || selectionAgent === "claude" ? "claude" : "codex")
+            : options.as?.toLowerCase();
           const sourceAgent = conv.agent_type || "claude_code";
           const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
           if (targetAgent && targetAgent !== normalizedSource) {

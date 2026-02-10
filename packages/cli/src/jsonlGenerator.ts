@@ -38,15 +38,237 @@ export interface ExportResult {
   messages: ExportedMessage[];
 }
 
+interface ExportPageResult extends ExportResult {
+  next_cursor?: string | null;
+  done?: boolean;
+  error?: string;
+  details?: string;
+}
+
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_RETRIES = 3;
+
+interface ReadResult {
+  error?: string;
+  details?: string;
+  conversation?: {
+    id: string;
+    title: string;
+    project_path: string | null;
+    message_count: number;
+    updated_at: string;
+  };
+  messages?: Array<{
+    role: string;
+    content: string;
+    timestamp: string;
+    tool_calls?: Array<{ id?: string; name?: string; input?: string }>;
+    tool_results?: Array<{ tool_use_id?: string; content?: string; is_error?: boolean }>;
+  }>;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchJsonWithRetry<T>(
+  url: string,
+  body: Record<string, unknown>,
+  context: string
+): Promise<{ response: Response; data: T }> {
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      const rawText = await response.text();
+      let data: T;
+      try {
+        data = JSON.parse(rawText) as T;
+      } catch {
+        if (response.status >= 500 && attempt < MAX_RETRIES) {
+          await sleep(250 * attempt);
+          continue;
+        }
+        throw new Error(`${context}: HTTP ${response.status} with invalid JSON`);
+      }
+
+      if (response.status >= 500 && attempt < MAX_RETRIES) {
+        await sleep(250 * attempt);
+        continue;
+      }
+
+      return { response, data };
+    } catch (err) {
+      lastErr = err;
+      if (attempt < MAX_RETRIES) {
+        await sleep(250 * attempt);
+        continue;
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(`${context}: ${msg}`);
+}
+
 export async function fetchExport(siteUrl: string, apiToken: string, conversationId: string): Promise<ExportResult> {
-  const resp = await fetch(`${siteUrl}/cli/export`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_token: apiToken, conversation_id: conversationId }),
-  });
-  const data = (await resp.json()) as any;
-  if (data.error) throw new Error(`Export failed: ${data.error}`);
-  return data as ExportResult;
+  const allMessages: ExportedMessage[] = [];
+  let conversation: ExportedConversation | null = null;
+  let cursor: string | undefined;
+  let page = 0;
+
+  while (true) {
+    page += 1;
+    if (page > 1000) {
+      throw new Error("Export failed: too many pages");
+    }
+
+    const { response: resp, data } = await fetchJsonWithRetry<ExportPageResult>(
+      `${siteUrl}/cli/export`,
+      {
+        api_token: apiToken,
+        conversation_id: conversationId,
+        cursor,
+        limit: 500,
+      },
+      "Export failed"
+    );
+
+    if (data.error) {
+      const details = data.details ? ` (${data.details.trim()})` : "";
+      const shouldFallbackToRead =
+        !cursor &&
+        data.error === "Internal error" &&
+        typeof data.details === "string" &&
+        data.details.includes("Array length is too long");
+      if (shouldFallbackToRead) {
+        return await fetchExportViaReadApi(siteUrl, apiToken, conversationId);
+      }
+      throw new Error(`Export failed: ${data.error}${details}`);
+    }
+    if (!resp.ok) {
+      throw new Error(`Export failed: HTTP ${resp.status}`);
+    }
+    if (!data.conversation || !Array.isArray(data.messages)) {
+      throw new Error("Export failed: malformed export response");
+    }
+
+    if (!conversation) {
+      conversation = data.conversation;
+    }
+    allMessages.push(...data.messages);
+
+    const nextCursor = typeof data.next_cursor === "string" ? data.next_cursor : undefined;
+    if (data.done || !nextCursor) {
+      break;
+    }
+    if (nextCursor === cursor) {
+      throw new Error("Export failed: pagination cursor did not advance");
+    }
+    cursor = nextCursor;
+  }
+
+  if (!conversation) {
+    throw new Error("Export failed: missing conversation metadata");
+  }
+
+  return {
+    conversation,
+    messages: allMessages,
+  };
+}
+
+async function fetchExportViaReadApi(siteUrl: string, apiToken: string, conversationId: string): Promise<ExportResult> {
+  let startLine = 1;
+  let totalCount = 0;
+  let convMeta: ReadResult["conversation"];
+  const allMessages: ExportedMessage[] = [];
+
+  while (true) {
+    const endLine = startLine + 49;
+    const { response: resp, data } = await fetchJsonWithRetry<ReadResult>(
+      `${siteUrl}/cli/read`,
+      {
+        api_token: apiToken,
+        conversation_id: conversationId,
+        start_line: startLine,
+        end_line: endLine,
+      },
+      "Export failed"
+    );
+
+    if (data.error) {
+      const details = data.details ? ` (${data.details.trim()})` : "";
+      throw new Error(`Export failed: ${data.error}${details}`);
+    }
+    if (!resp.ok) {
+      throw new Error(`Export failed: fallback read HTTP ${resp.status}`);
+    }
+    if (!data.conversation || !Array.isArray(data.messages)) {
+      throw new Error("Export failed: malformed fallback read response");
+    }
+
+    if (!convMeta) {
+      convMeta = data.conversation;
+      totalCount = data.conversation.message_count || 0;
+    }
+
+    for (const msg of data.messages) {
+      allMessages.push({
+        role: msg.role,
+        content: msg.content || "",
+        timestamp: msg.timestamp,
+        tool_calls: msg.tool_calls?.map((tc, idx) => ({
+          id: tc.id || `tool_${startLine}_${idx}`,
+          name: tc.name || "unknown_tool",
+          input: tc.input || "{}",
+        })),
+        tool_results: msg.tool_results?.map((tr) => ({
+          tool_use_id: tr.tool_use_id || `tool_${startLine}`,
+          content: tr.content || "",
+          is_error: tr.is_error,
+        })),
+      });
+    }
+
+    if (allMessages.length >= totalCount || data.messages.length === 0) {
+      break;
+    }
+    startLine += 50;
+  }
+
+  if (!convMeta) {
+    throw new Error("Export failed: fallback read missing conversation metadata");
+  }
+
+  const startedAt = allMessages[0]?.timestamp || convMeta.updated_at || new Date().toISOString();
+
+  return {
+    conversation: {
+      id: convMeta.id,
+      title: convMeta.title,
+      session_id: convMeta.id,
+      agent_type: "claude_code",
+      project_path: convMeta.project_path || null,
+      model: null,
+      message_count: totalCount,
+      started_at: startedAt,
+      updated_at: convMeta.updated_at,
+    },
+    messages: allMessages,
+  };
 }
 
 function truncate(text: string, max = 2000): string {

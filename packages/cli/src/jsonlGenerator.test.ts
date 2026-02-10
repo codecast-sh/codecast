@@ -1,0 +1,188 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { fetchExport } from "./jsonlGenerator.js";
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
+describe("fetchExport", () => {
+  test("aggregates paginated export responses", async () => {
+    const requestBodies: Array<{ api_token?: string; conversation_id?: string; cursor?: string; limit?: number }> = [];
+    let call = 0;
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      requestBodies.push(body);
+      call += 1;
+
+      if (call === 1) {
+        return new Response(JSON.stringify({
+          conversation: {
+            id: "conv1",
+            title: "Conversation",
+            session_id: "session-1",
+            agent_type: "claude_code",
+            project_path: "/tmp/project",
+            model: "claude",
+            message_count: 3,
+            started_at: "2026-01-01T00:00:00.000Z",
+            updated_at: "2026-01-01T00:00:01.000Z",
+          },
+          messages: [
+            { role: "user", content: "a", timestamp: "2026-01-01T00:00:00.000Z" },
+            { role: "assistant", content: "b", timestamp: "2026-01-01T00:00:00.100Z" },
+          ],
+          next_cursor: "cursor-1",
+          done: false,
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+
+      return new Response(JSON.stringify({
+        conversation: {
+          id: "conv1",
+          title: "Conversation",
+          session_id: "session-1",
+          agent_type: "claude_code",
+          project_path: "/tmp/project",
+          model: "claude",
+          message_count: 3,
+          started_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:01.000Z",
+        },
+        messages: [
+          { role: "user", content: "c", timestamp: "2026-01-01T00:00:00.200Z" },
+        ],
+        next_cursor: null,
+        done: true,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchExport("https://example.site", "token", "conv1");
+
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages[2].content).toBe("c");
+    expect(requestBodies).toEqual([
+      { api_token: "token", conversation_id: "conv1", limit: 500 },
+      { api_token: "token", conversation_id: "conv1", cursor: "cursor-1", limit: 500 },
+    ]);
+  });
+
+  test("supports single-page export responses", async () => {
+    globalThis.fetch = (async () => {
+      return new Response(JSON.stringify({
+        conversation: {
+          id: "conv2",
+          title: "Single page",
+          session_id: "session-2",
+          agent_type: "claude_code",
+          project_path: null,
+          model: null,
+          message_count: 1,
+          started_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:01.000Z",
+        },
+        messages: [
+          { role: "user", content: "hello", timestamp: "2026-01-01T00:00:00.000Z" },
+        ],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchExport("https://example.site", "token", "conv2");
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].content).toBe("hello");
+  });
+
+  test("includes server details in export failures", async () => {
+    globalThis.fetch = (async () => {
+      return new Response(JSON.stringify({
+        error: "Internal error",
+        details: "Unexpected backend failure",
+      }), { status: 500, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    await expect(fetchExport("https://example.site", "token", "conv3")).rejects.toThrow(
+      "Export failed: Internal error (Unexpected backend failure)"
+    );
+  });
+
+  test("falls back to read API when export hits array-length limit", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/cli/export")) {
+        return new Response(JSON.stringify({
+          error: "Internal error",
+          details: "Function conversations.js:exportConversationMessages return value invalid: Array length is too long (10239 > maximum length 8192)",
+        }), { status: 500, headers: { "Content-Type": "application/json" } });
+      }
+
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const startLine = body.start_line ?? 1;
+      const endLine = body.end_line ?? 50;
+      const count = endLine - startLine + 1;
+      const messages = Array.from({ length: count }, (_, i) => {
+        const line = startLine + i;
+        if (line > 55) return null;
+        return {
+          role: line % 2 === 0 ? "assistant" : "user",
+          content: `line ${line}`,
+          timestamp: `2026-01-01T00:00:${String(line).padStart(2, "0")}.000Z`,
+        };
+      }).filter(Boolean);
+
+      return new Response(JSON.stringify({
+        conversation: {
+          id: "conv4",
+          title: "Fallback conversation",
+          project_path: "/tmp/project",
+          message_count: 55,
+          updated_at: "2026-01-01T00:02:00.000Z",
+        },
+        messages,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchExport("https://example.site", "token", "conv4");
+
+    expect(result.messages).toHaveLength(55);
+    expect(result.messages[0].content).toBe("line 1");
+    expect(result.messages[54].content).toBe("line 55");
+    expect(result.conversation.title).toBe("Fallback conversation");
+  });
+
+  test("retries transient 500s before succeeding", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls < 3) {
+        return new Response(JSON.stringify({ error: "Internal error", details: "temporary" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        conversation: {
+          id: "conv5",
+          title: "Retry conversation",
+          session_id: "session-5",
+          agent_type: "claude_code",
+          project_path: null,
+          model: null,
+          message_count: 1,
+          started_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:01.000Z",
+        },
+        messages: [
+          { role: "user", content: "ok", timestamp: "2026-01-01T00:00:00.000Z" },
+        ],
+        done: true,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchExport("https://example.site", "token", "conv5");
+    expect(result.messages).toHaveLength(1);
+    expect(calls).toBe(3);
+  });
+});

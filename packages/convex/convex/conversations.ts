@@ -2612,6 +2612,86 @@ export const exportConversationMessages = query({
   },
 });
 
+export const exportConversationMessagesPage = query({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.string(),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
+    if (!authUserId) {
+      return { error: "Unauthorized" };
+    }
+    const user = await ctx.db.get(authUserId);
+    if (!user) {
+      return { error: "User not found" };
+    }
+
+    let conv = null;
+    try {
+      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
+    } catch {
+    }
+    if (!conv) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
+        .first();
+    }
+    if (!conv) {
+      return { error: "Conversation not found" };
+    }
+
+    const isOwn = conv.user_id.toString() === authUserId.toString();
+    if (!isOwn) {
+      if (conv.is_private !== false) {
+        return { error: "Access denied" };
+      }
+      if (!conv.team_id || !(await isTeamMember(ctx, authUserId, conv.team_id))) {
+        return { error: "Access denied" };
+      }
+    }
+
+    const pageSize = Math.max(1, Math.min(args.limit ?? 500, 1000));
+    const page = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+      .order("asc")
+      .paginate({ cursor: args.cursor ?? null, numItems: pageSize });
+
+    const messages = page.page
+      .filter(isNonEmptyMessage)
+      .map((m) => ({
+        role: m.role,
+        content: m.content || "",
+        thinking: m.thinking || undefined,
+        timestamp: new Date(m.timestamp).toISOString(),
+        message_uuid: m.message_uuid || undefined,
+        tool_calls: m.tool_calls,
+        tool_results: m.tool_results,
+      }));
+
+    return {
+      conversation: {
+        id: conv._id,
+        title: conv.title || `Session ${conv.session_id.slice(0, 8)}`,
+        session_id: conv.session_id,
+        agent_type: conv.agent_type,
+        project_path: conv.project_path || null,
+        model: conv.model || null,
+        message_count: conv.message_count || 0,
+        started_at: new Date(conv.started_at).toISOString(),
+        updated_at: new Date(conv.updated_at).toISOString(),
+      },
+      messages,
+      next_cursor: page.isDone ? null : page.continueCursor,
+      done: page.isDone,
+    };
+  },
+});
+
 export const updateTitle = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -4240,6 +4320,7 @@ export const getConversationsBySessionIds = query({
     if (!authUserId) return { error: "Unauthorized" };
 
     const results: Array<{
+      conversation_id: string;
       session_id: string;
       title: string;
       subtitle: string | null;
@@ -4272,6 +4353,7 @@ export const getConversationsBySessionIds = query({
       const title = conv.title || (preview ? preview.slice(0, 80) : `Session ${sessionId.slice(0, 8)}`);
 
       results.push({
+        conversation_id: conv._id.toString(),
         session_id: sessionId,
         title,
         subtitle: conv.subtitle || null,

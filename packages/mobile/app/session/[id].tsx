@@ -2601,7 +2601,7 @@ type PendingMessage = {
   retry_count: number;
 };
 
-function MessageInput({ conversationId, isActive }: { conversationId: Id<"conversations">; isActive: boolean }) {
+function MessageInput({ conversationId, isActive, onHeightChange }: { conversationId: Id<"conversations">; isActive: boolean; onHeightChange?: (height: number) => void }) {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [lastStatus, setLastStatus] = useState<'delivered' | 'failed' | null>(null);
@@ -2677,7 +2677,10 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
   };
 
   return (
-    <RNView style={styles.inputContainer}>
+    <RNView
+      style={styles.inputContainer}
+      onLayout={(event) => onHeightChange?.(event.nativeEvent.layout.height)}
+    >
       {!isActive && (
         <RNView style={styles.inactiveSessionBanner}>
           <RNText style={styles.inactiveSessionText}>
@@ -2793,12 +2796,12 @@ function SessionActions({ conversationId, isFavorite, shareToken }: {
       <TouchableOpacity onPress={handleFavorite} style={styles.actionButton} activeOpacity={0.7}>
         <FontAwesome
           name={isFavorite ? "star" : "star-o"}
-          size={18}
+          size={15}
           color={isFavorite ? Theme.accent : Theme.textMuted0}
         />
       </TouchableOpacity>
       <TouchableOpacity onPress={handleShare} style={styles.actionButton} activeOpacity={0.7} disabled={sharing}>
-        <FontAwesome name="share-alt" size={16} color={Theme.textMuted0} />
+        <FontAwesome name="share-alt" size={14} color={Theme.textMuted0} />
       </TouchableOpacity>
     </RNView>
   );
@@ -2854,7 +2857,12 @@ export default function SessionDetailScreen() {
   const isNearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(0);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(highlightMessageParam || null);
-  const [usageExpanded, setUsageExpanded] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(120);
+  const [jumpingToStart, setJumpingToStart] = useState(false);
+  const [floatingHeaderHeight, setFloatingHeaderHeight] = useState(152);
+  const floatingHeaderY = useRef(new Animated.Value(0)).current;
+  const floatingHeaderVisibleRef = useRef(true);
+  const lastScrollYRef = useRef(0);
   const activePulse = useRef(new Animated.Value(1)).current;
 
   const conversation = useQuery(
@@ -3039,19 +3047,6 @@ export default function SessionDetailScreen() {
     showToast('Resume command copied');
   }, [conversation?.session_id, conversation?.agent_type, showToast]);
 
-  const generateShareLink = useMutation(api.conversations.generateShareLink);
-  const handleToolbarShare = useCallback(async () => {
-    if (!conversation) return;
-    let token = conversation.share_token;
-    if (!token) {
-      token = await generateShareLink({ conversation_id: id as Id<"conversations"> });
-    }
-    if (token) {
-      const url = `https://codecast.sh/share/${token}`;
-      Share.share({ message: url, url });
-    }
-  }, [conversation, id, generateShareLink]);
-
   const searchLower = searchQuery.toLowerCase();
   const searchMatchIds = useMemo(() => {
     if (!searchLower) return null;
@@ -3096,44 +3091,6 @@ export default function SessionDetailScreen() {
     const idx = allMessages.findIndex(m => m._id === searchMatchList[prevIndex]);
     if (idx >= 0) flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.3 });
   }, [searchMatchList, currentMatchIndex, allMessages]);
-
-  const taskStats = useMemo(() => {
-    let total = 0;
-    let completed = 0;
-    for (const msg of allMessages) {
-      if (msg.tool_calls) {
-        for (const tc of msg.tool_calls) {
-          if (tc.name === 'TaskCreate') total++;
-          if (tc.name === 'TaskUpdate') {
-            try {
-              const inp = JSON.parse(tc.input);
-              if (inp.status === 'completed') completed++;
-            } catch {}
-          }
-        }
-      }
-    }
-    return total > 0 ? { total, completed } : null;
-  }, [allMessages]);
-
-  const latestTodos = useMemo(() => {
-    let latest: { todos: Array<{ content: string; status: string; activeForm?: string }>; timestamp: number } | null = null;
-    for (const msg of allMessages) {
-      if (msg.tool_calls) {
-        for (const tc of msg.tool_calls) {
-          if (tc.name === 'TodoWrite') {
-            try {
-              const parsed = JSON.parse(tc.input);
-              if (parsed.todos && (!latest || msg.timestamp > latest.timestamp)) {
-                latest = { todos: parsed.todos, timestamp: msg.timestamp };
-              }
-            } catch {}
-          }
-        }
-      }
-    }
-    return latest;
-  }, [allMessages]);
 
   const latestUsage = useMemo(() => {
     let latest: UsageData | null = null;
@@ -3196,6 +3153,25 @@ export default function SessionDetailScreen() {
     setSelectedMessageIds(new Set());
   }, [selectedMessageIds, allMessages, showToast]);
 
+  const handleComposerHeightChange = useCallback((height: number) => {
+    setComposerHeight(prev => (Math.abs(prev - height) < 1 ? prev : height));
+  }, []);
+
+  const setFloatingHeaderVisible = useCallback((visible: boolean) => {
+    if (floatingHeaderVisibleRef.current === visible) return;
+    floatingHeaderVisibleRef.current = visible;
+    Animated.timing(floatingHeaderY, {
+      toValue: visible ? 0 : -(floatingHeaderHeight + 8),
+      duration: visible ? 90 : 120,
+      useNativeDriver: true,
+    }).start();
+  }, [floatingHeaderHeight, floatingHeaderY]);
+
+  const handleFloatingHeaderLayout = useCallback((height: number) => {
+    setFloatingHeaderHeight(prev => (Math.abs(prev - height) < 1 ? prev : height));
+    floatingHeaderY.setValue(floatingHeaderVisibleRef.current ? 0 : -(height + 8));
+  }, [floatingHeaderY]);
+
   useEffect(() => {
     if (conversation && !initialScrollDone && allMessages.length > 0) {
       setTimeout(() => {
@@ -3212,7 +3188,10 @@ export default function SessionDetailScreen() {
     setInitialScrollDone(false);
     setUserScrolled(false);
     prevMessageCountRef.current = 0;
-  }, [id]);
+    lastScrollYRef.current = 0;
+    floatingHeaderVisibleRef.current = true;
+    floatingHeaderY.setValue(0);
+  }, [id, floatingHeaderHeight, floatingHeaderY]);
 
   // Auto-scroll when new messages arrive (if near bottom)
   useEffect(() => {
@@ -3261,11 +3240,74 @@ export default function SessionDetailScreen() {
     }
   }, [convex, id, loadingOlder, olderOldestTs, conversation?.oldest_timestamp]);
 
+  const handleJumpToStart = useCallback(async () => {
+    if (!id || jumpingToStart) return;
+
+    if (!hasMoreAbove) {
+      flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      return;
+    }
+
+    setJumpingToStart(true);
+    try {
+      const existingIds = new Set<string>(allMessages.map((message) => message._id));
+      const loadedMessages: Message[] = [];
+      let beforeTs = olderOldestTs ?? conversation?.oldest_timestamp ?? null;
+      let hasMore = true;
+      let latestOldest: number | null = beforeTs;
+
+      while (hasMore && beforeTs !== null) {
+        const result = await convex.query(api.conversations.getOlderMessages, {
+          conversation_id: id as Id<"conversations">,
+          before_timestamp: beforeTs,
+          limit: 100,
+        });
+
+        if (!result || result.messages.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        for (const message of result.messages) {
+          if (!existingIds.has(message._id)) {
+            existingIds.add(message._id);
+            loadedMessages.push(message);
+          }
+        }
+
+        beforeTs = result.oldest_timestamp;
+        latestOldest = result.oldest_timestamp;
+        hasMore = result.has_more;
+      }
+
+      if (loadedMessages.length > 0) {
+        setOlderMessages((prev) => {
+          const prevIds = new Set(prev.map((message) => message._id));
+          const merged = [...loadedMessages.filter((message) => !prevIds.has(message._id)), ...prev];
+          merged.sort((a, b) => a.timestamp - b.timestamp);
+          return merged;
+        });
+      }
+
+      setOlderHasMore(false);
+      setOlderOldestTs(latestOldest);
+      setTimeout(() => {
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      }, 40);
+    } catch {
+      showToast('Failed to jump to start');
+    } finally {
+      setJumpingToStart(false);
+    }
+  }, [id, jumpingToStart, hasMoreAbove, allMessages, olderOldestTs, conversation?.oldest_timestamp, convex, showToast]);
+
   const handleScroll = useCallback((event: any) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const scrollTop = contentOffset.y;
+    const scrollTop = Math.max(0, contentOffset.y);
     const scrollHeight = contentSize.height;
     const clientHeight = layoutMeasurement.height;
+    const deltaY = scrollTop - lastScrollYRef.current;
+    lastScrollYRef.current = scrollTop;
 
     // Check if near bottom (within 100px like web)
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
@@ -3283,11 +3325,19 @@ export default function SessionDetailScreen() {
       setUserScrolled(true);
     }
 
+    if (scrollTop < 8) {
+      setFloatingHeaderVisible(true);
+    } else if (deltaY > 0.5) {
+      setFloatingHeaderVisible(false);
+    } else if (deltaY < -0.5) {
+      setFloatingHeaderVisible(true);
+    }
+
     // Load older messages when near top
     if (scrollTop < 100 && hasMoreAbove && !loadingOlder && initialScrollDone) {
       loadOlderMessages();
     }
-  }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone]);
+  }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone, setFloatingHeaderVisible]);
 
   const isActive = conversation?.status === 'active';
 
@@ -3307,7 +3357,16 @@ export default function SessionDetailScreen() {
   if (conversation === undefined) {
     return (
       <RNView style={styles.container}>
-        <Stack.Screen options={{ title: 'Loading...', headerBackTitle: 'Sessions', headerStyle: { backgroundColor: Theme.bgAlt }, headerTintColor: Theme.text, headerTitleStyle: { color: Theme.text, fontWeight: '600', fontSize: 17 } }} />
+        <Stack.Screen
+          options={{
+            title: 'Conversation',
+            headerStyle: { backgroundColor: Theme.bgAlt },
+            headerTintColor: Theme.text,
+            headerTitleStyle: { color: Theme.text, fontWeight: '600', fontSize: 17 },
+            headerShadowVisible: false,
+            headerBackButtonDisplayMode: 'minimal',
+          }}
+        />
         <RNView style={styles.skeletonContainer}>
           <RNView style={styles.skeletonHeader}>
             <RNView style={[styles.skeletonBlock, { width: '60%', height: 18 }]} />
@@ -3338,17 +3397,17 @@ export default function SessionDetailScreen() {
     );
   }
 
-  const totalCount = allMessages.length + (conversation.has_more_above ? '+' as any : 0);
-
   return (
     <>
       <Stack.Screen
         options={{
           title: 'Conversation',
-          headerBackTitle: 'Sessions',
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
           headerTitleStyle: { color: Theme.text, fontWeight: '600', fontSize: 17 },
+          headerShadowVisible: false,
+          headerLargeTitle: false,
+          headerBackButtonDisplayMode: 'minimal',
         }}
       />
       <KeyboardAvoidingView
@@ -3356,254 +3415,198 @@ export default function SessionDetailScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
-        <FlatList
-          ref={flatListRef}
-          data={allMessages}
-          ListHeaderComponent={
-            <>
-              <RNView style={styles.sessionHeader}>
-                <RNView style={styles.sessionTitleRow}>
-                  <RNView style={{ flex: 1 }}>
-                    <RNText style={styles.sessionTitle} numberOfLines={2}>
-                      {conversation.title}
+        <Animated.View
+          style={[styles.floatingSessionHeader, { transform: [{ translateY: floatingHeaderY }] }]}
+          onLayout={(event) => handleFloatingHeaderLayout(event.nativeEvent.layout.height)}
+        >
+            <RNView style={styles.floatingSessionCard}>
+              <RNView style={styles.sessionMeta}>
+                {conversation.agent_type && (
+                  <RNView style={[styles.metaBadgeIcon, { borderColor: agentTypeColor(conversation.agent_type) + '40' }]}>
+                    <FontAwesome name={agentTypeIcon(conversation.agent_type) as any} size={9} color={agentTypeColor(conversation.agent_type)} />
+                  <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
+                    {formatAgentType(conversation.agent_type)}
+                  </RNText>
+                </RNView>
+                )}
+                {conversation.model && (
+                  <RNText style={styles.metaBadgeModel}>{formatModel(conversation.model)}</RNText>
+                )}
+                {conversation.started_at && (
+                  <RNText style={styles.messageCountText}>{formatRelativeTime(conversation.started_at)}</RNText>
+                )}
+              {conversation.short_id && (
+                <Pressable onPress={() => { Clipboard.setString(conversation.short_id!); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast('ID copied'); }}>
+                  <RNText style={styles.shortIdBadge}>{conversation.short_id}</RNText>
+                </Pressable>
+              )}
+                <RNText style={styles.messageCountText}>{conversation.message_count || allMessages.length} msgs</RNText>
+                {isActive && (
+                  <RNView style={styles.activeIndicator}>
+                    <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
+                    <RNText style={styles.activeText}>Active</RNText>
+                  </RNView>
+                )}
+                {(conversation.fork_count ?? 0) > 0 && (
+                  <Pressable onPress={() => setTreeModalVisible(true)} style={styles.forkBadge}>
+                    <FontAwesome name="code-fork" size={9} color={Theme.violet} />
+                    <RNText style={styles.forkBadgeText}>{conversation.fork_count}</RNText>
+                  </Pressable>
+                )}
+                {conversation.git_branch && (
+                  <Pressable
+                    onPress={() => {
+                      if (conversation.git_remote_url) {
+                        const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
+                        if (match) {
+                          Linking.openURL(`https://github.com/${match[1]}/tree/${conversation.git_branch}`);
+                        }
+                      }
+                    }}
+                    style={styles.gitBranchBadge}
+                  >
+                    <FontAwesome name="code-fork" size={9} color={Theme.green} />
+                    <RNText style={styles.gitBranchText} numberOfLines={1}>{conversation.git_branch}</RNText>
+                  </Pressable>
+                )}
+                {latestUsage && (
+                  <RNView style={styles.usageBadge}>
+                    <FontAwesome name="bar-chart" size={9} color={Theme.textDim} />
+                    <RNText style={styles.usageBadgeText}>
+                      {Math.round((latestUsage.contextSize / 200000) * 100)}%
                     </RNText>
-                    <RNView style={styles.sessionMeta}>
-                      {conversation.agent_type && (
-                        <RNView style={[styles.metaBadgeIcon, { borderColor: agentTypeColor(conversation.agent_type) + '40' }]}>
-                          <FontAwesome name={agentTypeIcon(conversation.agent_type) as any} size={9} color={agentTypeColor(conversation.agent_type)} />
-                          <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
-                            {formatAgentType(conversation.agent_type)}
-                          </RNText>
-                        </RNView>
-                      )}
-                      {conversation.model && (
-                        <RNText style={styles.metaBadgeModel}>
-                          {formatModel(conversation.model)}
-                        </RNText>
-                      )}
-                      {conversation.started_at && (
-                        <Pressable onPress={() => Alert.alert('Started', formatFullTimestamp(conversation.started_at!))}>
-                          <RNText style={styles.messageCountText}>
-                            {formatRelativeTime(conversation.started_at)}
-                          </RNText>
-                        </Pressable>
-                      )}
-                      {conversation.short_id && (
-                        <Pressable onPress={() => { Clipboard.setString(conversation.short_id!); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast('ID copied'); }}>
-                          <RNText style={styles.shortIdBadge}>{conversation.short_id}</RNText>
-                        </Pressable>
-                      )}
-                      <Pressable onPress={() => { Clipboard.setString(conversation._id); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showToast('Full ID copied'); }}>
-                        <RNText style={styles.messageCountText}>
-                          {conversation.message_count || allMessages.length} msgs
-                        </RNText>
-                      </Pressable>
-                      {conversation.started_at && (
-                        <RNText style={styles.durationBadge}>
-                          {formatDuration(conversation.started_at)}
-                        </RNText>
-                      )}
-                      {isActive && (
-                        <RNView style={styles.activeIndicator}>
-                          <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
-                          <RNText style={styles.activeText}>Active</RNText>
-                        </RNView>
-                      )}
-                      {(conversation.fork_count ?? 0) > 0 && (
-                        <Pressable onPress={() => setTreeModalVisible(true)} style={styles.forkBadge}>
-                          <FontAwesome name="code-fork" size={9} color={Theme.violet} />
-                          <RNText style={styles.forkBadgeText}>{conversation.fork_count}</RNText>
-                        </Pressable>
-                      )}
-                      {(conversation.compaction_count ?? 0) > 0 && (
-                        <Pressable onPress={() => Alert.alert('Context Compaction', `This conversation was compacted ${conversation.compaction_count} time${(conversation.compaction_count ?? 0) > 1 ? 's' : ''}. Compaction summarizes earlier messages to free up context window space.`)} style={styles.compactionBadge}>
-                          <FontAwesome name="compress" size={9} color="#d97706" />
-                          <RNText style={styles.compactionBadgeText}>{conversation.compaction_count}</RNText>
-                        </Pressable>
-                      )}
-                      {taskStats && (
-                        <RNView style={styles.taskStatsBadge}>
-                          <FontAwesome name="check-square-o" size={9} color={taskStats.completed === taskStats.total ? Theme.green : Theme.textDim} />
-                          <RNText style={[styles.taskStatsText, taskStats.completed === taskStats.total && { color: Theme.green }]}>
-                            {taskStats.completed}/{taskStats.total}
-                          </RNText>
-                        </RNView>
-                      )}
-                      {latestTodos && latestTodos.todos.length > 0 && (() => {
-                        const todoDone = latestTodos.todos.filter(t => t.status === 'completed').length;
-                        const todoAll = latestTodos.todos.length;
-                        const allComplete = todoDone === todoAll;
-                        return (
-                          <RNView style={[styles.taskStatsBadge, allComplete && { borderColor: 'rgba(16, 185, 129, 0.3)', borderWidth: 0.5 }]}>
-                            <FontAwesome name="list-ul" size={9} color={allComplete ? Theme.green : Theme.textDim} />
-                            <RNText style={[styles.taskStatsText, allComplete && { color: Theme.green }]}>
-                              {todoDone}/{todoAll}
-                            </RNText>
-                          </RNView>
-                        );
-                      })()}
-                      {latestUsage && (
-                        <Pressable onPress={() => setUsageExpanded(!usageExpanded)}>
-                          <RNView style={styles.usageBadge}>
-                            <FontAwesome name="bar-chart" size={9} color={Theme.textDim} />
-                            <RNText style={styles.usageBadgeText}>
-                              {Math.round((latestUsage.contextSize / 200000) * 100)}%
-                            </RNText>
-                          </RNView>
-                        </Pressable>
-                      )}
-                      {conversation.git_branch && (
-                        <Pressable
-                          onPress={() => {
-                            if (conversation.git_remote_url) {
-                              const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
-                              if (match) {
-                                Linking.openURL(`https://github.com/${match[1]}/tree/${conversation.git_branch}`);
-                                return;
-                              }
-                            }
-                          }}
-                          style={styles.gitBranchBadge}
-                        >
-                          <FontAwesome name="code-fork" size={9} color={Theme.green} />
-                          <RNText style={styles.gitBranchText} numberOfLines={1}>{conversation.git_branch}</RNText>
-                        </Pressable>
-                      )}
-                      {conversation.child_conversations && conversation.child_conversations.length > 0 && (
-                        <RNView style={[styles.metaBadgeIcon, { borderColor: Theme.cyan + '40' }]}>
-                          <FontAwesome name="users" size={9} color={Theme.cyan} />
-                          <RNText style={{ fontSize: 10, color: Theme.cyan, fontFamily: 'SpaceMono' }}>
-                            {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? 's' : ''}
-                          </RNText>
-                        </RNView>
-                      )}
-                    </RNView>
-                    {usageExpanded && latestUsage && (
-                      <UsageBar usage={latestUsage} />
-                    )}
-                    {conversation.parent_conversation_id && (
-                      <Pressable
-                        onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
-                        style={styles.parentLink}
-                      >
-                        <FontAwesome name="level-up" size={10} color={Theme.violet} />
-                        <RNText style={styles.parentLinkText}>View parent conversation</RNText>
-                      </Pressable>
-                    )}
-                    {conversation.forked_from_details && (
-                      <Pressable onPress={() => {
+                  </RNView>
+                )}
+              </RNView>
+              {(conversation.parent_conversation_id || conversation.forked_from_details) && (
+                <RNView style={styles.floatingLinksRow}>
+                  {conversation.parent_conversation_id && (
+                    <Pressable
+                      onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
+                      style={styles.floatingLinkPill}
+                    >
+                      <FontAwesome name="level-up" size={10} color={Theme.violet} />
+                      <RNText style={styles.floatingLinkText}>Parent</RNText>
+                    </Pressable>
+                  )}
+                  {conversation.forked_from_details && (
+                    <Pressable
+                      onPress={() => {
                         const details = conversation.forked_from_details!;
                         if (details.share_token) {
                           Linking.openURL(`https://codecast.sh/share/${details.share_token}`);
                         } else {
                           router.push(`/session/${details.conversation_id}`);
                         }
-                      }}>
-                        <RNText style={[styles.forkedFromText, { textDecorationLine: 'underline' }]}>
-                          Forked from @{conversation.forked_from_details.username}
-                        </RNText>
-                      </Pressable>
-                    )}
-                  </RNView>
-                  <SessionActions
-                    conversationId={id as Id<"conversations">}
-                    isFavorite={conversation.is_favorite ?? false}
-                    shareToken={conversation.share_token}
-                  />
-                </RNView>
-                <RNView style={styles.headerToolbar}>
-                  <TouchableOpacity onPress={() => setSearchVisible(v => !v)} style={styles.toolbarButton} activeOpacity={0.7}>
-                    <FontAwesome name="search" size={12} color={searchVisible ? Theme.cyan : Theme.textDim} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={handleCopyAll} style={styles.toolbarButton} activeOpacity={0.7}>
-                    <FontAwesome name="clipboard" size={13} color={Theme.textDim} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={handleToolbarShare} style={styles.toolbarButton} activeOpacity={0.7}>
-                    <FontAwesome name="share-alt" size={12} color={Theme.textDim} />
-                  </TouchableOpacity>
-                  {conversation.session_id && (
-                    <TouchableOpacity onPress={handleCopyResume} style={styles.toolbarButton} activeOpacity={0.7}>
-                      <FontAwesome name="terminal" size={12} color={Theme.textDim} />
-                    </TouchableOpacity>
-                  )}
-                  <TouchableOpacity onPress={() => setCollapsed(c => !c)} style={styles.toolbarButton} activeOpacity={0.7}>
-                    <FontAwesome name={collapsed ? "expand" : "compress"} size={13} color={collapsed ? Theme.cyan : Theme.textDim} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setShowThinking(s => !s)} style={styles.toolbarButton} activeOpacity={0.7}>
-                    <FontAwesome name="lightbulb-o" size={14} color={showThinking ? Theme.accent : Theme.textDim} />
-                  </TouchableOpacity>
-                  {conversation.git_branch && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
-                    <TouchableOpacity onPress={() => setDiffExpanded(d => !d)} style={styles.toolbarButton} activeOpacity={0.7}>
-                      <FontAwesome name="code" size={12} color={diffExpanded ? Theme.green : Theme.textDim} />
-                    </TouchableOpacity>
-                  )}
-                  <TouchableOpacity onPress={shareSelectionMode ? handleCancelShareSelection : handleStartShareSelection} style={styles.toolbarButton} activeOpacity={0.7}>
-                    <FontAwesome name="check-square-o" size={12} color={shareSelectionMode ? Theme.cyan : Theme.textDim} />
-                  </TouchableOpacity>
-                  {treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0 && (
-                    <TouchableOpacity onPress={() => setTreeModalVisible(true)} style={styles.toolbarButton} activeOpacity={0.7}>
-                      <FontAwesome name="sitemap" size={12} color={Theme.violet} />
-                    </TouchableOpacity>
+                      }}
+                      style={styles.floatingLinkPill}
+                    >
+                      <FontAwesome name="code-fork" size={9} color={Theme.cyan} />
+                      <RNText style={styles.floatingLinkText}>@{conversation.forked_from_details.username}</RNText>
+                    </Pressable>
                   )}
                 </RNView>
-                {diffExpanded && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
-                  <RNView style={styles.gitDiffPanel}>
-                    {conversation.git_diff_staged && conversation.git_diff_staged.trim().length > 0 && (
-                      <RNView style={{ marginBottom: 8 }}>
-                        <RNText style={{ fontSize: 10, color: Theme.green, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Staged</RNText>
-                        <RNView style={styles.gitDiffContent}>
-                          <GitDiffView diff={conversation.git_diff_staged} />
-                        </RNView>
-                      </RNView>
-                    )}
-                    {conversation.git_diff && conversation.git_diff.trim().length > 0 && (
-                      <RNView>
-                        {conversation.git_diff_staged && conversation.git_diff_staged.trim().length > 0 && (
-                          <RNText style={{ fontSize: 10, color: Theme.orange, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Unstaged</RNText>
-                        )}
-                        <RNView style={styles.gitDiffContent}>
-                          <GitDiffView diff={conversation.git_diff} />
-                        </RNView>
-                      </RNView>
-                    )}
-                  </RNView>
-                )}
-                {searchVisible && (
-                  <RNView style={styles.searchBar}>
-                    <FontAwesome name="search" size={12} color={Theme.textDim} style={{ marginRight: 8 }} />
-                    <TextInput
-                      style={styles.searchInput}
-                      value={searchQuery}
-                      onChangeText={setSearchQuery}
-                      placeholder="Search messages..."
-                      placeholderTextColor={Theme.textMuted0}
-                      autoFocus
-                      returnKeyType="search"
-                    />
-                    {searchQuery.length > 0 && (
-                      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                        {searchMatchList.length > 0 && (
-                          <>
-                            <RNText style={styles.searchCount}>{currentMatchIndex + 1}/{searchMatchList.length}</RNText>
-                            <TouchableOpacity onPress={goToPrevMatch} style={{ padding: 4 }} activeOpacity={0.7}>
-                              <FontAwesome name="chevron-up" size={10} color={Theme.textDim} />
-                            </TouchableOpacity>
-                            <TouchableOpacity onPress={goToNextMatch} style={{ padding: 4 }} activeOpacity={0.7}>
-                              <FontAwesome name="chevron-down" size={10} color={Theme.textDim} />
-                            </TouchableOpacity>
-                          </>
-                        )}
-                        {searchMatchList.length === 0 && (
-                          <RNText style={styles.searchCount}>0 matches</RNText>
-                        )}
-                        <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7} style={{ padding: 4 }}>
-                          <FontAwesome name="times-circle" size={14} color={Theme.textDim} />
+              )}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.headerToolbar}>
+              <TouchableOpacity onPress={() => setSearchVisible(v => !v)} style={styles.toolbarButton} activeOpacity={0.7}>
+                <FontAwesome name="search" size={12} color={searchVisible ? Theme.cyan : Theme.textDim} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleCopyAll} style={styles.toolbarButton} activeOpacity={0.7}>
+                <FontAwesome name="clipboard" size={13} color={Theme.textDim} />
+              </TouchableOpacity>
+              {conversation.session_id && (
+                <TouchableOpacity onPress={handleCopyResume} style={styles.toolbarButton} activeOpacity={0.7}>
+                  <FontAwesome name="terminal" size={12} color={Theme.textDim} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={() => setCollapsed(c => !c)} style={[styles.toolbarButton, collapsed && styles.toolbarButtonActive]} activeOpacity={0.7}>
+                <FontAwesome name={collapsed ? "expand" : "compress"} size={13} color={collapsed ? Theme.cyan : Theme.textDim} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowThinking(s => !s)} style={[styles.toolbarButton, showThinking && styles.toolbarButtonActive]} activeOpacity={0.7}>
+                <FontAwesome name="lightbulb-o" size={14} color={showThinking ? Theme.accent : Theme.textDim} />
+              </TouchableOpacity>
+              {conversation.git_branch && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
+                <TouchableOpacity onPress={() => setDiffExpanded(d => !d)} style={[styles.toolbarButton, diffExpanded && styles.toolbarButtonActive]} activeOpacity={0.7}>
+                  <FontAwesome name="code" size={12} color={diffExpanded ? Theme.green : Theme.textDim} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={shareSelectionMode ? handleCancelShareSelection : handleStartShareSelection} style={[styles.toolbarButton, shareSelectionMode && styles.toolbarButtonActive]} activeOpacity={0.7}>
+                <FontAwesome name="check-square-o" size={12} color={shareSelectionMode ? Theme.cyan : Theme.textDim} />
+              </TouchableOpacity>
+              {treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0 && (
+                <TouchableOpacity onPress={() => setTreeModalVisible(true)} style={styles.toolbarButton} activeOpacity={0.7}>
+                  <FontAwesome name="sitemap" size={12} color={Theme.violet} />
+                </TouchableOpacity>
+              )}
+              <SessionActions
+                conversationId={id as Id<"conversations">}
+                isFavorite={conversation.is_favorite ?? false}
+                shareToken={conversation.share_token}
+              />
+            </ScrollView>
+            {searchVisible && (
+              <RNView style={[styles.searchBar, styles.floatingSearchBar]}>
+                <FontAwesome name="search" size={12} color={Theme.textDim} style={{ marginRight: 8 }} />
+                <TextInput
+                  style={styles.searchInput}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Search messages..."
+                  placeholderTextColor={Theme.textMuted0}
+                  returnKeyType="search"
+                />
+                {searchQuery.length > 0 && (
+                  <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    {searchMatchList.length > 0 ? (
+                      <>
+                        <RNText style={styles.searchCount}>{currentMatchIndex + 1}/{searchMatchList.length}</RNText>
+                        <TouchableOpacity onPress={goToPrevMatch} style={{ padding: 4 }} activeOpacity={0.7}>
+                          <FontAwesome name="chevron-up" size={10} color={Theme.textDim} />
                         </TouchableOpacity>
-                      </RNView>
+                        <TouchableOpacity onPress={goToNextMatch} style={{ padding: 4 }} activeOpacity={0.7}>
+                          <FontAwesome name="chevron-down" size={10} color={Theme.textDim} />
+                        </TouchableOpacity>
+                      </>
+                    ) : (
+                      <RNText style={styles.searchCount}>0 matches</RNText>
                     )}
+                    <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7} style={{ padding: 4 }}>
+                      <FontAwesome name="times-circle" size={14} color={Theme.textDim} />
+                    </TouchableOpacity>
                   </RNView>
                 )}
               </RNView>
+            )}
+            {diffExpanded && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
+              <RNView style={[styles.gitDiffPanel, { marginTop: 6, marginBottom: 2 }]}>
+                {conversation.git_diff_staged && conversation.git_diff_staged.trim().length > 0 && (
+                  <RNView style={{ marginBottom: 8 }}>
+                    <RNText style={{ fontSize: 10, color: Theme.green, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Staged</RNText>
+                    <RNView style={styles.gitDiffContent}>
+                      <GitDiffView diff={conversation.git_diff_staged} />
+                    </RNView>
+                  </RNView>
+                )}
+                {conversation.git_diff && conversation.git_diff.trim().length > 0 && (
+                  <RNView>
+                    {conversation.git_diff_staged && conversation.git_diff_staged.trim().length > 0 && (
+                      <RNText style={{ fontSize: 10, color: Theme.orange, fontWeight: '600', marginBottom: 4, paddingHorizontal: 12 }}>Unstaged</RNText>
+                    )}
+                    <RNView style={styles.gitDiffContent}>
+                      <GitDiffView diff={conversation.git_diff} />
+                    </RNView>
+                  </RNView>
+                )}
+              </RNView>
+            )}
+          </RNView>
+        </Animated.View>
+        <FlatList
+          ref={flatListRef}
+          data={allMessages}
+          ListHeaderComponent={
+            <>
+              <RNView style={{ height: floatingHeaderHeight + 8 }} />
               {hasMoreAbove && (
                 <RNView style={styles.loadMoreIndicator}>
                   {loadingOlder ? (
@@ -3711,7 +3714,11 @@ export default function SessionDetailScreen() {
             );
           }}
           keyExtractor={(item) => item._id}
-          contentContainerStyle={[styles.messageList, allMessages.length === 0 && { flex: 1 }]}
+          contentContainerStyle={[
+            styles.messageList,
+            { paddingBottom: composerHeight + 12 },
+            allMessages.length === 0 && { flex: 1 },
+          ]}
           ListEmptyComponent={
             <RNView style={styles.emptyState}>
               <FontAwesome name="comments-o" size={32} color={Theme.textDim} />
@@ -3740,63 +3747,66 @@ export default function SessionDetailScreen() {
           }
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
-          scrollEventThrottle={100}
+          scrollEventThrottle={16}
           maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
         />
 
         <RNView>
-          <LinearGradient
-            colors={['transparent', Theme.bg]}
-            style={{ height: 20, position: 'absolute', top: -20, left: 0, right: 0 }}
-            pointerEvents="none"
+          <MessageInput
+            conversationId={id as Id<"conversations">}
+            isActive={isActive}
+            onHeightChange={handleComposerHeightChange}
           />
-          <MessageInput conversationId={id as Id<"conversations">} isActive={isActive} />
         </RNView>
 
         {/* Jump arrows */}
-        <RNView style={styles.jumpButtonsContainer}>
+        <RNView style={styles.jumpButtonsOverlay} pointerEvents="box-none">
           {allMessages.length > 150 && (userScrolled || !isNearBottomRef.current) && (
-            <RNView style={styles.scrollProgressTrack}>
-              <Animated.View style={[styles.scrollProgressFill, {
-                height: scrollProgressAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: ['0%', '100%'],
-                }),
-              }]} />
+            <RNView style={styles.scrollProgressTrackWrap}>
+              <RNView style={styles.scrollProgressTrack}>
+                <Animated.View style={[styles.scrollProgressFill, {
+                  height: scrollProgressAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['0%', '100%'],
+                  }),
+                }]} />
+              </RNView>
             </RNView>
           )}
           {(!isNearTop || hasMoreAbove) && (
-            <TouchableOpacity
-              onPress={() => {
-                if (hasMoreAbove) {
-                  flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-                } else {
-                  flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-                }
-              }}
-              style={styles.jumpButton}
-              activeOpacity={0.7}
-            >
-              <FontAwesome name="arrow-up" size={14} color={Theme.borderLight} />
-            </TouchableOpacity>
+            <RNView style={styles.jumpTopButtonWrap}>
+              <TouchableOpacity
+                onPress={handleJumpToStart}
+                style={styles.jumpButton}
+                activeOpacity={0.7}
+              >
+                {jumpingToStart ? (
+                  <ActivityIndicator size="small" color={Theme.textDim} />
+                ) : (
+                  <FontAwesome name="chevron-up" size={13} color={Theme.textDim} />
+                )}
+              </TouchableOpacity>
+            </RNView>
           )}
-          {userScrolled && (
-            <TouchableOpacity
-              onPress={() => {
-                flatListRef.current?.scrollToEnd({ animated: true });
-                setUserScrolled(false);
-                setNewMessageCount(0);
-              }}
-              style={styles.jumpButton}
-              activeOpacity={0.7}
-            >
-              <FontAwesome name="arrow-down" size={14} color={Theme.borderLight} />
-              {newMessageCount > 0 && (
-                <RNView style={styles.jumpBadge}>
-                  <RNText style={styles.jumpBadgeText}>{newMessageCount > 99 ? '99+' : newMessageCount}</RNText>
-                </RNView>
-              )}
-            </TouchableOpacity>
+          {(userScrolled || !isNearBottomRef.current) && (
+            <RNView style={styles.jumpBottomButtonWrap}>
+              <TouchableOpacity
+                onPress={() => {
+                  flatListRef.current?.scrollToEnd({ animated: true });
+                  setUserScrolled(false);
+                  setNewMessageCount(0);
+                }}
+                style={styles.jumpButton}
+                activeOpacity={0.7}
+              >
+                <FontAwesome name="chevron-down" size={13} color={Theme.textDim} />
+                {newMessageCount > 0 && (
+                  <RNView style={styles.jumpBadge}>
+                    <RNText style={styles.jumpBadgeText}>{newMessageCount > 99 ? '99+' : newMessageCount}</RNText>
+                  </RNView>
+                )}
+              </TouchableOpacity>
+            </RNView>
           )}
         </RNView>
       </KeyboardAvoidingView>
@@ -3868,29 +3878,56 @@ const styles = StyleSheet.create({
     color: Theme.red,
     textAlign: 'center',
   },
-  sessionHeader: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: Theme.bg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.bgHighlight,
+  floatingSessionHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 60,
+    paddingHorizontal: 12,
+    paddingTop: 8,
   },
-  sessionTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  sessionTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: Theme.text,
-    marginBottom: 6,
-    lineHeight: 22,
+  floatingSessionCard: {
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
   },
   sessionMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     flexWrap: 'wrap',
+  },
+  floatingLinksRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+    flexWrap: 'wrap',
+  },
+  floatingLinkPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  floatingLinkText: {
+    fontSize: 11,
+    color: Theme.textMuted,
+    fontWeight: '500',
   },
   metaBadge: {
     fontSize: 10,
@@ -3907,8 +3944,9 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   messageCountText: {
-    fontSize: 12,
-    color: Theme.textMuted,
+    fontSize: 11,
+    color: Theme.textSecondary,
+    fontWeight: '500',
   },
   activeIndicator: {
     flexDirection: 'row',
@@ -3933,14 +3971,15 @@ const styles = StyleSheet.create({
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginLeft: 12,
+    gap: 6,
   },
   actionButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Theme.bgAlt,
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    backgroundColor: Theme.bgHighlight,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3956,7 +3995,6 @@ const styles = StyleSheet.create({
   },
   messageList: {
     padding: 16,
-    paddingBottom: 120,
   },
   permissionsContainer: {
     marginBottom: 16,
@@ -4866,26 +4904,37 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   // Jump buttons
-  jumpButtonsContainer: {
+  jumpButtonsOverlay: {
     position: 'absolute',
-    bottom: 140,
-    right: 16,
-    flexDirection: 'column',
-    gap: 10,
+    top: 6,
+    left: 0,
+    right: 0,
+    bottom: 116,
     zIndex: 100,
+  },
+  jumpTopButtonWrap: {
+    position: 'absolute',
+    top: 6,
+    right: 10,
+  },
+  jumpBottomButtonWrap: {
+    position: 'absolute',
+    bottom: 6,
+    right: 10,
   },
   jumpButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: Theme.bgAlt,
+    backgroundColor: Theme.bgAlt + 'CC',
+    opacity: 0.86,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    elevation: 4,
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
@@ -5023,23 +5072,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#d97706',
     fontWeight: '600',
-  },
-  parentLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 6,
-  },
-  parentLinkText: {
-    fontSize: 11,
-    color: Theme.violet,
-    fontWeight: '500',
-  },
-  forkedFromText: {
-    fontSize: 10,
-    color: Theme.textMuted0,
-    marginTop: 4,
-    fontStyle: 'italic',
   },
   // Agent dot
   agentDot: {
@@ -5356,17 +5388,24 @@ const styles = StyleSheet.create({
   headerToolbar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
-    paddingHorizontal: 12,
-    paddingBottom: 8,
+    gap: 6,
+    paddingTop: 6,
+    paddingBottom: 1,
+    paddingRight: 2,
   },
   toolbarButton: {
-    width: 32,
-    height: 28,
-    borderRadius: 6,
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     backgroundColor: Theme.bgHighlight,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  toolbarButtonActive: {
+    backgroundColor: Theme.cyan + '16',
+    borderColor: Theme.cyan + '70',
   },
   gitBranchBadge: {
     flexDirection: 'row',
@@ -5444,6 +5483,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginHorizontal: 12,
     marginBottom: 8,
+  },
+  floatingSearchBar: {
+    marginTop: 6,
+    marginHorizontal: 0,
+    marginBottom: 0,
   },
   searchInput: {
     flex: 1,
@@ -5604,6 +5648,11 @@ const styles = StyleSheet.create({
     color: Theme.cyan,
     opacity: 0.7,
   },
+  scrollProgressTrackWrap: {
+    position: 'absolute',
+    right: 8,
+    top: '45%',
+  },
   scrollProgressTrack: {
     width: 3,
     height: 48,
@@ -5616,21 +5665,6 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: 1.5,
     backgroundColor: Theme.cyan,
-  },
-  taskStatsBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 4,
-  },
-  taskStatsText: {
-    fontSize: 10,
-    color: Theme.textDim,
-    fontWeight: '500',
-    fontFamily: 'SpaceMono',
   },
   selectionCheckbox: {
     position: 'absolute',

@@ -1557,6 +1557,13 @@ export function formatResumeResults(result: ResumeResult): string {
   const ownConvs = conversations.filter(cv => !cv.user);
   const teamConvs = conversations.filter(cv => cv.user);
 
+  const getAgentLabel = (agentType?: string): string | null => {
+    if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
+    if (agentType === "codex" || agentType === "codex_cli") return "Codex";
+    if (agentType === "cursor") return "Cursor";
+    return agentType;
+  };
+
   lines.push(`${c.dim}Found ${conversations.length} session${conversations.length === 1 ? "" : "s"} matching "${query}"${c.reset}`);
   lines.push("");
 
@@ -1575,8 +1582,8 @@ export function formatResumeResults(result: ResumeResult): string {
       const name = conv.user.name || conv.user.email || "team member";
       meta.push(`${c.magenta}${name}${c.reset}`);
     }
-    if (conv.agent_type && conv.agent_type !== "claude_code") {
-      const label = conv.agent_type === "codex" ? "Codex" : conv.agent_type === "cursor" ? "Cursor" : conv.agent_type;
+    const label = getAgentLabel(conv.agent_type);
+    if (label) {
       meta.push(`${c.yellow}${label}${c.reset}`);
     }
     if (conv.project_path) {
@@ -1628,7 +1635,7 @@ export function formatResumeResults(result: ResumeResult): string {
     }
   }
 
-  lines.push(`${c.dim}Enter number to open, or q to quit${c.reset}`);
+  lines.push(`${c.dim}Enter number to open, append c/x to force ${c.bold}Claude/Codex${c.reset}${c.dim} (e.g. 2x), or q to quit${c.reset}`);
 
   return lines.join("\n");
 }
