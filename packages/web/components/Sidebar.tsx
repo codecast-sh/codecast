@@ -69,7 +69,12 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
 
   const favorites = useQuery(api.conversations.listFavorites);
   const bookmarks = useQuery(api.bookmarks.listBookmarks);
-  const { conversations } = useQuery(api.conversations.listConversations, { filter: "my", limit: 100 }) ?? { conversations: [] };
+  const { conversations } =
+    useQuery(api.conversations.listConversations, {
+      filter: "my",
+      limit: 100,
+      include_message_previews: false,
+    }) ?? { conversations: [] };
 
   const handleFilterClick = (newFilter: "my" | "team") => {
     if (newFilter === "team") {
