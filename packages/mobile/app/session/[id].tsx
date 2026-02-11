@@ -3674,8 +3674,13 @@ export default function SessionDetailScreen() {
           onContentSizeChange={() => {
             if (!conversation || allMessages.length === 0) return;
             if (highlightMessageParam || highlightedMessageId) return;
+            if (initialScrollDone) {
+              if (isNearBottomRef.current && !userScrolled) {
+                flatListRef.current?.scrollToEnd({ animated: true });
+              }
+              return;
+            }
             if (userScrolled) return;
-            if (initialScrollDone) return;
 
             didInitialScrollRef.current = true;
             flatListRef.current?.scrollToEnd({ animated: false });
