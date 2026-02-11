@@ -3199,7 +3199,6 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
   function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLElement | null>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
@@ -3340,22 +3339,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return true;
     });
   }, [messages, commits, pullRequests]);
-
-  // Find the actual scrollable container (may be parent when embedded)
-  const getScrollContainer = (): HTMLElement | null => {
-    const container = containerRef.current;
-    if (!container) return null;
-    if (!embedded) return container;
-    let el = container.parentElement;
-    while (el) {
-      const style = getComputedStyle(el);
-      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-        return el;
-      }
-      el = el.parentElement;
-    }
-    return container;
-  };
 
   // Track if we've already scrolled for this highlight query
   const hasScrolledToHighlight = useRef(false);
@@ -3590,7 +3573,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const virtualizer = useVirtualizer({
     count: timeline.length,
-    getScrollElement: () => scrollContainerRef.current || containerRef.current,
+    getScrollElement: () => containerRef.current,
     estimateSize: (index) => {
       const item = timeline[index];
       if (!item) return 100;
@@ -3662,11 +3645,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }), [timeline, virtualizer]);
 
   useEffect(() => {
-    const scrollContainer = getScrollContainer();
+    const scrollContainer = containerRef.current;
     if (!scrollContainer) return;
-
-    // Update ref so virtualizer uses correct scroll element
-    scrollContainerRef.current = scrollContainer;
 
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
@@ -3722,7 +3702,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
     scrollContainer.addEventListener("scroll", handleScroll);
     return () => scrollContainer.removeEventListener("scroll", handleScroll);
-  }, [embedded, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer]);
+  }, [hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer]);
 
   useEffect(() => {
     if (!scrollProgressRef.current) return;
@@ -3750,7 +3730,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     virtualizer.scrollToIndex(newIndex, { align: 'start' });
     scrollAnchorRef.current = null;
     requestAnimationFrame(() => {
-      const scrollContainer = scrollContainerRef.current || containerRef.current;
+      const scrollContainer = containerRef.current;
       if (!scrollContainer) return;
       // scrollToIndex put the item at viewport top; adjust so it's at original offset
       scrollContainer.scrollTop -= pixelOffset;
