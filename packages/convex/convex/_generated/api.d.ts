@@ -33,6 +33,7 @@ import type * as notifications from "../notifications.js";
 import type * as patterns from "../patterns.js";
 import type * as pendingMessages from "../pendingMessages.js";
 import type * as permissions from "../permissions.js";
+import type * as privacy from "../privacy.js";
 import type * as publicComments from "../publicComments.js";
 import type * as pull_requests from "../pull_requests.js";
 import type * as rateLimit from "../rateLimit.js";
@@ -76,6 +77,7 @@ declare const fullApi: ApiFromModules<{
   patterns: typeof patterns;
   pendingMessages: typeof pendingMessages;
   permissions: typeof permissions;
+  privacy: typeof privacy;
   publicComments: typeof publicComments;
   pull_requests: typeof pull_requests;
   rateLimit: typeof rateLimit;

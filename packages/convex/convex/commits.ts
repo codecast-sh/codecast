@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { isConversationTeamVisible } from "./privacy";
 
 export const addCommit = mutation({
   args: {
@@ -53,7 +54,7 @@ export const addCommit = mutation({
 
     if (args.conversation_id) {
       const conversation = await ctx.db.get(args.conversation_id);
-      if (conversation?.team_id && conversation.is_private === false) {
+      if (conversation && await isConversationTeamVisible(ctx, conversation)) {
         await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
           team_id: conversation.team_id,
           actor_user_id: conversation.user_id,

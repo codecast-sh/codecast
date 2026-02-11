@@ -2,12 +2,7 @@ import { internalMutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
-
-async function isTeamMember(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<boolean> {
-  const m = await ctx.db.query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId)).first();
-  return !!m;
-}
+import { isTeamMember } from "./privacy";
 
 export const recordTeamActivity = internalMutation({
   args: {

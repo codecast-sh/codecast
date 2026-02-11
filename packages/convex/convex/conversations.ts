@@ -5,12 +5,15 @@ import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
-
-async function isTeamMember(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<boolean> {
-  const m = await ctx.db.query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId)).first();
-  return !!m;
-}
+import {
+  isTeamMember,
+  canTeamMemberAccess,
+  checkConversationAccess,
+  isConversationVisibleInFeed,
+  isConversationTeamVisible,
+  resolveVisibilityMode,
+  type VisibilityMode,
+} from "./privacy";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -376,16 +379,23 @@ export const getConversations = query({
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
       .collect();
     const userTeamIds = new Set(memberships.map((m: any) => m.team_id.toString()));
+    const ownerVisMap = new Map<string, string>();
+    for (const teamId of userTeamIds) {
+      const teamMembers = await ctx.db.query("team_memberships")
+        .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+        .collect();
+      for (const m of teamMembers) ownerVisMap.set(m.user_id.toString(), m.visibility || "summary");
+    }
 
     const allConversations = await ctx.db.query("conversations").collect();
     const filtered = allConversations.filter((c) => {
       const isOwn = c.user_id.toString() === args.user_id.toString();
       if (isOwn) return true;
-      if (c.is_private !== false) return false;
-      if (c.team_id && userTeamIds.has(c.team_id.toString())) {
-        return true;
-      }
-      return false;
+      if (!c.team_id || !userTeamIds.has(c.team_id.toString())) return false;
+      if (c.is_private === false) return true;
+      if (c.team_visibility && c.team_visibility !== "private") return true;
+      const ownerVis = ownerVisMap.get(c.user_id.toString()) || "summary";
+      return ownerVis !== "hidden" && ownerVis !== "activity";
     });
     return filtered.sort((a, b) => b.updated_at - a.updated_at);
   },
@@ -407,10 +417,7 @@ export const getConversation = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private !== false) {
-        return null;
-      }
-      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
         return null;
       }
     }
@@ -478,8 +485,8 @@ export const getAllMessages = query({
     const isShared = !!conversation.share_token;
     let hasTeamAccess = false;
 
-    if (authUserId && !isOwner && conversation.is_private === false && conversation.team_id) {
-      hasTeamAccess = await isTeamMember(ctx, authUserId, conversation.team_id);
+    if (authUserId && !isOwner) {
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
     }
 
     if (!isOwner && !hasTeamAccess && !isShared) {
@@ -635,8 +642,8 @@ export const getMessagesAroundTimestamp = query({
     const isShared = !!conversation.share_token;
     let hasTeamAccess = false;
 
-    if (authUserId && !isOwner && conversation.is_private === false && conversation.team_id) {
-      hasTeamAccess = await isTeamMember(ctx, authUserId, conversation.team_id);
+    if (authUserId && !isOwner) {
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
     }
 
     if (!isOwner && !hasTeamAccess && !isShared) {
@@ -763,10 +770,7 @@ export const getNewMessages = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private !== false) {
-        return null;
-      }
-      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
         return null;
       }
     }
@@ -826,10 +830,7 @@ export const getConversationMessages = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private !== false) {
-        return null;
-      }
-      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
         return null;
       }
     }
@@ -897,10 +898,7 @@ export const getMoreMessages = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private !== false) {
-        return null;
-      }
-      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
         return null;
       }
     }
@@ -944,10 +942,7 @@ export const getOlderMessages = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private !== false) {
-        return null;
-      }
-      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
         return null;
       }
     }
@@ -996,8 +991,8 @@ export const listConversations = query({
       return { conversations: [], nextCursor: null };
     }
 
-    const limit = args.limit ?? 50;
-    const includeMessagePreviews = args.include_message_previews ?? true;
+    const limit = Math.min(args.limit ?? 20, 50);
+    const includeMessagePreviews = args.include_message_previews ?? false;
     const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
     const effectiveTeamId = args.filter === "team" ? (args.activeTeamId || user.active_team_id) : undefined;
@@ -1094,9 +1089,12 @@ export const listConversations = query({
         .order("desc");
 
       // Filter by privacy and project visibility
+      // If user has directory mappings, respect is_private (auto-share logic applied)
+      // If user has no mappings, only hide explicitly private (team_visibility === "private")
       const fetched = await query.take((limit + 1) * 2);
+      const memberHasMappings = userHasMappings.get(args.memberId!.toString());
       conversations = fetched.filter((c) => {
-        if (c.is_private !== false) return false;
+        if (!isConversationVisibleInFeed(c, !!memberHasMappings)) return false;
         const projectPath = c.git_root || c.project_path;
         return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
       }).slice(0, limit + 1);
@@ -1122,8 +1120,9 @@ export const listConversations = query({
             .order("desc");
 
           const convs = await query.take(perMemberLimit * 2);
+          const memberHasMappings = userHasMappings.get(member.user_id.toString());
           return convs.filter((c) => {
-            if (c.is_private !== false) return false;
+            if (!isConversationVisibleInFeed(c, !!memberHasMappings)) return false;
             const projectPath = c.git_root || c.project_path;
             return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
           }).slice(0, perMemberLimit);
@@ -1147,26 +1146,11 @@ export const listConversations = query({
             ? user
             : teamUserMap.get(c.user_id.toString()) || await ctx.db.get(c.user_id);
 
-        type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
-
-        function getTeamVisibility(): VisibilityMode {
-          if (args.filter !== "team") return "full";
-          if (c.team_visibility) {
-            return c.team_visibility as VisibilityMode;
-          }
-          const ownerVisibility = membershipVisibilityMap.get(c.user_id.toString()) || "activity";
-          const visibilityMapping: Record<string, VisibilityMode> = {
-            "hidden": "minimal",
-            "activity": "minimal",
-            "summary": "summary",
-            "full": "full",
-            "detailed": "detailed",
-            "minimal": "minimal",
-          };
-          return visibilityMapping[ownerVisibility] || "detailed";
-        }
-
-        const visibilityMode = getTeamVisibility();
+        const visibilityMode = resolveVisibilityMode(
+          c.team_visibility,
+          membershipVisibilityMap.get(c.user_id.toString()),
+          args.filter === "team"
+        );
         const authorName = conversationUser?.name || conversationUser?.email?.split("@")[0] || "Unknown";
         const authorAvatar = conversationUser?.image || conversationUser?.github_avatar_url || null;
         const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
@@ -1517,22 +1501,7 @@ export const getConversationPublic = query({
     }
 
     const authUserId = await getAuthUserId(ctx);
-    let accessLevel: "owner" | "team" | "shared" | "denied" = "denied";
-
-    if (authUserId) {
-      const isOwner = conversation.user_id.toString() === authUserId.toString();
-      if (isOwner) {
-        accessLevel = "owner";
-      } else if (conversation.is_private === false && conversation.team_id) {
-        if (await isTeamMember(ctx, authUserId, conversation.team_id)) {
-          accessLevel = "team";
-        }
-      }
-    }
-
-    if (accessLevel === "denied" && conversation.share_token) {
-      accessLevel = "shared";
-    }
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
 
     if (accessLevel === "denied") {
       return { access_level: "denied" as const, conversation: null };
@@ -1709,11 +1678,9 @@ export const searchConversations = query({
       const conv = await ctx.db.get(messages[0].conversation_id);
       if (!conv) continue;
 
-      // Check access - user can see their own conversations, or non-private
-      // conversations from team members whose team_id matches the effective team
       const isOwn = conv.user_id.toString() === userId.toString();
       if (!isOwn) {
-        if (conv.is_private !== false) continue;
+        if (!(await isConversationTeamVisible(ctx, conv))) continue;
         if (!teamUserIds.has(conv.user_id.toString())) continue;
         if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) continue;
       }
@@ -1832,9 +1799,13 @@ export const setPrivacy = mutation({
       throw new Error("Unauthorized: can only change privacy of your own conversations");
     }
 
-    const updates: { is_private: boolean; team_id?: Id<"teams"> } = {
+    const updates: { is_private: boolean; team_id?: Id<"teams">; team_visibility?: string } = {
       is_private: args.is_private,
     };
+
+    if (args.is_private) {
+      updates.team_visibility = "private";
+    }
 
     // When unlocking, ensure team_id is synced to user's current team
     if (!args.is_private) {
@@ -2313,12 +2284,10 @@ export const searchForCLI = query({
       const conv = await ctx.db.get(messages[0].conversation_id) as any;
       if (!conv) continue;
 
-      // Check access - user can see their own conversations, or non-private
-      // conversations from team members whose team_id matches the effective team
       const isOwn = conv.user_id.toString() === authUserId.toString();
       if (!isOwn) {
+        if (!(await isConversationTeamVisible(ctx, conv))) continue;
         if (!teamUserIds.has(conv.user_id.toString())) continue;
-        if (conv.is_private !== false) continue;
         if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) continue;
       }
 
@@ -2495,10 +2464,7 @@ export const readConversationMessages = query({
     // conversations from team members
     const isOwn = conv.user_id.toString() === authUserId.toString();
     if (!isOwn) {
-      if (conv.is_private !== false) {
-        return { error: "Access denied" };
-      }
-      if (!conv.team_id || !(await isTeamMember(ctx, authUserId, conv.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conv))) {
         return { error: "Access denied" };
       }
     }
@@ -2620,10 +2586,7 @@ export const exportConversationMessages = query({
 
     const isOwn = conv.user_id.toString() === authUserId.toString();
     if (!isOwn) {
-      if (conv.is_private !== false) {
-        return { error: "Access denied" };
-      }
-      if (!conv.team_id || !(await isTeamMember(ctx, authUserId, conv.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conv))) {
         return { error: "Access denied" };
       }
     }
@@ -2695,10 +2658,7 @@ export const exportConversationMessagesPage = query({
 
     const isOwn = conv.user_id.toString() === authUserId.toString();
     if (!isOwn) {
-      if (conv.is_private !== false) {
-        return { error: "Access denied" };
-      }
-      if (!conv.team_id || !(await isTeamMember(ctx, authUserId, conv.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conv))) {
         return { error: "Access denied" };
       }
     }
@@ -3160,10 +3120,7 @@ export const forkFromMessage = mutation({
 
     const isOwner = original.user_id.toString() === userId.toString();
     if (!isOwner) {
-      if (original.is_private !== false) {
-        throw new Error("Access denied");
-      }
-      if (!original.team_id || !(await isTeamMember(ctx, userId, original.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, userId, original))) {
         throw new Error("Access denied");
       }
     }
@@ -3268,10 +3225,7 @@ export const getConversationTree = query({
 
     const isOwner = conv.user_id.toString() === userId.toString();
     if (!isOwner) {
-      if (conv.is_private !== false) {
-        return { error: "Access denied" };
-      }
-      if (!conv.team_id || !(await isTeamMember(ctx, userId, conv.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, userId, conv))) {
         return { error: "Access denied" };
       }
     }
@@ -3425,11 +3379,7 @@ export const getMessageFeed = query({
       if (args.filter === "my") {
         hasAccess = isOwn;
       } else {
-        if (conv.is_private !== false) {
-          hasAccess = false;
-        } else if (conv.team_id && await isTeamMember(ctx, userId, conv.team_id)) {
-          hasAccess = true;
-        }
+        hasAccess = await canTeamMemberAccess(ctx, userId, conv);
       }
 
       if (!hasAccess) {
@@ -3620,11 +3570,15 @@ export const feedForCLI = query({
 
     type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
     const allTeamUsers: UserDoc[] = [];
+    const memberVisibilityMap = new Map<string, string>();
     for (const teamId of effectiveTeamIds) {
       const teamMemberships = await ctx.db
         .query("team_memberships")
         .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
         .collect();
+      for (const m of teamMemberships) {
+        memberVisibilityMap.set(m.user_id.toString(), m.visibility || "summary");
+      }
       const memberUsers = await Promise.all(
         teamMemberships.map(m => ctx.db.get(m.user_id))
       );
@@ -3633,6 +3587,13 @@ export const feedForCLI = query({
     const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
     const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
     const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
+
+    const isTeamConversationVisible = (c: { is_private: boolean; team_visibility?: string; user_id: Id<"users">; team_id?: Id<"teams"> }) => {
+      if (c.is_private === false) return true;
+      if (c.team_visibility && c.team_visibility !== "private") return true;
+      const ownerVis = memberVisibilityMap.get(c.user_id.toString()) || "summary";
+      return ownerVis !== "hidden" && ownerVis !== "activity";
+    };
 
     let filterUserId: string | null = null;
     if (args.member_name) {
@@ -3720,7 +3681,7 @@ export const feedForCLI = query({
       const teamUserIdSet = new Set(teamUsers.filter(u => u._id.toString() !== authUserId.toString()).map(u => u._id.toString()));
       queryMatchedTeamConversations = validConvs.filter(c =>
         teamUserIdSet.has(c.user_id.toString()) &&
-        c.is_private === false &&
+        isTeamConversationVisible(c) &&
         c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString())
       );
     }
@@ -3757,7 +3718,7 @@ export const feedForCLI = query({
             .order("desc")
             .take(10);
           return convos.filter(c =>
-            c.is_private === false &&
+            isTeamConversationVisible(c) &&
             c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString())
           );
         })

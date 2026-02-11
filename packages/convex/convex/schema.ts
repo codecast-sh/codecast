@@ -130,7 +130,7 @@ export default defineSchema({
     updated_at: v.number(),
     message_count: v.number(),
     is_private: v.boolean(),
-    team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"))),
+    team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
     status: v.union(v.literal("active"), v.literal("completed")),
     share_token: v.optional(v.string()),
     parent_message_uuid: v.optional(v.string()),

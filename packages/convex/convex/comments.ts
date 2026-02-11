@@ -3,12 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-
-async function isTeamMember(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<boolean> {
-  const m = await ctx.db.query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId)).first();
-  return !!m;
-}
+import { canTeamMemberAccess } from "./privacy";
 
 export const addComment = mutation({
   args: {
@@ -31,9 +26,10 @@ export const addComment = mutation({
       throw new Error("Conversation not found");
     }
 
-    if (conversation.team_id) {
-      if (!(await isTeamMember(ctx, userId, conversation.team_id))) {
-        throw new Error("Unauthorized: not a member of this team");
+    const isOwner = conversation.user_id.toString() === userId.toString();
+    if (!isOwner) {
+      if (!(await canTeamMemberAccess(ctx, userId, conversation))) {
+        throw new Error("Unauthorized: not allowed to comment on this conversation");
       }
     }
 
@@ -162,8 +158,9 @@ export const getComments = query({
       return [];
     }
 
-    if (conversation.team_id) {
-      if (!(await isTeamMember(ctx, userId, conversation.team_id))) {
+    const isOwner = conversation.user_id.toString() === userId.toString();
+    if (!isOwner) {
+      if (!(await canTeamMemberAccess(ctx, userId, conversation))) {
         return [];
       }
     }

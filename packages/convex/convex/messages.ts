@@ -6,12 +6,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { shouldGenerateTitle } from "./titleGeneration";
-
-async function isTeamMember(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<boolean> {
-  const m = await ctx.db.query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId)).first();
-  return !!m;
-}
+import { canTeamMemberAccess } from "./privacy";
 
 export const getMessageTimestamp = query({
   args: {
@@ -29,10 +24,7 @@ export const getMessageTimestamp = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private !== false) {
-        return null;
-      }
-      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
         return null;
       }
     }
@@ -321,10 +313,7 @@ export const generateMessageShareLink = mutation({
 
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private !== false) {
-        throw new Error("Unauthorized: can only share messages from your own conversations");
-      }
-      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
         throw new Error("Unauthorized: can only share messages from your own conversations");
       }
     }
@@ -361,10 +350,7 @@ export const findMessageByContent = query({
     }
     const isOwner = conversation.user_id.toString() === authUserId.toString();
     if (!isOwner) {
-      if (conversation.is_private !== false) {
-        return null;
-      }
-      if (!conversation.team_id || !(await isTeamMember(ctx, authUserId, conversation.team_id))) {
+      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
         return null;
       }
     }
