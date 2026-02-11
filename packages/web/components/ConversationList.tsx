@@ -367,6 +367,14 @@ function CursorIcon({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
+function GeminiIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 0C12 0 12 6.268 8.134 10.134C4.268 14 0 14 0 14C0 14 6.268 14 10.134 17.866C14 21.732 14 28 14 28C14 28 14 21.732 17.866 17.866C21.732 14 28 14 28 14C28 14 21.732 14 17.866 10.134C14 6.268 14 0 14 0" transform="scale(0.857) translate(1, -2)"/>
+    </svg>
+  );
+}
+
 function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; className?: string }) {
   if (agentType === "codex" || agentType === "codex_cli") {
     return (
@@ -378,6 +386,12 @@ function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; cl
     return (
       <span className={`${className} rounded bg-[#1a1a2e] flex items-center justify-center shrink-0`}>
         <CursorIcon className="w-2.5 h-2.5 text-white" />
+      </span>
+    );
+  } else if (agentType === "gemini") {
+    return (
+      <span className={`${className} rounded bg-[#1a73e8] flex items-center justify-center shrink-0`}>
+        <GeminiIcon className="w-2.5 h-2.5 text-white" />
       </span>
     );
   }
@@ -455,6 +469,7 @@ function getAgentTypeLabel(agentType: string): string {
   if (agentType === "claude_code") return "Claude Code";
   if (agentType === "codex" || agentType === "codex_cli") return "Codex";
   if (agentType === "cursor") return "Cursor";
+  if (agentType === "gemini") return "Gemini";
   return agentType;
 }
 

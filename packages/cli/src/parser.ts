@@ -559,3 +559,109 @@ export function parseCursorTranscriptFile(content: string): ParsedMessage[] {
   flush();
   return messages;
 }
+
+interface GeminiSessionMessage {
+  id: string;
+  timestamp: string;
+  type: "user" | "gemini" | "info";
+  content: Array<{ text: string }> | string;
+  thoughts?: Array<{ subject: string; description: string; timestamp: string }>;
+  tokens?: { input: number; output: number; cached: number; thoughts: number; tool: number; total: number };
+  model?: string;
+}
+
+interface GeminiSessionFile {
+  sessionId: string;
+  projectHash: string;
+  startTime: string;
+  lastUpdated: string;
+  messages: GeminiSessionMessage[];
+}
+
+export function parseGeminiSessionFile(content: string): ParsedMessage[] {
+  let session: GeminiSessionFile;
+  try {
+    session = JSON.parse(content);
+  } catch {
+    return [];
+  }
+
+  if (!session.messages || !Array.isArray(session.messages)) {
+    return [];
+  }
+
+  const messages: ParsedMessage[] = [];
+
+  for (const msg of session.messages) {
+    if (msg.type === "info") continue;
+
+    const timestamp = msg.timestamp ? new Date(msg.timestamp).getTime() : Date.now();
+    let role: "user" | "assistant";
+    let textContent = "";
+
+    if (msg.type === "user") {
+      role = "user";
+      if (Array.isArray(msg.content)) {
+        textContent = msg.content.map((c) => c.text).join("\n");
+      } else if (typeof msg.content === "string") {
+        textContent = msg.content;
+      }
+    } else if (msg.type === "gemini") {
+      role = "assistant";
+      if (typeof msg.content === "string") {
+        textContent = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        textContent = msg.content.map((c) => c.text).join("\n");
+      }
+    } else {
+      continue;
+    }
+
+    let thinking: string | undefined;
+    if (msg.thoughts && msg.thoughts.length > 0) {
+      thinking = msg.thoughts
+        .map((t) => (t.subject ? `${t.subject}: ${t.description}` : t.description))
+        .join("\n\n");
+    }
+
+    if (textContent || thinking) {
+      messages.push({
+        uuid: msg.id,
+        role,
+        content: textContent,
+        timestamp,
+        thinking: thinking || undefined,
+      });
+    }
+  }
+
+  return messages;
+}
+
+export function extractGeminiSessionId(content: string): string | undefined {
+  try {
+    const session = JSON.parse(content);
+    return session.sessionId;
+  } catch {
+    return undefined;
+  }
+}
+
+export function extractGeminiProjectHash(content: string): string | undefined {
+  try {
+    const session = JSON.parse(content);
+    return session.projectHash;
+  } catch {
+    return undefined;
+  }
+}
+
+export function extractGeminiStartTime(content: string): number | undefined {
+  try {
+    const session = JSON.parse(content);
+    if (session.startTime) {
+      return new Date(session.startTime).getTime();
+    }
+  } catch {}
+  return undefined;
+}

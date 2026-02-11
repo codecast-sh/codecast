@@ -213,7 +213,8 @@ export const createConversation = mutation({
     agent_type: v.union(
       v.literal("claude_code"),
       v.literal("codex"),
-      v.literal("cursor")
+      v.literal("cursor"),
+      v.literal("gemini")
     ),
     session_id: v.string(),
     project_hash: v.optional(v.string()),

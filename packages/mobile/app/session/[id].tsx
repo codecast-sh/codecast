@@ -538,18 +538,21 @@ function formatAgentType(agentType?: string): string {
   if (agentType === 'claude_code') return 'Claude Code';
   if (agentType === 'codex') return 'Codex';
   if (agentType === 'cursor') return 'Cursor';
+  if (agentType === 'gemini') return 'Gemini';
   return agentType;
 }
 
 function agentTypeColor(agentType?: string): string {
   if (agentType === 'codex') return '#10b981';
   if (agentType === 'cursor') return '#60a5fa';
+  if (agentType === 'gemini') return '#1a73e8';
   return Theme.accent;
 }
 
 function agentTypeIcon(agentType?: string): string {
   if (agentType === 'codex') return 'terminal';
   if (agentType === 'cursor') return 'mouse-pointer';
+  if (agentType === 'gemini') return 'star';
   return 'bolt';
 }
 
@@ -2132,6 +2135,7 @@ function SystemMessage({ message }: { message: Message }) {
 function assistantLabel(agentType?: string): string {
   if (agentType === 'codex') return 'Codex';
   if (agentType === 'cursor') return 'Cursor';
+  if (agentType === 'gemini') return 'Gemini';
   return 'Claude';
 }
 
@@ -2345,7 +2349,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               <RNText style={styles.userAvatarText}>{(userName || 'Y')[0].toUpperCase()}</RNText>
             </RNView>
           ) : agentType ? (
-            <RNView style={[styles.agentDot, { backgroundColor: agentType === 'codex' ? '#10b981' : agentType === 'cursor' ? '#60a5fa' : Theme.accent }]} />
+            <RNView style={[styles.agentDot, { backgroundColor: agentType === 'codex' ? '#10b981' : agentType === 'cursor' ? '#60a5fa' : agentType === 'gemini' ? '#1a73e8' : Theme.accent }]} />
           ) : null}
           <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
             {isUser ? (userName || 'You') : assistantLabel(agentType)}

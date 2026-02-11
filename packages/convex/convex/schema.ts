@@ -115,7 +115,8 @@ export default defineSchema({
     agent_type: v.union(
       v.literal("claude_code"),
       v.literal("codex"),
-      v.literal("cursor")
+      v.literal("cursor"),
+      v.literal("gemini")
     ),
     session_id: v.string(),
     slug: v.optional(v.string()),

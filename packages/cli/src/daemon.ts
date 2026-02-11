@@ -7,7 +7,8 @@ import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
-import { parseSessionFile, parseCodexSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, type ParsedMessage } from "./parser.js";
+import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
+import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractGeminiProjectHash, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { markSynced, getSyncRecord, findUnsyncedFiles } from "./syncLedger.js";
@@ -1635,6 +1636,173 @@ async function processCodexSession(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing Codex session file ${filePath}: ${errMsg}`);
+  }
+}
+
+const geminiSyncedCounts = new Map<string, number>();
+
+async function processGeminiSession(
+  filePath: string,
+  sessionId: string,
+  projectHash: string,
+  syncService: SyncService,
+  userId: string,
+  teamId: string | undefined,
+  conversationCache: ConversationCache,
+  retryQueue: RetryQueue,
+  pendingMessages: PendingMessages,
+  titleCache: TitleCache,
+  updateStateCallback: () => void
+): Promise<void> {
+  try {
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf-8");
+    } catch (err: any) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
+        return;
+      }
+      throw err;
+    }
+
+    const allMessages = parseGeminiSessionFile(content);
+    const previousCount = geminiSyncedCounts.get(filePath) || 0;
+
+    if (allMessages.length <= previousCount) {
+      return;
+    }
+
+    const newMessages = allMessages.slice(previousCount);
+    let conversationId = conversationCache[sessionId];
+
+    if (!conversationId) {
+      try {
+        const firstUserMessage = allMessages.find(msg => msg.role === "user");
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const startTime = allMessages[0]?.timestamp;
+
+        conversationId = await syncService.createConversation({
+          userId,
+          teamId,
+          sessionId,
+          agentType: "gemini",
+          projectPath: undefined,
+          slug: undefined,
+          title,
+          startedAt: startTime,
+          parentMessageUuid: undefined,
+          gitInfo: undefined,
+        });
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        log(`Created conversation ${conversationId} for Gemini session ${sessionId}`);
+
+        if ((global as any).activeSessions) {
+          (global as any).activeSessions.set(conversationId, {
+            sessionId,
+            conversationId,
+            projectPath: "",
+          });
+        }
+
+        if (pendingMessages[sessionId]) {
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+          delete pendingMessages[sessionId];
+        }
+      } catch (err) {
+        if (err instanceof AuthExpiredError) {
+          if (handleAuthFailure()) {
+            log("⚠️  Authentication expired - sync paused");
+            geminiSyncedCounts.set(filePath, allMessages.length);
+            return;
+          }
+        }
+
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log(`Failed to create Gemini conversation, queueing for retry: ${errMsg}`);
+
+        if (!pendingMessages[sessionId]) {
+          pendingMessages[sessionId] = [];
+        }
+        for (const msg of newMessages) {
+          pendingMessages[sessionId].push({
+            uuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            filePath,
+            fileSize: content.length,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+          });
+        }
+
+        const firstUserMessage = allMessages.find(msg => msg.role === "user");
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
+        retryQueue.add("createConversation", {
+          userId,
+          teamId,
+          sessionId,
+          agentType: "gemini",
+          title,
+          startedAt: allMessages[0]?.timestamp,
+        }, errMsg);
+
+        geminiSyncedCounts.set(filePath, allMessages.length);
+        return;
+      }
+    }
+
+    const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService, retryQueue);
+    if (batchResult.authExpired) {
+      log("⚠️  Authentication expired - sync paused");
+      return;
+    }
+    if (batchResult.conversationNotFound) {
+      log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+      delete conversationCache[sessionId];
+      saveConversationCache(conversationCache);
+
+      const firstUserMessage = allMessages.find(msg => msg.role === "user");
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
+      try {
+        conversationId = await syncService.createConversation({
+          userId,
+          teamId,
+          sessionId,
+          agentType: "gemini",
+          title,
+          startedAt: allMessages[0]?.timestamp,
+        });
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        log(`Recreated conversation ${conversationId} for Gemini session ${sessionId}`);
+
+        await syncService.addMessages({
+          conversationId,
+          messages: newMessages.map(prepMessageForSync),
+        });
+      } catch (retryErr) {
+        const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        log(`Failed to recreate Gemini conversation and add messages: ${retryErrMsg}`);
+      }
+    }
+
+    geminiSyncedCounts.set(filePath, allMessages.length);
+    log(`Synced ${newMessages.length} Gemini messages for session ${sessionId}`);
+    syncStats.messagesSynced += newMessages.length;
+    syncStats.sessionsActive.add(sessionId);
+
+    updateStateCallback();
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log(`Error processing Gemini session file ${filePath}: ${errMsg}`);
   }
 }
 
@@ -3309,6 +3477,55 @@ async function main(): Promise<void> {
   });
 
   codexWatcher.start();
+
+  const geminiWatcher = new GeminiWatcher();
+  const geminiSyncs = new Map<string, InvalidateSync>();
+
+  geminiWatcher.on("ready", () => {
+    log("Gemini watcher ready");
+  });
+
+  geminiWatcher.on("session", (event: GeminiSessionEvent) => {
+    const filePath = event.filePath;
+
+    const state = readDaemonState();
+    if (state?.authExpired) {
+      return;
+    }
+
+    if (isSyncPaused()) {
+      log(`Sync paused, skipping Gemini session: ${event.sessionId}`);
+      return;
+    }
+
+    let sync = geminiSyncs.get(filePath);
+    if (!sync) {
+      sync = new InvalidateSync(async () => {
+        await processGeminiSession(
+          filePath,
+          event.sessionId,
+          event.projectHash,
+          syncService,
+          config.user_id!,
+          config.team_id,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState
+        );
+      });
+      geminiSyncs.set(filePath, sync);
+    }
+
+    sync.invalidate();
+  });
+
+  geminiWatcher.on("error", (error: Error) => {
+    logError("Gemini watcher error", error);
+  });
+
+  geminiWatcher.start();
 
   const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe: (() => void) | null = null;

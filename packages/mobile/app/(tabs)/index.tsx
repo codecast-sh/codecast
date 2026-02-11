@@ -77,6 +77,7 @@ function agentLabel(agentType: string): string {
     case "claude_code": return "Claude";
     case "codex": return "Codex";
     case "cursor": return "Cursor";
+    case "gemini": return "Gemini";
     default: return "";
   }
 }
@@ -86,6 +87,7 @@ function agentColor(agentType: string): string {
     case "claude_code": return Theme.orange;
     case "codex": return Theme.green;
     case "cursor": return Theme.violet;
+    case "gemini": return Theme.blue;
     default: return Theme.textMuted0;
   }
 }
