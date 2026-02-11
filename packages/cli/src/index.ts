@@ -36,6 +36,26 @@ function getRealCwd(): string {
   return process.env.CODECAST_CWD || process.cwd();
 }
 
+function truncatePath(p: string | null, maxLen: number = 38): string {
+  if (!p) return "";
+  const home = process.env.HOME || "";
+  if (home && p.startsWith(home)) {
+    p = "~" + p.slice(home.length);
+  }
+  if (p.length > maxLen) {
+    const parts = p.split("/");
+    if (parts.length > 3) {
+      const prefix = parts[0];
+      const suffix = parts.slice(-2).join("/");
+      if ((prefix + "/.../" + suffix).length <= maxLen) {
+        return prefix + "/.../" + suffix;
+      }
+      return ".../" + suffix;
+    }
+  }
+  return p;
+}
+
 /**
  * Finds the session ID for the current Claude Code process by:
  * 1. Walking up process tree to find parent Claude process
