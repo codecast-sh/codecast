@@ -3365,20 +3365,18 @@ export default function SessionDetailScreen() {
     const deltaY = scrollTop - lastScrollYRef.current;
     lastScrollYRef.current = scrollTop;
 
-    // Check if near bottom (within 100px like web)
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    const isNearBottom = distanceFromBottom < 100;
+    const isNearBottom = distanceFromBottom < 200;
     isNearBottomRef.current = isNearBottom;
 
-    // Check if near top
     setIsNearTop(scrollTop < 96);
 
     const progress = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0;
     scrollProgressAnim.setValue(progress);
 
-    if (!isNearBottom) {
+    if (distanceFromBottom > 400 && !userScrolled) {
       setUserScrolled(true);
-    } else {
+    } else if (isNearBottom && userScrolled) {
       setUserScrolled(false);
       setNewMessageCount(0);
     }
@@ -3402,7 +3400,7 @@ export default function SessionDetailScreen() {
     if (scrollTop < 100 && hasMoreAbove && !loadingOlder && initialScrollDone) {
       loadOlderMessages();
     }
-  }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible]);
+  }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
 
   const lastMessageAt = conversation?.messages?.length
     ? conversation.messages[conversation.messages.length - 1]?.timestamp
@@ -3850,7 +3848,7 @@ export default function SessionDetailScreen() {
 
         {/* Jump arrows */}
         <RNView style={styles.jumpButtonsOverlay} pointerEvents="box-none">
-          {allMessages.length > 150 && (userScrolled || !isNearBottomRef.current) && (
+          {allMessages.length > 150 && userScrolled && (
             <RNView style={styles.scrollProgressTrackWrap}>
               <RNView style={styles.scrollProgressTrack}>
                 <Animated.View style={[styles.scrollProgressFill, {
@@ -3887,7 +3885,7 @@ export default function SessionDetailScreen() {
               </TouchableOpacity>
             </Animated.View>
           )}
-          {(userScrolled || !isNearBottomRef.current) && (
+          {userScrolled && (
             <RNView style={styles.jumpBottomButtonWrap}>
               <TouchableOpacity
                 onPress={handleJumpToEnd}
