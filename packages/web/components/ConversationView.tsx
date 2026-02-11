@@ -403,15 +403,27 @@ function CursorIcon() {
   );
 }
 
+function GeminiIcon() {
+  return (
+    <div className="w-6 h-6 rounded bg-[#1a73e8] flex items-center justify-center shrink-0">
+      <svg width="14" height="14" viewBox="0 0 28 28" fill="white" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 0C12 0 12 6.268 8.134 10.134C4.268 14 0 14 0 14C0 14 6.268 14 10.134 17.866C14 21.732 14 28 14 28C14 28 14 21.732 17.866 17.866C21.732 14 28 14 28 14C28 14 21.732 14 17.866 10.134C14 6.268 14 0 14 0" />
+      </svg>
+    </div>
+  );
+}
+
 function AssistantIcon({ agentType }: { agentType?: string }) {
   if (agentType === "codex") return <CodexIcon />;
   if (agentType === "cursor") return <CursorIcon />;
+  if (agentType === "gemini") return <GeminiIcon />;
   return <ClaudeIcon />;
 }
 
 function assistantLabel(agentType?: string): string {
   if (agentType === "codex") return "Codex";
   if (agentType === "cursor") return "Cursor";
+  if (agentType === "gemini") return "Gemini";
   return "Claude";
 }
 
@@ -434,6 +446,12 @@ function AgentTypeIcon({ agentType }: { agentType: string }) {
         <path d="M4 4l16 6-8 2-2 8z"/>
       </svg>
     );
+  } else if (agentType === "gemini") {
+    return (
+      <svg className="w-3 h-3 text-blue-400" viewBox="0 0 28 28" fill="currentColor">
+        <path d="M12 0C12 0 12 6.268 8.134 10.134C4.268 14 0 14 0 14C0 14 6.268 14 10.134 17.866C14 21.732 14 28 14 28C14 28 14 21.732 17.866 17.866C21.732 14 28 14 28 14C28 14 21.732 14 17.866 10.134C14 6.268 14 0 14 0" />
+      </svg>
+    );
   }
   return null;
 }
@@ -443,6 +461,7 @@ function formatAgentType(agentType?: string): string {
   if (agentType === "claude_code") return "Claude Code";
   if (agentType === "codex") return "Codex";
   if (agentType === "cursor") return "Cursor";
+  if (agentType === "gemini") return "Gemini";
   return agentType;
 }
 
@@ -3126,8 +3145,8 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
   };
 
   return (
-    <div className="sticky bottom-0 z-30 pointer-events-none mt-auto">
-      <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent" />
+    <div className="shrink-0 z-30 pointer-events-none">
+      <div className="h-8 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-8 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         {isInactive && (
           <div className="max-w-2xl mx-auto px-4 mb-2">
@@ -3312,7 +3331,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       ...commits.map(commit => ({ type: 'commit' as const, data: commit, timestamp: commit.timestamp })),
       ...pullRequests.map(pr => ({ type: 'pull_request' as const, data: pr, timestamp: pr.created_at })),
     ];
-    return items.sort((a, b) => a.timestamp - b.timestamp);
+    items.sort((a, b) => a.timestamp - b.timestamp);
+    return items.filter(item => {
+      if (item.type !== 'message') return true;
+      const msg = item.data as Message;
+      if (msg.role === "user" && msg.tool_results && msg.tool_results.length > 0) return false;
+      if (msg.role === "user" && (!msg.content || !msg.content.trim())) return false;
+      return true;
+    });
   }, [messages, commits, pullRequests]);
 
   // Find the actual scrollable container (may be parent when embedded)
@@ -3576,7 +3602,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const msg = item.data as Message;
       if (collapsed) {
         if (msg.role === "system") return 0;
-        if (msg.role === "user" && msg.tool_results) return 0;
         if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return 0;
         if (msg.role === "assistant") {
           const hasTextContent = msg.content && msg.content.trim().length > 0;
@@ -3586,31 +3611,31 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             const checkItem = timeline[i];
             if (checkItem.type !== 'message') continue;
             const checkMsg = checkItem.data as Message;
-            if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
-              break;
-            }
+            if (checkMsg.role === "user") break;
             if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
-              return 0; // Earlier message in sequence has text, this won't render
+              return 0;
             }
           }
         }
         return 80;
       }
 
-      if (msg.role === "system") return 60;
+      if (msg.role === "system") return 8;
       if (msg.role === "user") {
-        if (msg.tool_results) return 120;
-        if (msg.content && isCommandMessage(msg.content)) return 50;
+        if (msg.content && isCommandMessage(msg.content)) return 30;
         const lines = (msg.content || "").split("\n").length;
-        return Math.max(100, lines * 20 + 60);
+        return Math.max(60, lines * 18 + 40);
       }
       if (msg.role === "assistant") {
+        const hasTextContent = msg.content && msg.content.trim().length > 0;
         const toolCount = msg.tool_calls?.length || 0;
+        if (!hasTextContent && !msg.thinking && !msg.images?.length) return 8;
+        if (!hasTextContent && toolCount > 0) return toolCount * 30;
         const hasThinking = showThinking && msg.thinking && msg.thinking.trim().length > 0;
         const contentLines = (msg.content || "").split("\n").length;
-        return Math.max(120, toolCount * 150 + (hasThinking ? 100 : 0) + contentLines * 20 + 60);
+        return Math.max(60, toolCount * 30 + (hasThinking ? 80 : 0) + contentLines * 18 + 40);
       }
-      return 100;
+      return 40;
     },
     overscan: 50,
     paddingEnd: 100,
@@ -3752,9 +3777,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   useEffect(() => {
     if (timeline.length > 0 && !hasInitialScrolled.current && !window.location.hash && !highlightQuery) {
       hasInitialScrolled.current = true;
-      setTimeout(() => {
+      // Re-scroll multiple times as measurements settle to fix over-estimated total size
+      let lastScrollHeight = 0;
+      const stabilize = (attempt: number) => {
         virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
-      }, 100);
+        const sc = containerRef.current;
+        const currentHeight = sc?.scrollHeight ?? 0;
+        if (attempt < 5 && currentHeight !== lastScrollHeight) {
+          lastScrollHeight = currentHeight;
+          setTimeout(() => stabilize(attempt + 1), 100);
+        }
+      };
+      setTimeout(() => stabilize(0), 100);
     }
   }, [timeline.length, virtualizer, highlightQuery]);
 
@@ -3978,13 +4012,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (msg.role === "user") {
-      if (msg.tool_results && msg.tool_results.length > 0) {
-        if (collapsed) return null;
-        const toolName = msg.tool_results[0]?.tool_use_id
-          ? toolCallMap[msg.tool_results[0].tool_use_id]
-          : undefined;
-        return <ToolResultMessage key={msg._id} toolResults={msg.tool_results} toolName={toolName} />;
-      }
       if (msg.content && msg.content.trim()) {
         if (isCommandMessage(msg.content)) {
           if (collapsed) return null;
@@ -4007,23 +4034,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (msg.role === "assistant") {
-      // Find previous non-tool-result message to determine if this is first in Claude sequence
-      let prevNonToolResultIdx = index - 1;
-      while (prevNonToolResultIdx >= 0) {
-        const prevItem = timeline[prevNonToolResultIdx];
-        if (prevItem.type === 'commit') {
-          prevNonToolResultIdx--;
-          continue;
-        }
-        const prev = prevItem.data as Message;
-        // Skip user messages that are just tool results
-        if (prev.role === "user" && prev.tool_results && prev.tool_results.length > 0) {
-          prevNonToolResultIdx--;
-          continue;
-        }
-        break;
-      }
-      const prevItem = prevNonToolResultIdx >= 0 ? timeline[prevNonToolResultIdx] : null;
+      // Find previous non-commit item to determine if this is first in assistant sequence
+      let prevIdx = index - 1;
+      while (prevIdx >= 0 && timeline[prevIdx].type === 'commit') prevIdx--;
+      const prevItem = prevIdx >= 0 ? timeline[prevIdx] : null;
       const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
       const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
 
@@ -4033,11 +4047,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         const checkItem = timeline[i];
         if (checkItem.type !== 'message') continue;
         const checkMsg = checkItem.data as Message;
-        // Stop at user messages (except tool results)
-        if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
-          break;
-        }
-        // Found an earlier assistant message with text - that's the sequence start
+        if (checkMsg.role === "user") break;
         if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
           sequenceStartId = checkMsg._id;
         }
@@ -4051,23 +4061,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         const checkItem = timeline[i];
         if (checkItem.type !== 'message') continue;
         const checkMsg = checkItem.data as Message;
-        if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
-          break;
-        }
-        if (checkMsg.role === "assistant") {
-          runMessageIds.unshift(checkMsg._id);
-        }
+        if (checkMsg.role === "user") break;
+        if (checkMsg.role === "assistant") runMessageIds.unshift(checkMsg._id);
       }
       for (let i = index + 1; i < timeline.length; i++) {
         const checkItem = timeline[i];
         if (checkItem.type !== 'message') continue;
         const checkMsg = checkItem.data as Message;
-        if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
-          break;
-        }
-        if (checkMsg.role === "assistant") {
-          runMessageIds.push(checkMsg._id);
-        }
+        if (checkMsg.role === "user") break;
+        if (checkMsg.role === "assistant") runMessageIds.push(checkMsg._id);
       }
 
       // In collapsed mode, only render messages if sequence is expanded OR this is the first with text
@@ -4082,9 +4084,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             const checkItem = timeline[i];
             if (checkItem.type !== 'message') continue;
             const checkMsg = checkItem.data as Message;
-            if (checkMsg.role === "user" && (!checkMsg.tool_results || checkMsg.tool_results.length === 0)) {
-              break;
-            }
+            if (checkMsg.role === "user") break;
             if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
               hasEarlierTextContent = true;
               break;
@@ -4155,7 +4155,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   return (
-    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "" : "h-screen"}`}>
+    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
       <header className={`border-b border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""}`}>
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1">
           <div className="flex items-center gap-2 min-w-0">
@@ -4464,7 +4464,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         />
       )}
 
-      <div ref={containerRef} className={`flex-1 min-h-0 ${embedded ? "" : "overflow-y-auto"}`} style={{ overflowAnchor: "auto" }}>
+      <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "auto" }}>
         <div className="min-h-full flex flex-col">
         {!conversation ? (
           <ConversationSkeleton />
@@ -4488,11 +4488,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             </div>
           )}
           <div
-            className="flex-1"
             style={{
               minHeight: virtualizer.getTotalSize(),
               width: "100%",
               position: "relative",
+              marginTop: "auto",
             }}
           >
             {/* Earlier messages indicator at top */}
@@ -4591,11 +4591,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </>
         )}
 
-          {showMessageInput && conversation && (
-            <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} />
-          )}
         </div>
       </div>
+
+      {showMessageInput && conversation && (
+        <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} />
+      )}
 
       {timeline.length > 0 && (
         <div className="fixed bottom-24 right-8 z-30 flex items-center gap-2.5">
