@@ -562,6 +562,37 @@ function isDaemonRunning(): boolean {
   return getDaemonPid() !== null;
 }
 
+function ensureDaemonRunning(): void {
+  const config = readConfig();
+  if (!config?.auth_token) return;
+  if (isDaemonRunning()) return;
+  try {
+    startDaemonQuiet();
+  } catch {}
+}
+
+function startDaemonQuiet(): void {
+  ensureConfigDir();
+  if (isDaemonRunning()) return;
+
+  let child;
+  const daemonTsPath = path.join(__dirname, "daemon.ts");
+  const daemonJsPath = path.join(__dirname, "daemon.js");
+
+  if (fs.existsSync(daemonTsPath)) {
+    child = spawn(process.execPath, [daemonTsPath], { detached: true, stdio: "ignore" });
+  } else if (fs.existsSync(daemonJsPath)) {
+    child = spawn(process.execPath, [daemonJsPath], { detached: true, stdio: "ignore" });
+  } else {
+    child = spawn(process.execPath, ["_daemon"], { detached: true, stdio: "ignore" });
+  }
+
+  child.unref();
+  if (child.pid) {
+    fs.writeFileSync(PID_FILE, String(child.pid), { mode: 0o600 });
+  }
+}
+
 function readDaemonState(): DaemonState | null {
   if (!fs.existsSync(STATE_FILE)) {
     return null;
@@ -3791,9 +3822,15 @@ function getExecutableInfo(command = "_daemon"): { executablePath: string; args:
   if (isBinary) {
     return { executablePath: process.argv[0], args: ["--", command] };
   } else if (isBundle) {
-    return { executablePath: process.execPath, args: [path.resolve(__dirname, "daemon.js")] };
+    const script = command === "_watchdog"
+      ? path.resolve(__dirname, "index.js")
+      : path.resolve(__dirname, "daemon.js");
+    return { executablePath: process.execPath, args: [script, command] };
   } else {
-    return { executablePath: process.execPath, args: [path.resolve(__dirname, "daemon.ts")] };
+    const script = command === "_watchdog"
+      ? path.resolve(__dirname, "index.ts")
+      : path.resolve(__dirname, "daemon.ts");
+    return { executablePath: process.execPath, args: [script, command] };
   }
 }
 
@@ -6136,9 +6173,10 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   if (process.env.DEBUG_CLI) {
     console.error(`[DEBUG] preAction hook: cmd=${cmdName} args=${args}`);
   }
-  // Skip logging for daemon-internal commands
-  if (!['start', 'stop', 'daemon', 'codecast'].includes(cmdName)) {
+  const internalCmds = ['start', 'stop', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update'];
+  if (!internalCmds.includes(cmdName)) {
     logCliCommand(cmdName, args);
+    ensureDaemonRunning();
   }
 });
 

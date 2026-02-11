@@ -322,8 +322,12 @@ async function executeRemoteCommand(
         });
         setTimeout(() => {
           log("Restarting daemon per remote command...");
-          skipRespawn = true;
-          spawnReplacement();
+          const spawned = spawnReplacement();
+          if (spawned) {
+            skipRespawn = true;
+          } else {
+            log("spawnReplacement failed, letting exit handler respawn");
+          }
           setTimeout(() => process.exit(0), 500);
         }, 1000);
         return;
@@ -351,8 +355,12 @@ async function executeRemoteCommand(
             logLifecycle("update_complete", `Updated from v${currentVersion} to v${newVersion}`);
             await flushRemoteLogs();
             log("Update successful, restarting...");
-            skipRespawn = true;
-            spawnReplacement();
+            const spawned = spawnReplacement();
+            if (spawned) {
+              skipRespawn = true;
+            } else {
+              log("spawnReplacement failed, letting exit handler respawn");
+            }
             setTimeout(() => process.exit(0), 500);
           } else {
             logLifecycle("update_failed", `Update failed from v${currentVersion}`);
@@ -2734,8 +2742,12 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
       const success = await performUpdate();
       if (success) {
         log("Update successful, restarting daemon...");
-        skipRespawn = true;
-        spawnReplacement();
+        const spawned = spawnReplacement();
+        if (spawned) {
+          skipRespawn = true;
+        } else {
+          log("spawnReplacement failed, letting exit handler respawn");
+        }
         await new Promise(resolve => setTimeout(resolve, 500));
         process.exit(0);
       } else {

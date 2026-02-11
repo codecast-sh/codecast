@@ -59,6 +59,17 @@ else
   exit 1
 fi
 
+# Stop running daemon before replacing binary
+PID_FILE="${HOME}/.codecast/daemon.pid"
+if [ -f "${PID_FILE}" ]; then
+  OLD_PID=$(cat "${PID_FILE}" 2>/dev/null)
+  if [ -n "${OLD_PID}" ] && kill -0 "${OLD_PID}" 2>/dev/null; then
+    echo "Stopping running daemon (PID: ${OLD_PID})..."
+    kill "${OLD_PID}" 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
 echo "Installing to ${INSTALL_DIR}/codecast..."
 mv "${TEMP_FILE}" "${INSTALL_DIR}/codecast"
 chmod +x "${INSTALL_DIR}/codecast"
@@ -85,5 +96,11 @@ if [ -n "${TOKEN}" ]; then
   echo "Linking device..."
   "${INSTALL_DIR}/codecast" login "${TOKEN}"
 else
-  echo "Run 'codecast auth' to authenticate and start syncing."
+  # Restart daemon if it was running before
+  if [ -n "${OLD_PID}" ] && [ -f "${HOME}/.codecast/config.json" ]; then
+    echo "Restarting daemon..."
+    "${INSTALL_DIR}/codecast" start 2>/dev/null || true
+  else
+    echo "Run 'codecast auth' to authenticate and start syncing."
+  fi
 fi

@@ -81,7 +81,7 @@ export const list = query({
       return [];
     }
 
-    const limit = Math.min(args.limit ?? 100, 500);
+    const limit = args.limit ?? 500;
 
     const query = ctx.db
       .query("daemon_logs")
@@ -154,7 +154,7 @@ export const adminList = query({
       return { logs: [], users: [], isAdmin: false };
     }
 
-    const limit = Math.min(args.limit ?? 200, 1000);
+    const limit = args.limit ?? 500;
 
     const logsQuery = args.userId
       ? ctx.db
@@ -319,53 +319,18 @@ export const adminGetStats = query({
   },
 });
 
-const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes without heartbeat = offline
-
-export const checkDaemonHealth = internalMutation({
+export const clearOfflineAlerts = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const now = Date.now();
-    const allUsers = await ctx.db.query("users").collect();
+    const logs = await ctx.db
+      .query("daemon_logs")
+      .order("desc")
+      .take(10000);
 
-    const daemonUsers = allUsers.filter(
-      (u) => u.last_heartbeat && u.cli_version
-    );
-
-    let alertsCreated = 0;
-
-    for (const user of daemonUsers) {
-      const heartbeatAge = now - (user.last_heartbeat ?? 0);
-      if (heartbeatAge < STALE_THRESHOLD_MS) continue;
-
-      // Check if we already created an offline alert recently (within last 30 min)
-      const recentAlerts = await ctx.db
-        .query("daemon_logs")
-        .withIndex("by_user_timestamp", (q) =>
-          q.eq("user_id", user._id).gt("timestamp", now - 30 * 60 * 1000)
-        )
-        .collect();
-
-      const hasRecentOfflineAlert = recentAlerts.some(
-        (l) => l.message.startsWith("DAEMON OFFLINE")
-      );
-
-      if (hasRecentOfflineAlert) continue;
-
-      const offlineMinutes = Math.round(heartbeatAge / 60000);
-      await ctx.db.insert("daemon_logs", {
-        user_id: user._id,
-        level: "error",
-        message: `DAEMON OFFLINE: No heartbeat for ${offlineMinutes}min (v${user.cli_version || "?"}, ${user.cli_platform || "?"})`,
-        metadata: {
-          error_code: "daemon_offline",
-        },
-        daemon_version: user.cli_version,
-        platform: user.cli_platform,
-        timestamp: now,
-      });
-      alertsCreated++;
+    const offlineLogs = logs.filter((l) => l.message.startsWith("DAEMON OFFLINE"));
+    for (const log of offlineLogs) {
+      await ctx.db.delete(log._id);
     }
-
-    return { checked: daemonUsers.length, alertsCreated };
+    return { deleted: offlineLogs.length };
   },
 });
