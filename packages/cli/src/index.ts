@@ -572,9 +572,11 @@ function readDaemonState(): DaemonState | null {
   }
 }
 
-function formatRelativeTime(timestamp: number): string {
+function formatRelativeTime(timestamp: string | number): string {
+  const ts = typeof timestamp === "number" ? timestamp : new Date(timestamp).getTime();
+  if (!Number.isFinite(ts)) return "unknown";
   const now = Date.now();
-  const diffMs = now - timestamp;
+  const diffMs = now - ts;
   const diffSec = Math.floor(diffMs / 1000);
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);
@@ -586,8 +588,10 @@ function formatRelativeTime(timestamp: number): string {
     return diffMin === 1 ? "1 minute ago" : `${diffMin} minutes ago`;
   } else if (diffHour < 24) {
     return diffHour === 1 ? "1 hour ago" : `${diffHour} hours ago`;
-  } else {
+  } else if (diffDay >= 0) {
     return diffDay === 1 ? "1 day ago" : `${diffDay} days ago`;
+  } else {
+    return "unknown";
   }
 }
 
@@ -3331,7 +3335,7 @@ program
         const selectedId = await select({
           message: `Select a session (${offset + 1}-${offset + current.length}${page?.hasMore ? "+" : ""}):`,
           choices,
-          pageSize: Math.min(12, choices.length),
+          pageSize: Math.min(4, choices.length),
         });
 
         if (selectedId === "__quit__") process.exit(0);
@@ -3366,8 +3370,8 @@ program
           await select({
             message: "Resume in:",
             choices: [
-              { name: "claude", value: "claude" },
-              { name: "codex", value: "codex" },
+              { name: normalizedSource === "claude" ? "claude (current)" : "claude", value: "claude" },
+              { name: normalizedSource === "codex" ? "codex (current)" : "codex", value: "codex" },
             ],
             default: normalizedSource === "codex" ? "codex" : "claude",
           });
