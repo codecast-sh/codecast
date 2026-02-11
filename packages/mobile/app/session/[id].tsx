@@ -3376,9 +3376,11 @@ export default function SessionDetailScreen() {
     const progress = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0;
     scrollProgressAnim.setValue(progress);
 
-    // Set userScrolled if scrolling away from bottom
     if (!isNearBottom) {
       setUserScrolled(true);
+    } else {
+      setUserScrolled(false);
+      setNewMessageCount(0);
     }
 
     if (searchVisible) {
