@@ -279,7 +279,7 @@ function CodeBlockWithCopy({ content, language }: { content: string; language: s
           )}
         </TouchableOpacity>
       </RNView>
-      <ScrollView horizontal showsHorizontalScrollIndicator>
+      <ScrollView horizontal showsHorizontalScrollIndicator style={styles.hScroll}>
         <RNView style={styles.codeContent}>
           {showLineNumbers ? (
             <RNView style={{ flexDirection: 'row' }}>
@@ -429,7 +429,12 @@ function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text
       const headerCells = tableLines[0].split('|').map(c => c.trim()).filter(Boolean);
       const bodyRows = tableLines.slice(2).map(row => row.split('|').map(c => c.trim()).filter(Boolean));
       elements.push(
-        <ScrollView key={`${blockKey}tbl${elKey++}`} horizontal showsHorizontalScrollIndicator style={{ marginVertical: 6 }}>
+        <ScrollView
+          key={`${blockKey}tbl${elKey++}`}
+          horizontal
+          showsHorizontalScrollIndicator
+          style={[styles.hScroll, { marginVertical: 6 }]}
+        >
           <RNView>
             <RNView style={styles.tableRow}>
               {headerCells.map((cell, ci) => (
@@ -1405,7 +1410,7 @@ function CompactionSummaryBlock({ content }: { content: string }) {
 function GitDiffView({ diff }: { diff: string }) {
   const lines = diff.split('\n');
   return (
-    <ScrollView horizontal>
+    <ScrollView horizontal style={styles.hScroll}>
       <RNView style={{ padding: 8 }}>
         {lines.map((line, i) => {
           let color = Theme.textMuted;
@@ -1904,7 +1909,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
           {isEdit && parsedInput.old_string && parsedInput.new_string ? (
             <RNView style={styles.diffSection}>
               <RNView style={styles.diffOld}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
                   <RNView style={{ flexDirection: 'row' }}>
                     <RNView style={styles.diffLineNumbers}>
                       {String(parsedInput.old_string).split('\n').map((_, i) => (
@@ -1918,7 +1923,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
                 </ScrollView>
               </RNView>
               <RNView style={styles.diffNew}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
                   <RNView style={{ flexDirection: 'row' }}>
                     <RNView style={styles.diffLineNumbers}>
                       {String(parsedInput.new_string).split('\n').map((_, i) => (
@@ -1963,18 +1968,18 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
               </RNView>
             )
           ) : toolCall.name === 'apply_patch' && (parsedInput.input || parsedInput.patch) ? (
-            <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <RNView style={styles.toolResultBox}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
                 <RNText style={styles.toolCodeText} selectable>{String(parsedInput.input || parsedInput.patch)}</RNText>
               </ScrollView>
-            </ScrollView>
+            </RNView>
           ) : null}
           {result && resultDisplay && resultDisplay.trim() ? (
-            <ScrollView style={styles.toolResultScroll} nestedScrollEnabled>
+            <RNView style={styles.toolResultBox}>
               {canToggleViewMode && viewMode === 'rendered' ? (
                 <MarkdownContent text={stripLineNumbers(resultDisplay)} baseStyle={styles.toolCallResult} isUser={false} />
               ) : isCodeResult ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
                   <RNText style={[styles.toolCodeText, result.is_error && { color: Theme.red }]} selectable>{resultDisplay}</RNText>
                 </ScrollView>
               ) : isMarkdownResult ? (
@@ -1984,7 +1989,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
                   {resultDisplay}
                 </RNText>
               )}
-            </ScrollView>
+            </RNView>
           ) : result && (!resultDisplay || !resultDisplay.trim()) ? (
             <RNText style={styles.noOutputText}>No output</RNText>
           ) : null}
@@ -2806,6 +2811,7 @@ export default function SessionDetailScreen() {
   const openedAtLastMessageTsRef = useRef<number | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(highlightMessageParam || null);
   const [jumpingToStart, setJumpingToStart] = useState(false);
+  const [jumpingToEnd, setJumpingToEnd] = useState(false);
   const [floatingHeaderHeight, setFloatingHeaderHeight] = useState(152);
   const floatingHeaderY = useRef(new Animated.Value(0)).current;
   const floatingHeaderOffsetRef = useRef(0);
@@ -3270,6 +3276,26 @@ export default function SessionDetailScreen() {
     }
   }, [convex, id, loadingOlder, olderOldestTs, conversation?.oldest_timestamp]);
 
+  const handleJumpToEnd = useCallback(() => {
+    if (!id || jumpingToEnd) return;
+    setJumpingToEnd(true);
+    try {
+      // "Last page" in our model = drop any older pages and show the latest slice from getAllMessages.
+      setOlderMessages([]);
+      setOlderHasMore(true);
+      setOlderOldestTs(null);
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+        setUserScrolled(false);
+        setNewMessageCount(0);
+      }, 80);
+    } catch {
+      showToast('Failed to jump to end');
+    } finally {
+      setTimeout(() => setJumpingToEnd(false), 120);
+    }
+  }, [id, jumpingToEnd, showToast]);
+
   const handleJumpToStart = useCallback(async () => {
     if (!id || jumpingToStart) return;
 
@@ -3638,6 +3664,11 @@ export default function SessionDetailScreen() {
         <FlatList
           ref={flatListRef}
           data={allMessages}
+          removeClippedSubviews={false}
+          windowSize={11}
+          initialNumToRender={24}
+          maxToRenderPerBatch={24}
+          updateCellsBatchingPeriod={32}
           onContentSizeChange={() => {
             if (!conversation || allMessages.length === 0) return;
             if (highlightMessageParam || highlightedMessageId) return;
@@ -3800,7 +3831,7 @@ export default function SessionDetailScreen() {
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={16}
-          maintainVisibleContentPosition={initialScrollDone ? { minIndexForVisible: 1 } : undefined}
+          maintainVisibleContentPosition={undefined}
         />
 
         <RNView>
@@ -3852,17 +3883,17 @@ export default function SessionDetailScreen() {
           {(userScrolled || !isNearBottomRef.current) && (
             <RNView style={styles.jumpBottomButtonWrap}>
               <TouchableOpacity
-                onPress={() => {
-                  flatListRef.current?.scrollToEnd({ animated: true });
-                  setUserScrolled(false);
-                  setNewMessageCount(0);
-                }}
+                onPress={handleJumpToEnd}
                 style={styles.jumpButton}
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel="Jump to latest message"
               >
-                <FontAwesome name="angle-down" size={18} color={Theme.textDim} />
+                {jumpingToEnd ? (
+                  <ActivityIndicator size="small" color={Theme.textDim} />
+                ) : (
+                  <FontAwesome name="angle-down" size={18} color={Theme.textDim} />
+                )}
                 {newMessageCount > 0 && (
                   <RNView style={styles.jumpBadge}>
                     <RNText style={styles.jumpBadgeText}>{newMessageCount > 99 ? '99+' : newMessageCount}</RNText>
@@ -4460,8 +4491,11 @@ const styles = StyleSheet.create({
     fontFamily: 'SpaceMono',
     color: Theme.green,
   },
-  toolResultScroll: {
-    maxHeight: 320,
+  toolResultBox: {
+    flexGrow: 0,
+  },
+  hScroll: {
+    flexGrow: 0,
   },
   noOutputText: {
     fontSize: 12,
