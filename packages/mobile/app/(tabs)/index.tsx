@@ -53,9 +53,9 @@ function formatRelativeTime(timestamp: number): string {
   const diffDays = Math.floor(diffMs / 86400000);
 
   if (diffMinutes < 1) return "just now";
-  if (diffMinutes < 60) return `${diffMinutes}m`;
-  if (diffHours < 24) return `${diffHours}h`;
-  if (diffDays < 7) return `${diffDays}d`;
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
 
   const date = new Date(timestamp);
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -90,6 +90,15 @@ function agentColor(agentType: string): string {
   }
 }
 
+function durationColor(ms: number): string {
+  const minutes = ms / 60000;
+  if (minutes < 5) return Theme.textMuted0;
+  if (minutes < 20) return Theme.textMuted;
+  if (minutes < 60) return Theme.orange;
+  if (minutes < 120) return Theme.accent;
+  return Theme.red;
+}
+
 function projectName(path?: string): string | null {
   if (!path) return null;
   const parts = path.split('/');
@@ -104,6 +113,7 @@ function ConversationItem({ conversation, onPress, onLongPress }: {
   const project = projectName(conversation.project_path ?? undefined);
   const agent = agentLabel(conversation.agent_type ?? "");
   const durationMs = conversation.duration_ms ?? (conversation.updated_at - conversation.started_at);
+  const dColor = durationColor(durationMs);
 
   return (
     <TouchableOpacity
@@ -124,11 +134,6 @@ function ConversationItem({ conversation, onPress, onLongPress }: {
             <RNText style={styles.messageCount}>
               {conversation.message_count ?? 0}
             </RNText>
-            {durationMs > 60000 && (
-              <RNText style={styles.durationText}>
-                {formatDuration(durationMs)}
-              </RNText>
-            )}
           </RNView>
         </RNView>
 
@@ -150,6 +155,17 @@ function ConversationItem({ conversation, onPress, onLongPress }: {
           <RNText style={styles.metaText}>
             {formatRelativeTime(conversation.updated_at)}
           </RNText>
+          {durationMs > 60000 && (
+            <>
+              <RNText style={styles.metaSeparator}>·</RNText>
+              <RNView style={styles.durationInline}>
+                <FontAwesome name="clock-o" size={11} color={dColor} />
+                <RNText style={[styles.durationInlineText, { color: dColor }]}>
+                  {formatDuration(durationMs)}
+                </RNText>
+              </RNView>
+            </>
+          )}
           {project && (
             <>
               <RNText style={styles.metaSeparator}>·</RNText>
@@ -537,6 +553,17 @@ const styles = StyleSheet.create({
     color: Theme.textMuted0,
     fontVariant: ['tabular-nums'],
     fontWeight: '400',
+  },
+  durationInline: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  durationInlineText: {
+    fontSize: 13,
+    fontFamily: "SpaceMono",
+    fontWeight: "600",
+    fontVariant: ["tabular-nums"],
   },
   conversationMeta: {
     flexDirection: 'row',
