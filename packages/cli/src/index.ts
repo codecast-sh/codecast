@@ -16,6 +16,7 @@ import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
+import * as readline from "readline";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -593,6 +594,13 @@ function formatRelativeTime(timestamp: string | number): string {
   } else {
     return "unknown";
   }
+}
+
+function getAgentLabel(agentType?: string): string | null {
+  if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
+  if (agentType === "codex" || agentType === "codex_cli") return "Codex";
+  if (agentType === "cursor") return "Cursor";
+  return agentType;
 }
 
 function showStatus(): void {
@@ -3266,104 +3274,161 @@ program
         process.exit(0);
       }
 
-      const getAgentLabel = (agentType?: string): string | null => {
-        if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
-        if (agentType === "codex" || agentType === "codex_cli") return "Codex";
-        if (agentType === "cursor") return "Cursor";
-        return agentType;
+      const renderResumeCards = (current: any[], selectedIndex: number, currentOffset: number, hasMore: boolean) => {
+        const lines: string[] = [];
+        lines.push(`${c.dim}Found sessions matching "${query}"${c.reset}`);
+        lines.push(`${c.dim}Showing ${currentOffset + 1}-${currentOffset + current.length}${hasMore ? "+" : ""}${c.reset}`);
+        lines.push("");
+
+        for (let i = 0; i < current.length; i++) {
+          const conv = current[i];
+          const isSelected = i === selectedIndex;
+          const cursor = isSelected ? `${c.cyan}>${c.reset}` : " ";
+          const title = conv.title || "Untitled";
+          const relTime = formatRelativeTime(conv.updated_at);
+
+          const metaParts: string[] = [
+            `${c.dim}${relTime}${c.reset}`,
+            `${c.dim}${conv.message_count} msgs${c.reset}`,
+          ];
+          if (conv.user) {
+            const name = conv.user.name || conv.user.email || "team member";
+            metaParts.push(`${c.magenta}${name}${c.reset}`);
+          }
+          const label = getAgentLabel(conv.agent_type);
+          if (label) metaParts.push(`${c.yellow}${label}${c.reset}`);
+          if (conv.project_path) metaParts.push(`${c.dim}${truncatePath(conv.project_path)}${c.reset}`);
+
+          lines.push(`${cursor} ${isSelected ? c.bold : ""}${title}${c.reset}`);
+          lines.push(`  ${metaParts.join(" | ")}`);
+
+          const firstMessage = conv.goal || conv.preview;
+          if (firstMessage) {
+            const msgLine = String(firstMessage).split("\n")[0].trim();
+            const maxLen = 90;
+            lines.push(`  ${c.green}>${c.reset} ${msgLine.length > maxLen ? msgLine.slice(0, maxLen) + "..." : msgLine}`);
+          }
+
+          if (conv.subtitle) {
+            const subtitleLines = String(conv.subtitle).split("\n").filter((l) => l.trim());
+            const maxLines = 4;
+            const maxLineLen = 86;
+            for (let j = 0; j < Math.min(subtitleLines.length, maxLines); j++) {
+              const rawLine = subtitleLines[j].trim();
+              lines.push(`    ${rawLine.length > maxLineLen ? rawLine.slice(0, maxLineLen) + "..." : rawLine}`);
+            }
+            if (subtitleLines.length > maxLines) {
+              lines.push(`    ${c.dim}... (${subtitleLines.length - maxLines} more)${c.reset}`);
+            }
+          }
+
+          lines.push("");
+        }
+
+        lines.push(`${c.dim}Use arrows to pick (up/down), page (left/right), enter to open, q to quit${c.reset}`);
+
+        return lines.join("\n");
       };
 
-      const formatResumeChoice = (conv: any): { name: string; description?: string } => {
-        const title = conv.title || "Untitled";
-        const relTime = formatRelativeTime(conv.updated_at);
+      const pickConversation = async (): Promise<{ conv: any; normalizedSource: string }> => {
+        let currentOffset = offset;
+        let currentPage = page!;
+        let selectedIndex = 0;
+        let busy = false;
 
-        const metaParts: string[] = [
-          relTime,
-          `${conv.message_count} msgs`,
-        ];
-        if (conv.user) metaParts.push(conv.user.name || conv.user.email || "team member");
-        const label = getAgentLabel(conv.agent_type);
-        if (label) metaParts.push(label);
-        if (conv.project_path) metaParts.push(truncatePath(conv.project_path));
-
-        const descLines: string[] = [];
-        descLines.push(metaParts.filter(Boolean).join(" | "));
-
-        const firstMessage = conv.goal || conv.preview;
-        if (firstMessage) {
-          const msgLine = String(firstMessage).split("\n")[0].trim();
-          const maxLen = 120;
-          descLines.push(`> ${msgLine.length > maxLen ? msgLine.slice(0, maxLen) + "..." : msgLine}`);
-        }
-
-        if (conv.subtitle) {
-          const subtitleLines = String(conv.subtitle).split("\n").filter((l) => l.trim());
-          const maxLines = 2;
-          const maxLineLen = 120;
-          for (let j = 0; j < Math.min(subtitleLines.length, maxLines); j++) {
-            const rawLine = subtitleLines[j].trim();
-            descLines.push(rawLine.length > maxLineLen ? rawLine.slice(0, maxLineLen) + "..." : rawLine);
-          }
-          if (subtitleLines.length > maxLines) {
-            descLines.push(`... (${subtitleLines.length - maxLines} more)`);
-          }
-        }
-
-        return {
-          name: title,
-          description: descLines.join("\n"),
+        const cleanup = () => {
+          try { process.stdin.setRawMode(false); } catch {}
+          process.stdin.removeAllListeners("keypress");
         };
+
+        const render = () => {
+          process.stdout.write("\x1b[2J\x1b[H");
+          process.stdout.write(renderResumeCards(currentPage.conversations || [], selectedIndex, currentOffset, !!currentPage.hasMore));
+        };
+
+        const setPage = async (newOffset: number) => {
+          currentOffset = newOffset;
+          currentPage = await fetchResumePage(currentOffset);
+          selectedIndex = 0;
+        };
+
+        readline.emitKeypressEvents(process.stdin);
+        if (process.stdin.isTTY) process.stdin.setRawMode(true);
+
+        render();
+
+        return await new Promise((resolve) => {
+          process.stdin.on("keypress", async (_str, key) => {
+            if (busy) return;
+            busy = true;
+            try {
+              const current = currentPage.conversations || [];
+
+              if (key?.name === "q" || key?.name === "escape" || (key?.ctrl && key?.name === "c")) {
+                cleanup();
+                process.exit(0);
+              }
+
+              if (key?.name === "down") {
+                if (selectedIndex < current.length - 1) {
+                  selectedIndex += 1;
+                } else if (currentPage.hasMore) {
+                  await setPage(currentOffset + limit);
+                }
+                render();
+                return;
+              }
+
+              if (key?.name === "up") {
+                if (selectedIndex > 0) {
+                  selectedIndex -= 1;
+                } else if (currentOffset > 0) {
+                  await setPage(Math.max(0, currentOffset - limit));
+                }
+                render();
+                return;
+              }
+
+              if (key?.name === "right") {
+                if (currentPage.hasMore) {
+                  await setPage(currentOffset + limit);
+                  render();
+                }
+                return;
+              }
+
+              if (key?.name === "left") {
+                if (currentOffset > 0) {
+                  await setPage(Math.max(0, currentOffset - limit));
+                  render();
+                }
+                return;
+              }
+
+              if (key?.name === "return" || key?.name === "enter") {
+                const conv = current[selectedIndex];
+                if (!conv) return;
+                cleanup();
+                const sourceAgent = conv.agent_type || "claude_code";
+                const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
+                resolve({ conv, normalizedSource });
+              }
+            } finally {
+              busy = false;
+            }
+          });
+        });
       };
 
-      // Interactive picker with pagination + rich session cards.
-      while (true) {
-        const current = page?.conversations || [];
-        if (current.length === 0) {
-          console.log(`No sessions found matching "${query}"`);
-          process.exit(0);
-        }
-
-        const choices: Array<{ name: string; value: string; description?: string }> = current.map((conv: any) => {
-          const { name, description } = formatResumeChoice(conv);
-          return { name, value: String(conv.id), description };
-        });
-
-        if (offset > 0) choices.push({ name: fmt.muted("Prev page"), value: "__prev__" });
-        if (page?.hasMore) choices.push({ name: fmt.muted("Next page"), value: "__next__" });
-        choices.push({ name: fmt.muted("Quit"), value: "__quit__" });
-
-        const selectedId = await select({
-          message: `Select a session (${offset + 1}-${offset + current.length}${page?.hasMore ? "+" : ""}):`,
-          choices,
-          pageSize: Math.min(4, choices.length),
-        });
-
-        if (selectedId === "__quit__") process.exit(0);
-        if (selectedId === "__next__") {
-          offset += limit;
-          page = await fetchResumePage(offset);
-          continue;
-        }
-        if (selectedId === "__prev__") {
-          offset = Math.max(0, offset - limit);
-          page = await fetchResumePage(offset);
-          continue;
-        }
-
-        const conv = current.find((c: any) => String(c.id) === selectedId) || conversations.find((c: any) => String(c.id) === selectedId);
-        if (!conv) {
-          console.error("Selected session not found");
-          process.exit(1);
-        }
+      const picked = await pickConversation();
+      const conv = picked.conv;
+      const normalizedSource = picked.normalizedSource;
 
         const sessionId = conv.session_id;
         if (!sessionId) {
           console.error("Session ID not found");
           process.exit(1);
         }
-
-        const sourceAgent = conv.agent_type || "claude_code";
-        const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
 
         const targetAgent =
           options.as?.toLowerCase() ||
@@ -3385,7 +3450,6 @@ program
           launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
         }
         return;
-      }
     } catch (error) {
       console.error("Resume failed:", error instanceof Error ? error.message : error);
       process.exit(1);
