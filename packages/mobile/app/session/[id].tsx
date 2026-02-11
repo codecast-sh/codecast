@@ -3236,7 +3236,7 @@ export default function SessionDetailScreen() {
     }
 
     if (isNearBottomRef.current && allMessages.length > 0) {
-      flatListRef.current?.scrollToEnd({ animated: true });
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 16);
       setUserScrolled(false);
       setNewMessageCount(0);
     } else if (!isNearBottomRef.current) {
@@ -3674,7 +3674,7 @@ export default function SessionDetailScreen() {
             if (highlightMessageParam || highlightedMessageId) return;
             if (initialScrollDone) {
               if (isNearBottomRef.current && !userScrolled) {
-                flatListRef.current?.scrollToEnd({ animated: true });
+                flatListRef.current?.scrollToEnd({ animated: false });
               }
               return;
             }
