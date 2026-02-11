@@ -1635,7 +1635,7 @@ export function formatResumeResults(result: ResumeResult): string {
     }
   }
 
-  lines.push(`${c.dim}Enter number to open, append c/x to force ${c.bold}Claude/Codex${c.reset}${c.dim} (e.g. 2x), or q to quit${c.reset}`);
+  lines.push(`${c.dim}Run: codecast resume "${query}" and use arrows to pick a session (q to quit)${c.reset}`);
 
   return lines.join("\n");
 }

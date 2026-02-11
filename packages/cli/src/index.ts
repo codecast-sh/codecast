@@ -3273,46 +3273,46 @@ program
         return agentType;
       };
 
-      const formatResumeChoice = (conv: any): string => {
+      const formatResumeChoice = (conv: any): { name: string; description?: string } => {
         const title = conv.title || "Untitled";
         const relTime = formatRelativeTime(conv.updated_at);
-        const meta: string[] = [
-          `${c.dim}${relTime}${c.reset}`,
-          `${c.dim}${conv.message_count} msgs${c.reset}`,
-        ];
-        if (conv.user) {
-          const name = conv.user.name || conv.user.email || "team member";
-          meta.push(`${c.magenta}${name}${c.reset}`);
-        }
-        const label = getAgentLabel(conv.agent_type);
-        if (label) meta.push(`${c.yellow}${label}${c.reset}`);
-        if (conv.project_path) meta.push(`${c.dim}${truncatePath(conv.project_path)}${c.reset}`);
 
-        const lines: string[] = [];
-        lines.push(`${c.bold}${title}${c.reset}`);
-        lines.push(`  ${meta.join(" | ")}`);
+        const metaParts: string[] = [
+          relTime,
+          `${conv.message_count} msgs`,
+        ];
+        if (conv.user) metaParts.push(conv.user.name || conv.user.email || "team member");
+        const label = getAgentLabel(conv.agent_type);
+        if (label) metaParts.push(label);
+        if (conv.project_path) metaParts.push(truncatePath(conv.project_path));
+
+        const descLines: string[] = [];
+        descLines.push(metaParts.filter(Boolean).join(" | "));
 
         const firstMessage = conv.goal || conv.preview;
         if (firstMessage) {
           const msgLine = String(firstMessage).split("\n")[0].trim();
-          const maxLen = 85;
-          lines.push(`  ${c.green}>${c.reset} ${msgLine.length > maxLen ? msgLine.slice(0, maxLen) + "..." : msgLine}`);
+          const maxLen = 120;
+          descLines.push(`> ${msgLine.length > maxLen ? msgLine.slice(0, maxLen) + "..." : msgLine}`);
         }
 
         if (conv.subtitle) {
           const subtitleLines = String(conv.subtitle).split("\n").filter((l) => l.trim());
           const maxLines = 2;
-          const maxLineLen = 83;
+          const maxLineLen = 120;
           for (let j = 0; j < Math.min(subtitleLines.length, maxLines); j++) {
             const rawLine = subtitleLines[j].trim();
-            lines.push(`    ${rawLine.length > maxLineLen ? rawLine.slice(0, maxLineLen) + "..." : rawLine}`);
+            descLines.push(rawLine.length > maxLineLen ? rawLine.slice(0, maxLineLen) + "..." : rawLine);
           }
           if (subtitleLines.length > maxLines) {
-            lines.push(`    ${c.dim}... (${subtitleLines.length - maxLines} more)${c.reset}`);
+            descLines.push(`... (${subtitleLines.length - maxLines} more)`);
           }
         }
 
-        return lines.join("\n");
+        return {
+          name: title,
+          description: descLines.join("\n"),
+        };
       };
 
       // Interactive picker with pagination + rich session cards.
@@ -3323,9 +3323,9 @@ program
           process.exit(0);
         }
 
-        const choices: Array<{ name: string; value: string }> = current.map((conv: any) => {
-          const sid = conv.session_id ? String(conv.session_id).slice(0, 8) : "unknown";
-          return { name: `${formatResumeChoice(conv)}\n${fmt.muted(`  id: ${sid}`)}`, value: String(conv.id) };
+        const choices: Array<{ name: string; value: string; description?: string }> = current.map((conv: any) => {
+          const { name, description } = formatResumeChoice(conv);
+          return { name, value: String(conv.id), description };
         });
 
         if (offset > 0) choices.push({ name: fmt.muted("Prev page"), value: "__prev__" });
