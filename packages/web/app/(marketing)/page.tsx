@@ -8,18 +8,26 @@ import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
 import { Logo, LogoIcon } from "@/components/Logo";
 
-function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" }) {
+function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" }) {
   const colors = {
     amber: "bg-amber-300/50",
     green: "bg-emerald-300/50",
     blue: "bg-sky-300/50",
+    rose: "bg-rose-300/50",
   };
+  const transforms: Record<string, { rotate: number; translate: string }> = {
+    amber: { rotate: -2.1, translate: "-2px, 1px" },
+    green: { rotate: 1.8, translate: "1px, -2px" },
+    blue: { rotate: -1.5, translate: "2px, 1px" },
+    rose: { rotate: 2.2, translate: "-1px, -1px" },
+  };
+  const t = transforms[color];
   return (
     <span className="relative inline-block">
       <span
         className={`absolute inset-0 ${colors[color]}`}
         style={{
-          transform: `rotate(${color === "amber" ? -2.1 : color === "green" ? 1.8 : -1.5}deg) translate(${color === "amber" ? "-2px, 1px" : color === "green" ? "1px, -2px" : "2px, 1px"})`,
+          transform: `rotate(${t.rotate}deg) translate(${t.translate})`,
           top: "-0.28em",
           bottom: "-0.25em",
           left: "-0.4em",
@@ -258,7 +266,7 @@ export default function LandingPage() {
           </h1>
 
           <p className="text-xl text-stone-600 leading-relaxed mb-4 max-w-2xl mx-auto">
-            Real-time sync for <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, and <Highlight color="blue">Cursor</Highlight>. Watch your agent work from any device,
+            Real-time sync for <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="rose">Gemini CLI</Highlight>, and <Highlight color="blue">Cursor</Highlight>. Watch your agent work from any device,
             share sessions with your team, and give it memory across every session.
           </p>
 
@@ -328,10 +336,10 @@ export default function LandingPage() {
           <div className="relative">
             <div className="absolute -left-4 -top-4 w-12 h-12 rounded-full bg-stone-900 text-white flex items-center justify-center font-mono font-bold text-lg">2</div>
             <div className="bg-white rounded-xl border border-stone-200 p-6 pt-10 h-full">
-              <div className="font-mono text-sm text-stone-400 mb-2">$ claude / codex / cursor</div>
+              <div className="font-mono text-sm text-stone-400 mb-2">$ claude / codex / gemini / cursor</div>
               <h3 className="text-xl font-semibold text-stone-900 mb-2">Code with your AI</h3>
               <p className="text-stone-500">
-                Use Claude Code, Codex, or Cursor as normal. Every session syncs in real-time to your dashboard.
+                Use Claude Code, Codex, Gemini CLI, or Cursor as normal. Every session syncs in real-time to your dashboard.
               </p>
             </div>
           </div>
@@ -363,7 +371,7 @@ export default function LandingPage() {
           </h2>
           <p className="text-lg text-stone-500 max-w-2xl mx-auto">
             Every AI session starts fresh. Codecast changes that by giving your agent
-            searchable access to all past sessions -- across Claude Code, Codex, and Cursor.
+            searchable access to all past sessions -- across Claude Code, Codex, Gemini CLI, and Cursor.
           </p>
         </div>
 
@@ -435,7 +443,7 @@ export default function LandingPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-lg mb-1">Team visibility</h3>
-                    <p className="text-stone-300">See what your teammates are building across Claude Code, Codex, and Cursor. Share sessions, pick up where they left off, learn from their debugging.</p>
+                    <p className="text-stone-300">See what your teammates are building across Claude Code, Codex, Gemini CLI, and Cursor. Share sessions, pick up where they left off, learn from their debugging.</p>
                   </div>
                 </div>
 
@@ -495,9 +503,16 @@ export default function LandingPage() {
                   <span className="text-[#586e75]">5m ago</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-[#586e75]">○</span>
+                  <span className="text-green-400">●</span>
                   <span className="text-[#93a1a1]">alex</span>
                   <span className="text-[#586e75]">added rate limiting middleware</span>
+                  <span className="text-[#d33682] ml-auto text-xs">gemini</span>
+                  <span className="text-[#586e75]">12m ago</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[#586e75]">○</span>
+                  <span className="text-[#93a1a1]">dana</span>
+                  <span className="text-[#586e75]">migrated to new API schema</span>
                   <span className="text-[#b58900] ml-auto text-xs">cursor</span>
                   <span className="text-[#586e75]">1h ago</span>
                 </div>
@@ -879,7 +894,7 @@ export default function LandingPage() {
             <div>
               <Logo size="md" className="text-stone-900 mb-4" />
               <p className="text-sm text-stone-500">
-                Real-time sync for Claude Code, Codex, and Cursor.
+                Real-time sync for Claude Code, Codex, Gemini CLI, and Cursor.
               </p>
             </div>
             <div>

@@ -24,6 +24,9 @@ export function NotificationBell() {
 
     if (isOpen) {
       document.addEventListener("mousedown", handleClickOutside);
+      if (unreadCount && unreadCount > 0) {
+        markAllAsRead();
+      }
       return () => document.removeEventListener("mousedown", handleClickOutside);
     }
   }, [isOpen]);
@@ -36,11 +39,6 @@ export function NotificationBell() {
     setIsOpen(false);
   };
 
-  const handleMarkAllAsRead = async () => {
-    await markAllAsRead();
-  };
-
-  const unreadNotifications = notifications?.filter(n => !n.read) || [];
   const recentNotifications = notifications?.slice(0, 5) || [];
 
   return (
@@ -67,16 +65,8 @@ export function NotificationBell() {
 
       {isOpen && (
         <div className="absolute right-0 mt-2 w-80 bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden z-50">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-sol-border">
+          <div className="px-4 py-3 border-b border-sol-border">
             <h3 className="text-sm font-semibold text-sol-text">Notifications</h3>
-            {unreadNotifications.length > 0 && (
-              <button
-                onClick={handleMarkAllAsRead}
-                className="text-xs text-sol-yellow hover:text-sol-yellow-bright transition-colors"
-              >
-                Mark all read
-              </button>
-            )}
           </div>
 
           <div className="max-h-96 overflow-y-auto">

@@ -16,6 +16,7 @@ export function useConversationsWithError(filter: "my" | "team", memberId?: stri
   const result = useQuery(api.conversations.listConversations, {
     filter,
     cursor,
+    include_message_previews: true,
     memberId: memberId ? (memberId as Id<"users">) : undefined,
     activeTeamId: filter === "team" && activeTeamId ? activeTeamId : undefined,
   });

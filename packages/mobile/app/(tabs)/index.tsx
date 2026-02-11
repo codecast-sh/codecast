@@ -239,6 +239,7 @@ export default function SessionsScreen() {
   const result = useQuery(api.conversations.listConversations, {
     filter,
     limit: 12,
+    include_message_previews: false,
   });
 
   const searchResults = useQuery(
