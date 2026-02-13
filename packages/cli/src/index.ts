@@ -217,6 +217,7 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
+const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 
@@ -565,7 +566,22 @@ function isDaemonRunning(): boolean {
 function ensureDaemonRunning(): void {
   const config = readConfig();
   if (!config?.auth_token) return;
-  if (isDaemonRunning()) return;
+  if (isDaemonRunning()) {
+    try {
+      const runningVersion = fs.existsSync(VERSION_FILE)
+        ? fs.readFileSync(VERSION_FILE, "utf-8").trim()
+        : null;
+      if (runningVersion && runningVersion !== getVersion()) {
+        const pid = getDaemonPid();
+        if (pid) {
+          try { process.kill(pid, "SIGTERM"); } catch {}
+          try { fs.unlinkSync(PID_FILE); } catch {}
+          startDaemonQuiet();
+        }
+      }
+    } catch {}
+    return;
+  }
   try {
     startDaemonQuiet();
   } catch {}
@@ -5593,6 +5609,7 @@ program
       );
       console.log(`Minimum CLI version set to ${version}`);
       console.log("Remote daemons will auto-update within 5 minutes");
+      process.exit(0);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.error(`Failed to set min version: ${errMsg}`);

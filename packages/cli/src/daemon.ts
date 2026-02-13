@@ -29,6 +29,7 @@ const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
+const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 
 interface Config {
   user_id?: string;
@@ -37,6 +38,7 @@ interface Config {
   auth_token?: string;
   excluded_paths?: string;
   claude_args?: string;
+  codex_args?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];
 }
@@ -100,12 +102,14 @@ interface RemoteLog {
 const remoteLogQueue: RemoteLog[] = [];
 let syncServiceRef: SyncService | null = null;
 let daemonVersion: string | undefined;
+let activeConfig: Config | null = null;
 const platform = process.platform;
 
-const IDLE_TIMEOUT_MS = 30_000;
+const IDLE_TIMEOUT_MS = 2 * 60_000;
 const IDLE_COOLDOWN_MS = 5 * 60_000;
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastIdleNotification = new Map<string, number>();
+const lastIdleNotifiedSize = new Map<string, number>();
 const lastErrorNotification = new Map<string, number>();
 
 function truncateForNotification(text: string, maxLen = 200): string {
@@ -262,7 +266,24 @@ async function sendHeartbeat(): Promise<void> {
     if (data.commands && data.commands.length > 0) {
       log(`Received ${data.commands.length} remote command(s)`);
       for (const cmd of data.commands) {
-        await executeRemoteCommand(cmd.id, cmd.command, config);
+        await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
+      }
+    }
+
+    if (data.sync_mode !== undefined) {
+      const currentConfig = readConfig();
+      const serverMode = data.sync_mode as "all" | "selected";
+      const serverProjects: string[] = data.sync_projects ?? [];
+      const localMode = currentConfig?.sync_mode ?? "all";
+      const localProjects = currentConfig?.sync_projects ?? [];
+
+      if (serverMode !== localMode || JSON.stringify(serverProjects) !== JSON.stringify(localProjects)) {
+        log(`Sync settings updated from server: mode=${serverMode}, projects=${serverProjects.length}`);
+        patchConfig({ sync_mode: serverMode, sync_projects: serverProjects });
+        if (activeConfig) {
+          activeConfig.sync_mode = serverMode;
+          activeConfig.sync_projects = serverProjects;
+        }
       }
     }
   } catch (err) {
@@ -273,7 +294,8 @@ async function sendHeartbeat(): Promise<void> {
 async function executeRemoteCommand(
   commandId: string,
   command: string,
-  config: Config
+  config: Config,
+  commandArgs?: string
 ): Promise<void> {
   const siteUrl = config.convex_url?.replace(".cloud", ".site");
   if (!siteUrl || !config.auth_token) return;
@@ -369,6 +391,49 @@ async function executeRemoteCommand(
         }, 1000);
         return;
       }
+      case "start_session": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const agentType: string = parsed.agent_type || "claude";
+        const projectPath: string = parsed.project_path || process.env.HOME || "/tmp";
+        const prompt: string | undefined = parsed.prompt;
+
+        const shortId = Math.random().toString(36).slice(2, 8);
+        const tmuxSession = `cc-${agentType}-${shortId}`;
+
+        const cwd = fs.existsSync(projectPath) ? projectPath : (process.env.HOME || "/tmp");
+
+        let binary: string;
+        let binaryArgs: string[] = [];
+        if (agentType === "codex") {
+          binary = "codex";
+          if (prompt) binaryArgs.push(prompt);
+          const extraArgs = config.codex_args;
+          if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
+        } else if (agentType === "gemini") {
+          binary = "gemini";
+          if (prompt) binaryArgs.push(prompt);
+        } else {
+          binary = "claude";
+          if (prompt) {
+            binaryArgs.push("-p", prompt);
+          }
+          const extraArgs = config.claude_args;
+          if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
+        }
+
+        const shellCmd = [binary, ...binaryArgs].map(a => a.includes(" ") ? `'${a.replace(/'/g, "'\\''")}'` : a).join(" ");
+
+        try {
+          execSync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, { timeout: 5000 });
+          execSync(`tmux send-keys -t '${tmuxSession}' '${shellCmd.replace(/'/g, "'\\''")}' Enter`, { timeout: 5000 });
+          result = JSON.stringify({ tmux_session: tmuxSession, agent_type: agentType, project_path: cwd });
+          log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
+        } catch (spawnErr) {
+          error = `Failed to start session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
+          log(`[REMOTE] start_session error: ${error}`);
+        }
+        break;
+      }
       default:
         error = `Unknown command: ${command}`;
     }
@@ -425,6 +490,13 @@ function readConfig(): Config | null {
   } catch {
     return null;
   }
+}
+
+function patchConfig(updates: Partial<Config>): void {
+  const config = readConfig();
+  if (!config) return;
+  Object.assign(config, updates);
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
 function readConversationCache(): ConversationCache {
@@ -985,7 +1057,7 @@ async function processSessionFile(
             const response = decision.approved ? "y" : "n";
             log(`Attempting to inject response '${response}' to Claude Code`);
 
-            findClaudeSessionProcess(sessionId).then((proc) => {
+            findSessionProcess(sessionId).then((proc) => {
               if (!proc) {
                 log("No Claude Code process found for session");
                 return;
@@ -1041,27 +1113,28 @@ async function processSessionFile(
 
         const capturedFilePath = filePath;
         const capturedSize = stats.size;
-        idleTimers.set(sessionId, setTimeout(() => {
-          idleTimers.delete(sessionId);
-          try {
-            const currentStats = fs.statSync(capturedFilePath);
-            if (currentStats.size !== capturedSize) return;
-          } catch { return; }
 
-          const now = Date.now();
-          const lastIdle = lastIdleNotification.get(sessionId) ?? 0;
-          if (now - lastIdle < IDLE_COOLDOWN_MS) return;
+        if (capturedSize === lastIdleNotifiedSize.get(sessionId)) {
+          // Already notified for this state, skip
+        } else {
+          idleTimers.set(sessionId, setTimeout(() => {
+            idleTimers.delete(sessionId);
+            try {
+              const currentStats = fs.statSync(capturedFilePath);
+              if (currentStats.size !== capturedSize) return;
+            } catch { return; }
 
-          lastIdleNotification.set(sessionId, now);
-          const preview = truncateForNotification(lastAssistantMessage.content);
-          syncService.createSessionNotification({
-            conversation_id: conversationId,
-            type: "session_idle",
-            title: "codecast - Waiting for input",
-            message: preview,
-          }).catch(() => {});
-          log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
-        }, IDLE_TIMEOUT_MS));
+            lastIdleNotifiedSize.set(sessionId, capturedSize);
+            const preview = truncateForNotification(lastAssistantMessage.content);
+            syncService.createSessionNotification({
+              conversation_id: conversationId,
+              type: "session_idle",
+              title: "Claude done",
+              message: preview,
+            }).catch(() => {});
+            log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
+          }, IDLE_TIMEOUT_MS));
+        }
       }
     } else if (conversationId) {
       const existingTimer = idleTimers.get(sessionId);
@@ -1069,6 +1142,7 @@ async function processSessionFile(
         clearTimeout(existingTimer);
         idleTimers.delete(sessionId);
       }
+      lastIdleNotifiedSize.delete(sessionId);
     }
 
     updateStateCallback();
@@ -1855,7 +1929,7 @@ function buildReverseConversationCache(cache: ConversationCache): Record<string,
   return reverse;
 }
 
-async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
+async function findSessionProcess(sessionId: string, agentType: "claude" | "codex" | "gemini" = "claude"): Promise<ClaudeSessionInfo | null> {
   // Check process cache first
   const cached = await getCachedSessionProcess(sessionId);
   if (cached) {
@@ -1863,10 +1937,12 @@ async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessio
     return cached;
   }
 
+  const binaryPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "claude";
+
   try {
     // Strategy A: grep for --resume <sessionId> (exact match for resumed sessions)
     try {
-      const { stdout } = await execAsync("ps aux | grep -E 'claude.*--resume' | grep -v grep");
+      const { stdout } = await execAsync(`ps aux | grep -E '${binaryPattern}.*--resume' | grep -v grep`);
       const lines = stdout.trim().split("\n");
       for (const line of lines) {
         if (!line.includes(sessionId)) continue;
@@ -1894,11 +1970,10 @@ async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessio
           const paneLine = paneInfo.trim().split("\n")[0];
           if (paneLine) {
             const [paneTty, panePidStr] = paneLine.split(" ");
-            // Find the claude child process in this pane
             const panePid = parseInt(panePidStr, 10);
             if (!isNaN(panePid) && paneTty) {
               try {
-                const { stdout: childPs } = await execAsync(`pgrep -P ${panePid} -f claude 2>/dev/null || ps -o pid= -p ${panePid}`);
+                const { stdout: childPs } = await execAsync(`pgrep -P ${panePid} -f ${binaryPattern} 2>/dev/null || ps -o pid= -p ${panePid}`);
                 const childPid = parseInt(childPs.trim().split("\n")[0]?.trim(), 10);
                 const pid = isNaN(childPid) ? panePid : childPid;
                 const result = { pid, tty: normalizeTty(paneTty), sessionId };
@@ -1925,8 +2000,8 @@ async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessio
 
         if (projectCwd) {
           try {
-            // Get all running claude processes (not just --resume ones)
-            const { stdout: psOut } = await execAsync("ps aux | grep -E '/claude\\b|claude-code' | grep -v grep | grep -v 'codecast'");
+            const psPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "/claude\\b|claude-code";
+            const { stdout: psOut } = await execAsync(`ps aux | grep -E '${psPattern}' | grep -v grep | grep -v 'codecast'`);
             const candidates: Array<{ pid: number; tty: string }> = [];
 
             for (const line of psOut.trim().split("\n")) {
@@ -1951,18 +2026,26 @@ async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessio
               } catch {}
             }
 
-            if (candidates.length === 1) {
-              const result = { pid: candidates[0].pid, tty: candidates[0].tty, sessionId };
+            // Filter out candidates already cached for a different session
+            const unclaimed = candidates.filter(c => {
+              for (const [cachedSid, cachedInfo] of sessionProcessCache) {
+                if (cachedSid !== sessionId && cachedInfo.pid === c.pid) return false;
+              }
+              return true;
+            });
+
+            if (unclaimed.length === 1) {
+              const result = { pid: unclaimed[0].pid, tty: unclaimed[0].tty, sessionId };
               cacheSessionProcess(sessionId, result);
-              log(`Found session ${sessionId.slice(0, 8)} via CWD match: pid=${candidates[0].pid}, cwd=${projectCwd}`);
+              log(`Found session ${sessionId.slice(0, 8)} via CWD match: pid=${unclaimed[0].pid}, cwd=${projectCwd}`);
               return result;
-            } else if (candidates.length > 1) {
+            } else if (unclaimed.length > 1) {
               // Disambiguate using JSONL birth time vs process start time
               const jsonlBirthMs = jsonlStat.birthtimeMs;
               let bestCandidate: { pid: number; tty: string } | null = null;
               let bestDelta = Infinity;
 
-              for (const c of candidates) {
+              for (const c of unclaimed) {
                 try {
                   const { stdout: etimeOut } = await execAsync(`ps -o lstart= -p ${c.pid}`);
                   const processStart = new Date(etimeOut.trim()).getTime();
@@ -1980,7 +2063,9 @@ async function findClaudeSessionProcess(sessionId: string): Promise<ClaudeSessio
                 log(`Found session ${sessionId.slice(0, 8)} via CWD+timing match: pid=${bestCandidate.pid}, delta=${Math.round(bestDelta / 1000)}s`);
                 return result;
               }
-              log(`CWD match found ${candidates.length} candidates for ${sessionId.slice(0, 8)}, could not disambiguate`);
+              log(`CWD match found ${unclaimed.length} unclaimed candidates for ${sessionId.slice(0, 8)}, could not disambiguate`);
+            } else {
+              log(`CWD match found ${candidates.length} candidates for ${sessionId.slice(0, 8)} but all claimed by other sessions`);
             }
           } catch {}
         }
@@ -2014,30 +2099,38 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
 async function injectViaTmux(target: string, content: string): Promise<void> {
   const escaped = content.replace(/'/g, "'\\''");
   await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
+  await new Promise(resolve => setTimeout(resolve, 150));
   await execAsync(`tmux send-keys -t '${target}' Enter`);
   log(`Injected via tmux to ${target}`);
 }
 
 async function injectViaIterm(tty: string, content: string): Promise<void> {
   const normalizedTty = normalizeTty(tty);
-  const escaped = content.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const scriptContent = `tell application "iTerm2"
-  repeat with w in windows
-    repeat with t in tabs of w
-      repeat with s in sessions of t
-        if tty of s is "${normalizedTty}" then
-          write text "${escaped}" in s
-          return "ok"
-        end if
+  const scriptContent = `on run argv
+  set msgText to item 1 of argv
+  set targetTty to item 2 of argv
+  tell application "iTerm2"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          set sTty to tty of s
+          if sTty is targetTty then
+            tell s to write text msgText without newline
+            delay 0.15
+            tell s to write text ""
+            return "ok"
+          end if
+        end repeat
       end repeat
     end repeat
-  end repeat
-end tell
-return "not_found"`;
+  end tell
+  return "not_found"
+end run`;
   const tmpFile = path.join(CONFIG_DIR, "iterm-inject.scpt");
   fs.writeFileSync(tmpFile, scriptContent);
   try {
-    const { stdout } = await execAsync(`osascript "${tmpFile}"`);
+    const escapedContent = content.replace(/'/g, "'\\''");
+    const { stdout } = await execAsync(`osascript "${tmpFile}" '${escapedContent}' '${normalizedTty}'`);
     if (stdout.trim() === "not_found") {
       throw new Error(`iTerm2 session not found for TTY ${normalizedTty}`);
     }
@@ -2047,17 +2140,61 @@ return "not_found"`;
   }
 }
 
+type SessionFileInfo = { path: string; agentType: "claude" | "codex" | "gemini" };
+
 function findSessionJsonlPath(sessionId: string): string | null {
+  return findSessionFile(sessionId)?.path ?? null;
+}
+
+function findSessionFile(sessionId: string): SessionFileInfo | null {
+  // Claude sessions: ~/.claude/projects/<hash>/<sessionId>.jsonl
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  if (!fs.existsSync(claudeProjectsDir)) return null;
-
-  const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
-    .filter(d => d.isDirectory()).map(d => d.name);
-
-  for (const dir of projectDirs) {
-    const jsonlPath = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
-    if (fs.existsSync(jsonlPath)) return jsonlPath;
+  if (fs.existsSync(claudeProjectsDir)) {
+    const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
+      .filter(d => d.isDirectory()).map(d => d.name);
+    for (const dir of projectDirs) {
+      const jsonlPath = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+      if (fs.existsSync(jsonlPath)) return { path: jsonlPath, agentType: "claude" };
+    }
   }
+
+  // Codex sessions: ~/.codex/sessions/YYYY/MM/DD/<name>-<timestamp>-<sessionId>.jsonl
+  const codexSessionsDir = path.join(process.env.HOME || "", ".codex", "sessions");
+  if (fs.existsSync(codexSessionsDir)) {
+    try {
+      const findCodex = (dir: string): string | null => {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            const found = findCodex(fullPath);
+            if (found) return found;
+          } else if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId)) {
+            return fullPath;
+          }
+        }
+        return null;
+      };
+      const codexPath = findCodex(codexSessionsDir);
+      if (codexPath) return { path: codexPath, agentType: "codex" };
+    } catch {}
+  }
+
+  // Gemini sessions: ~/.gemini/tmp/<hash>/chats/<sessionId>.json
+  const geminiTmpDir = path.join(process.env.HOME || "", ".gemini", "tmp");
+  if (fs.existsSync(geminiTmpDir)) {
+    try {
+      const projectDirs = fs.readdirSync(geminiTmpDir, { withFileTypes: true })
+        .filter(d => d.isDirectory()).map(d => d.name);
+      for (const dir of projectDirs) {
+        const chatsDir = path.join(geminiTmpDir, dir, "chats");
+        if (!fs.existsSync(chatsDir)) continue;
+        const jsonPath = path.join(chatsDir, `${sessionId}.json`);
+        if (fs.existsSync(jsonPath)) return { path: jsonPath, agentType: "gemini" };
+      }
+    } catch {}
+  }
+
   return null;
 }
 
@@ -2113,54 +2250,70 @@ function slugify(text: string, maxLen = 30): string {
 }
 
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache): Promise<boolean> {
-  const jsonlPath = findSessionJsonlPath(sessionId);
-  if (!jsonlPath) {
-    log(`Cannot auto-resume: JSONL not found for session ${sessionId.slice(0, 8)}`);
+  const sessionFile = findSessionFile(sessionId);
+  if (!sessionFile) {
+    log(`Cannot auto-resume: session file not found for ${sessionId.slice(0, 8)}`);
     return false;
   }
 
+  const { path: jsonlPath, agentType } = sessionFile;
   const jsonlContent = fs.readFileSync(jsonlPath, "utf-8").slice(0, 5000);
-  const cwd = extractCwd(jsonlContent) || process.env.HOME || "/tmp";
-
   const config = readConfig();
-  let extraFlags = config?.claude_args || "";
-  try {
-    const firstUserLine = jsonlContent.split("\n").find(l => l.includes('"type":"user"'));
-    if (firstUserLine) {
-      const parsed = JSON.parse(firstUserLine);
-      if (parsed.permissionMode === "bypassPermissions" && !extraFlags.includes("--dangerously-skip-permissions")) {
-        extraFlags = extraFlags ? extraFlags + " --dangerously-skip-permissions" : "--dangerously-skip-permissions";
-      }
-    }
-  } catch {}
 
+  let cwd: string;
+  let resumeCmd: string;
   const shortId = sessionId.slice(0, 8);
   const title = titleCache[sessionId] || extractSummaryTitle(jsonlContent);
   const slug = title ? slugify(title) : "";
-  const tmuxSession = slug ? `cc-resume-${slug}-${shortId}` : `cc-resume-${shortId}`;
-  const resumeCmd = `claude --resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
+
+  if (agentType === "codex") {
+    cwd = extractCodexCwd(jsonlContent) || process.env.HOME || "/tmp";
+    const extraFlags = config?.codex_args || "";
+    resumeCmd = `codex resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
+  } else if (agentType === "gemini") {
+    cwd = process.env.HOME || "/tmp";
+    resumeCmd = `gemini --resume latest`;
+  } else {
+    cwd = extractCwd(jsonlContent) || process.env.HOME || "/tmp";
+    let extraFlags = config?.claude_args || "";
+    try {
+      const firstUserLine = jsonlContent.split("\n").find(l => l.includes('"type":"user"'));
+      if (firstUserLine) {
+        const parsed = JSON.parse(firstUserLine);
+        if (parsed.permissionMode === "bypassPermissions" && !extraFlags.includes("--dangerously-skip-permissions")) {
+          extraFlags = extraFlags ? extraFlags + " --dangerously-skip-permissions" : "--dangerously-skip-permissions";
+        }
+      }
+    } catch {}
+    resumeCmd = `claude --resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
+  }
+
+  const prefix = agentType === "codex" ? "cx" : agentType === "gemini" ? "gm" : "cc";
+  const tmuxSession = slug ? `${prefix}-resume-${slug}-${shortId}` : `${prefix}-resume-${shortId}`;
 
   try {
-    // Kill existing session if any
     try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
 
     await execAsync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`);
-    await execAsync(`tmux send-keys -t '${tmuxSession}' '${resumeCmd}' Enter`);
+    await execAsync(`tmux send-keys -t '${tmuxSession}' '${resumeCmd.replace(/'/g, "'\\''")}'  Enter`);
 
-    log(`Auto-resumed session ${shortId} in tmux session ${tmuxSession}, cwd=${cwd}, cmd=${resumeCmd}`);
+    log(`Auto-resumed ${agentType} session ${shortId} in tmux ${tmuxSession}, cwd=${cwd}, cmd=${resumeCmd}`);
 
-    // Wait for Claude to start up
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    // Wait for agent to start up
+    const startupDelay = agentType === "gemini" ? 3000 : 5000;
+    await new Promise(resolve => setTimeout(resolve, startupDelay));
 
-    // Now inject the message
-    await execAsync(`tmux send-keys -t '${tmuxSession}' -l '${content.replace(/'/g, "'\\''")}'`);
+    // Inject the message
+    const escaped = content.replace(/'/g, "'\\''");
+    await execAsync(`tmux send-keys -t '${tmuxSession}' -l '${escaped}'`);
+    await new Promise(resolve => setTimeout(resolve, 150));
     await execAsync(`tmux send-keys -t '${tmuxSession}' Enter`);
 
     resumeSessionCache.set(sessionId, tmuxSession);
-    log(`Injected message to auto-resumed session ${shortId}`);
+    log(`Injected message to auto-resumed ${agentType} session ${shortId}`);
     return true;
   } catch (err) {
-    log(`Auto-resume failed for ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
+    log(`Auto-resume failed for ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }
@@ -2181,13 +2334,29 @@ async function deliverMessage(
     return false;
   }
 
-  log(`Delivering message to session ${sessionId.slice(0, 8)} (conversation ${conversationId.slice(0, 12)})`);
+  // Determine session type for process discovery and auto-resume
+  const isCursorSession = sessionId.startsWith("cursor-");
+  const isGeminiSession = sessionId.startsWith("session-");
+
+  // Cursor is an IDE, not a terminal process - can't inject
+  if (isCursorSession) {
+    log(`Session ${sessionId.slice(0, 20)} is a Cursor session, skipping delivery`);
+    return false;
+  }
+
+  // Detect codex sessions by checking if the JSONL exists in codex paths
+  let detectedType: "claude" | "codex" | "gemini" = isGeminiSession ? "gemini" : "claude";
+  if (!isGeminiSession) {
+    const sessionFile = findSessionFile(sessionId);
+    if (sessionFile) detectedType = sessionFile.agentType;
+  }
+
+  log(`Delivering message to session ${sessionId.slice(0, 12)} (conversation ${conversationId.slice(0, 12)}, type=${detectedType})`);
 
   // Check if we have a cached tmux target from a previous auto-resume
   const cachedTmux = resumeSessionCache.get(sessionId);
   if (cachedTmux) {
     try {
-      // Verify session still exists
       await execAsync(`tmux has-session -t '${cachedTmux}' 2>/dev/null`);
       await injectViaTmux(cachedTmux, content);
       await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
@@ -2198,7 +2367,7 @@ async function deliverMessage(
   }
 
   // Find the running process
-  const proc = await findClaudeSessionProcess(sessionId);
+  const proc = await findSessionProcess(sessionId, detectedType);
 
   if (proc) {
     // Try tmux first (most reliable)
@@ -2222,12 +2391,14 @@ async function deliverMessage(
       log(`iTerm2 injection failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    log(`All injection methods failed for active session ${sessionId.slice(0, 8)}`);
-    return false;
+    // All injection methods failed on a live process - fall back to auto-resume
+    log(`All injection methods failed for active session ${sessionId.slice(0, 12)}, falling back to auto-resume`);
+  } else {
+    log(`No running process for session ${sessionId.slice(0, 12)}`);
   }
 
-  // No running process - try auto-resume
-  log(`No running process for session ${sessionId.slice(0, 8)}, attempting auto-resume`);
+  // Last resort: auto-resume in a new tmux session
+  log(`Attempting auto-resume for session ${sessionId.slice(0, 8)}`);
   const resumed = await autoResumeSession(sessionId, content, titleCache);
   if (resumed) {
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
@@ -2763,6 +2934,34 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
   }
 }
 
+function checkDiskVersionMismatch(): void {
+  try {
+    const updateTsPath = path.join(__dirname, "update.ts");
+    const updateJsPath = path.join(__dirname, "update.js");
+    const filePath = fs.existsSync(updateTsPath) ? updateTsPath : updateJsPath;
+    if (!fs.existsSync(filePath)) return;
+
+    const content = fs.readFileSync(filePath, "utf-8");
+    const match = content.match(/const VERSION\s*=\s*["']([^"']+)["']/);
+    if (!match) return;
+
+    const diskVersion = match[1];
+    if (diskVersion !== daemonVersion) {
+      log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, restarting`);
+      logLifecycle("version_mismatch_restart", `${daemonVersion} -> ${diskVersion}`);
+      flushRemoteLogs().then(() => {
+        const spawned = spawnReplacement();
+        if (spawned) skipRespawn = true;
+        setTimeout(() => process.exit(0), 500);
+      }).catch(() => {
+        const spawned = spawnReplacement();
+        if (spawned) skipRespawn = true;
+        setTimeout(() => process.exit(0), 500);
+      });
+    }
+  } catch {}
+}
+
 function startVersionChecker(syncService: SyncService): NodeJS.Timeout {
   checkForForcedUpdate(syncService);
 
@@ -3057,6 +3256,10 @@ async function main(): Promise<void> {
     daemonVersion = "unknown";
   }
 
+  try {
+    fs.writeFileSync(VERSION_FILE, daemonVersion, { mode: 0o600 });
+  } catch {}
+
   // Report crash recovery if we had crashes before this successful startup
   let crashRecoveryInfo = "";
   if (fs.existsSync(CRASH_FILE)) {
@@ -3080,6 +3283,7 @@ async function main(): Promise<void> {
   saveDaemonState({ connected: false });
 
   const { config, convexUrl } = await waitForConfig();
+  activeConfig = config;
 
   log(`User ID: ${config.user_id}`);
   log(`Convex URL: ${convexUrl}`);
@@ -3109,6 +3313,7 @@ async function main(): Promise<void> {
   setInterval(() => {
     logHealthSummary();
     sendHeartbeat().catch(() => {});
+    checkDiskVersionMismatch();
   }, HEALTH_REPORT_INTERVAL_MS);
 
   // Send initial heartbeat
@@ -3640,7 +3845,7 @@ async function main(): Promise<void> {
               let injected = false;
 
               if (sessionId) {
-                const proc = await findClaudeSessionProcess(sessionId);
+                const proc = await findSessionProcess(sessionId);
                 if (proc) {
                   const tmuxTarget = await findTmuxPaneForTty(proc.tty);
                   if (tmuxTarget) {
@@ -3712,7 +3917,7 @@ async function main(): Promise<void> {
 
             processedCommandIds.add(cmd.id);
             log(`[SUBSCRIPTION] Executing command: ${cmd.command} (${cmd.id})`);
-            await executeRemoteCommand(cmd.id, cmd.command, config);
+            await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
           }
 
           resetReconnectDelay();
@@ -3794,6 +3999,7 @@ async function main(): Promise<void> {
         log(`Failed to remove PID file: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    try { fs.unlinkSync(VERSION_FILE); } catch {}
 
     logLifecycle("daemon_stop", "graceful shutdown");
     await flushRemoteLogs();
