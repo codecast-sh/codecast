@@ -167,10 +167,13 @@ export const list = query({
       .order("desc")
       .take(50);
 
-    const notificationsWithActors = await Promise.all(
+    const enriched = await Promise.all(
       notifications.map(async (notification) => {
         const actor = notification.actor_user_id
           ? await ctx.db.get(notification.actor_user_id)
+          : null;
+        const conversation = notification.conversation_id
+          ? await ctx.db.get(notification.conversation_id)
           : null;
         return {
           ...notification,
@@ -180,11 +183,16 @@ export const list = query({
             github_username: actor.github_username,
             github_avatar_url: actor.github_avatar_url,
           } : null,
+          conversation: conversation ? {
+            title: conversation.title,
+            project_path: conversation.project_path,
+            agent_type: conversation.agent_type,
+          } : null,
         };
       })
     );
 
-    return notificationsWithActors;
+    return enriched;
   },
 });
 
