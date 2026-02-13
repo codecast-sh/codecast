@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, SectionList } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, SectionList, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useState, useCallback, useRef, useMemo } from 'react';
@@ -225,12 +225,198 @@ function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: 
   );
 }
 
+type AgentType = "claude" | "codex" | "gemini";
+
+function NewSessionModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const [agentType, setAgentType] = useState<AgentType>("claude");
+  const [projectPath, setProjectPath] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const startSession = useMutation(api.users.startSession);
+  const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 6 });
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    try {
+      await startSession({
+        agent_type: agentType,
+        project_path: projectPath || undefined,
+        prompt: prompt || undefined,
+      });
+      Alert.alert("Session started", `${agentType} session is launching on your machine.`);
+      onClose();
+      setPrompt("");
+      setProjectPath("");
+    } catch (err) {
+      Alert.alert("Error", err instanceof Error ? err.message : "Failed to start session");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const agents: { type: AgentType; label: string; color: string }[] = [
+    { type: "claude", label: "Claude", color: Theme.orange },
+    { type: "codex", label: "Codex", color: Theme.green },
+    { type: "gemini", label: "Gemini", color: Theme.blue },
+  ];
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <RNView style={modalStyles.header}>
+          <RNText style={modalStyles.title}>New Session</RNText>
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <FontAwesome name="times" size={20} color={Theme.textMuted} />
+          </TouchableOpacity>
+        </RNView>
+
+        <ScrollView style={modalStyles.body} keyboardShouldPersistTaps="handled">
+          <RNText style={modalStyles.label}>Agent</RNText>
+          <RNView style={modalStyles.agentRow}>
+            {agents.map((a) => (
+              <TouchableOpacity
+                key={a.type}
+                style={[modalStyles.agentBtn, agentType === a.type && { borderColor: a.color, backgroundColor: a.color + "20" }]}
+                onPress={() => setAgentType(a.type)}
+                activeOpacity={0.7}
+              >
+                <RNText style={[modalStyles.agentBtnText, agentType === a.type && { color: a.color }]}>
+                  {a.label}
+                </RNText>
+              </TouchableOpacity>
+            ))}
+          </RNView>
+
+          <RNText style={modalStyles.label}>Project directory</RNText>
+          <TextInput
+            style={modalStyles.input}
+            value={projectPath}
+            onChangeText={setProjectPath}
+            placeholder="~/src/my-project"
+            placeholderTextColor={Theme.textMuted0}
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {recentProjects && recentProjects.length > 0 && !projectPath && (
+            <RNView style={modalStyles.recentRow}>
+              {recentProjects.slice(0, 4).map((p) => (
+                <TouchableOpacity
+                  key={p.path}
+                  style={modalStyles.recentChip}
+                  onPress={() => setProjectPath(p.path)}
+                  activeOpacity={0.7}
+                >
+                  <RNText style={modalStyles.recentChipText} numberOfLines={1}>
+                    {p.path.split("/").pop()}
+                  </RNText>
+                </TouchableOpacity>
+              ))}
+            </RNView>
+          )}
+
+          <RNText style={modalStyles.label}>Initial prompt (optional)</RNText>
+          <TextInput
+            style={[modalStyles.input, { height: 80, textAlignVertical: "top" }]}
+            value={prompt}
+            onChangeText={setPrompt}
+            placeholder="What should the agent work on?"
+            placeholderTextColor={Theme.textMuted0}
+            multiline
+            autoCorrect={false}
+          />
+        </ScrollView>
+
+        <RNView style={modalStyles.footer}>
+          <TouchableOpacity style={modalStyles.cancelBtn} onPress={onClose} activeOpacity={0.7}>
+            <RNText style={modalStyles.cancelBtnText}>Cancel</RNText>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[modalStyles.submitBtn, submitting && { opacity: 0.5 }]}
+            onPress={handleSubmit}
+            disabled={submitting}
+            activeOpacity={0.7}
+          >
+            <RNText style={modalStyles.submitBtnText}>{submitting ? "Starting..." : "Start Session"}</RNText>
+          </TouchableOpacity>
+        </RNView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const modalStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Theme.bg },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+  },
+  title: { fontSize: 18, fontWeight: "600", color: Theme.text },
+  body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
+  label: { fontSize: 13, fontWeight: "600", color: Theme.textMuted, marginBottom: 6, marginTop: Spacing.md },
+  agentRow: { flexDirection: "row", gap: 10 },
+  agentBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: Theme.borderLight,
+    alignItems: "center",
+  },
+  agentBtnText: { fontSize: 14, fontWeight: "600", color: Theme.textMuted },
+  input: {
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 10,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: Theme.text,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
+  recentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
+  recentChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    maxWidth: 140,
+  },
+  recentChipText: { fontSize: 12, color: Theme.textMuted, fontWeight: "500" },
+  footer: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.borderLight,
+  },
+  cancelBtn: { paddingHorizontal: 16, paddingVertical: 10 },
+  cancelBtnText: { fontSize: 15, color: Theme.textMuted },
+  submitBtn: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: Theme.accent,
+  },
+  submitBtnText: { fontSize: 15, fontWeight: "600", color: Theme.bg },
+});
+
 export default function SessionsScreen() {
   const [filter, setFilter] = useState<"my" | "team">("my");
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showFavorites, setShowFavorites] = useState(true);
+  const [showNewSession, setShowNewSession] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
 
@@ -384,6 +570,16 @@ export default function SessionsScreen() {
           />
         </>
       )}
+
+      <NewSessionModal visible={showNewSession} onClose={() => setShowNewSession(false)} />
+
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => setShowNewSession(true)}
+        activeOpacity={0.8}
+      >
+        <FontAwesome name="plus" size={20} color={Theme.bg} />
+      </TouchableOpacity>
     </RNView>
   );
 }
@@ -645,5 +841,21 @@ const styles = StyleSheet.create({
   },
   emptyList: {
     flex: 1,
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 20,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: Theme.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 8,
   },
 });

@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Text as RNText } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Text as RNText, Image } from 'react-native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -19,6 +19,11 @@ type Notification = {
     name?: string;
     github_username?: string;
     github_avatar_url?: string;
+  } | null;
+  conversation: {
+    title?: string;
+    project_path?: string;
+    agent_type?: string;
   } | null;
 };
 
@@ -52,6 +57,16 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
   }
 }
 
+function agentTypeLabel(type?: string) {
+  switch (type) {
+    case "claude_code": return "Claude Code";
+    case "codex": return "Codex";
+    case "cursor": return "Cursor";
+    case "gemini": return "Gemini";
+    default: return null;
+  }
+}
+
 function NotificationItem({ notification, onPress, onMarkRead }: {
   notification: Notification;
   onPress: () => void;
@@ -60,11 +75,17 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
   const selfTypes = ["session_idle", "permission_request", "session_error"];
   const isSelf = selfTypes.includes(notification.type);
   const actorName = isSelf
-    ? (notification.type === "session_idle" ? "Waiting for input"
+    ? (notification.type === "session_idle" ? "Claude done"
       : notification.type === "permission_request" ? "Permission needed"
       : "Session error")
     : (notification.actor?.name || notification.actor?.github_username || "Someone");
   const icon = notificationIcon(notification.type);
+  const avatarUrl = notification.actor?.github_avatar_url;
+  const conv = notification.conversation;
+  const contextLine = conv?.title
+    || conv?.project_path?.split("/").pop()
+    || null;
+  const agentLabel = agentTypeLabel(conv?.agent_type);
 
   return (
     <TouchableOpacity
@@ -72,17 +93,36 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
       style={[styles.notificationCard, !notification.read && styles.notificationUnread]}
       activeOpacity={0.7}
     >
-      <RNView style={styles.notificationIconContainer}>
-        <FontAwesome name={icon.name} size={16} color={icon.color} />
+      <RNView style={styles.avatarContainer}>
+        {avatarUrl ? (
+          <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+        ) : (
+          <RNView style={styles.avatarFallback}>
+            <FontAwesome name={icon.name} size={18} color={icon.color} />
+          </RNView>
+        )}
+        {avatarUrl && (
+          <RNView style={[styles.iconBadge, { backgroundColor: icon.color }]}>
+            <FontAwesome name={icon.name} size={8} color="#fff" />
+          </RNView>
+        )}
       </RNView>
       <RNView style={styles.notificationContent}>
         <RNView style={styles.notificationHeader}>
-          <RNText style={styles.notificationActorName}>{actorName}</RNText>
+          <RNText style={styles.notificationActorName} numberOfLines={1}>{actorName}</RNText>
           <RNText style={styles.notificationTime}>
             {formatRelativeTime(notification.created_at)}
           </RNText>
         </RNView>
-        <RNText style={styles.notificationMessage} numberOfLines={2}>
+        {contextLine && (
+          <RNView style={styles.contextRow}>
+            {agentLabel && (
+              <RNText style={styles.agentBadge}>{agentLabel}</RNText>
+            )}
+            <RNText style={styles.contextText} numberOfLines={1}>{contextLine}</RNText>
+          </RNView>
+        )}
+        <RNText style={styles.notificationMessage} numberOfLines={6}>
           {notification.message}
         </RNText>
       </RNView>
@@ -198,7 +238,7 @@ const styles = StyleSheet.create({
   notificationCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.md,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.bgHighlight,
@@ -207,15 +247,36 @@ const styles = StyleSheet.create({
   notificationUnread: {
     backgroundColor: `${Theme.accent}08`,
   },
-  notificationIconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  avatarContainer: {
+    width: 42,
+    height: 42,
+    marginRight: Spacing.md,
+    marginTop: 2,
+  },
+  avatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
+  avatarFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: Theme.bgAlt,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: Spacing.md,
-    marginTop: 2,
+  },
+  iconBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: Theme.bg,
   },
   notificationContent: {
     flex: 1,
@@ -224,16 +285,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 3,
+    marginBottom: 2,
   },
   notificationActorName: {
     fontSize: 15,
     fontWeight: '600',
     color: Theme.text,
+    flex: 1,
+    marginRight: Spacing.sm,
   },
   notificationTime: {
     fontSize: 12,
     color: Theme.textMuted0,
+  },
+  contextRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  agentBadge: {
+    fontSize: 11,
+    color: Theme.accent,
+    fontWeight: '600',
+    marginRight: 6,
+  },
+  contextText: {
+    fontSize: 12,
+    color: Theme.textMuted0,
+    flex: 1,
   },
   notificationMessage: {
     fontSize: 14,
