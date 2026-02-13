@@ -47,6 +47,7 @@ interface ConversationDiffLayoutProps {
   highlightQuery?: string;
   onClearHighlight?: () => void;
   targetMessageId?: string;
+  isOwner?: boolean;
 }
 
 export function ConversationDiffLayout({
@@ -66,6 +67,7 @@ export function ConversationDiffLayout({
   highlightQuery,
   targetMessageId,
   onClearHighlight,
+  isOwner,
 }: ConversationDiffLayoutProps) {
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
@@ -166,6 +168,7 @@ export function ConversationDiffLayout({
     onClearHighlight,
     embedded,
     targetMessageId,
+    isOwner,
   };
 
   // Mobile: tabs layout

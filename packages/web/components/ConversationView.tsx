@@ -23,6 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -93,7 +94,7 @@ export type ConversationData = {
   share_token?: string;
   message_count?: number;
   messages: Message[];
-  user?: { name?: string; email?: string } | null;
+  user?: { name?: string; email?: string; avatar_url?: string | null } | null;
   parent_conversation_id?: string | null;
   child_conversations?: Array<{ _id: string; title: string }>;
   child_conversation_map?: Record<string, string>;
@@ -195,6 +196,7 @@ type ConversationViewProps = {
   embedded?: boolean;
   showMessageInput?: boolean;
   targetMessageId?: string;
+  isOwner?: boolean;
 };
 
 export interface ConversationViewHandle {
@@ -3197,7 +3199,7 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
@@ -4148,6 +4150,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1">{truncatedTitle}</h1>
 
             {conversation && (
+              <TooltipProvider delayDuration={300}>
               <div className="flex items-center gap-1 flex-shrink-0">
                 <ConversationMetadata
                   agentType={conversation.agent_type}
@@ -4159,16 +4162,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 />
 
                 {conversation.parent_conversation_id && (
-                  <Link
-                    href={`/conversation/${conversation.parent_conversation_id}`}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
-                    title="View parent conversation"
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                    </svg>
-                    Parent
-                  </Link>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Link
+                        href={`/conversation/${conversation.parent_conversation_id}`}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+                      >
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                        </svg>
+                        Parent
+                      </Link>
+                    </TooltipTrigger>
+                    <TooltipContent>View parent conversation</TooltipContent>
+                  </Tooltip>
                 )}
 
                 {isConversationLive && (
@@ -4178,107 +4185,42 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </span>
                 )}
 
-                {(conversation.compaction_count ?? 0) > 0 && (
-                  <span
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-500 border border-amber-500/30"
-                    title={`Context was compacted ${conversation.compaction_count} time${conversation.compaction_count === 1 ? '' : 's'}`}
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                    </svg>
-                    {conversation.compaction_count}
-                  </span>
-                )}
-
-                {((conversation.fork_count ?? 0) > 0 || conversation.forked_from_details || (conversation.fork_children?.length ?? 0) > 0) && (
-                  <span
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/30"
-                    title={conversation.forked_from_details
-                      ? `Forked from @${conversation.forked_from_details.username}`
-                      : `${conversation.fork_count || conversation.fork_children?.length || 0} fork${(conversation.fork_count || conversation.fork_children?.length || 0) === 1 ? '' : 's'}`}
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-                    </svg>
-                    {conversation.forked_from_details ? "fork" : (conversation.fork_count || conversation.fork_children?.length || 0)}
-                  </span>
-                )}
-
-                {conversation.child_conversations && conversation.child_conversations.length > 0 && (
-                  <span
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30"
-                    title={`${conversation.child_conversations.length} subagent${conversation.child_conversations.length > 1 ? 's' : ''}`}
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                    </svg>
-                    {conversation.child_conversations.length}
-                  </span>
-                )}
-
                 {conversation.git_branch && (
-                  <span
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
-                    title={conversation.git_branch}
-                    onClick={() => {
-                      if (conversation.git_remote_url) {
-                        const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
-                        if (match) {
-                          window.open(`https://github.com/${match[1]}/tree/${conversation.git_branch}`, '_blank');
-                        }
-                      }
-                    }}
-                    style={conversation.git_remote_url ? { cursor: 'pointer' } : undefined}
-                  >
-                    <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-                    </svg>
-                    <span className="truncate">{conversation.git_branch}</span>
-                  </span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
+                        onClick={() => {
+                          if (conversation.git_remote_url) {
+                            const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
+                            if (match) {
+                              window.open(`https://github.com/${match[1]}/tree/${conversation.git_branch}`, '_blank');
+                            }
+                          }
+                        }}
+                        style={conversation.git_remote_url ? { cursor: 'pointer' } : undefined}
+                      >
+                        <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                        </svg>
+                        <span className="truncate">{conversation.git_branch}</span>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{conversation.git_branch}</TooltipContent>
+                  </Tooltip>
                 )}
 
-                {taskStats && (
-                  <span
-                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${
-                      taskStats.completed === taskStats.total
-                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                        : 'bg-sol-bg-highlight text-sol-text-dim border-sol-border/30'
-                    }`}
-                    title={`Tasks: ${taskStats.completed} completed of ${taskStats.total}`}
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    {taskStats.completed}/{taskStats.total}
-                  </span>
-                )}
-
-                {latestTodos && latestTodos.todos.length > 0 && (
-                  <span
-                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${
-                      latestTodos.todos.filter((t: any) => t.status === 'completed').length === latestTodos.todos.length
-                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                        : 'bg-sol-bg-highlight text-sol-text-dim border-sol-border/30'
-                    }`}
-                    title={`Todos: ${latestTodos.todos.filter((t: any) => t.status === 'completed').length} completed of ${latestTodos.todos.length}`}
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                    </svg>
-                    {latestTodos.todos.filter((t: any) => t.status === 'completed').length}/{latestTodos.todos.length}
-                  </span>
-                )}
-
-                {latestUsage && (
-                  <span
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-bg-highlight text-sol-text-dim border border-sol-border/30"
-                    title={`Context: ${Math.round((latestUsage.contextSize / 200000) * 100)}% used`}
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                    </svg>
-                    {Math.round((latestUsage.contextSize / 200000) * 100)}%
-                  </span>
+                {!isOwner && conversation.user?.avatar_url && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <img
+                        src={conversation.user.avatar_url}
+                        alt={conversation.user.name || "User"}
+                        className="w-5 h-5 rounded-full ring-1 ring-sol-border/50"
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent>{conversation.user.name || conversation.user.email || "User"}</TooltipContent>
+                  </Tooltip>
                 )}
 
                 {headerExtra}
@@ -4288,93 +4230,113 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
-                    <span className="max-w-[100px] truncate" title={highlightQuery}>{highlightQuery}</span>
+                    <span className="max-w-[100px] truncate">{highlightQuery}</span>
                     {allMatchingMessageIds.length > 0 && (
                       <>
                         <span className="text-[10px] opacity-70 ml-1">
                           {currentMatchIndex + 1}/{allMatchingMessageIds.length}
                         </span>
-                        <button
-                          onClick={goToPrevMatch}
-                          className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
-                          title="Previous match"
-                        >
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                          </svg>
-                        </button>
-                        <button
-                          onClick={goToNextMatch}
-                          className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
-                          title="Next match"
-                        >
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                          </svg>
-                        </button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={goToPrevMatch}
+                              className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                              </svg>
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>Previous match</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={goToNextMatch}
+                              className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>Next match</TooltipContent>
+                        </Tooltip>
                       </>
                     )}
                     {allMatchingMessageIds.length === 0 && (
                       <span className="text-[10px] opacity-70 ml-1">0 matches</span>
                     )}
-                    <button
-                      onClick={onClearHighlight}
-                      className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors ml-1"
-                      title="Clear search"
-                    >
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={onClearHighlight}
+                          className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors ml-1"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>Clear search</TooltipContent>
+                    </Tooltip>
                   </div>
                 )}
 
-                <button
-                  onClick={handleCopyAll}
-                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
-                  title="Copy all messages"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                </button>
-
-                {conversation?.session_id && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
-                        title="Copy resume command"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => handleCopyResumeCommand("claude")}>
-                        Copy Claude resume
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleCopyResumeCommand("codex")}>
-                        Copy Codex resume
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => setCollapsed((c) => !c)}
+                      className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${collapsed ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
+                    >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                        {collapsed
+                          ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                          : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l-4 4m0 0h4m-4 0v-4m11 4l-4-4m4 4v-4m0 4h-4M15 10l4-4m0 0h-4m4 0v4M5 10l4-4m0 0v4m0-4H5" />
+                        }
                       </svg>
                     </button>
-                  </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent>{collapsed ? "Expand messages" : "Collapse messages"}</TooltipContent>
+                </Tooltip>
+
+                <DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DropdownMenuTrigger asChild>
+                        <button className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                          </svg>
+                        </button>
+                      </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent>More options</TooltipContent>
+                  </Tooltip>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setCollapsed((c) => !c)}>
-                      {collapsed ? "Expand messages" : "Collapse messages"}
-                      <span className="ml-auto text-[10px] text-sol-text-dim">Cmd+Shift+C</span>
+                    <DropdownMenuItem onClick={handleCopyAll}>
+                      <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      Copy all messages
                     </DropdownMenuItem>
+                    {conversation?.session_id && (
+                      <>
+                        <DropdownMenuItem onClick={() => handleCopyResumeCommand("claude")}>
+                          <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          Copy Claude resume
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleCopyResumeCommand("codex")}>
+                          <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          Copy Codex resume
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>
                       {showThinking ? "Hide thinking" : "Show thinking"}
                     </DropdownMenuItem>
@@ -4406,8 +4368,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         <ConversationTree conversationId={conversation._id.toString()} />
                       </>
                     )}
+                    {((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0) && (
+                      <DropdownMenuItem disabled>
+                        <svg className="w-3 h-3 mr-1.5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                        </svg>
+                        {conversation.fork_count || conversation.fork_children?.length || 0} fork{(conversation.fork_count || conversation.fork_children?.length || 0) === 1 ? '' : 's'}
+                      </DropdownMenuItem>
+                    )}
+                    {(conversation.compaction_count ?? 0) > 0 && (
+                      <DropdownMenuItem disabled>
+                        <svg className="w-3 h-3 mr-1.5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                        </svg>
+                        {conversation.compaction_count} compaction{conversation.compaction_count === 1 ? '' : 's'}
+                      </DropdownMenuItem>
+                    )}
                     {conversation.child_conversations && conversation.child_conversations.length > 0 && (
                       <DropdownMenuItem disabled>
+                        <svg className="w-3 h-3 mr-1.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                        </svg>
                         {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? "s" : ""}
                       </DropdownMenuItem>
                     )}
@@ -4432,6 +4413,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
+              </TooltipProvider>
             )}
           </div>
         </div>
@@ -4445,7 +4427,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "auto" }}>
-        <div className="min-h-full flex flex-col">
+        <div className="flex flex-col">
         {!conversation ? (
           <ConversationSkeleton />
         ) : timeline.length === 0 ? (
@@ -4472,7 +4454,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               minHeight: virtualizer.getTotalSize(),
               width: "100%",
               position: "relative",
-              marginTop: "auto",
             }}
           >
             {/* Earlier messages indicator at top */}

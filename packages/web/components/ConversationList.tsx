@@ -481,6 +481,144 @@ function createConversationAriaLabel(conv: Conversation): string {
   return `${title}, ${agentType}, ${time}${status}`;
 }
 
+function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const [agentType, setAgentType] = useState<"claude" | "codex" | "gemini">("claude");
+  const [projectPath, setProjectPath] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const startSession = useMutation(api.users.startSession);
+  const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    function handleEsc(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    function handleClickOutside(e: MouseEvent) {
+      if (modalRef.current && !modalRef.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener("keydown", handleEsc);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("keydown", handleEsc);
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = async () => {
+    setIsSubmitting(true);
+    try {
+      await startSession({
+        agent_type: agentType,
+        project_path: projectPath || undefined,
+        prompt: prompt || undefined,
+      });
+      toast.success(`Starting ${agentType} session...`);
+      onClose();
+      setPrompt("");
+      setProjectPath("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to start session");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm">
+      <div ref={modalRef} className="bg-white dark:bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+        <div className="px-5 pt-5 pb-3">
+          <h3 className="text-base font-semibold text-sol-text">New Session</h3>
+          <p className="text-xs text-sol-text-muted mt-0.5">Start a coding session on your machine</p>
+        </div>
+
+        <div className="px-5 pb-4 space-y-3">
+          {/* Agent type */}
+          <div className="flex gap-2">
+            {(["claude", "codex", "gemini"] as const).map((type) => (
+              <button
+                key={type}
+                onClick={() => setAgentType(type)}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors border ${
+                  agentType === type
+                    ? type === "claude"
+                      ? "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/50"
+                      : type === "codex"
+                        ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50"
+                        : "bg-blue-500/20 text-blue-400 border-blue-500/50"
+                    : "bg-sol-bg-alt/60 text-sol-text-muted border-sol-border/40 hover:border-sol-border"
+                }`}
+              >
+                <div className="flex items-center justify-center gap-1.5">
+                  <AgentIcon agentType={type === "claude" ? "claude_code" : type} className="w-4 h-4" />
+                  {type === "claude" ? "Claude" : type === "codex" ? "Codex" : "Gemini"}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Project path */}
+          <div>
+            <label className="block text-xs font-medium text-sol-text-muted mb-1">Project directory</label>
+            <input
+              type="text"
+              value={projectPath}
+              onChange={(e) => setProjectPath(e.target.value)}
+              placeholder="~/src/my-project"
+              className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-yellow/50"
+            />
+            {recentProjects && recentProjects.length > 0 && !projectPath && (
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {recentProjects.slice(0, 5).map((p) => (
+                  <button
+                    key={p.path}
+                    onClick={() => setProjectPath(p.path)}
+                    className="px-2 py-0.5 text-[11px] rounded bg-sol-bg-alt/80 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/60 transition-colors truncate max-w-[140px]"
+                    title={p.path}
+                  >
+                    {p.path.split("/").pop()}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Prompt */}
+          <div>
+            <label className="block text-xs font-medium text-sol-text-muted mb-1">Initial prompt <span className="text-sol-text-dim">(optional)</span></label>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="What should the agent work on?"
+              rows={2}
+              className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-yellow/50 resize-none"
+            />
+          </div>
+        </div>
+
+        <div className="px-5 pb-4 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm text-sol-text-muted hover:text-sol-text transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={isSubmitting}
+            className="px-4 py-2 text-sm font-medium bg-sol-yellow text-sol-bg rounded-lg hover:bg-sol-yellow/90 transition-colors disabled:opacity-50"
+          >
+            {isSubmitting ? "Starting..." : "Start Session"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type TimeFilter = "all" | "long" | "active";
 type SubagentFilter = "all" | "main" | "subagent";
 
@@ -498,6 +636,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("all");
   const [focusedIndex, setFocusedIndex] = useState(-1);
+  const [showNewSession, setShowNewSession] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
@@ -699,8 +838,24 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
         }
       }}
       onBlur={() => setFocusedIndex(-1)}>
+      <NewSessionModal isOpen={showNewSession} onClose={() => setShowNewSession(false)} />
       {/* Filter bar */}
       <div className="flex flex-wrap gap-1.5 sm:gap-2 items-center pt-2">
+        {filter === "my" && (
+          <button
+            onClick={() => setShowNewSession(true)}
+            className="px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 hover:bg-sol-yellow/30"
+          >
+            <span className="flex items-center gap-1">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              <span className="hidden sm:inline">New Session</span>
+              <span className="sm:hidden">New</span>
+            </span>
+          </button>
+        )}
+        {filter === "my" && <div className="w-px h-5 bg-sol-border/30 mx-0.5" />}
         {/* Time filters */}
         <button
           onClick={() => setTimeFilter("all")}

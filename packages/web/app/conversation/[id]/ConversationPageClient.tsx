@@ -180,6 +180,7 @@ function OwnerView({
         onClearHighlight={onClearHighlight}
         embedded
         targetMessageId={targetMessageId}
+        isOwner={isOwner}
       />
     </DashboardLayout>
   );
@@ -238,6 +239,7 @@ function SharedView({ id, highlightQuery, onClearHighlight }: { id: string; high
         backHref="/"
         backLabel="Home"
         showMessageInput={false}
+        isOwner={false}
         hasMoreAbove={hasMoreAbove}
         isLoadingOlder={isLoadingOlder}
         onLoadOlder={loadOlder}
