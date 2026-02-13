@@ -608,7 +608,7 @@ export const getAllMessages = query({
       ...conversation,
       title,
       messages,
-      user: user ? { name: user.name, email: user.email } : null,
+      user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
@@ -742,7 +742,7 @@ export const getMessagesAroundTimestamp = query({
       ...conversation,
       title,
       messages,
-      user: user ? { name: user.name, email: user.email } : null,
+      user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
       last_timestamp: newestTimestamp,
       oldest_timestamp: oldestTimestamp,
       has_more_above: hasMoreAbove,
@@ -1566,7 +1566,7 @@ export const getConversationPublic = query({
         ...conversation,
         title,
         messages: sortedMessages,
-        user: user ? { name: user.name, email: user.email } : null,
+        user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
         has_more_above: hasMore,
         oldest_timestamp: oldestTimestamp,
         fork_count: conversation.fork_count,
@@ -4380,3 +4380,4 @@ export const getConversationsBySessionIds = query({
     return { conversations: results };
   },
 });
+
