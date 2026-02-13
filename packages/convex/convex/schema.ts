@@ -65,8 +65,10 @@ export default defineSchema({
       v.literal("status"),
       v.literal("restart"),
       v.literal("force_update"),
-      v.literal("version")
+      v.literal("version"),
+      v.literal("start_session")
     ),
+    args: v.optional(v.string()),
     created_at: v.number(),
     executed_at: v.optional(v.number()),
     result: v.optional(v.string()),

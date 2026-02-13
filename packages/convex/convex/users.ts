@@ -118,11 +118,16 @@ export const daemonHeartbeat = mutation({
       )
       .collect();
 
+    const user = await ctx.db.get(auth.userId);
+
     return {
       commands: pendingCommands.map((c) => ({
         id: c._id,
         command: c.command,
+        args: c.args,
       })),
+      sync_mode: user?.sync_mode ?? "all",
+      sync_projects: user?.sync_projects ?? [],
     };
   },
 });
@@ -162,8 +167,10 @@ export const sendDaemonCommand = mutation({
       v.literal("status"),
       v.literal("restart"),
       v.literal("force_update"),
-      v.literal("version")
+      v.literal("version"),
+      v.literal("start_session")
     ),
+    args_json: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -179,6 +186,7 @@ export const sendDaemonCommand = mutation({
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: args.user_id,
       command: args.command,
+      args: args.args_json,
       created_at: Date.now(),
     });
 
@@ -1298,7 +1306,39 @@ export const getMyPendingCommands = query({
     return commands.map((c) => ({
       id: c._id,
       command: c.command,
+      args: c.args,
     }));
+  },
+});
+
+export const startSession = mutation({
+  args: {
+    agent_type: v.union(
+      v.literal("claude"),
+      v.literal("codex"),
+      v.literal("gemini")
+    ),
+    project_path: v.optional(v.string()),
+    prompt: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "start_session",
+      args: JSON.stringify({
+        agent_type: args.agent_type,
+        project_path: args.project_path,
+        prompt: args.prompt,
+      }),
+      created_at: Date.now(),
+    });
+
+    return { command_id: commandId };
   },
 });
 
