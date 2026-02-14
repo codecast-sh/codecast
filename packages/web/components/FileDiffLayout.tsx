@@ -325,12 +325,14 @@ function FileSidebar({
   onSelectFile,
   header,
   selectedFileRef,
+  commonPrefix,
 }: {
   files: DiffFile[];
   selectedFile: string | null;
   onSelectFile: (filename: string) => void;
   header?: React.ReactNode;
   selectedFileRef?: React.RefObject<HTMLButtonElement | null>;
+  commonPrefix?: string;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -395,6 +397,11 @@ function FileSidebar({
               <span className="text-sol-text-dim mx-1">/</span>
               <span className="text-sol-red font-medium">-{totalDeletions}</span>
             </div>
+            {commonPrefix && (
+              <div className="text-xs mt-1 font-mono text-sol-text-dim truncate" title={commonPrefix}>
+                {commonPrefix}/
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-0.5">
             <button
@@ -733,6 +740,7 @@ export function FileDiffLayout({
   renderFileExtra,
 }: FileDiffLayoutProps) {
   // Strip common prefix once for consistent comparisons
+  const commonPrefix = useMemo(() => findCommonPrefix(files.map(f => f.filename)), [files]);
   const strippedFiles = useMemo(() => stripCommonPrefix(files), [files]);
 
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -909,6 +917,11 @@ export function FileDiffLayout({
             </span>
             <span className="text-sol-green font-medium">+{totalAdditions}</span>
             <span className="text-sol-red font-medium">-{totalDeletions}</span>
+            {commonPrefix && (
+              <span className="font-mono text-sol-text-dim text-xs" title={commonPrefix}>
+                {commonPrefix}/
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1">
             {viewModeButton}
@@ -985,6 +998,7 @@ export function FileDiffLayout({
                 onSelectFile={handleSelectFile}
                 header={sidebarHeader}
                 selectedFileRef={selectedFileRef}
+                commonPrefix={commonPrefix}
               />
             </div>
           )}
@@ -1024,6 +1038,7 @@ export function FileDiffLayout({
               onSelectFile={handleSelectFile}
               header={sidebarHeader}
               selectedFileRef={selectedFileRef}
+              commonPrefix={commonPrefix}
             />
           </Panel>
 
