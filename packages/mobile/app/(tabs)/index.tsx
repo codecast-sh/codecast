@@ -1,7 +1,7 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, SectionList, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, SectionList, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -415,8 +415,11 @@ export default function SessionsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [showFavorites, setShowFavorites] = useState(true);
   const [showNewSession, setShowNewSession] = useState(false);
+  const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const [cursor, setCursor] = useState<string | undefined>(undefined);
+  const [allConversations, setAllConversations] = useState<Conversation[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
 
@@ -424,20 +427,60 @@ export default function SessionsScreen() {
 
   const result = useQuery(api.conversations.listConversations, {
     filter,
-    limit: 12,
+    limit: 20,
+    cursor,
     include_message_previews: false,
   });
+
+  useEffect(() => {
+    if (!result?.conversations) return;
+    if (!cursor) {
+      setAllConversations(result.conversations as Conversation[]);
+    } else {
+      setAllConversations(prev => {
+        const ids = new Set(prev.map(c => c._id));
+        const fresh = (result.conversations as Conversation[]).filter(c => !ids.has(c._id));
+        return [...prev, ...fresh];
+      });
+    }
+    setLoadingMore(false);
+  }, [result, cursor]);
+
+  useEffect(() => {
+    setCursor(undefined);
+    setAllConversations([]);
+    setProjectFilter(null);
+  }, [filter]);
 
   const searchResults = useQuery(
     api.conversations.searchConversations,
     isSearching ? { query: debouncedQuery, limit: 20 } : "skip"
   );
 
-  const favorites = useQuery(api.conversations.listFavorites);
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
 
-  const conversations = result?.conversations || [];
-  const hasFavorites = favorites && favorites.length > 0;
+  const projects = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of allConversations) {
+      const path = c.project_path;
+      if (!path) continue;
+      const name = path.split('/').pop() || path;
+      if (!map.has(path)) map.set(path, name);
+    }
+    return Array.from(map.entries()).map(([path, name]) => ({ path, name }));
+  }, [allConversations]);
+
+  const filteredConversations = useMemo(() => {
+    if (!projectFilter) return allConversations;
+    return allConversations.filter(c => c.project_path === projectFilter);
+  }, [allConversations, projectFilter]);
+
+  const handleLoadMore = useCallback(() => {
+    if (result?.nextCursor && !loadingMore) {
+      setLoadingMore(true);
+      setCursor(result.nextCursor);
+    }
+  }, [result?.nextCursor, loadingMore]);
 
   const handleSearchChange = useCallback((text: string) => {
     setSearchQuery(text);
@@ -458,10 +501,13 @@ export default function SessionsScreen() {
     } catch {}
   }, [toggleFavorite]);
 
-  const onRefresh = async () => {
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
+    setCursor(undefined);
+    setAllConversations([]);
+    setProjectFilter(null);
     setTimeout(() => setRefreshing(false), 1000);
-  };
+  }, []);
 
   const renderSearchResults = () => {
     if (!searchResults) return null;
@@ -498,6 +544,15 @@ export default function SessionsScreen() {
       </RNText>
     </RNView>
   );
+
+  const renderFooter = () => {
+    if (!loadingMore || !result?.nextCursor) return null;
+    return (
+      <RNView style={{ paddingVertical: 16, alignItems: 'center' }}>
+        <ActivityIndicator size="small" color={Theme.textMuted} />
+      </RNView>
+    );
+  };
 
   return (
     <RNView style={styles.container}>
@@ -547,8 +602,37 @@ export default function SessionsScreen() {
             </TouchableOpacity>
           </RNView>
 
+          {projects.length >= 2 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.projectFilterRow}
+              contentContainerStyle={styles.projectFilterContent}
+            >
+              <TouchableOpacity
+                style={[styles.projectChip, !projectFilter && styles.projectChipActive]}
+                onPress={() => setProjectFilter(null)}
+                activeOpacity={0.7}
+              >
+                <RNText style={[styles.projectChipText, !projectFilter && styles.projectChipTextActive]}>All</RNText>
+              </TouchableOpacity>
+              {projects.map(p => (
+                <TouchableOpacity
+                  key={p.path}
+                  style={[styles.projectChip, projectFilter === p.path && styles.projectChipActive]}
+                  onPress={() => setProjectFilter(prev => prev === p.path ? null : p.path)}
+                  activeOpacity={0.7}
+                >
+                  <RNText style={[styles.projectChipText, projectFilter === p.path && styles.projectChipTextActive]} numberOfLines={1}>
+                    {p.name}
+                  </RNText>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+
           <FlatList
-            data={conversations}
+            data={filteredConversations}
             renderItem={({ item }) => (
               <ConversationItem
                 conversation={item}
@@ -564,8 +648,11 @@ export default function SessionsScreen() {
                 tintColor={Theme.textMuted}
               />
             }
+            onEndReached={handleLoadMore}
+            onEndReachedThreshold={0.3}
             ListEmptyComponent={result === undefined ? null : renderEmpty}
-            contentContainerStyle={conversations.length === 0 ? styles.emptyList : styles.listContent}
+            ListFooterComponent={renderFooter}
+            contentContainerStyle={filteredConversations.length === 0 ? styles.emptyList : styles.listContent}
             showsVerticalScrollIndicator={false}
           />
         </>
@@ -841,6 +928,37 @@ const styles = StyleSheet.create({
   },
   emptyList: {
     flex: 1,
+  },
+  projectFilterRow: {
+    backgroundColor: Theme.bgAlt,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+  },
+  projectFilterContent: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  projectChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: Theme.bg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    maxWidth: 120,
+  },
+  projectChipActive: {
+    backgroundColor: Theme.accent,
+    borderColor: Theme.accent,
+  },
+  projectChipText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: Theme.textMuted,
+  },
+  projectChipTextActive: {
+    color: Theme.bg,
   },
   fab: {
     position: 'absolute',

@@ -9,7 +9,7 @@ import { Theme, Spacing } from '@/constants/Theme';
 
 type Notification = {
   _id: Id<"notifications">;
-  type: "mention" | "comment_reply" | "conversation_comment" | "team_invite" | "session_idle" | "permission_request" | "session_error" | "team_session_start";
+  type: "mention" | "comment_reply" | "conversation_comment" | "team_invite" | "session_idle" | "permission_request" | "session_error" | "team_session_start" | "task_completed" | "task_failed";
   message: string;
   read: boolean;
   created_at: number;
@@ -53,6 +53,8 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "permission_request": return { name: "shield", color: "#f59e0b" };
     case "session_error": return { name: "exclamation-triangle", color: Theme.red };
     case "team_session_start": return { name: "play-circle", color: Theme.blue };
+    case "task_completed": return { name: "check-circle", color: Theme.greenBright };
+    case "task_failed": return { name: "exclamation-circle", color: Theme.red };
     default: return { name: "bell", color: Theme.textMuted };
   }
 }
@@ -72,11 +74,13 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
   onPress: () => void;
   onMarkRead: () => void;
 }) {
-  const selfTypes = ["session_idle", "permission_request", "session_error"];
+  const selfTypes = ["session_idle", "permission_request", "session_error", "task_completed", "task_failed"];
   const isSelf = selfTypes.includes(notification.type);
   const actorName = isSelf
     ? (notification.type === "session_idle" ? "Claude done"
       : notification.type === "permission_request" ? "Permission needed"
+      : notification.type === "task_completed" ? "Task completed"
+      : notification.type === "task_failed" ? "Task failed"
       : "Session error")
     : (notification.actor?.name || notification.actor?.github_username || "Someone");
   const icon = notificationIcon(notification.type);
