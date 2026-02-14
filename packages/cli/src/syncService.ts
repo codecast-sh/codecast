@@ -605,4 +605,76 @@ export class SyncService {
       throw error;
     }
   }
+
+  // --- Agent Tasks ---
+
+  async getDueTasks(limit?: number): Promise<any[]> {
+    if (!this.apiToken) return [];
+    try {
+      const result = await this.client.query(
+        "agentTasks:getDueTasks" as any,
+        { api_token: this.apiToken, limit }
+      );
+      return (result as any[]) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async claimTask(taskId: string, daemonId: string): Promise<any> {
+    if (!this.apiToken) return null;
+    try {
+      return await this.client.mutation(
+        "agentTasks:claimTask" as any,
+        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  async renewTaskLease(taskId: string, daemonId: string): Promise<boolean> {
+    if (!this.apiToken) return false;
+    try {
+      const result = await this.client.mutation(
+        "agentTasks:renewLease" as any,
+        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
+      );
+      return result as boolean;
+    } catch {
+      return false;
+    }
+  }
+
+  async completeTaskRun(taskId: string, daemonId: string, summary?: string, conversationId?: string): Promise<boolean> {
+    if (!this.apiToken) return false;
+    try {
+      const result = await this.client.mutation(
+        "agentTasks:completeTaskRun" as any,
+        {
+          api_token: this.apiToken,
+          task_id: taskId,
+          daemon_id: daemonId,
+          summary,
+          conversation_id: conversationId,
+        }
+      );
+      return result as boolean;
+    } catch {
+      return false;
+    }
+  }
+
+  async failTaskRun(taskId: string, daemonId: string, error?: string): Promise<boolean> {
+    if (!this.apiToken) return false;
+    try {
+      const result = await this.client.mutation(
+        "agentTasks:failTaskRun" as any,
+        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error }
+      );
+      return result as boolean;
+    } catch {
+      return false;
+    }
+  }
 }

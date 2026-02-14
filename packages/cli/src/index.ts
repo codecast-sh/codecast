@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
@@ -237,6 +237,8 @@ interface Config {
   auto_update?: boolean;
   memory_enabled?: boolean;
   memory_version?: string;
+  task_enabled?: boolean;
+  task_version?: string;
   claude_args?: string;
   codex_args?: string;
   sync_mode?: "all" | "selected";
@@ -1217,6 +1219,44 @@ Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n
 ${MEMORY_SNIPPET_END}
 `;
 
+const TASK_SNIPPET_END = "<!-- /codecast-tasks -->";
+const TASK_SNIPPET = `
+## Async Tasks
+
+You can schedule follow-up work that runs autonomously after this session ends. Use this for anything that should happen later: checking CI, reviewing PRs, continuing long-running refactors, or responding to events.
+
+\`\`\`bash
+# Schedule tasks
+codecast task add "Check if CI is green on main" --in 30m
+codecast task add "Review open PRs and summarize findings" --every 4h
+codecast task add "Respond to new PR review comments" --on pr_comment
+codecast task add "Continue the auth refactor" --in 2h --context current --mode apply
+
+# Report completion (when running inside a task)
+codecast task complete <task_id> --summary "what was done"
+
+# Manage tasks
+codecast task ls                       # list active tasks
+codecast task ls --all                 # include completed/failed
+codecast task pause <id>               # pause a task
+codecast task run <id>                 # run immediately
+codecast task cancel <id>              # cancel a task
+codecast task log <id>                 # show last run conversation
+\`\`\`
+
+Options:
+- \`--in <duration>\`: delay before run (30m, 2h, 1d)
+- \`--every <duration>\`: recurring interval
+- \`--on <event>\`: trigger on webhook (pr_comment, pr_opened, pr_merged, push)
+- \`--context current\`: capture current session context for the follow-up
+- \`--mode apply\`: allow the task agent to make changes (default: propose = read-only)
+- \`--project <path>\`: set working directory (defaults to current)
+- \`--max-runtime <duration>\`: override max runtime (default: 10m)
+
+When a task fires, a new agent session spawns with your prompt and the task ID. The agent should call \`codecast task complete <task_id> --summary "..."\` when done to report results back.
+${TASK_SNIPPET_END}
+`;
+
 interface SnippetTarget {
   filePath: string;
   dirPath: string;
@@ -1301,8 +1341,76 @@ function installMemorySnippet(update = false): { installed: boolean; updated: bo
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
+function installTaskSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+
+  let existing = "";
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, "utf-8");
+  }
+
+  const hasTask = existing.includes("## Async Tasks") && existing.includes("codecast task");
+  if (hasTask && !update) {
+    return { installed: false, updated: false };
+  }
+
+  if (hasTask && update) {
+    const taskStart = existing.indexOf("## Async Tasks");
+    let taskEnd = existing.length;
+
+    const endMarkerIdx = existing.indexOf(TASK_SNIPPET_END, taskStart);
+    if (endMarkerIdx !== -1) {
+      taskEnd = endMarkerIdx + TASK_SNIPPET_END.length;
+      if (existing[taskEnd] === "\n") taskEnd++;
+    } else {
+      const nextSection = existing.slice(taskStart + 10).match(/\n## [A-Z]/);
+      if (nextSection && nextSection.index !== undefined) {
+        taskEnd = taskStart + 10 + nextSection.index;
+      }
+    }
+
+    const before = existing.slice(0, taskStart);
+    const after = existing.slice(taskEnd);
+    existing = before + after;
+    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + TASK_SNIPPET, { mode: 0o600 });
+    return { installed: true, updated: true };
+  }
+
+  fs.writeFileSync(filePath, existing + TASK_SNIPPET, { mode: 0o600 });
+  return { installed: true, updated: false };
+}
+
+function installTaskSnippet(update = false): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    const result = installTaskSnippetToFile(target.filePath, target.dirPath, update);
+    if (result.installed) anyInstalled = true;
+    if (result.updated) anyUpdated = true;
+  }
+
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
 async function promptMemoryEnablement(): Promise<void> {
   const config = readConfig() || {};
+
+  // Auto-update task snippet if enabled
+  if (config.task_enabled && config.task_version !== getTaskVersion()) {
+    const result = installTaskSnippet(true);
+    config.task_version = getTaskVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Task snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.task_enabled) {
+    installTaskSnippet(false);
+  }
 
   if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
     if (config.memory_enabled) {
@@ -5561,6 +5669,9 @@ program
       if (config.memory_enabled) {
         installMemorySnippet(true);
       }
+      if (config.task_enabled) {
+        installTaskSnippet(true);
+      }
 
       // Restart daemon if it was running
       if (daemonWasRunning) {
@@ -6118,6 +6229,444 @@ program
     }
   });
 
+// --- Agent Tasks ---
+
+function parseDuration(input: string): number | undefined {
+  const match = input.toLowerCase().trim().match(/^(\d+)\s*(s|sec|m|min|h|hr|hour|d|day)s?$/);
+  if (!match) return undefined;
+  const num = parseInt(match[1]);
+  const unit = match[2][0];
+  if (unit === "s") return num * 1000;
+  if (unit === "m") return num * 60 * 1000;
+  if (unit === "h") return num * 60 * 60 * 1000;
+  if (unit === "d") return num * 24 * 60 * 60 * 1000;
+  return undefined;
+}
+
+const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> = {
+  pr_comment: { event_type: "pull_request_review_comment", action: "created" },
+  pr_opened: { event_type: "pull_request", action: "opened" },
+  pr_merged: { event_type: "pull_request", action: "closed" },
+  push: { event_type: "push" },
+};
+
+const task = program
+  .command("task")
+  .description("Manage scheduled agent tasks");
+
+task
+  .command("add")
+  .description("Schedule a new agent task")
+  .argument("<prompt>", "Task instruction for the agent")
+  .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d)")
+  .option("--every <duration>", "Run on interval (e.g., 4h, 1d)")
+  .option("--on <event>", "Run on event (pr_comment, pr_opened, pr_merged, push)")
+  .option("--title <title>", "Short title (defaults to first 60 chars of prompt)")
+  .option("--context <mode>", "Context capture: 'current' to grab running session")
+  .option("--mode <mode>", "Agent mode: propose (default) or apply", "propose")
+  .option("--project <path>", "Project path for agent cwd")
+  .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
+  .option("--max-runtime <duration>", "Max runtime (default: 10m)")
+  .action(async (prompt, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    let schedule_type: "once" | "recurring" | "event" = "once";
+    let run_at: number | undefined;
+    let interval_ms: number | undefined;
+    let event_filter: { event_type: string; action?: string; repository?: string } | undefined;
+
+    if (options.every) {
+      schedule_type = "recurring";
+      interval_ms = parseDuration(options.every);
+      if (!interval_ms) {
+        console.error(`Invalid duration: ${options.every}`);
+        process.exit(1);
+      }
+      run_at = Date.now() + interval_ms;
+    } else if (options.on) {
+      schedule_type = "event";
+      const shorthand = EVENT_SHORTHANDS[options.on];
+      if (!shorthand) {
+        console.error(`Unknown event: ${options.on}. Valid: ${Object.keys(EVENT_SHORTHANDS).join(", ")}`);
+        process.exit(1);
+      }
+      event_filter = shorthand;
+    } else if (options.in) {
+      const delay = parseDuration(options.in);
+      if (!delay) {
+        console.error(`Invalid duration: ${options.in}`);
+        process.exit(1);
+      }
+      run_at = Date.now() + delay;
+    } else {
+      run_at = Date.now();
+    }
+
+    const title = options.title || prompt.slice(0, 60);
+    const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;
+
+    let context_summary: string | undefined;
+    let originating_conversation_id: string | undefined;
+    if (options.context === "current") {
+      const sessionId = findCurrentSessionFromProcess(getRealCwd());
+      if (sessionId) {
+        console.log(fmt.muted(`Capturing context from session ${sessionId.slice(0, 8)}...`));
+        // Look up conversation ID from session
+        try {
+          const resp = await fetch(`${siteUrl}/cli/sessions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_token: config.auth_token, session_id: sessionId }),
+          });
+          const data = await resp.json();
+          if (data?.conversation_id) {
+            originating_conversation_id = data.conversation_id;
+          }
+        } catch {}
+      }
+    }
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/tasks/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          title,
+          prompt,
+          context_summary,
+          originating_conversation_id,
+          project_path: options.project || getRealCwd(),
+          agent_type: options.agent,
+          schedule_type,
+          run_at,
+          interval_ms,
+          event_filter,
+          mode: options.mode,
+          max_runtime_ms: maxRuntimeMs,
+        }),
+      });
+
+      const result = await response.json();
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const taskId = result.task_id;
+      const shortId = taskId.slice(-8);
+
+      if (schedule_type === "recurring") {
+        console.log(`${c.green}+${c.reset} Task ${c.cyan}${shortId}${c.reset} scheduled every ${options.every}: ${c.bold}${title}${c.reset}`);
+      } else if (schedule_type === "event") {
+        console.log(`${c.green}+${c.reset} Task ${c.cyan}${shortId}${c.reset} on ${c.yellow}${options.on}${c.reset}: ${c.bold}${title}${c.reset}`);
+      } else if (options.in) {
+        console.log(`${c.green}+${c.reset} Task ${c.cyan}${shortId}${c.reset} in ${options.in}: ${c.bold}${title}${c.reset}`);
+      } else {
+        console.log(`${c.green}+${c.reset} Task ${c.cyan}${shortId}${c.reset} queued now: ${c.bold}${title}${c.reset}`);
+      }
+    } catch (error) {
+      console.error("Failed to create task:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+task
+  .command("ls")
+  .description("List agent tasks")
+  .option("-s, --status <status>", "Filter by status (scheduled, running, completed, failed, paused)")
+  .option("-a, --all", "Show all statuses including completed")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    try {
+      const body: any = { api_token: config.auth_token };
+      if (options.status) body.status = options.status;
+
+      const response = await fetch(`${siteUrl}/cli/tasks/list`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const tasks = await response.json();
+      if (tasks.error) {
+        console.error(`Error: ${tasks.error}`);
+        process.exit(1);
+      }
+
+      if (!Array.isArray(tasks) || tasks.length === 0) {
+        console.log(fmt.muted("No tasks found."));
+        return;
+      }
+
+      // Filter out completed/failed by default unless --all
+      const filtered = options.all || options.status
+        ? tasks
+        : tasks.filter((t: any) => !["completed", "failed"].includes(t.status));
+
+      if (filtered.length === 0) {
+        console.log(fmt.muted("No active tasks. Use --all to see completed tasks."));
+        return;
+      }
+
+      const statusColorMap: Record<string, string> = {
+        scheduled: c.yellow,
+        running: c.green,
+        paused: c.dim,
+        completed: c.cyan,
+        failed: c.red,
+      };
+
+      for (const t of filtered) {
+        const shortId = t._id.slice(-8);
+        const color = statusColorMap[t.status] || "";
+        const statusStr = `${color}${t.status.padEnd(10)}${c.reset}`;
+        const scheduleInfo = t.schedule_type === "recurring"
+          ? fmt.muted(`every ${formatMs(t.interval_ms)}`)
+          : t.schedule_type === "event"
+            ? fmt.muted(`on ${t.event_filter?.event_type || "event"}`)
+            : t.run_at
+              ? fmt.muted(formatRunAt(t.run_at))
+              : "";
+
+        console.log(`  ${c.cyan}${shortId}${c.reset}  ${statusStr}  ${t.title}  ${scheduleInfo}`);
+        if (t.last_run_summary) {
+          console.log(`           ${fmt.muted(t.last_run_summary.slice(0, 80))}`);
+        }
+      }
+
+      console.log(fmt.muted(`\n${filtered.length} task(s)`));
+    } catch (error) {
+      console.error("Failed to list tasks:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+task
+  .command("complete")
+  .description("Mark a running task as completed (called by the agent)")
+  .argument("<id>", "Task ID (full or last 8 chars)")
+  .option("--summary <text>", "Summary of what was done")
+  .action(async (id, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const taskId = await resolveTaskId(config, siteUrl, id);
+    if (!taskId) return;
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/tasks/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          task_id: taskId,
+          summary: options.summary,
+        }),
+      });
+      const result = await response.json();
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+      if (result.success) {
+        console.log(`${c.green}ok${c.reset} Task completed: ${c.cyan}${id}${c.reset}`);
+      } else {
+        console.error("Failed to complete task (may not be in running state)");
+        process.exit(1);
+      }
+    } catch (error) {
+      console.error(`Failed: ${error instanceof Error ? error.message : error}`);
+      process.exit(1);
+    }
+  });
+
+task
+  .command("cancel")
+  .description("Cancel a task")
+  .argument("<id>", "Task ID (full or last 8 chars)")
+  .action(async (id) => {
+    await taskAction("cancel", id, "Cancelled");
+  });
+
+task
+  .command("pause")
+  .description("Pause a scheduled task")
+  .argument("<id>", "Task ID (full or last 8 chars)")
+  .action(async (id) => {
+    await taskAction("pause", id, "Paused");
+  });
+
+task
+  .command("run")
+  .description("Run a task immediately")
+  .argument("<id>", "Task ID (full or last 8 chars)")
+  .action(async (id) => {
+    await taskAction("run", id, "Queued for immediate run");
+  });
+
+task
+  .command("log")
+  .description("Show last run conversation for a task")
+  .argument("<id>", "Task ID (full or last 8 chars)")
+  .action(async (id) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    const taskId = await resolveTaskId(config, siteUrl, id);
+    if (!taskId) return;
+
+    // Get task details to find last_run_conversation_id
+    const response = await fetch(`${siteUrl}/cli/tasks/list`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token }),
+    });
+    const tasks = await response.json();
+    const t = Array.isArray(tasks) ? tasks.find((x: any) => x._id === taskId) : null;
+
+    if (!t) {
+      console.error("Task not found");
+      process.exit(1);
+    }
+
+    if (!t.last_run_conversation_id) {
+      console.log(fmt.muted("No run history yet."));
+      return;
+    }
+
+    console.log(`Last run conversation: ${c.cyan}${t.last_run_conversation_id}${c.reset}`);
+    console.log(fmt.muted(`Use: codecast read ${t.last_run_conversation_id}`));
+  });
+
+task
+  .command("install")
+  .description("Install task snippet into agent config (CLAUDE.md, AGENTS.md)")
+  .option("--disable", "Remove task snippet and disable")
+  .action(async (options) => {
+    const config = readConfig() || {};
+
+    if (options.disable) {
+      config.task_enabled = false;
+      writeConfig(config);
+      console.log("Task snippet disabled. Run 'codecast task install' to re-enable.");
+      return;
+    }
+
+    const result = installTaskSnippet(true);
+    config.task_enabled = true;
+    config.task_version = getTaskVersion();
+    writeConfig(config);
+
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
+    if (result.updated) {
+      console.log(`Task snippet updated in ${targetList}`);
+    } else if (result.installed) {
+      console.log(`Task snippet installed in ${targetList}`);
+      console.log("Your agents can now schedule follow-up work autonomously.");
+    } else {
+      console.log("Task snippet is up to date.");
+    }
+  });
+
+async function taskAction(action: string, id: string, successMsg: string): Promise<void> {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.convex_url) {
+    console.error("Not authenticated. Run: codecast auth");
+    process.exit(1);
+  }
+  const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+  const taskId = await resolveTaskId(config, siteUrl, id);
+  if (!taskId) return;
+
+  try {
+    const response = await fetch(`${siteUrl}/cli/tasks/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, task_id: taskId }),
+    });
+    const result = await response.json();
+    if (result.error) {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+    if (result.success) {
+      console.log(`${c.green}ok${c.reset} ${successMsg}: ${c.cyan}${id}${c.reset}`);
+    } else {
+      console.error("Action failed (task may not be in the right state)");
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error(`Failed: ${error instanceof Error ? error.message : error}`);
+    process.exit(1);
+  }
+}
+
+async function resolveTaskId(config: any, siteUrl: string, idInput: string): Promise<string | null> {
+  // If it looks like a full Convex ID, use as-is
+  if (idInput.length > 16) return idInput;
+
+  // Otherwise, search by suffix
+  try {
+    const response = await fetch(`${siteUrl}/cli/tasks/list`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token }),
+    });
+    const tasks = await response.json();
+    if (!Array.isArray(tasks)) {
+      console.error("Failed to fetch tasks");
+      return null;
+    }
+    const matches = tasks.filter((t: any) => t._id.endsWith(idInput));
+    if (matches.length === 0) {
+      console.error(`No task found matching: ${idInput}`);
+      return null;
+    }
+    if (matches.length > 1) {
+      console.error(`Ambiguous ID, ${matches.length} matches. Use a longer suffix.`);
+      return null;
+    }
+    return matches[0]._id;
+  } catch {
+    console.error("Failed to resolve task ID");
+    return null;
+  }
+}
+
+function formatMs(ms: number): string {
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
+  if (ms < 86400000) return `${Math.round(ms / 3600000)}h`;
+  return `${Math.round(ms / 86400000)}d`;
+}
+
+function formatRunAt(timestamp: number): string {
+  const diff = timestamp - Date.now();
+  if (diff < 0) return "overdue";
+  return `in ${formatMs(diff)}`;
+}
+
 program
   .command("claude")
   .description("Launch Claude Code with managed session (enables reliable message delivery)")
@@ -6162,6 +6711,9 @@ checkForUpdates().then(async (available) => {
   if (success) {
     if (config?.memory_enabled) {
       installMemorySnippet(true);
+    }
+    if (config?.task_enabled) {
+      installTaskSnippet(true);
     }
     console.log("Update complete. Restart codecast to use the new version.\n");
   } else {

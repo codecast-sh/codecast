@@ -21,6 +21,7 @@ import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate } from "./update.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
+import { TaskScheduler } from "./taskScheduler.js";
 
 const execAsync = promisify(exec);
 
@@ -2295,13 +2296,33 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
     try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
 
     await execAsync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`);
-    await execAsync(`tmux send-keys -t '${tmuxSession}' '${resumeCmd.replace(/'/g, "'\\''")}'  Enter`);
+    // Prefix with env -u CLAUDECODE to prevent "cannot launch inside another Claude Code session" error
+    const safeResumeCmd = `env -u CLAUDECODE ${resumeCmd}`;
+    await execAsync(`tmux send-keys -t '${tmuxSession}' '${safeResumeCmd.replace(/'/g, "'\\''")}'  Enter`);
 
     log(`Auto-resumed ${agentType} session ${shortId} in tmux ${tmuxSession}, cwd=${cwd}, cmd=${resumeCmd}`);
 
     // Wait for agent to start up
-    const startupDelay = agentType === "gemini" ? 3000 : 5000;
+    const startupDelay = agentType === "gemini" ? 3000 : 8000;
     await new Promise(resolve => setTimeout(resolve, startupDelay));
+
+    // Verify the agent actually started by checking pane content for fatal startup errors
+    try {
+      const { stdout: paneContent } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
+      const fatalErrors = [
+        "cannot be launched inside another",
+        "command not found",
+        "No such file or directory",
+        "Session not found",
+        "ENOENT",
+      ];
+      const hasFatalError = fatalErrors.some(e => paneContent.includes(e));
+      if (hasFatalError) {
+        log(`Auto-resume verification failed for ${shortId}: agent did not start. Pane: ${paneContent.slice(0, 300)}`);
+        try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
+        return false;
+      }
+    } catch {}
 
     // Inject the message
     const escaped = content.replace(/'/g, "'\\''");
@@ -2358,9 +2379,18 @@ async function deliverMessage(
   if (cachedTmux) {
     try {
       await execAsync(`tmux has-session -t '${cachedTmux}' 2>/dev/null`);
-      await injectViaTmux(cachedTmux, content);
-      await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-      return true;
+      // Verify the cached session still has an active agent (not just a bash shell)
+      const { stdout: paneCheck } = await execAsync(`tmux capture-pane -p -J -t '${cachedTmux}' -S -5`);
+      const lastLine = paneCheck.trim().split("\n").pop() || "";
+      if (lastLine.match(/\$\s*$/) || lastLine.includes("command not found")) {
+        log(`Cached tmux ${cachedTmux} has dead shell, clearing cache`);
+        resumeSessionCache.delete(sessionId);
+        try { await execAsync(`tmux kill-session -t '${cachedTmux}' 2>/dev/null`); } catch {}
+      } else {
+        await injectViaTmux(cachedTmux, content);
+        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        return true;
+      }
     } catch {
       resumeSessionCache.delete(sessionId);
     }
@@ -3318,6 +3348,14 @@ async function main(): Promise<void> {
 
   // Send initial heartbeat
   sendHeartbeat().catch(() => {});
+
+  // Start task scheduler
+  const taskScheduler = new TaskScheduler({
+    syncService,
+    config,
+    log,
+  });
+  taskScheduler.start();
 
   const conversationCache = readConversationCache();
   const titleCache = readTitleCache();
