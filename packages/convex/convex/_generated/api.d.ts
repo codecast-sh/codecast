@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as agentTasks from "../agentTasks.js";
 import type * as apiTokens from "../apiTokens.js";
 import type * as auth from "../auth.js";
 import type * as bookmarks from "../bookmarks.js";
@@ -52,6 +53,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agentTasks: typeof agentTasks;
   apiTokens: typeof apiTokens;
   auth: typeof auth;
   bookmarks: typeof bookmarks;

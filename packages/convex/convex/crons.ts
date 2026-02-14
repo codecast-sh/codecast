@@ -10,5 +10,10 @@ crons.interval(
   { limit: 50 }
 );
 
+crons.interval(
+  "reclaim stale agent tasks",
+  { minutes: 5 },
+  internal.agentTasks.reclaimStaleTasks
+);
 
 export default crons;

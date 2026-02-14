@@ -120,7 +120,9 @@ export const create = mutation({
       v.literal("session_idle"),
       v.literal("permission_request"),
       v.literal("session_error"),
-      v.literal("team_session_start")
+      v.literal("team_session_start"),
+      v.literal("task_completed"),
+      v.literal("task_failed")
     ),
     actor_user_id: v.optional(v.id("users")),
     comment_id: v.optional(v.id("comments")),

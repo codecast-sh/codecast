@@ -2184,4 +2184,451 @@ http.route({
   }),
 });
 
+// --- Agent Tasks endpoints ---
+
+http.route({
+  path: "/cli/tasks/create",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runMutation(api.agentTasks.createTask, body);
+      return new Response(JSON.stringify({ task_id: result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const status = msg.includes("Unauthorized") ? 401 : 500;
+      return new Response(JSON.stringify({ error: msg }), {
+        status,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/create",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/list",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runQuery(api.agentTasks.listTasks, {
+        api_token: body.api_token,
+        status: body.status,
+      });
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/list",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/due",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runQuery(api.agentTasks.getDueTasks, {
+        api_token: body.api_token,
+        limit: body.limit,
+      });
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/due",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/claim",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runMutation(api.agentTasks.claimTask, {
+        api_token: body.api_token,
+        task_id: body.task_id,
+        daemon_id: body.daemon_id,
+      });
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/claim",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/renew-lease",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runMutation(api.agentTasks.renewLease, {
+        api_token: body.api_token,
+        task_id: body.task_id,
+        daemon_id: body.daemon_id,
+      });
+      return new Response(JSON.stringify({ success: result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/renew-lease",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/complete",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runMutation(api.agentTasks.completeTaskRun, {
+        api_token: body.api_token,
+        task_id: body.task_id,
+        ...(body.daemon_id ? { daemon_id: body.daemon_id } : {}),
+        summary: body.summary,
+        conversation_id: body.conversation_id,
+      });
+      return new Response(JSON.stringify({ success: result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/complete",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/fail",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runMutation(api.agentTasks.failTaskRun, {
+        api_token: body.api_token,
+        task_id: body.task_id,
+        daemon_id: body.daemon_id,
+        error: body.error,
+      });
+      return new Response(JSON.stringify({ success: result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/fail",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/cancel",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runMutation(api.agentTasks.cancelTask, {
+        api_token: body.api_token,
+        task_id: body.task_id,
+      });
+      return new Response(JSON.stringify({ success: result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/cancel",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/pause",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runMutation(api.agentTasks.pauseTask, {
+        api_token: body.api_token,
+        task_id: body.task_id,
+      });
+      return new Response(JSON.stringify({ success: result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/pause",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/run",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const result = await ctx.runMutation(api.agentTasks.runTaskNow, {
+        api_token: body.api_token,
+        task_id: body.task_id,
+      });
+      return new Response(JSON.stringify({ success: result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return new Response(JSON.stringify({ error: msg }), {
+        status: msg.includes("Unauthorized") ? 401 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/tasks/run",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
 export default http;

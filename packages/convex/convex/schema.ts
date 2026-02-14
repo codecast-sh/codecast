@@ -543,7 +543,9 @@ export default defineSchema({
       v.literal("session_idle"),
       v.literal("permission_request"),
       v.literal("session_error"),
-      v.literal("team_session_start")
+      v.literal("team_session_start"),
+      v.literal("task_completed"),
+      v.literal("task_failed")
     ),
     actor_user_id: v.optional(v.id("users")),
     comment_id: v.optional(v.id("comments")),
@@ -632,6 +634,54 @@ export default defineSchema({
     updated_at: v.number(),
     updated_by: v.optional(v.id("users")),
   }).index("by_key", ["key"]),
+
+  agent_tasks: defineTable({
+    user_id: v.id("users"),
+    title: v.string(),
+    prompt: v.string(),
+    context_summary: v.optional(v.string()),
+    originating_conversation_id: v.optional(v.id("conversations")),
+    project_path: v.optional(v.string()),
+    agent_type: v.optional(v.string()),
+
+    schedule_type: v.union(
+      v.literal("once"),
+      v.literal("recurring"),
+      v.literal("event")
+    ),
+    run_at: v.optional(v.number()),
+    interval_ms: v.optional(v.number()),
+    event_filter: v.optional(v.object({
+      event_type: v.string(),
+      action: v.optional(v.string()),
+      repository: v.optional(v.string()),
+    })),
+
+    mode: v.union(v.literal("propose"), v.literal("apply")),
+    max_runtime_ms: v.optional(v.number()),
+
+    status: v.union(
+      v.literal("scheduled"),
+      v.literal("running"),
+      v.literal("paused"),
+      v.literal("completed"),
+      v.literal("failed")
+    ),
+    lease_holder: v.optional(v.string()),
+    lease_expires_at: v.optional(v.number()),
+    retry_count: v.number(),
+    max_retries: v.optional(v.number()),
+
+    last_run_at: v.optional(v.number()),
+    last_run_summary: v.optional(v.string()),
+    last_run_conversation_id: v.optional(v.id("conversations")),
+    run_count: v.number(),
+    created_at: v.number(),
+  })
+    .index("by_user_status", ["user_id", "status"])
+    .index("by_user_run_at", ["user_id", "run_at"])
+    .index("by_status_run_at", ["status", "run_at"])
+    .index("by_event_filter", ["status"]),
 
   daemon_logs: defineTable({
     user_id: v.id("users"),

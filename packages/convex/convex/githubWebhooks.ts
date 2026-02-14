@@ -49,6 +49,18 @@ export const storeWebhookEvent = internalMutation({
       });
     }
 
+    // Match agent task triggers
+    let repository: string | undefined;
+    try {
+      const p = JSON.parse(args.payload);
+      repository = p.repository?.full_name;
+    } catch {}
+    void ctx.scheduler.runAfter(0, internal.agentTasks.matchTaskTriggers, {
+      event_type: args.event_type,
+      action: args.action,
+      repository,
+    });
+
     return { success: true, duplicate: false };
   },
 });
