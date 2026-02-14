@@ -53,6 +53,34 @@ async function getAuthenticatedUserIdReadOnly(
   return null;
 }
 
+async function findChildConversations(
+  ctx: { db: any },
+  messages: Array<{ message_uuid?: string }>,
+): Promise<{ children: Array<{ _id: string; title: string }>; map: Record<string, string> }> {
+  const children: Array<{ _id: string; title: string }> = [];
+  const map: Record<string, string> = {};
+  const uuids = messages
+    .map((m) => m.message_uuid)
+    .filter((u): u is string => !!u);
+  const results = await Promise.all(
+    uuids.map((uuid) =>
+      ctx.db
+        .query("conversations")
+        .withIndex("by_parent_message_uuid", (q: any) => q.eq("parent_message_uuid", uuid))
+        .first()
+    )
+  );
+  for (let i = 0; i < results.length; i++) {
+    const conv = results[i];
+    if (conv) {
+      const title = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
+      children.push({ _id: conv._id, title });
+      map[uuids[i]] = conv._id;
+    }
+  }
+  return { children, map };
+}
+
 function generateShareToken(): string {
   return crypto.randomUUID();
 }
@@ -537,25 +565,10 @@ export const getAllMessages = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || `Session ${conversation.session_id.slice(0, 8)}`;
 
-    const childConversations: Array<{ _id: string; title: string }> = [];
-    const childConversationMap: Record<string, string> = {};
-
-    if (messages.length > 0) {
-      const childConvs = await ctx.db
-        .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
-        .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
-        .take(100);
-
-      const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
-      for (const conv of childConvs) {
-        if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
-          const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
-          childConversations.push({ _id: conv._id, title: childTitle });
-          childConversationMap[conv.parent_message_uuid] = conv._id;
-        }
-      }
-    }
+    const { children: childConversations, map: childConversationMap } =
+      messages.length > 0
+        ? await findChildConversations(ctx, messages)
+        : { children: [], map: {} };
 
     let forkedFromDetails = null;
     if (conversation.forked_from) {
@@ -718,25 +731,10 @@ export const getMessagesAroundTimestamp = query({
       }
     }
 
-    const childConversations: Array<{ _id: string; title: string }> = [];
-    const childConversationMap: Record<string, string> = {};
-
-    if (messages.length > 0) {
-      const childConvs = await ctx.db
-        .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
-        .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
-        .take(100);
-
-      const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
-      for (const conv of childConvs) {
-        if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
-          const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
-          childConversations.push({ _id: conv._id, title: childTitle });
-          childConversationMap[conv.parent_message_uuid] = conv._id;
-        }
-      }
-    }
+    const { children: childConversations, map: childConversationMap } =
+      messages.length > 0
+        ? await findChildConversations(ctx, messages)
+        : { children: [], map: {} };
 
     return {
       ...conversation,
@@ -783,25 +781,10 @@ export const getNewMessages = query({
       .order("asc")
       .collect();
 
-    const childConversations: Array<{ _id: string; title: string }> = [];
-    const childConversationMap: Record<string, string> = {};
-
-    if (messages.length > 0) {
-      const childConvs = await ctx.db
-        .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
-        .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
-        .take(100);
-
-      const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
-      for (const conv of childConvs) {
-        if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
-          const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
-          childConversations.push({ _id: conv._id, title: childTitle });
-          childConversationMap[conv.parent_message_uuid] = conv._id;
-        }
-      }
-    }
+    const { children: childConversations, map: childConversationMap } =
+      messages.length > 0
+        ? await findChildConversations(ctx, messages)
+        : { children: [], map: {} };
 
     return {
       messages,
@@ -854,23 +837,10 @@ export const getConversationMessages = query({
         .collect();
     }
 
-    const childConversations: Array<{ _id: string; title: string }> = [];
-    const childConversationMap: Record<string, string> = {};
-
-    const childConvs = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", conversation.user_id))
-      .filter((q) => q.neq(q.field("parent_message_uuid"), undefined))
-      .take(100);
-
-    const messageUuids = new Set(messages.filter((m) => m.message_uuid).map((m) => m.message_uuid!));
-    for (const conv of childConvs) {
-      if (conv.parent_message_uuid && messageUuids.has(conv.parent_message_uuid)) {
-        const childTitle = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
-        childConversations.push({ _id: conv._id, title: childTitle });
-        childConversationMap[conv.parent_message_uuid] = conv._id;
-      }
-    }
+    const { children: childConversations, map: childConversationMap } =
+      messages.length > 0
+        ? await findChildConversations(ctx, messages)
+        : { children: [], map: {} };
 
     return {
       messages,
@@ -4380,4 +4350,5 @@ export const getConversationsBySessionIds = query({
     return { conversations: results };
   },
 });
+
 
