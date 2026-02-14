@@ -515,15 +515,6 @@ function ConversationMetadata({
           <span className="font-mono truncate max-w-[120px] sm:max-w-none" title={model}>{formatModel(model)}</span>
         </div>
       )}
-      {shortId && (
-        <button
-          className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0 font-mono bg-sol-bg-highlight px-1 py-0.5 rounded hover:bg-sol-border/40 transition-colors cursor-pointer"
-          title="Copy short ID"
-          onClick={() => { copyToClipboard(shortId).then(() => toast.success("ID copied")); }}
-        >
-          {shortId}
-        </button>
-      )}
       {startedAt && (
         <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
           <span className="text-sol-text-dim hidden sm:inline">&middot;</span>
@@ -2002,15 +1993,15 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group rounded-lg scroll-mt-20 p-4 ${effectivelyCollapsed ? "mb-2" : "mb-6"} relative transition-all border ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "border-2 border-sol-cyan bg-sol-cyan/20 ring-2 ring-sol-cyan/30" : "bg-sol-blue/15 border-sol-blue/40"}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
-      <div className={`absolute top-3 right-3 transition-opacity flex gap-1 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg shadow-md ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
+      <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
         {onStartShareSelection && (
           <MessageSharePopover
             messageId={messageId}
             onStartShareSelection={onStartShareSelection}
             trigger={
               <span
-                className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue cursor-pointer"
+                className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary cursor-pointer"
                 title="Share message"
                 aria-label="Share message"
               >
@@ -2023,7 +2014,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         )}
         <button
           onClick={handleCopyLink}
-          className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
+          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
           title="Copy link to message"
           aria-label="Copy link to message"
         >
@@ -2033,7 +2024,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         </button>
         <button
           onClick={handleToggleBookmark}
-          className={`p-1.5 rounded hover:bg-sol-blue/20 ${isBookmarked ? "text-amber-400" : "text-sol-blue"}`}
+          className={`p-1.5 rounded hover:bg-sol-bg-alt ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
           title={isBookmarked ? "Remove bookmark" : "Bookmark message"}
           aria-label={isBookmarked ? "Remove bookmark" : "Bookmark message"}
         >
@@ -2043,7 +2034,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         </button>
         <button
           onClick={onOpenComments}
-          className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue flex items-center gap-1"
+          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary flex items-center gap-1"
           title="Comments"
           aria-label="Comments"
         >
@@ -2068,7 +2059,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         )}
         <button
           onClick={handleCopy}
-          className="p-1.5 rounded hover:bg-sol-blue/20 text-sol-blue"
+          className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
           title="Copy message"
           aria-label="Copy message"
         >
@@ -3117,9 +3108,23 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
+  const [isFocused, setIsFocused] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
 
   const isInactive = status && status !== "active";
+  const isExpanded = isFocused || message.length > 0;
+
+  const resetTextareaHeight = () => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + "px";
+    }
+  };
+
+  useEffect(() => {
+    resetTextareaHeight();
+  }, [message]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3146,53 +3151,69 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit(e);
+    }
+  };
+
   return (
-    <div className="shrink-0 z-30 pointer-events-none">
-      <div className="h-8 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-8 relative" />
+    <div className="shrink-0 z-30 pointer-events-none sticky bottom-0">
+      <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         {isInactive && (
-          <div className="max-w-2xl mx-auto px-4 mb-2">
+          <div className="max-w-4xl mx-auto px-4 mb-2">
             <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg px-3 py-2 text-xs text-sol-text-secondary">
               This session is inactive. Sending a message will auto-resume it in a new terminal.
             </div>
           </div>
         )}
-        <form onSubmit={handleSubmit} className="max-w-2xl mx-auto px-4">
-          <div className="flex items-center gap-2 bg-sol-bg-alt border border-sol-border rounded-full px-4 py-2 shadow-lg">
-            <input
-              type="text"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              disabled={isSubmitting}
-              placeholder="Send a message to this session..."
-              className="flex-1 bg-transparent text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50"
-            />
-            <button
-              type="submit"
-              disabled={!message.trim() || isSubmitting}
-              className="px-4 py-1.5 bg-sol-blue hover:bg-sol-cyan text-white rounded-full text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {isSubmitting ? (
-                <>
+        <div className="relative">
+          {isFocused && (
+            <div className={`mx-auto px-4 mb-1 ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+              <p className="text-[11px] text-sol-text-dim text-right">
+                Shift + Enter for new line
+              </p>
+            </div>
+          )}
+          <form onSubmit={handleSubmit} className={`mx-auto px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+            <div className={`flex items-end gap-2 bg-sol-bg-alt border border-sol-border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"}`}>
+              <textarea
+                ref={textareaRef}
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
+                disabled={isSubmitting}
+                placeholder="Send a message to this session..."
+                rows={1}
+                className="flex-1 bg-transparent text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1"
+              />
+              <button
+                type="submit"
+                disabled={!message.trim() || isSubmitting}
+                className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center shrink-0 border ${!message.trim() || isSubmitting ? "border-sol-border text-sol-text-dim/40 cursor-not-allowed" : "border-sol-text-secondary text-sol-text-secondary hover:border-sol-text hover:text-sol-text"}`}
+              >
+                {isSubmitting ? (
                   <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
-                  Sending...
-                </>
-              ) : lastStatus === "delivered" ? (
-                <>
+                ) : lastStatus === "delivered" ? (
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>
-                  Sent
-                </>
-              ) : (
-                "Send"
-              )}
-            </button>
-          </div>
-        </form>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );
@@ -3623,6 +3644,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return 40;
     },
     overscan: 50,
+    paddingStart: 16,
     paddingEnd: 100,
     isScrollingResetDelay: 150,
   });
@@ -4147,7 +4169,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             >
               &larr;
             </Link>
-            <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1">{truncatedTitle}</h1>
+            <TooltipProvider delayDuration={500}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1 cursor-default">{truncatedTitle}</h1>
+                </TooltipTrigger>
+                {conversation?.messages?.[0]?.content && (
+                  <TooltipContent side="bottom" className="max-w-sm bg-white text-gray-800 border border-gray-200 shadow-lg text-xs leading-relaxed">
+                    {conversation.messages[0].content.length > 200 ? conversation.messages[0].content.slice(0, 200) + "..." : conversation.messages[0].content}
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
+
+            {isConversationLive && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex-shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Live
+              </span>
+            )}
 
             {conversation && (
               <TooltipProvider delayDuration={300}>
@@ -4176,13 +4216,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </TooltipTrigger>
                     <TooltipContent>View parent conversation</TooltipContent>
                   </Tooltip>
-                )}
-
-                {isConversationLive && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Live
-                  </span>
                 )}
 
                 {conversation.git_branch && (
@@ -4289,10 +4322,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       onClick={() => setCollapsed((c) => !c)}
                       className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${collapsed ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
                     >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                         {collapsed
-                          ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                          : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l-4 4m0 0h4m-4 0v-4m11 4l-4-4m4 4v-4m0 4h-4M15 10l4-4m0 0h-4m4 0v4M5 10l4-4m0 0v4m0-4H5" />
+                          ? <><path d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1" /></>
+                          : <><path d="M4 14h6v6M3 21l6.1-6.1M20 10h-6V4M21 3l-6.1 6.1" /></>
                         }
                       </svg>
                     </button>
@@ -4314,6 +4347,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <TooltipContent>More options</TooltipContent>
                   </Tooltip>
                   <DropdownMenuContent align="end">
+                    {conversation?.short_id && (
+                      <DropdownMenuItem onClick={() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")); }}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
+                        </svg>
+                        Copy ID ({conversation.short_id})
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem onClick={handleCopyAll}>
                       <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
