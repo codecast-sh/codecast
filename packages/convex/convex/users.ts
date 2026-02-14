@@ -128,6 +128,7 @@ export const daemonHeartbeat = mutation({
       })),
       sync_mode: user?.sync_mode ?? "all",
       sync_projects: user?.sync_projects ?? [],
+      team_id: user?.active_team_id ?? user?.team_id ?? undefined,
     };
   },
 });

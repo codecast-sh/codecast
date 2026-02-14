@@ -287,6 +287,17 @@ async function sendHeartbeat(): Promise<void> {
         }
       }
     }
+
+    if (data.team_id !== undefined) {
+      const currentConfig = readConfig();
+      if (currentConfig && currentConfig.team_id !== data.team_id) {
+        log(`Team ID updated from server: ${data.team_id}`);
+        patchConfig({ team_id: data.team_id });
+        if (activeConfig) {
+          activeConfig.team_id = data.team_id;
+        }
+      }
+    }
   } catch (err) {
     log(`Heartbeat error: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -423,10 +434,13 @@ async function executeRemoteCommand(
         }
 
         const shellCmd = [binary, ...binaryArgs].map(a => a.includes(" ") ? `'${a.replace(/'/g, "'\\''")}'` : a).join(" ");
+        const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; ${shellCmd}`;
+        const execPath = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
+        const execOpts = { timeout: 5000, env: { ...process.env, PATH: execPath } };
 
         try {
-          execSync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, { timeout: 5000 });
-          execSync(`tmux send-keys -t '${tmuxSession}' '${shellCmd.replace(/'/g, "'\\''")}' Enter`, { timeout: 5000 });
+          execSync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
+          execSync(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
           result = JSON.stringify({ tmux_session: tmuxSession, agent_type: agentType, project_path: cwd });
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
         } catch (spawnErr) {

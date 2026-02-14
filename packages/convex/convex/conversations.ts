@@ -288,7 +288,7 @@ export const createConversation = mutation({
     const startedAt = args.started_at ?? now;
 
     const user = await ctx.db.get(args.user_id);
-    let resolvedTeamId = args.team_id;
+    let resolvedTeamId = args.team_id || (user as any)?.active_team_id || (user as any)?.team_id;
     let isPrivate = true;
     let autoShared = false;
 
@@ -319,7 +319,7 @@ export const createConversation = mutation({
           autoShared = true;
         }
       }
-      // No fallback - if no directory mapping, conversation has no team_id ("Only Me")
+      // If no directory mapping matches, resolvedTeamId stays as user's active_team_id
     }
 
     if (!autoShared && user?.team_share_paths && user.team_share_paths.length > 0 && resolvedTeamId && conversationPath) {
@@ -1769,7 +1769,7 @@ export const setPrivacy = mutation({
       throw new Error("Unauthorized: can only change privacy of your own conversations");
     }
 
-    const updates: { is_private: boolean; team_id?: Id<"teams">; team_visibility?: string } = {
+    const updates: { is_private: boolean; team_id?: Id<"teams">; team_visibility?: "summary" | "full" | "private" } = {
       is_private: args.is_private,
     };
 
@@ -1935,29 +1935,29 @@ export const backfillTeamIds = internalMutation({
   handler: async (ctx, args) => {
     const batchSize = args.limit ?? 100;
 
-    // Get all users with team_id to build a lookup map
-    const usersWithTeams = await ctx.db
+    // Get all users with team_id or active_team_id to build a lookup map
+    const allUsers = await ctx.db
       .query("users")
-      .filter((q) => q.neq(q.field("team_id"), undefined))
       .collect();
 
     const userTeamMap = new Map<string, Id<"teams">>();
-    for (const user of usersWithTeams) {
-      if (user.team_id) {
-        userTeamMap.set(user._id.toString(), user.team_id);
+    for (const user of allUsers) {
+      const teamId = (user as any).active_team_id || user.team_id;
+      if (teamId) {
+        userTeamMap.set(user._id.toString(), teamId);
       }
     }
 
-    // Paginate through conversations
+    // Paginate through conversations missing team_id
     const result = await ctx.db
       .query("conversations")
       .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
 
     let updated = 0;
     for (const conv of result.page) {
+      if (conv.team_id) continue;
       const userTeamId = userTeamMap.get(conv.user_id.toString());
-      // Update if user has team_id and conversation doesn't, or they differ
-      if (userTeamId && conv.team_id?.toString() !== userTeamId.toString()) {
+      if (userTeamId) {
         await ctx.db.patch(conv._id, { team_id: userTeamId });
         updated++;
       }
@@ -2030,6 +2030,7 @@ export const diagnoseTeamIds = internalQuery({
     };
   },
 });
+
 
 export const getConversationBySessionId = query({
   args: {
