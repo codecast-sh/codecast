@@ -936,25 +936,24 @@ const styles = StyleSheet.create({
   },
   projectFilterContent: {
     paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
+    paddingVertical: 10,
     gap: 8,
   },
   projectChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
     backgroundColor: Theme.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    maxWidth: 120,
+    borderWidth: 1,
+    borderColor: Theme.border,
   },
   projectChipActive: {
     backgroundColor: Theme.accent,
     borderColor: Theme.accent,
   },
   projectChipText: {
-    fontSize: 12,
-    fontWeight: '500',
+    fontSize: 13,
+    fontWeight: '600',
     color: Theme.textMuted,
   },
   projectChipTextActive: {
