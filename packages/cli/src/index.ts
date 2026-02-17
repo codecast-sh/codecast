@@ -3325,6 +3325,75 @@ program
       }
     }
 
+    // Try short codecast ID (e.g. "jx7c6wr") - resolve via export endpoint
+    const isShortId = queryWords.length === 1 && /^[a-z0-9]{5,10}$/i.test(queryWords[0]) && !exactSessionId;
+    if (isShortId) {
+      try {
+        const exportResp = await fetch(`${siteUrl}/cli/export`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            conversation_id: queryWords[0],
+            limit: 1,
+          }),
+        });
+        if (exportResp.ok) {
+          const exportData = await exportResp.json() as {
+            error?: string;
+            conversation?: {
+              id: string;
+              title: string;
+              session_id: string;
+              agent_type: string;
+              project_path: string | null;
+            };
+          };
+          if (exportData.conversation && !exportData.error) {
+            const conv = exportData.conversation;
+            const targetAgent = options.as?.toLowerCase();
+            const sourceAgent = conv.agent_type || "claude_code";
+            const normalizedSource = sourceAgent === "claude_code" ? "claude" : sourceAgent;
+
+            if (options.dryRun) {
+              if (targetAgent && targetAgent !== normalizedSource) {
+                console.log(`Would convert ${normalizedSource} session ${conv.session_id} to ${targetAgent}`);
+              } else {
+                const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
+                const cmd = effectiveAgent === "codex"
+                  ? `codex resume ${conv.session_id}`
+                  : `claude --resume ${conv.session_id}`;
+                console.log(`Would run: ${cmd}`);
+              }
+              return;
+            }
+
+            console.log(`Opening: ${conv.title}`);
+            if (targetAgent && targetAgent !== normalizedSource) {
+              await convertAndLaunch(
+                conv.id,
+                normalizedSource,
+                targetAgent,
+                config,
+                options.claudeArgs,
+                options.claudeTail,
+                options.claudeFull,
+                false,
+                options.here ? undefined : conv.project_path,
+              );
+            } else {
+              const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
+              const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
+              launchSession(conv.session_id, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path);
+            }
+            return;
+          }
+        }
+      } catch {
+        // Fall through to search
+      }
+    }
+
     const extractGoalFromPreview = (preview: Array<{ role: string; content: string }> | undefined): string | undefined => {
       if (!preview) return undefined;
       const firstUser = preview.find((m) => m.role === "user");
