@@ -4380,33 +4380,71 @@ export const getConversationsBySessionIds = query({
 });
 
 export const listIdleSessions = query({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    window_hours: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
     const now = Date.now();
-    const ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+    const HEARTBEAT_ALIVE_MS = 90 * 1000;
+    const windowHours = args.window_hours ?? 1;
+    const WINDOW_MS = windowHours * 60 * 60 * 1000;
+    const IDLE_THRESHOLD_MS = 2 * 60 * 1000;
+    const cutoff = now - WINDOW_MS;
 
-    const recentConversations = await ctx.db
+    const conversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", userId).gt("updated_at", now - ACTIVE_WINDOW_MS)
+        q.eq("user_id", userId).gte("updated_at", cutoff)
       )
-      .order("desc")
+      .filter((q) => q.eq(q.field("status"), "active"))
       .collect();
 
-    const results = [];
-    for (const conv of recentConversations) {
-      if (conv.status !== "active") continue;
+    const managedSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
 
-      const pendingMsg = await ctx.db
+    const liveConvIds = new Set(
+      managedSessions
+        .filter((s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
+        .map((s) => s.conversation_id!.toString())
+    );
+
+    const results = [];
+    for (const conv of conversations) {
+      const daemonAlive = liveConvIds.has(conv._id.toString());
+      const recentlyUpdated = now - conv.updated_at < IDLE_THRESHOLD_MS;
+
+      if (daemonAlive && recentlyUpdated) continue;
+
+      // Dismissed and no new activity since dismiss
+      const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
+
+      const hasPending = await ctx.db
         .query("pending_messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
         .filter((q) => q.eq(q.field("status"), "pending"))
         .first();
 
-      if (pendingMsg) continue;
+      // Skip dismissed sessions unless they have a new pending message
+      if (dismissed && !hasPending) continue;
+
+      const lastMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) =>
+          q.eq("conversation_id", conv._id)
+        )
+        .order("desc")
+        .first();
+
+      const lastRoleIsAssistant = lastMsg?.role === "assistant";
+
+      if (!hasPending && !lastRoleIsAssistant) continue;
+
+      const isIdle = !daemonAlive || (!hasPending && lastRoleIsAssistant);
 
       results.push({
         _id: conv._id,
@@ -4420,11 +4458,33 @@ export const listIdleSessions = query({
         agent_type: conv.agent_type,
         message_count: conv.message_count,
         idle_summary: conv.idle_summary,
+        is_idle: isIdle,
+        has_pending: !!hasPending,
       });
     }
 
-    results.sort((a, b) => a.updated_at - b.updated_at);
+    results.sort((a, b) => {
+      if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
+      return a.is_idle
+        ? a.updated_at - b.updated_at
+        : b.updated_at - a.updated_at;
+    });
 
     return results;
+  },
+});
+
+export const dismissFromInbox = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not found");
+    await ctx.db.patch(args.conversation_id, {
+      inbox_dismissed_at: Date.now(),
+    });
   },
 });

@@ -323,6 +323,12 @@ export const createSessionNotification = mutation({
       });
     }
 
+    if (args.type === "session_idle") {
+      await ctx.scheduler.runAfter(0, internal.idleSummary.generateIdleSummary, {
+        conversation_id: args.conversation_id,
+      });
+    }
+
     return { notificationId };
   },
 });
