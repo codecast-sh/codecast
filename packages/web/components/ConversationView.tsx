@@ -33,6 +33,9 @@ import { copyToClipboard } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "./tools/MarkdownRenderer";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
+import { patch as cachePatch } from "../store/convexCache";
+import { usePendingSessionStore } from "../store/pendingSessionStore";
+import { useOptimisticMessagesStore } from "../store/optimisticMessagesStore";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -112,6 +115,7 @@ export type ConversationData = {
     share_token?: string;
     username: string;
   } | null;
+  draft_message?: string;
   compaction_count?: number;
   loaded_start_index?: number;
   fork_children?: Array<{
@@ -199,6 +203,7 @@ type ConversationViewProps = {
   isOwner?: boolean;
   onSendAndAdvance?: () => void;
   autoFocusInput?: boolean;
+  fallbackStickyContent?: string | null;
 };
 
 export interface ConversationViewHandle {
@@ -1732,18 +1737,48 @@ function isInterruptMessage(content: string): boolean {
   return trimmed === "[Request interrupted by user]" || trimmed === "[Request cancelled by user]";
 }
 
-function InterruptStatusLine({ timestamp }: { timestamp: number }) {
+function InterruptStatusLine() {
   return (
-    <div className="mb-2 flex items-center gap-3">
-      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sol-text-dim/20 to-transparent" />
-      <div className="flex items-center gap-1.5 text-sol-text-dim text-xs">
-        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-        </svg>
-        <span>Interrupted</span>
-        <span className="text-sol-text-dim/50" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-      </div>
-      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sol-text-dim/20 to-transparent" />
+    <div className="my-6 flex items-center gap-3">
+      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sky-400/40 to-transparent" />
+      <span className="text-xs text-sky-400 font-medium">user interrupted</span>
+      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sky-400/40 to-transparent" />
+    </div>
+  );
+}
+
+function isTaskNotification(content: string): boolean {
+  return content.trim().startsWith('<task-notification>');
+}
+
+function parseTaskNotification(content: string): { taskId: string; status: string; summary: string; outputFile?: string } | null {
+  const match = content.match(/<task-notification>([\s\S]*?)<\/task-notification>/);
+  if (!match) return null;
+  const inner = match[1];
+  const taskId = inner.match(/<task-id>(.*?)<\/task-id>/)?.[1] || '';
+  const status = inner.match(/<status>(.*?)<\/status>/)?.[1] || '';
+  const summary = inner.match(/<summary>(.*?)<\/summary>/)?.[1] || '';
+  const outputFile = inner.match(/<output-file>(.*?)<\/output-file>/)?.[1];
+  return { taskId, status, summary, outputFile };
+}
+
+const taskStatusConfig: Record<string, { icon: string; color: string; bg: string }> = {
+  completed: { icon: '\u2713', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
+  killed: { icon: '\u25A0', color: 'text-sol-orange', bg: 'bg-sol-orange/10 border-sol-orange/20' },
+  failed: { icon: '\u2717', color: 'text-sol-red', bg: 'bg-sol-red/10 border-sol-red/20' },
+  running: { icon: '\u25B6', color: 'text-sol-blue', bg: 'bg-sol-blue/10 border-sol-blue/20' },
+};
+
+function TaskNotificationLine({ content, timestamp }: { content: string; timestamp: number }) {
+  const parsed = parseTaskNotification(content);
+  if (!parsed) return null;
+  const cfg = taskStatusConfig[parsed.status] || taskStatusConfig.killed;
+  return (
+    <div className={`mb-2 px-3 py-2 flex items-center gap-2.5 text-xs border rounded ${cfg.bg}`}>
+      <span className={`font-mono text-sm leading-none ${cfg.color}`}>{cfg.icon}</span>
+      <span className="text-sol-text-muted">{parsed.summary}</span>
+      <span className="text-sol-text-dim font-mono text-[10px] ml-auto shrink-0">{parsed.taskId}</span>
+      <span className="text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
     </div>
   );
 }
@@ -1969,13 +2004,14 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
-  const commentCount = useQuery(api.comments.getCommentCount, {
-    message_id: messageId as Id<"messages">,
-  });
+  const isRealMessageId = messageId && !messageId.startsWith("optimistic_");
+  const commentCount = useQuery(api.comments.getCommentCount,
+    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
+  );
 
   const isBookmarked = useQuery(
     api.bookmarks.isBookmarked,
-    messageId ? { message_id: messageId as Id<"messages"> } : "skip"
+    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
@@ -2346,9 +2382,9 @@ function AssistantBlock({
   model?: string;
 }) {
   const COLLAPSED_LINES = 2;
-  const CONTENT_MAX_HEIGHT = 1800;
+  const CONTENT_MAX_HEIGHT = 300;
 
-  const [contentExpanded, setContentExpanded] = useState(false);
+  const [contentExpanded, setContentExpanded] = useState(true);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -2359,13 +2395,14 @@ function AssistantBlock({
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images && images.length > 0;
 
-  const commentCount = useQuery(api.comments.getCommentCount, {
-    message_id: messageId as Id<"messages">,
-  });
+  const isRealMessageId = messageId && !messageId.startsWith("optimistic_");
+  const commentCount = useQuery(api.comments.getCommentCount,
+    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
+  );
 
   const isBookmarked = useQuery(
     api.bookmarks.isBookmarked,
-    messageId ? { message_id: messageId as Id<"messages"> } : "skip"
+    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
@@ -2617,7 +2654,7 @@ function AssistantBlock({
                 <div
                   ref={contentRef}
                   className="relative"
-                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
+                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 2rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 2rem), transparent)' } : undefined}
                 >
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
@@ -2644,19 +2681,29 @@ function AssistantBlock({
                 </div>
               )}
             </div>
-            {!collapsed && (isOverflowing || contentExpanded) && (
-              <div className="flex items-center gap-3 mt-2">
+            {!collapsed && (isOverflowing || !contentExpanded) && (
+              <div className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => setContentExpanded(e => !e)}
-                  className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors"
+                  title={contentExpanded ? "Collapse" : "Expand"}
                 >
-                  {contentExpanded ? "Collapse" : "Expand"}
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    {contentExpanded ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                    )}
+                  </svg>
                 </button>
                 <button
                   onClick={() => setFullscreen(true)}
-                  className="text-sm font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors"
+                  title="Fullscreen"
                 >
-                  Fullscreen
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+                  </svg>
                 </button>
               </div>
             )}
@@ -3127,16 +3174,27 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
-function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean }) {
-  const [message, setMessage] = useState("");
+function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string }) {
+  const [message, setMessage] = useState(initialDraft || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const getRealId = usePendingSessionStore((s) => s.getRealId);
+  const addOptimistic = useOptimisticMessagesStore((s) => s.add);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      cachePatch("conversations", conversationId, { draft_message: message || null });
+    }, 1500);
+    return () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); };
+  }, [message, conversationId]);
 
   const isInactive = status && status !== "active";
-  const isExpanded = isFocused || message.length > 0;
+  const isExpanded = !!onSendAndAdvance || isFocused || message.length > 0;
 
   const resetTextareaHeight = () => {
     if (textareaRef.current) {
@@ -3163,12 +3221,20 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     setLastStatus(null);
 
     try {
+      const realId = getRealId(conversationId);
+      if (realId.startsWith("temp_")) {
+        throw new Error("Session is still being created, please try again in a moment");
+      }
+      const trimmed = message.trim();
       await sendMessage({
-        conversation_id: conversationId as Id<"conversations">,
-        content: message.trim(),
+        conversation_id: realId as Id<"conversations">,
+        content: trimmed,
       });
+      addOptimistic(realId, trimmed);
       setLastStatus("delivered");
       setMessage("");
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      cachePatch("conversations", conversationId, { draft_message: null });
 
       setTimeout(() => setLastStatus(null), 2000);
     } catch (error) {
@@ -3195,17 +3261,13 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     <div className="shrink-0 z-30 pointer-events-none sticky bottom-0">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
-        {isInactive && (
-          <div className="max-w-4xl mx-auto px-4 mb-2">
-            <div className="bg-sol-blue/10 border border-sol-blue/30 rounded-lg px-3 py-2 text-xs text-sol-text-secondary">
-              This session is inactive. Sending a message will auto-resume it in a new terminal.
-            </div>
-          </div>
-        )}
         <div className="relative">
           {isFocused && (
-            <div className={`mx-auto px-4 mb-1 ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
-              <p className="text-[11px] text-sol-text-dim text-right">
+            <div className={`mx-auto px-4 mb-1 flex justify-between ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+              <p className="text-[11px] text-sol-text-dim">
+                {isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
+              </p>
+              <p className="text-[11px] text-sol-text-dim">
                 Shift + Enter for new line
               </p>
             </div>
@@ -3227,7 +3289,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
               <button
                 type="submit"
                 disabled={!message.trim() || isSubmitting}
-                className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center shrink-0 border ${!message.trim() || isSubmitting ? "border-sol-border text-sol-text-dim/40 cursor-not-allowed" : "border-sol-text-secondary text-sol-text-secondary hover:border-sol-text hover:text-sol-text"}`}
+                className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center shrink-0 border ${!message.trim() || isSubmitting ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
               >
                 {isSubmitting ? (
                   <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -3253,10 +3315,11 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
+  const [isScrollable, setIsScrollable] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
   const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
@@ -3272,9 +3335,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const hasScrolledToTarget = useRef(false);
   const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
   const isPaginatingRef = useRef(false);
+  const knownItemIdsRef = useRef<Set<string>>(new Set());
+  const newItemIdsRef = useRef<Set<string>>(new Set());
   const [shareSelectionMode, setShareSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
+  const [stickyMsgVisible, setStickyMsgVisible] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
+  const [headerHeight, setHeaderHeight] = useState(32);
 
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
@@ -3371,7 +3439,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const pendingPermissions = useQuery(
     api.permissions.getPendingPermissions,
-    conversation?._id ? { conversation_id: conversation._id } : "skip"
+    conversation?._id && !conversation._id.startsWith("temp_") ? { conversation_id: conversation._id } : "skip"
   );
 
   // Merge messages, commits, and PRs into a single timeline
@@ -3395,6 +3463,47 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return true;
     });
   }, [messages, commits, pullRequests]);
+
+  const stickyUserMsgIndices = useMemo(() => {
+    const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "continue", "<task-notification>"];
+    const indices: number[] = [];
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      const msg = item.data as Message;
+      if (msg.role !== 'user' || !msg.content?.trim()) continue;
+      const t = msg.content.trim();
+      if (t.length < 4 || NOISE_PREFIXES.some(p => t.startsWith(p))) continue;
+      if (isCommandMessage(t) || isInterruptMessage(t)) continue;
+      indices.push(i);
+    }
+    return indices;
+  }, [timeline]);
+
+  const [activeStickyMsg, setActiveStickyMsg] = useState<{ index: number; content: string; id: string } | null>(null);
+
+  useEffect(() => {
+    const currentIds = new Set(timeline.map(item => {
+      if (item.type === 'message') return (item.data as Message)._id;
+      if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
+      return `pr-${(item.data as any)._id}`;
+    }));
+
+    if (knownItemIdsRef.current.size > 0 && !isPaginatingRef.current) {
+      const fresh = new Set<string>();
+      for (const id of currentIds) {
+        if (!knownItemIdsRef.current.has(id)) fresh.add(id);
+      }
+      if (fresh.size > 0 && fresh.size <= 20) {
+        newItemIdsRef.current = fresh;
+        knownItemIdsRef.current = currentIds;
+        const timer = setTimeout(() => { newItemIdsRef.current = new Set(); }, 400);
+        return () => clearTimeout(timer);
+      }
+    }
+
+    knownItemIdsRef.current = currentIds;
+  }, [timeline]);
 
   // Track if we've already scrolled for this highlight query
   const hasScrolledToHighlight = useRef(false);
@@ -3644,6 +3753,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (msg.role === "system") return 0;
         if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return 0;
         if (msg.role === "user" && msg.content && isInterruptMessage(msg.content)) return 0;
+        if (msg.role === "user" && msg.content && isTaskNotification(msg.content)) return 0;
         if (msg.role === "assistant") {
           const hasTextContent = msg.content && msg.content.trim().length > 0;
           if (!hasTextContent) return 0;
@@ -3665,6 +3775,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (msg.role === "user") {
         if (msg.content && isCommandMessage(msg.content)) return 30;
         if (msg.content && isInterruptMessage(msg.content)) return 30;
+        if (msg.content && isTaskNotification(msg.content)) return 40;
         const lines = (msg.content || "").split("\n").length;
         return Math.max(60, lines * 18 + 40);
       }
@@ -3685,6 +3796,68 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     isScrollingResetDelay: 150,
   });
 
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setHeaderHeight(el.offsetHeight));
+    setHeaderHeight(el.offsetHeight);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+
+  useEffect(() => {
+    if (stickyUserMsgIndices.length === 0) {
+      if (fallbackStickyContent) {
+        setActiveStickyMsg({ index: -1, content: fallbackStickyContent, id: '__fallback__' });
+        setStickyMsgVisible(true);
+      } else {
+        setActiveStickyMsg(null);
+        setStickyMsgVisible(false);
+      }
+      return;
+    }
+    const el = containerRef.current;
+    if (!el) return;
+    let ticking = false;
+    const check = () => {
+      ticking = false;
+      const scrollTop = el.scrollTop;
+      const virtualItems = virtualizer.getVirtualItems();
+      let bestIdx: number | null = null;
+      for (let i = stickyUserMsgIndices.length - 1; i >= 0; i--) {
+        const tlIdx = stickyUserMsgIndices[i];
+        const vItem = virtualItems.find(v => v.index === tlIdx);
+        if (vItem) {
+          if (vItem.start + vItem.size <= scrollTop + 80) {
+            bestIdx = tlIdx;
+            break;
+          }
+        } else {
+          if (tlIdx < (virtualItems[0]?.index ?? 0)) {
+            bestIdx = tlIdx;
+            break;
+          }
+        }
+      }
+      if (bestIdx !== null) {
+        const item = timeline[bestIdx];
+        const msg = item.data as Message;
+        setActiveStickyMsg({ index: bestIdx, content: msg.content!, id: msg._id });
+        setStickyMsgVisible(true);
+      } else if (fallbackStickyContent) {
+        setActiveStickyMsg({ index: -1, content: fallbackStickyContent, id: '__fallback__' });
+        setStickyMsgVisible(true);
+      } else {
+        setActiveStickyMsg(null);
+        setStickyMsgVisible(false);
+      }
+    };
+    check();
+    const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent]);
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: (messageId: string) => {
@@ -3713,6 +3886,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
       isNearBottomRef.current = isNearBottom;
 
+      setIsScrollable(scrollHeight > clientHeight + 10);
       setIsNearTop(scrollTop < 300);
 
       if (!isNearBottom) {
@@ -3844,6 +4018,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (attempt < 5 && currentHeight !== lastScrollHeight) {
           lastScrollHeight = currentHeight;
           setTimeout(() => stabilize(attempt + 1), 100);
+        } else if (sc) {
+          const canScroll = sc.scrollHeight > sc.clientHeight + 10;
+          setIsScrollable(canScroll);
+          setIsNearTop(sc.scrollTop < 300);
+          if (canScroll && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 100) {
+            setUserScrolled(false);
+          }
         }
       };
       setTimeout(() => stabilize(0), 100);
@@ -4077,7 +4258,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         }
         if (isInterruptMessage(msg.content)) {
           if (collapsed) return null;
-          return <InterruptStatusLine key={msg._id} timestamp={msg.timestamp} />;
+          return <InterruptStatusLine key={msg._id} />;
+        }
+        if (isTaskNotification(msg.content)) {
+          if (collapsed) return null;
+          return <TaskNotificationLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
         }
         // Check if previous message was a compact_boundary - if so, render as compaction summary
         const prevItem = index > 0 ? timeline[index - 1] : null;
@@ -4218,7 +4403,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
-      <header className={`border-b border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""}`}>
+      <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""}`}>
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1">
           <div className="flex items-center gap-2 min-w-0">
             <Link
@@ -4406,7 +4591,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </Tooltip>
                   <DropdownMenuContent align="end">
                     {conversation?.short_id && (
-                      <DropdownMenuItem onClick={() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")); }}>
+                      <DropdownMenuItem onClick={() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
                         </svg>
@@ -4518,6 +4703,30 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       </header>
 
+      {stickyMsgVisible && activeStickyMsg && (
+        <div
+          className="absolute left-0 right-0 z-[15] px-2 sm:px-3 md:px-4 pt-1 cursor-pointer"
+          style={{ top: headerHeight }}
+          onClick={() => {
+            if (activeStickyMsg.index >= 0) {
+              virtualizer.scrollToIndex(activeStickyMsg.index, { align: 'start' });
+            } else if (onJumpToEnd) {
+              onJumpToEnd();
+            }
+          }}
+        >
+          <div className="max-w-4xl mx-auto">
+            <div className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg">
+              <div className="flex items-center gap-2 mb-1">
+                <UserIcon />
+                <span className="text-sol-blue text-xs font-medium">{conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
+              </div>
+              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8">{activeStickyMsg.content}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {diffExpanded && conversation && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
         <GitDiffPanel
           gitDiff={conversation.git_diff}
@@ -4584,6 +4793,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               const item = timeline[virtualItem.index];
               const content = renderItem(item, virtualItem.index);
               const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
+              const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : `pr-${(item.data as any)._id}`;
+              const isNew = newItemIdsRef.current.has(itemId);
               return (
                 <div
                   key={virtualItem.key}
@@ -4598,7 +4809,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isSearchDimmed ? "opacity-25" : ""} transition-opacity`}>
+                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isSearchDimmed ? "opacity-25" : ""} ${isNew ? "animate-message-in" : ""} transition-opacity`}>
                       {content}
                     </div>
                   )}
@@ -4655,32 +4866,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {showMessageInput && conversation && (
-        <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} />
+        <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} />
       )}
 
       {timeline.length > 0 && (
-        <div className="fixed bottom-24 right-8 z-30 flex items-center gap-2.5">
+        <div className="absolute bottom-24 right-8 z-30 flex items-center gap-2.5">
           <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
                   if (hasMoreAbove && onJumpToStart) {
                     jumpDirectionRef.current = 'start';
                     onJumpToStart();
-                  } else if (embedded && containerRef.current) {
-                    let el = containerRef.current.parentElement;
-                    while (el) {
-                      const style = getComputedStyle(el);
-                      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-                        el.scrollTo({ top: 0 });
-                        break;
-                      }
-                      el = el.parentElement;
-                    }
                   } else {
                     virtualizer.scrollToIndex(0, { align: "start" });
+                    requestAnimationFrame(() => {
+                      if (containerRef.current) containerRef.current.scrollTop = 0;
+                    });
                   }
                 }}
-                className={`p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${(!isNearTop || hasMoreAbove) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                className={`p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((!isNearTop && isScrollable) || hasMoreAbove) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label="Scroll to top"
               >
                 {isLoadingOlder ? (
@@ -4694,28 +4898,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </svg>
                 )}
               </button>
-            {(userScrolled || hasMoreBelow) && (
               <button
                 onClick={() => {
                   if (hasMoreBelow && onJumpToEnd) {
                     jumpDirectionRef.current = 'end';
                     onJumpToEnd();
-                  } else if (embedded && containerRef.current) {
-                    let el = containerRef.current.parentElement;
-                    while (el) {
-                      const style = getComputedStyle(el);
-                      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-                        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-                        break;
-                      }
-                      el = el.parentElement;
-                    }
                   } else {
-                    virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
+                    virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+                    requestAnimationFrame(() => {
+                      if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight;
+                    });
                   }
                   setUserScrolled(false);
                 }}
-                className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
+                className={`p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((userScrolled && isScrollable) || hasMoreBelow) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label="Scroll to bottom"
               >
                 {isLoadingNewer ? (
@@ -4729,9 +4925,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </svg>
                 )}
               </button>
-            )}
           </div>
-          {(!isNearTop || userScrolled || hasMoreAbove || hasMoreBelow) && (
+          {(isScrollable && (!isNearTop || userScrolled) || hasMoreAbove || hasMoreBelow) && (
             <div className="w-1.5 h-16 rounded-sm relative border border-sol-border overflow-hidden">
               <div
                 ref={scrollProgressRef}

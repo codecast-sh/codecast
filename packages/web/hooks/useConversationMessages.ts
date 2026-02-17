@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { getCached, setCached } from "../store/queryCache";
+import { queryCacheKey, useCachedQuery } from "./useCachedQuery";
+import { useOptimisticMessagesStore } from "../store/optimisticMessagesStore";
+
+const EMPTY_OPTIMISTIC: never[] = [];
 
 type Message = {
   _id: string;
@@ -21,13 +26,22 @@ export function useConversationMessages(
   targetMessageId?: string,
   highlightQuery?: string
 ) {
-  const [lastTimestamp, setLastTimestamp] = useState<number | null>(null);
-  const [oldestTimestamp, setOldestTimestamp] = useState<number | null>(null);
-  const [cachedMessages, setCachedMessages] = useState<Message[]>([]);
-  const [cachedConversation, setCachedConversation] = useState<any>(null);
-  const [hasMoreAbove, setHasMoreAbove] = useState(false);
+  const initialArgs = { conversation_id: conversationId as Id<"conversations">, limit: 100 };
+  const initialCacheKey = queryCacheKey(api.conversations.getAllMessages, initialArgs);
+  const snapshot = getCached<any>(initialCacheKey);
+
+  const [lastTimestamp, setLastTimestamp] = useState<number | null>(snapshot?.last_timestamp ?? null);
+  const [oldestTimestamp, setOldestTimestamp] = useState<number | null>(snapshot?.oldest_timestamp ?? null);
+  const [cachedMessages, setCachedMessages] = useState<Message[]>(snapshot?.messages ?? []);
+  const [cachedConversation, setCachedConversation] = useState<any>(snapshot ?? null);
+  const [hasMoreAbove, setHasMoreAbove] = useState(snapshot?.has_more_above ?? false);
   const [hasMoreBelow, setHasMoreBelow] = useState(false);
-  const [loadedStartIndex, setLoadedStartIndex] = useState(0);
+  const [loadedStartIndex, setLoadedStartIndex] = useState(() => {
+    if (!snapshot) return 0;
+    const total = snapshot.message_count || snapshot.messages?.length || 0;
+    const loaded = snapshot.messages?.length || 0;
+    return Math.max(0, total - loaded);
+  });
   const [loadOlderTimestamp, setLoadOlderTimestamp] = useState<number | undefined>(undefined);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   const [isLoadingNewer, setIsLoadingNewer] = useState(false);
@@ -36,7 +50,7 @@ export function useConversationMessages(
   const [jumpMode, setJumpMode] = useState<'start' | 'end' | null>(null);
   const searchAttempts = useRef(0);
   const maxSearchAttempts = 20;
-  const initializedRef = useRef(false);
+  const initializedRef = useRef(!!snapshot);
 
   // Query for target message timestamp if we have a target
   const targetMessageTimestamp = useQuery(
@@ -80,10 +94,10 @@ export function useConversationMessages(
 
   // When there's no target, or target timestamp is still loading, use initialData
   // But don't use initialData if we have a target and are waiting for timestamp
-  const initialData = useQuery(
+  const initialData = useCachedQuery(
     api.conversations.getAllMessages,
     !hasTarget && !initializedRef.current
-      ? { conversation_id: conversationId as Id<"conversations">, limit: 100 }
+      ? initialArgs
       : "skip"
   );
 
@@ -153,13 +167,15 @@ export function useConversationMessages(
       setIsSearchingForTarget(false);
       const total = aroundData.message_count || aroundData.messages?.length || 0;
       const loaded = aroundData.messages?.length || 0;
+      let startIdx = 0;
       if (!aroundData.has_more_above) {
-        setLoadedStartIndex(0);
+        startIdx = 0;
       } else if (!aroundData.has_more_below) {
-        setLoadedStartIndex(Math.max(0, total - loaded));
+        startIdx = Math.max(0, total - loaded);
       } else {
-        setLoadedStartIndex(Math.max(0, Math.round((total - loaded) / 2)));
+        startIdx = Math.max(0, Math.round((total - loaded) / 2));
       }
+      setLoadedStartIndex(startIdx);
     }
   }, [aroundData]);
 
@@ -177,7 +193,7 @@ export function useConversationMessages(
       const loaded = initialData.messages?.length || 0;
       setLoadedStartIndex(Math.max(0, total - loaded));
     }
-  }, [initialData]);
+  }, [initialData, conversationId]);
 
   // Keep conversation metadata updated
   useEffect(() => {
@@ -286,6 +302,14 @@ export function useConversationMessages(
   // Handle new messages polling
   useEffect(() => {
     if (newMessagesResult && newMessagesResult.messages?.length > 0) {
+      // Clean up optimistic messages that now have real counterparts
+      const removeMatching = useOptimisticMessagesStore.getState().removeMatching;
+      for (const msg of newMessagesResult.messages) {
+        if (msg.role === "user" && msg.content?.trim()) {
+          removeMatching(conversationId, msg.content);
+        }
+      }
+
       setCachedMessages((prev) => {
         const existingIds = new Set(prev.map((m) => m._id));
         const uniqueNew = newMessagesResult.messages.filter(
@@ -313,7 +337,22 @@ export function useConversationMessages(
         });
       }
     }
-  }, [newMessagesResult]);
+  }, [newMessagesResult, conversationId]);
+
+  // Keep query cache up-to-date so remounts get latest data
+  useEffect(() => {
+    if (cachedConversation && cachedMessages.length > 0) {
+      setCached(initialCacheKey, {
+        ...cachedConversation,
+        messages: cachedMessages,
+        last_timestamp: lastTimestamp,
+        oldest_timestamp: oldestTimestamp,
+        has_more_above: hasMoreAbove,
+        has_more_below: hasMoreBelow,
+        message_count: cachedConversation.message_count,
+      });
+    }
+  }, [initialCacheKey, cachedConversation, cachedMessages, lastTimestamp, oldestTimestamp, hasMoreAbove, hasMoreBelow]);
 
   // Auto-search for target message if not found in initial load
   useEffect(() => {
@@ -415,10 +454,30 @@ export function useConversationMessages(
     setIsLoadingNewer(true);
   }, []);
 
+  const optimisticMsgs = useOptimisticMessagesStore(
+    (s) => s.messages[conversationId] ?? EMPTY_OPTIMISTIC
+  );
+
+  const mergedMessages = useMemo(() => {
+    if (optimisticMsgs.length === 0) return cachedMessages;
+    const existingContents = new Set(
+      cachedMessages
+        .filter((m) => m.role === "user" && m.content)
+        .map((m) => m.content!.trim())
+    );
+    const fresh = optimisticMsgs.filter(
+      (m) => !existingContents.has(m.content.trim())
+    );
+    if (fresh.length === 0) return cachedMessages;
+    return [...cachedMessages, ...fresh].sort(
+      (a, b) => a.timestamp - b.timestamp
+    );
+  }, [cachedMessages, optimisticMsgs]);
+
   const conversation = cachedConversation
     ? {
         ...cachedConversation,
-        messages: cachedMessages,
+        messages: mergedMessages,
         loaded_start_index: loadedStartIndex,
       }
     : null;

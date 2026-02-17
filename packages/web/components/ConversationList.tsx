@@ -485,11 +485,22 @@ function createConversationAriaLabel(conv: Conversation): string {
 export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [agentType, setAgentType] = useState<"claude" | "codex" | "gemini">("claude");
   const [projectPath, setProjectPath] = useState("");
-  const [prompt, setPrompt] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const startSession = useMutation(api.users.startSession);
+  const createQuickSession = useMutation(api.conversations.createQuickSession);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
   const modalRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+  const context = useNewSessionStore((s) => s.context);
+
+  useEffect(() => {
+    if (isOpen && context.projectPath) {
+      setProjectPath(context.projectPath);
+    }
+    if (isOpen && context.agentType) {
+      const mapped = context.agentType === "claude_code" ? "claude" : context.agentType === "codex" ? "codex" : "gemini";
+      setAgentType(mapped as "claude" | "codex" | "gemini");
+    }
+  }, [isOpen, context]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -512,21 +523,22 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const handleSubmit = async () => {
     setIsSubmitting(true);
     try {
-      await startSession({
-        agent_type: agentType,
+      const convexAgentType = agentType === "claude" ? "claude_code" as const : agentType === "codex" ? "codex" as const : "gemini" as const;
+      const conversationId = await createQuickSession({
+        agent_type: convexAgentType,
         project_path: projectPath || undefined,
-        prompt: prompt || undefined,
+        git_root: projectPath || undefined,
       });
-      toast.success(`Starting ${agentType} session...`);
       onClose();
-      setPrompt("");
       setProjectPath("");
+      router.push(`/conversation/${conversationId}?focus=1`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to start session");
+      toast.error(err instanceof Error ? err.message : "Failed to create session");
     } finally {
       setIsSubmitting(false);
     }
   };
+
 
   return (
     <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm">
@@ -570,6 +582,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
               onChange={(e) => setProjectPath(e.target.value)}
               placeholder="~/src/my-project"
               className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-yellow/50"
+              onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
             />
             {recentProjects && recentProjects.length > 0 && !projectPath && (
               <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -586,18 +599,6 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
               </div>
             )}
           </div>
-
-          {/* Prompt */}
-          <div>
-            <label className="block text-xs font-medium text-sol-text-muted mb-1">Initial prompt <span className="text-sol-text-dim">(optional)</span></label>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="What should the agent work on?"
-              rows={2}
-              className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-yellow/50 resize-none"
-            />
-          </div>
         </div>
 
         <div className="px-5 pb-4 flex justify-end gap-2">
@@ -612,7 +613,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
             disabled={isSubmitting}
             className="px-4 py-2 text-sm font-medium bg-sol-yellow text-sol-bg rounded-lg hover:bg-sol-yellow/90 transition-colors disabled:opacity-50"
           >
-            {isSubmitting ? "Starting..." : "Start Session"}
+            {isSubmitting ? "Creating..." : "Create Session"}
           </button>
         </div>
       </div>
@@ -845,7 +846,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
       <div className="flex flex-wrap gap-1.5 sm:gap-2 items-center pt-2">
         {filter === "my" && (
           <button
-            onClick={openNewSession}
+            onClick={() => openNewSession()}
             className="px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 hover:bg-sol-yellow/30"
           >
             <span className="flex items-center gap-1">

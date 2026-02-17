@@ -16,6 +16,7 @@ import {
   ChevronsDownUp,
   PanelLeftClose,
   PanelLeft,
+  PanelRightClose,
   LayoutList,
   SplitSquareVertical,
 } from "lucide-react";
@@ -42,6 +43,7 @@ export interface FileDiffLayoutProps {
   sidebarHeader?: React.ReactNode;
   onFileComment?: (filename: string, lineNumber?: number) => void;
   renderFileExtra?: (file: DiffFile) => React.ReactNode;
+  onCloseDiffPanel?: () => void;
 }
 
 const STORAGE_KEY = "file-diff-layout";
@@ -140,6 +142,27 @@ interface FileTreeNode {
   isDirectory: boolean;
   children: FileTreeNode[];
   file?: DiffFile;
+}
+
+function shortenPrefix(prefix: string): string {
+  if (!prefix) return prefix;
+  const parts = prefix.split("/").filter(Boolean);
+  // Detect home-dir-relative paths: /Users/x/src/project/... or /home/x/...
+  // Show from the first directory after common base dirs (Users/x, home/x, etc.)
+  const homeIdx = parts.findIndex(p => p === "Users" || p === "home");
+  if (homeIdx >= 0) {
+    // Skip Users/<name> or home/<name>, then show from next meaningful dir
+    const startAfterHome = homeIdx + 2;
+    if (startAfterHome < parts.length) {
+      return parts.slice(startAfterHome).join("/");
+    }
+  }
+  // For other absolute paths, just drop the leading slash structure
+  // and show last 3-4 meaningful segments
+  if (parts.length > 4) {
+    return parts.slice(-4).join("/");
+  }
+  return parts.join("/");
 }
 
 function findCommonPrefix(paths: string[]): string {
@@ -399,7 +422,7 @@ function FileSidebar({
             </div>
             {commonPrefix && (
               <div className="text-xs mt-1 font-mono text-sol-text-dim truncate" title={commonPrefix}>
-                {commonPrefix}/
+                {shortenPrefix(commonPrefix)}/
               </div>
             )}
           </div>
@@ -738,6 +761,7 @@ export function FileDiffLayout({
   sidebarHeader,
   onFileComment,
   renderFileExtra,
+  onCloseDiffPanel,
 }: FileDiffLayoutProps) {
   // Strip common prefix once for consistent comparisons
   const commonPrefix = useMemo(() => findCommonPrefix(files.map(f => f.filename)), [files]);
@@ -910,20 +934,20 @@ export function FileDiffLayout({
   if (viewMode === "unified") {
     return (
       <div className="h-full flex flex-col">
-        <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3 text-sm">
-            <span className="text-sol-text-muted">
+        <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center justify-between shrink-0 gap-2">
+          <div className="flex items-center gap-3 text-sm min-w-0 truncate">
+            <span className="text-sol-text-muted shrink-0">
               {files.length} {files.length === 1 ? "file" : "files"} changed
             </span>
-            <span className="text-sol-green font-medium">+{totalAdditions}</span>
-            <span className="text-sol-red font-medium">-{totalDeletions}</span>
+            <span className="text-sol-green font-medium shrink-0">+{totalAdditions}</span>
+            <span className="text-sol-red font-medium shrink-0">-{totalDeletions}</span>
             {commonPrefix && (
-              <span className="font-mono text-sol-text-dim text-xs" title={commonPrefix}>
-                {commonPrefix}/
+              <span className="font-mono text-sol-text-dim text-xs truncate" title={commonPrefix}>
+                {shortenPrefix(commonPrefix)}/
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             {viewModeButton}
             <Button
               variant="ghost"
@@ -934,6 +958,17 @@ export function FileDiffLayout({
             >
               <Keyboard className="h-4 w-4" />
             </Button>
+            {onCloseDiffPanel && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 opacity-50 hover:opacity-100"
+                onClick={onCloseDiffPanel}
+                title="Close diff panel (d)"
+              >
+                <PanelRightClose className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         </div>
         <div className="flex-1 min-h-0">
@@ -949,12 +984,12 @@ export function FileDiffLayout({
   }
 
   const headerContent = showHeader ? (
-    <div className="border-b border-sol-border px-4 py-3 bg-sol-bg flex items-center justify-between shrink-0">
-      <div>
-        {title && <h1 className="text-lg font-semibold text-sol-text">{title}</h1>}
-        {subtitle && <div className={title ? "mt-1" : ""}>{subtitle}</div>}
+    <div className="border-b border-sol-border px-4 py-3 bg-sol-bg flex items-center justify-between shrink-0 gap-2">
+      <div className="min-w-0 truncate">
+        {title && <h1 className="text-lg font-semibold text-sol-text truncate">{title}</h1>}
+        {subtitle && <div className={cn("truncate", title ? "mt-1" : "")}>{subtitle}</div>}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 shrink-0">
         {headerExtra}
         {viewModeButton}
         <Button
@@ -966,11 +1001,22 @@ export function FileDiffLayout({
         >
           <Keyboard className="h-4 w-4" />
         </Button>
+        {onCloseDiffPanel && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 opacity-50 hover:opacity-100"
+            onClick={onCloseDiffPanel}
+            title="Close diff panel (d)"
+          >
+            <PanelRightClose className="h-4 w-4" />
+          </Button>
+        )}
       </div>
     </div>
   ) : (
-    <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center justify-end shrink-0">
-      <div className="flex items-center gap-1">
+    <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center justify-end shrink-0 gap-2">
+      <div className="flex items-center gap-1 shrink-0">
         {viewModeButton}
         <Button
           variant="ghost"
@@ -981,6 +1027,17 @@ export function FileDiffLayout({
         >
           <Keyboard className="h-4 w-4" />
         </Button>
+        {onCloseDiffPanel && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 opacity-50 hover:opacity-100"
+            onClick={onCloseDiffPanel}
+            title="Close diff panel (d)"
+          >
+            <PanelRightClose className="h-4 w-4" />
+          </Button>
+        )}
       </div>
     </div>
   );

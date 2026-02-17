@@ -51,6 +51,7 @@ interface ConversationDiffLayoutProps {
   onSendAndAdvance?: () => void;
   autoFocusInput?: boolean;
   backHref?: string;
+  fallbackStickyContent?: string | null;
 }
 
 export function ConversationDiffLayout({
@@ -74,6 +75,7 @@ export function ConversationDiffLayout({
   onSendAndAdvance,
   autoFocusInput,
   backHref: backHrefProp,
+  fallbackStickyContent,
 }: ConversationDiffLayoutProps) {
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
@@ -155,11 +157,19 @@ export function ConversationDiffLayout({
     localStorage.setItem(STORAGE_KEY, JSON.stringify(newLayout));
   };
 
+  const changesOverlay = changes.length > 0 && !diffPanelOpen ? <ChangesBar changes={changes} /> : null;
+  const combinedHeaderExtra = changesOverlay ? (
+    <>
+      {headerExtra}
+      {changesOverlay}
+    </>
+  ) : headerExtra;
+
   const conversationViewProps = {
     ref: conversationRef,
     conversation,
     backHref: backHrefProp || "/dashboard",
-    headerExtra,
+    headerExtra: combinedHeaderExtra,
     commits: commits || [],
     pullRequests: pullRequests || [],
     hasMoreAbove,
@@ -177,6 +187,7 @@ export function ConversationDiffLayout({
     isOwner,
     onSendAndAdvance,
     autoFocusInput,
+    fallbackStickyContent,
   };
 
   // Mobile: tabs layout
@@ -191,6 +202,7 @@ export function ConversationDiffLayout({
             </TabsTrigger>
           </TabsList>
           <TabsContent value="conversation" className="flex-1 overflow-auto m-0">
+
             <ConversationView {...conversationViewProps} />
           </TabsContent>
           <TabsContent value="diff" className="flex-1 overflow-auto m-0">
@@ -204,7 +216,7 @@ export function ConversationDiffLayout({
   // Desktop: diff panel closed - simple layout
   if (!diffPanelOpen) {
     return (
-      <div className={`${heightClass} w-full overflow-y-auto`}>
+      <div className={`${heightClass} w-full overflow-y-auto relative`}>
         <ConversationView {...conversationViewProps} />
       </div>
     );
@@ -222,6 +234,7 @@ export function ConversationDiffLayout({
         {/* Conversation Panel */}
         <Panel id="content-panel" minSize={15}>
           <div className="h-full relative overflow-y-auto">
+
             <ConversationView {...conversationViewProps} />
           </div>
         </Panel>
@@ -430,8 +443,55 @@ function DiffPane() {
             <span className="text-xs text-sol-text-dim">{positionLabel}</span>
           </div>
         }
+        onCloseDiffPanel={() => useDiffViewerStore.getState().setDiffPanelOpen(false)}
       />
     </div>
+  );
+}
+
+function ChangesBar({ changes }: { changes: FileChange[] }) {
+  const setDiffPanelOpen = useDiffViewerStore((state) => state.setDiffPanelOpen);
+
+  const uniqueFiles = useMemo(() => {
+    const seen = new Set<string>();
+    return changes
+      .filter((c) => c.changeType !== "commit")
+      .filter((c) => {
+        if (seen.has(c.filePath)) return false;
+        seen.add(c.filePath);
+        return true;
+      });
+  }, [changes]);
+
+  if (uniqueFiles.length === 0) return null;
+
+  const displayFiles = uniqueFiles.slice(0, 5);
+  const remaining = uniqueFiles.length - displayFiles.length;
+
+  return (
+    <button
+      onClick={() => setDiffPanelOpen(true)}
+      className="absolute top-full right-0 mt-2 mr-3 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-bg-alt/80 backdrop-blur-sm border border-sol-border/40 shadow-sm hover:border-sol-border/70 hover:bg-sol-bg-alt/95 transition-all group cursor-pointer"
+    >
+      <div className="flex items-center gap-1">
+        {displayFiles.map((f) => (
+          <span
+            key={f.filePath}
+            className="w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-60"
+            style={{ backgroundColor: getFileColor(f.filePath) }}
+          />
+        ))}
+        {remaining > 0 && (
+          <span className="text-[10px] text-sol-text-dim">+{remaining}</span>
+        )}
+      </div>
+      <span className="text-[11px] text-sol-text-dim group-hover:text-sol-text-secondary transition-colors">
+        {uniqueFiles.length} file{uniqueFiles.length !== 1 ? "s" : ""} changed
+      </span>
+      <svg className="w-3 h-3 text-sol-text-dim/60 group-hover:text-sol-text-dim transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+      </svg>
+    </button>
   );
 }
 
