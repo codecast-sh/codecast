@@ -149,6 +149,8 @@ export default defineSchema({
     short_id: v.optional(v.string()),
     auto_shared: v.optional(v.boolean()),
     skip_title_generation: v.optional(v.boolean()),
+    idle_summary: v.optional(v.string()),
+    inbox_dismissed_at: v.optional(v.number()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
