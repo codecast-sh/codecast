@@ -26,6 +26,7 @@ import type * as githubApp from "../githubApp.js";
 import type * as githubWebhooks from "../githubWebhooks.js";
 import type * as health from "../health.js";
 import type * as http from "../http.js";
+import type * as idleSummary from "../idleSummary.js";
 import type * as images from "../images.js";
 import type * as managedSessions from "../managedSessions.js";
 import type * as messages from "../messages.js";
@@ -71,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   githubWebhooks: typeof githubWebhooks;
   health: typeof health;
   http: typeof http;
+  idleSummary: typeof idleSummary;
   images: typeof images;
   managedSessions: typeof managedSessions;
   messages: typeof messages;
