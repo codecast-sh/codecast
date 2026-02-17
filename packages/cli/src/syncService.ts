@@ -430,6 +430,16 @@ export class SyncService {
     }
   }
 
+  async updateSessionId(conversationId: string, sessionId: string): Promise<void> {
+    try {
+      await this.client.mutation("conversations:updateSessionId" as any, {
+        conversation_id: conversationId,
+        session_id: sessionId,
+        api_token: this.apiToken,
+      });
+    } catch {}
+  }
+
   async updateMessageStatus(params: {
     messageId: string;
     status: "pending" | "delivered" | "failed";

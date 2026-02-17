@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { Database } from "bun:sqlite";
 import { execSync, exec, spawn } from "child_process";
@@ -22,6 +23,7 @@ import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate } from "./update.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { TaskScheduler } from "./taskScheduler.js";
+import { fetchExport, generateClaudeCodeJsonl, writeClaudeCodeSession, chooseClaudeTailMessagesForTokenBudget } from "./jsonlGenerator.js";
 
 const _execAsync = promisify(exec);
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
@@ -410,6 +412,7 @@ async function executeRemoteCommand(
         const agentType: string = parsed.agent_type || "claude";
         const projectPath: string = parsed.project_path || process.env.HOME || "/tmp";
         const prompt: string | undefined = parsed.prompt;
+        const conversationId: string | undefined = parsed.conversation_id;
 
         const shortId = Math.random().toString(36).slice(2, 8);
         const tmuxSession = `cc-${agentType}-${shortId}`;
@@ -445,6 +448,10 @@ async function executeRemoteCommand(
           execSync(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
           result = JSON.stringify({ tmux_session: tmuxSession, agent_type: agentType, project_path: cwd });
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
+          if (conversationId) {
+            startedSessionTmux.set(conversationId, { tmuxSession, projectPath: cwd, startedAt: Date.now() });
+            log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
+          }
         } catch (spawnErr) {
           error = `Failed to start session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
           log(`[REMOTE] start_session error: ${error}`);
@@ -891,22 +898,39 @@ async function processSessionFile(
       const firstUserMessage = messages.find(msg => msg.role === "user");
       const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
-      conversationId = await syncService.createConversation({
-        userId,
-        teamId,
-        sessionId,
-        agentType: "claude_code",
-        projectPath: actualProjectPath,
-        slug,
-        title,
-        startedAt: firstMessageTimestamp,
-        parentMessageUuid,
-        gitInfo,
-      });
-      conversationCache[sessionId] = conversationId;
-      saveConversationCache(conversationCache);
-      log(`Created conversation ${conversationId} for session ${sessionId}`);
-      syncStats.conversationsCreated++;
+      let matchedStartedConversation: string | null = null;
+      for (const [convId, entry] of startedSessionTmux.entries()) {
+        if (entry.projectPath === actualProjectPath && Date.now() - entry.startedAt < 120_000) {
+          matchedStartedConversation = convId;
+          break;
+        }
+      }
+
+      if (matchedStartedConversation) {
+        conversationId = matchedStartedConversation;
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        syncService.updateSessionId(conversationId, sessionId).catch(() => {});
+        startedSessionTmux.delete(matchedStartedConversation);
+        log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
+      } else {
+        conversationId = await syncService.createConversation({
+          userId,
+          teamId,
+          sessionId,
+          agentType: "claude_code",
+          projectPath: actualProjectPath,
+          slug,
+          title,
+          startedAt: firstMessageTimestamp,
+          parentMessageUuid,
+          gitInfo,
+        });
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        log(`Created conversation ${conversationId} for session ${sessionId}`);
+        syncStats.conversationsCreated++;
+      }
 
       if ((global as any).activeSessions) {
         (global as any).activeSessions.set(conversationId, {
@@ -1046,6 +1070,12 @@ async function processSessionFile(
     log(`Synced ${messages.length} messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
+    tryRegisterSessionProcess(sessionId, "claude");
+
+    const lastMessage = messages[messages.length - 1];
+    const wasInterrupted = lastMessage?.role === "user" &&
+      (lastMessage.content?.trim() === "[Request interrupted by user]" ||
+       lastMessage.content?.trim() === "[Request cancelled by user]");
 
     const lastAssistantMessage = messages.filter(m => m.role === "assistant").pop();
     if (lastAssistantMessage && conversationId) {
@@ -1128,29 +1158,34 @@ async function processSessionFile(
         const existingTimer = idleTimers.get(sessionId);
         if (existingTimer) clearTimeout(existingTimer);
 
-        const capturedFilePath = filePath;
-        const capturedSize = stats.size;
-
-        if (capturedSize === lastIdleNotifiedSize.get(sessionId)) {
-          // Already notified for this state, skip
+        if (wasInterrupted) {
+          idleTimers.delete(sessionId);
+          lastIdleNotifiedSize.set(sessionId, stats.size);
         } else {
-          idleTimers.set(sessionId, setTimeout(() => {
-            idleTimers.delete(sessionId);
-            try {
-              const currentStats = fs.statSync(capturedFilePath);
-              if (currentStats.size !== capturedSize) return;
-            } catch { return; }
+          const capturedFilePath = filePath;
+          const capturedSize = stats.size;
 
-            lastIdleNotifiedSize.set(sessionId, capturedSize);
-            const preview = truncateForNotification(lastAssistantMessage.content);
-            syncService.createSessionNotification({
-              conversation_id: conversationId,
-              type: "session_idle",
-              title: "Claude done",
-              message: preview,
-            }).catch(() => {});
-            log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
-          }, IDLE_TIMEOUT_MS));
+          if (capturedSize === lastIdleNotifiedSize.get(sessionId)) {
+            // Already notified for this state, skip
+          } else {
+            idleTimers.set(sessionId, setTimeout(() => {
+              idleTimers.delete(sessionId);
+              try {
+                const currentStats = fs.statSync(capturedFilePath);
+                if (currentStats.size !== capturedSize) return;
+              } catch { return; }
+
+              lastIdleNotifiedSize.set(sessionId, capturedSize);
+              const preview = truncateForNotification(lastAssistantMessage.content);
+              syncService.createSessionNotification({
+                conversation_id: conversationId,
+                type: "session_idle",
+                title: "Claude done",
+                message: preview,
+              }).catch(() => {});
+              log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
+            }, IDLE_TIMEOUT_MS));
+          }
         }
       }
     } else if (conversationId) {
@@ -1730,6 +1765,7 @@ async function processCodexSession(
     log(`Synced ${messages.length} Codex messages for session ${sessionId}`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
+    tryRegisterSessionProcess(sessionId, "codex");
 
     updateStateCallback();
   } catch (err) {
@@ -1897,6 +1933,7 @@ async function processGeminiSession(
     log(`Synced ${newMessages.length} Gemini messages for session ${sessionId}`);
     syncStats.messagesSynced += newMessages.length;
     syncStats.sessionsActive.add(sessionId);
+    tryRegisterSessionProcess(sessionId, "gemini");
 
     updateStateCallback();
   } catch (err) {
@@ -1944,6 +1981,27 @@ function buildReverseConversationCache(cache: ConversationCache): Record<string,
     reverse[convId] = sessionId;
   }
   return reverse;
+}
+
+function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "codex" | "gemini"): void {
+  try {
+    const registryDir = path.join(CONFIG_DIR, "session-registry");
+    const registryFile = path.join(registryDir, `${sessionId}.json`);
+
+    if (fs.existsSync(registryFile)) {
+      const stat = fs.statSync(registryFile);
+      if (Date.now() - stat.mtimeMs < 300_000) return;
+    }
+
+    findSessionProcess(sessionId, agentType).then((result) => {
+      if (!result) return;
+      try {
+        fs.mkdirSync(registryDir, { recursive: true });
+        fs.writeFileSync(registryFile, JSON.stringify({ pid: result.pid, tty: result.tty, ts: Math.floor(Date.now() / 1000) }));
+        log(`Opportunistically registered session ${sessionId.slice(0, 8)}: pid=${result.pid}, tty=${result.tty}`);
+      } catch {}
+    }).catch(() => {});
+  } catch {}
 }
 
 async function findSessionProcess(sessionId: string, agentType: "claude" | "codex" | "gemini" = "claude"): Promise<ClaudeSessionInfo | null> {
@@ -2034,7 +2092,7 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
       if (recentlyModified) {
         // Determine the project directory from the JSONL content
         const jsonlContent = fs.readFileSync(jsonlPath, "utf-8").slice(0, 5000);
-        const projectCwd = extractCwd(jsonlContent);
+        const projectCwd = extractCwd(jsonlContent) || (agentType === "codex" ? extractCodexCwd(jsonlContent) : null);
 
         if (projectCwd) {
           try {
@@ -2238,6 +2296,9 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
 
 const resumeSessionCache = new Map<string, string>();
 
+const startedSessionTmux = new Map<string, { tmuxSession: string; projectPath: string; startedAt: number }>();
+const STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
+
 interface CachedProcessInfo {
   pid: number;
   tty: string;
@@ -2287,7 +2348,7 @@ function slugify(text: string, maxLen = 30): string {
     .replace(/-+$/, "");
 }
 
-async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache): Promise<boolean> {
+async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, nonInteractive = false): Promise<boolean> {
   const sessionFile = findSessionFile(sessionId);
   if (!sessionFile) {
     log(`Cannot auto-resume: session file not found for ${sessionId.slice(0, 8)}`);
@@ -2333,6 +2394,17 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
     try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
 
     await execAsync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`);
+
+    // For non-interactive mode (materialized sessions), use -p flag to process message and exit
+    if (nonInteractive && agentType === "claude") {
+      const tmpFile = path.join(os.tmpdir(), `codecast-msg-${shortId}.txt`);
+      fs.writeFileSync(tmpFile, content);
+      const nonInteractiveCmd = `env -u CLAUDECODE ${resumeCmd} -p "$(cat '${tmpFile}')" --output-format stream-json --verbose; rm -f '${tmpFile}'`;
+      await execAsync(`tmux send-keys -t '${tmuxSession}' '${nonInteractiveCmd.replace(/'/g, "'\\''")}'  Enter`);
+      log(`Auto-resumed ${agentType} session ${shortId} in tmux ${tmuxSession} (non-interactive), cwd=${cwd}`);
+      return true;
+    }
+
     // Prefix with env -u CLAUDECODE to prevent "cannot launch inside another Claude Code session" error
     const safeResumeCmd = `env -u CLAUDECODE ${resumeCmd}`;
     await execAsync(`tmux send-keys -t '${tmuxSession}' '${safeResumeCmd.replace(/'/g, "'\\''")}'  Enter`);
@@ -2376,6 +2448,71 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
 }
 
+const materializeFailures = new Map<string, number>();
+const materializeInFlight = new Map<string, Promise<string | null>>();
+const materializedSessions = new Set<string>();
+const MATERIALIZE_COOLDOWN_MS = 5 * 60 * 1000;
+
+async function materializeSession(
+  conversationId: string,
+  conversationCache: ConversationCache,
+  titleCache: TitleCache,
+  syncService?: SyncService
+): Promise<string | null> {
+  const existing = materializeInFlight.get(conversationId);
+  if (existing) return existing;
+
+  const lastFail = materializeFailures.get(conversationId);
+  if (lastFail && Date.now() - lastFail < MATERIALIZE_COOLDOWN_MS) {
+    return null;
+  }
+
+  const config = readConfig();
+  if (!config?.convex_url || !config?.auth_token) {
+    log(`Cannot materialize session: missing convex_url or auth_token`);
+    return null;
+  }
+
+  const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+  const promise = (async (): Promise<string | null> => {
+    try {
+      log(`Materializing session for conversation ${conversationId.slice(0, 12)}...`);
+      const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
+
+      const TOKEN_BUDGET = 100_000;
+      const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
+      const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages });
+      const projectPath = exportData.conversation.project_path || undefined;
+      writeClaudeCodeSession(jsonl, sessionId, projectPath);
+
+      conversationCache[sessionId] = conversationId;
+      saveConversationCache(conversationCache);
+      materializedSessions.add(sessionId);
+      if (exportData.conversation.title) {
+        titleCache[sessionId] = exportData.conversation.title;
+        saveTitleCache(titleCache);
+      }
+
+      if (syncService) {
+        syncService.updateSessionId(conversationId, sessionId).catch(() => {});
+      }
+
+      log(`Materialized session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} (${exportData.messages.length} messages, tail=${tailMessages})`);
+      return sessionId;
+    } catch (err) {
+      log(`Failed to materialize session for ${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+      materializeFailures.set(conversationId, Date.now());
+      return null;
+    } finally {
+      materializeInFlight.delete(conversationId);
+    }
+  })();
+
+  materializeInFlight.set(conversationId, promise);
+  return promise;
+}
+
 async function deliverMessage(
   conversationId: string,
   content: string,
@@ -2385,11 +2522,36 @@ async function deliverMessage(
   titleCache: TitleCache
 ): Promise<boolean> {
   const reverseCache = buildReverseConversationCache(conversationCache);
-  const sessionId = reverseCache[conversationId];
+  let sessionId = reverseCache[conversationId];
 
   if (!sessionId) {
-    log(`No session_id found for conversation ${conversationId}`);
-    return false;
+    const started = startedSessionTmux.get(conversationId);
+    if (started && Date.now() - started.startedAt < STARTED_SESSION_TTL_MS) {
+      try {
+        await execAsync(`tmux has-session -t '${started.tmuxSession}' 2>/dev/null`);
+        const elapsed = Date.now() - started.startedAt;
+        if (elapsed < 10000) {
+          log(`Waiting ${10000 - elapsed}ms for Claude to initialize in ${started.tmuxSession}`);
+          await new Promise(resolve => setTimeout(resolve, 10000 - elapsed));
+        }
+        await injectViaTmux(started.tmuxSession + ":0.0", content);
+        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        log(`Delivered message to started session tmux ${started.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+        return true;
+      } catch (err) {
+        log(`Started session tmux ${started.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
+        startedSessionTmux.delete(conversationId);
+      }
+    } else if (started) {
+      startedSessionTmux.delete(conversationId);
+    }
+
+    log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
+    sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
+    if (!sessionId) {
+      log(`Cannot deliver: no local session and materialization failed for ${conversationId}`);
+      return false;
+    }
   }
 
   // Determine session type for process discovery and auto-resume
@@ -2433,8 +2595,10 @@ async function deliverMessage(
     }
   }
 
-  // Find the running process
-  const proc = await findSessionProcess(sessionId, detectedType);
+  // Skip process matching for materialized sessions - they have no running process
+  // and CWD+timing heuristics can false-positive match other sessions
+  const isMaterialized = materializedSessions.has(sessionId);
+  const proc = isMaterialized ? null : await findSessionProcess(sessionId, detectedType);
 
   if (proc) {
     // Try tmux first (most reliable)
@@ -2466,8 +2630,9 @@ async function deliverMessage(
 
   // Last resort: auto-resume in a new tmux session
   log(`Attempting auto-resume for session ${sessionId.slice(0, 8)}`);
-  const resumed = await autoResumeSession(sessionId, content, titleCache);
+  const resumed = await autoResumeSession(sessionId, content, titleCache, isMaterialized);
   if (resumed) {
+    materializedSessions.delete(sessionId);
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     return true;
   }
@@ -3122,6 +3287,13 @@ function startWatchdog(
 
     // Validate process cache
     validateProcessCache();
+
+    // Prune stale started session entries
+    for (const [convId, entry] of startedSessionTmux.entries()) {
+      if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
+        startedSessionTmux.delete(convId);
+      }
+    }
 
     // Check for watcher staleness - only log once per hour to avoid noise
     const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);

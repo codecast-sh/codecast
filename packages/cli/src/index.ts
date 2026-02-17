@@ -520,6 +520,86 @@ function installSlashCommand(): void {
   }
 }
 
+const SESSION_REGISTER_HOOK = `#!/bin/bash
+# Registers session-to-PID/TTY mapping for codecast daemon process discovery
+set -uo pipefail
+
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id',''))" 2>/dev/null)
+[ -z "$SESSION_ID" ] && exit 0
+
+# Walk up to find the claude process PID
+CLAUDE_PID=""
+CHECK_PID=$PPID
+for _ in 1 2 3 4; do
+  [ -z "$CHECK_PID" ] || [ "$CHECK_PID" = "1" ] && break
+  CMD=$(ps -o comm= -p "$CHECK_PID" 2>/dev/null)
+  if echo "$CMD" | grep -qiE 'claude|2\\.1\\.' 2>/dev/null; then
+    CLAUDE_PID=$CHECK_PID
+    break
+  fi
+  CHECK_PID=$(ps -o ppid= -p "$CHECK_PID" 2>/dev/null | tr -d ' ')
+done
+
+[ -z "$CLAUDE_PID" ] && exit 0
+
+TTY=$(ps -o tty= -p "$CLAUDE_PID" 2>/dev/null | tr -d ' ')
+[ -z "$TTY" ] || [ "$TTY" = "??" ] && exit 0
+
+REGISTRY_DIR="$HOME/.codecast/session-registry"
+mkdir -p "$REGISTRY_DIR"
+echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s)}" > "$REGISTRY_DIR/$SESSION_ID.json"
+exit 0
+`;
+
+function installSessionRegisterHook(): void {
+  const home = process.env.HOME || "";
+  const hooksDir = path.join(home, ".claude", "hooks");
+  const hookFile = path.join(hooksDir, "session-register.sh");
+  const settingsFile = path.join(home, ".claude", "settings.json");
+
+  try {
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.writeFileSync(hookFile, SESSION_REGISTER_HOOK, { mode: 0o755 });
+
+    let settings: any = {};
+    if (fs.existsSync(settingsFile)) {
+      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+    }
+
+    if (!settings.hooks) settings.hooks = {};
+
+    const hookEntry = {
+      type: "command",
+      command: hookFile,
+      timeout: 5,
+    };
+
+    for (const event of ["SessionStart", "UserPromptSubmit"] as const) {
+      if (!settings.hooks[event]) settings.hooks[event] = [];
+
+      const hookArray = settings.hooks[event] as any[];
+      const alreadyPresent = hookArray.some((matcher: any) => {
+        const hooks = matcher.hooks || [];
+        return hooks.some((h: any) => h.command?.includes("session-register.sh"));
+      });
+
+      if (!alreadyPresent) {
+        if (hookArray.length > 0 && hookArray[0].matcher === "") {
+          hookArray[0].hooks = hookArray[0].hooks || [];
+          hookArray[0].hooks.push(hookEntry);
+        } else {
+          hookArray.unshift({ matcher: "", hooks: [hookEntry] });
+        }
+      }
+    }
+
+    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+  } catch {
+    // Ignore errors - hook is optional enhancement
+  }
+}
+
 function showWelcome(): void {
   console.log(`${c.dim}${"─".repeat(50)}${c.reset}`);
   console.log(`\n  ${c.bold}Welcome to codecast${c.reset} ${fmt.muted("— sync & search your agent sessions")}\n`);
@@ -950,6 +1030,7 @@ async function runAuth(): Promise<void> {
   }
 
   installSlashCommand();
+  installSessionRegisterHook();
 
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
@@ -5741,6 +5822,7 @@ program
       if (config.task_enabled) {
         installTaskSnippet(true);
       }
+      installSessionRegisterHook();
 
       // Restart daemon if it was running
       if (daemonWasRunning) {
@@ -6784,6 +6866,7 @@ checkForUpdates().then(async (available) => {
     if (config?.task_enabled) {
       installTaskSnippet(true);
     }
+    installSessionRegisterHook();
     console.log("Update complete. Restart codecast to use the new version.\n");
   } else {
     showUpdateNotice(available);
