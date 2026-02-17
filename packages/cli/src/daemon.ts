@@ -23,7 +23,9 @@ import { getVersion, performUpdate } from "./update.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { TaskScheduler } from "./taskScheduler.js";
 
-const execAsync = promisify(exec);
+const _execAsync = promisify(exec);
+const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
+const execAsync: typeof _execAsync = (cmd, opts?) => _execAsync(cmd, { ...opts as any, env: { ...process.env, PATH: ENRICHED_PATH, ...(opts as any)?.env } });
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -1955,6 +1957,27 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
   const binaryPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "claude";
 
   try {
+    // Strategy 0: Check session registry (written by SessionStart hook)
+    try {
+      const registryFile = path.join(CONFIG_DIR, "session-registry", `${sessionId}.json`);
+      if (fs.existsSync(registryFile)) {
+        const reg = JSON.parse(fs.readFileSync(registryFile, "utf-8"));
+        const pid = reg.pid;
+        const tty = normalizeTty(reg.tty);
+        // Verify process is still alive and is a claude-like process
+        const { stdout: checkPs } = await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`);
+        if (checkPs.trim()) {
+          const result = { pid, tty, sessionId };
+          cacheSessionProcess(sessionId, result);
+          log(`Found session ${sessionId.slice(0, 8)} via registry: pid=${pid}, tty=${tty}`);
+          return result;
+        } else {
+          // Process is dead, clean up stale registry
+          try { fs.unlinkSync(registryFile); } catch {}
+        }
+      }
+    } catch {}
+
     // Strategy A: grep for --resume <sessionId> (exact match for resumed sessions)
     try {
       const { stdout } = await execAsync(`ps aux | grep -E '${binaryPattern}.*--resume' | grep -v grep`);
