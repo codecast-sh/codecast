@@ -135,15 +135,27 @@ export const addMessage = mutation({
       timestamp: msgTimestamp,
     });
     const newMessageCount = conversation.message_count + 1;
-    await ctx.db.patch(args.conversation_id, {
+    const convPatch: Record<string, unknown> = {
       message_count: newMessageCount,
       updated_at: msgTimestamp,
-    });
+    };
+    if (args.role === "user") {
+      convPatch.last_user_message_at = msgTimestamp;
+    }
+    await ctx.db.patch(args.conversation_id, convPatch);
 
+    const userPatch: Record<string, unknown> = {};
     if (args.api_token) {
-      await ctx.db.patch(conversation.user_id, {
-        daemon_last_seen: Date.now(),
-      });
+      userPatch.daemon_last_seen = Date.now();
+    }
+    if (args.role === "user") {
+      const user = await ctx.db.get(conversation.user_id);
+      if (!user?.last_message_sent_at || msgTimestamp > user.last_message_sent_at) {
+        userPatch.last_message_sent_at = msgTimestamp;
+      }
+    }
+    if (Object.keys(userPatch).length > 0) {
+      await ctx.db.patch(conversation.user_id, userPatch);
     }
 
     if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount)) {
@@ -261,15 +273,38 @@ export const addMessages = mutation({
 
     if (insertedCount > 0) {
       const newMessageCount = conversation.message_count + insertedCount;
-      await ctx.db.patch(args.conversation_id, {
+      const convPatch: Record<string, unknown> = {
         message_count: newMessageCount,
         updated_at: maxTimestamp,
-      });
+      };
+      const hasUserMsg = args.messages.some((m) => m.role === "user");
+      if (hasUserMsg) {
+        const lastUserTs = args.messages
+          .filter((m) => m.role === "user")
+          .reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
+        if (lastUserTs > 0) {
+          convPatch.last_user_message_at = lastUserTs;
+        }
+      }
+      await ctx.db.patch(args.conversation_id, convPatch);
 
+      const userPatch: Record<string, unknown> = {};
       if (args.api_token) {
-        await ctx.db.patch(conversation.user_id, {
-          daemon_last_seen: Date.now(),
-        });
+        userPatch.daemon_last_seen = Date.now();
+      }
+      if (hasUserMsg) {
+        const lastUserTs = args.messages
+          .filter((m) => m.role === "user")
+          .reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
+        if (lastUserTs > 0) {
+          const user = await ctx.db.get(conversation.user_id);
+          if (!user?.last_message_sent_at || lastUserTs > user.last_message_sent_at) {
+            userPatch.last_message_sent_at = lastUserTs;
+          }
+        }
+      }
+      if (Object.keys(userPatch).length > 0) {
+        await ctx.db.patch(conversation.user_id, userPatch);
       }
 
       if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount) && !shouldGenerateTitle(conversation.message_count)) {
@@ -469,6 +504,40 @@ export const getSharedMessage = query({
       user: user ? { name: user.name, image: user.image } : null,
       note: share.note,
       sharedAt: share.created_at,
+    };
+  },
+});
+
+export const getSharedMessageMeta = query({
+  args: {
+    share_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const share = await ctx.db
+      .query("message_shares")
+      .withIndex("by_share_token", (q) => q.eq("share_token", args.share_token))
+      .first();
+
+    if (!share) return null;
+
+    const message = await ctx.db.get(share.message_id);
+    if (!message) return null;
+
+    const conversation = await ctx.db.get(message.conversation_id);
+    if (!conversation) return null;
+
+    const user = await ctx.db.get(conversation.user_id);
+
+    const raw = message.content?.trim() || "";
+    const plain = raw.replace(/[*_`#~\[\]()>]/g, "").replace(/\n{2,}/g, " ").replace(/\n/g, " ");
+    const description = plain.length > 200 ? plain.slice(0, 200) + "..." : plain;
+
+    return {
+      title: conversation.title || null,
+      description,
+      role: message.role,
+      author: user?.name || null,
+      note: share.note || null,
     };
   },
 });
