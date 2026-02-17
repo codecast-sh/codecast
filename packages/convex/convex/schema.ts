@@ -15,6 +15,7 @@ export default defineSchema({
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
     active_team_id: v.optional(v.id("teams")),
     daemon_last_seen: v.optional(v.number()),
+    last_message_sent_at: v.optional(v.number()),
     theme: v.optional(v.union(v.literal("dark"), v.literal("light"))),
     github_id: v.optional(v.string()),
     github_username: v.optional(v.string()),
@@ -136,6 +137,7 @@ export default defineSchema({
     status: v.union(v.literal("active"), v.literal("completed")),
     share_token: v.optional(v.string()),
     parent_message_uuid: v.optional(v.string()),
+    parent_conversation_id: v.optional(v.id("conversations")),
     git_commit_hash: v.optional(v.string()),
     git_branch: v.optional(v.string()),
     git_remote_url: v.optional(v.string()),
@@ -151,6 +153,8 @@ export default defineSchema({
     skip_title_generation: v.optional(v.boolean()),
     idle_summary: v.optional(v.string()),
     inbox_dismissed_at: v.optional(v.number()),
+    draft_message: v.optional(v.string()),
+    last_user_message_at: v.optional(v.number()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -169,7 +173,8 @@ export default defineSchema({
     .index("by_short_id", ["short_id"])
     .index("by_forked_from", ["forked_from"])
     .index("by_git_branch", ["git_branch"])
-    .index("by_parent_message_uuid", ["parent_message_uuid"]),
+    .index("by_parent_message_uuid", ["parent_message_uuid"])
+    .index("by_parent_conversation_id", ["parent_conversation_id"]),
 
   public_conversations: defineTable({
     conversation_id: v.id("conversations"),
