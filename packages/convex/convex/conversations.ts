@@ -55,29 +55,32 @@ async function getAuthenticatedUserIdReadOnly(
 
 async function findChildConversations(
   ctx: { db: any },
+  conversationId: Id<"conversations">,
   messages: Array<{ message_uuid?: string }>,
 ): Promise<{ children: Array<{ _id: string; title: string }>; map: Record<string, string> }> {
-  const children: Array<{ _id: string; title: string }> = [];
   const map: Record<string, string> = {};
-  const uuids = messages
-    .map((m) => m.message_uuid)
-    .filter((u): u is string => !!u);
-  const results = await Promise.all(
-    uuids.map((uuid) =>
-      ctx.db
-        .query("conversations")
-        .withIndex("by_parent_message_uuid", (q: any) => q.eq("parent_message_uuid", uuid))
-        .first()
-    )
+
+  const allChildren = await ctx.db
+    .query("conversations")
+    .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conversationId))
+    .collect();
+
+  const children = allChildren.map((conv: any) => ({
+    _id: conv._id,
+    title: conv.title || `Session ${conv.session_id.slice(0, 8)}`,
+  }));
+
+  const childByParentUuid = new Map<string, string>(
+    allChildren
+      .filter((c: any) => c.parent_message_uuid)
+      .map((c: any) => [c.parent_message_uuid as string, c._id as string])
   );
-  for (let i = 0; i < results.length; i++) {
-    const conv = results[i];
-    if (conv) {
-      const title = conv.title || `Session ${conv.session_id.slice(0, 8)}`;
-      children.push({ _id: conv._id, title });
-      map[uuids[i]] = conv._id;
+  for (const msg of messages) {
+    if (msg.message_uuid && childByParentUuid.has(msg.message_uuid)) {
+      map[msg.message_uuid] = childByParentUuid.get(msg.message_uuid)!;
     }
   }
+
   return { children, map };
 }
 
@@ -332,6 +335,17 @@ export const createConversation = mutation({
       }
     }
 
+    let parentConversationId: Id<"conversations"> | undefined;
+    if (args.parent_message_uuid) {
+      const parentMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", args.parent_message_uuid!))
+        .first();
+      if (parentMsg) {
+        parentConversationId = parentMsg.conversation_id;
+      }
+    }
+
     const conversationId = await ctx.db.insert("conversations", {
       user_id: args.user_id,
       team_id: resolvedTeamId,
@@ -348,6 +362,7 @@ export const createConversation = mutation({
       auto_shared: autoShared || undefined,
       status: "active",
       parent_message_uuid: args.parent_message_uuid,
+      parent_conversation_id: parentConversationId,
       git_commit_hash: args.git_commit_hash,
       git_branch: args.git_branch,
       git_remote_url: args.git_remote_url,
@@ -385,6 +400,108 @@ export const createConversation = mutation({
         },
       });
     }
+
+    return conversationId;
+  },
+});
+
+export const createQuickSession = mutation({
+  args: {
+    agent_type: v.optional(v.union(
+      v.literal("claude_code"),
+      v.literal("codex"),
+      v.literal("cursor"),
+      v.literal("gemini")
+    )),
+    project_path: v.optional(v.string()),
+    git_root: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+
+    await checkRateLimit(ctx, userId, "createConversation");
+
+    const now = Date.now();
+    const sessionId = crypto.randomUUID();
+    const agentType = args.agent_type || "claude_code";
+
+    const user = await ctx.db.get(userId);
+    let resolvedTeamId = (user as any)?.active_team_id || (user as any)?.team_id;
+    let isPrivate = true;
+    let autoShared = false;
+
+    const conversationPath = args.git_root || args.project_path;
+    if (conversationPath) {
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+
+      let bestMatch: { teamId: Id<"teams">; pathLength: number; autoShare: boolean } | null = null;
+      for (const mapping of mappings) {
+        if (conversationPath === mapping.path_prefix || conversationPath.startsWith(mapping.path_prefix + "/")) {
+          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
+            bestMatch = {
+              teamId: mapping.team_id,
+              pathLength: mapping.path_prefix.length,
+              autoShare: mapping.auto_share,
+            };
+          }
+        }
+      }
+
+      if (bestMatch) {
+        resolvedTeamId = bestMatch.teamId;
+        if (bestMatch.autoShare) {
+          isPrivate = false;
+          autoShared = true;
+        }
+      }
+    }
+
+    if (!autoShared && user?.team_share_paths && user.team_share_paths.length > 0 && resolvedTeamId && conversationPath) {
+      for (const sharePath of user.team_share_paths) {
+        if (conversationPath === sharePath || conversationPath.startsWith(sharePath + "/")) {
+          isPrivate = false;
+          autoShared = true;
+          break;
+        }
+      }
+    }
+
+    const conversationId = await ctx.db.insert("conversations", {
+      user_id: userId,
+      team_id: resolvedTeamId,
+      agent_type: agentType,
+      session_id: sessionId,
+      project_path: args.project_path,
+      git_root: args.git_root,
+      started_at: now,
+      updated_at: now,
+      message_count: 0,
+      is_private: isPrivate,
+      auto_shared: autoShared || undefined,
+      status: "active",
+    });
+
+    await ctx.db.patch(conversationId, {
+      short_id: conversationId.toString().slice(0, 7),
+    });
+
+    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : "gemini";
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "start_session",
+      args: JSON.stringify({
+        agent_type: daemonAgentType,
+        project_path: args.project_path || args.git_root,
+        conversation_id: conversationId,
+      }),
+      created_at: now,
+    });
 
     return conversationId;
   },
@@ -567,7 +684,7 @@ export const getAllMessages = query({
 
     const { children: childConversations, map: childConversationMap } =
       messages.length > 0
-        ? await findChildConversations(ctx, messages)
+        ? await findChildConversations(ctx, args.conversation_id, messages)
         : { children: [], map: {} };
 
     let forkedFromDetails = null;
@@ -733,7 +850,7 @@ export const getMessagesAroundTimestamp = query({
 
     const { children: childConversations, map: childConversationMap } =
       messages.length > 0
-        ? await findChildConversations(ctx, messages)
+        ? await findChildConversations(ctx, args.conversation_id, messages)
         : { children: [], map: {} };
 
     return {
@@ -783,7 +900,7 @@ export const getNewMessages = query({
 
     const { children: childConversations, map: childConversationMap } =
       messages.length > 0
-        ? await findChildConversations(ctx, messages)
+        ? await findChildConversations(ctx, args.conversation_id, messages)
         : { children: [], map: {} };
 
     return {
@@ -839,7 +956,7 @@ export const getConversationMessages = query({
 
     const { children: childConversations, map: childConversationMap } =
       messages.length > 0
-        ? await findChildConversations(ctx, messages)
+        ? await findChildConversations(ctx, args.conversation_id, messages)
         : { children: [], map: {} };
 
     return {
@@ -1454,6 +1571,56 @@ export const getSharedConversation = query({
       user: user ? { name: user.name, email: user.email } : null,
       fork_count: conversation.fork_count,
       forked_from: conversation.forked_from,
+    };
+  },
+});
+
+export const getSharedConversationMeta = query({
+  args: {
+    share_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_share_token", (q) => q.eq("share_token", args.share_token))
+      .collect();
+
+    if (conversations.length === 0) return null;
+
+    const conversation = conversations[0];
+    const user = await ctx.db.get(conversation.user_id);
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", conversation._id)
+      )
+      .order("asc")
+      .take(10);
+
+    let firstUserMessage = "";
+    for (const msg of messages) {
+      const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+      if (msg.role === "user" && !hasToolResults) {
+        const text = msg.content?.trim();
+        if (text) {
+          firstUserMessage = text.slice(0, 200);
+          if (text.length > 200) firstUserMessage += "...";
+          break;
+        }
+      }
+    }
+
+    const title = conversation.title
+      || firstUserMessage
+      || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
+      || `Session ${conversation.session_id.slice(0, 8)}`;
+
+    return {
+      title,
+      description: firstUserMessage || conversation.subtitle || null,
+      author: user?.name || null,
+      message_count: conversation.message_count || 0,
     };
   },
 });
@@ -4318,6 +4485,41 @@ export const backfillAutoSharedConversations = internalMutation({
   },
 });
 
+export const backfillParentConversationIds = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batchSize = args.limit ?? 50;
+    const result = await ctx.db.query("conversations")
+      .order("desc")
+      .paginate({ cursor: args.cursor ?? null, numItems: batchSize });
+
+    let updated = 0;
+    for (const conv of result.page) {
+      if (conv.parent_message_uuid && !conv.parent_conversation_id) {
+        const parentMsg = await ctx.db
+          .query("messages")
+          .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conv.parent_message_uuid!))
+          .first();
+        if (parentMsg) {
+          await ctx.db.patch(conv._id, {
+            parent_conversation_id: parentMsg.conversation_id,
+          });
+          updated++;
+        }
+      }
+    }
+
+    return {
+      updated,
+      nextCursor: !result.isDone ? result.continueCursor : null,
+      isDone: result.isDone,
+    };
+  },
+});
+
 export const getConversationsBySessionIds = query({
   args: {
     api_token: v.string(),
@@ -4381,7 +4583,7 @@ export const getConversationsBySessionIds = query({
 
 export const listIdleSessions = query({
   args: {
-    window_hours: v.optional(v.number()),
+    show_all: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -4389,9 +4591,8 @@ export const listIdleSessions = query({
 
     const now = Date.now();
     const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const windowHours = args.window_hours ?? 1;
-    const WINDOW_MS = windowHours * 60 * 60 * 1000;
-    const IDLE_THRESHOLD_MS = 2 * 60 * 1000;
+    const WINDOW_MS = 48 * 60 * 60 * 1000;
+    const CLUSTER_WINDOW_MS = 60 * 60 * 1000;
     const cutoff = now - WINDOW_MS;
 
     const conversations = await ctx.db
@@ -4399,8 +4600,9 @@ export const listIdleSessions = query({
       .withIndex("by_user_updated", (q) =>
         q.eq("user_id", userId).gte("updated_at", cutoff)
       )
+      .order("desc")
       .filter((q) => q.eq(q.field("status"), "active"))
-      .collect();
+      .take(100);
 
     const managedSessions = await ctx.db
       .query("managed_sessions")
@@ -4413,24 +4615,53 @@ export const listIdleSessions = query({
         .map((s) => s.conversation_id!.toString())
     );
 
-    const results = [];
+    const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
+
+    const user = await ctx.db.get(userId);
+    const lastUserMessageAt = user?.last_message_sent_at ?? 0;
+    const clusterCutoff = lastUserMessageAt > 0 ? lastUserMessageAt - CLUSTER_WINDOW_MS : 0;
+
+    const candidates = [];
     for (const conv of conversations) {
-      const daemonAlive = liveConvIds.has(conv._id.toString());
-      const recentlyUpdated = now - conv.updated_at < IDLE_THRESHOLD_MS;
+      if (conv.parent_conversation_id) continue;
+      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff) continue;
 
-      if (daemonAlive && recentlyUpdated) continue;
+      const title = conv.title?.trim() || "";
+      if (title.toLowerCase() === "warmup") continue;
+      if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
 
-      // Dismissed and no new activity since dismiss
       const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
+      if (dismissed) {
+        const hasPendingDismissed = await ctx.db
+          .query("pending_messages")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+          .filter((q) => q.eq(q.field("status"), "pending"))
+          .first();
+        if (!hasPendingDismissed) continue;
+      }
+
+      candidates.push(conv);
+    }
+
+    const NOISE_MSG_PREFIXES = [
+      "[Request interrupted",
+      "This session is being continued",
+      "continue",
+    ];
+    const isNoiseMsg = (c: string) => {
+      const t = c.trim();
+      return NOISE_MSG_PREFIXES.some((p) => t.startsWith(p)) || t.length < 4;
+    };
+
+    const results = [];
+    for (const conv of candidates) {
+      const daemonAlive = liveConvIds.has(conv._id.toString());
 
       const hasPending = await ctx.db
         .query("pending_messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
         .filter((q) => q.eq(q.field("status"), "pending"))
         .first();
-
-      // Skip dismissed sessions unless they have a new pending message
-      if (dismissed && !hasPending) continue;
 
       const lastMsg = await ctx.db
         .query("messages")
@@ -4440,11 +4671,36 @@ export const listIdleSessions = query({
         .order("desc")
         .first();
 
-      const lastRoleIsAssistant = lastMsg?.role === "assistant";
+      const lastRoleIsUser = lastMsg?.role === "user";
+      const recentlyActive = (now - conv.updated_at) < 10 * 60 * 1000;
 
-      if (!hasPending && !lastRoleIsAssistant) continue;
+      if (!hasPending && lastRoleIsUser && !daemonAlive && !recentlyActive) continue;
 
-      const isIdle = !daemonAlive || (!hasPending && lastRoleIsAssistant);
+      const isIdle = !daemonAlive || (!hasPending && !lastRoleIsUser);
+
+      let lastUserMsg = null;
+      if (lastMsg?.role === "user" && lastMsg.content?.trim() && !isNoiseMsg(lastMsg.content)) {
+        lastUserMsg = lastMsg;
+      } else {
+        const msgCandidates = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q) =>
+            q.eq("conversation_id", conv._id)
+          )
+          .order("desc")
+          .filter((q) =>
+            q.and(
+              q.eq(q.field("role"), "user"),
+              q.neq(q.field("content"), ""),
+              q.neq(q.field("content"), undefined),
+            )
+          )
+          .take(5);
+        const good = msgCandidates.find((m) => m.content?.trim() && !isNoiseMsg(m.content!));
+        if (good) {
+          lastUserMsg = good;
+        }
+      }
 
       results.push({
         _id: conv._id,
@@ -4452,6 +4708,7 @@ export const listIdleSessions = query({
         title: conv.title,
         subtitle: conv.subtitle,
         updated_at: conv.updated_at,
+        started_at: conv.started_at,
         project_path: conv.project_path,
         git_root: conv.git_root,
         git_branch: conv.git_branch,
@@ -4460,14 +4717,14 @@ export const listIdleSessions = query({
         idle_summary: conv.idle_summary,
         is_idle: isIdle,
         has_pending: !!hasPending,
+        last_user_message: lastUserMsg?.content?.slice(0, 200) || null,
       });
     }
 
     results.sort((a, b) => {
       if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
-      return a.is_idle
-        ? a.updated_at - b.updated_at
-        : b.updated_at - a.updated_at;
+      if (a.is_idle) return a.updated_at - b.updated_at;
+      return b.started_at - a.started_at;
     });
 
     return results;
@@ -4486,5 +4743,149 @@ export const dismissFromInbox = mutation({
     await ctx.db.patch(args.conversation_id, {
       inbox_dismissed_at: Date.now(),
     });
+  },
+});
+
+const PATCHABLE_FIELDS = new Set([
+  "inbox_dismissed_at",
+  "draft_message",
+]);
+
+export const patchConversation = mutation({
+  args: {
+    id: v.id("conversations"),
+    fields: v.any(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const conv = await ctx.db.get(args.id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not found");
+
+    const patch: Record<string, any> = {};
+    for (const [key, value] of Object.entries(args.fields as Record<string, any>)) {
+      if (!PATCHABLE_FIELDS.has(key)) continue;
+      patch[key] = value === null ? undefined : value;
+    }
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(args.id, patch);
+    }
+  },
+});
+
+export const updateSessionId = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    session_id: v.string(),
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Unauthorized");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) {
+      throw new Error("Not found");
+    }
+
+    await ctx.db.patch(args.conversation_id, { session_id: args.session_id });
+    return { updated: true };
+  },
+});
+
+export const listDismissedSessions = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const now = Date.now();
+    const WINDOW_MS = 48 * 60 * 60 * 1000;
+    const cutoff = now - WINDOW_MS;
+
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) =>
+        q.eq("user_id", userId).gte("updated_at", cutoff)
+      )
+      .order("desc")
+      .filter((q) => q.eq(q.field("status"), "active"))
+      .take(100);
+
+    const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
+    const results = [];
+
+    for (const conv of conversations) {
+      if (conv.parent_conversation_id) continue;
+
+      const title = conv.title?.trim() || "";
+      if (title.toLowerCase() === "warmup") continue;
+      if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
+
+      const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
+      if (!dismissed) continue;
+
+      results.push({
+        _id: conv._id,
+        session_id: conv.session_id,
+        title: conv.title,
+        subtitle: conv.subtitle,
+        updated_at: conv.updated_at,
+        project_path: conv.project_path,
+        git_root: conv.git_root,
+        git_branch: conv.git_branch,
+        agent_type: conv.agent_type,
+        message_count: conv.message_count,
+        idle_summary: conv.idle_summary,
+        is_idle: true,
+        has_pending: false,
+      });
+    }
+
+    results.sort((a, b) => b.updated_at - a.updated_at);
+    return results;
+  },
+});
+
+export const backfillLastUserMessageAt = internalMutation({
+  args: { user_id: v.optional(v.id("users")) },
+  handler: async (ctx, args) => {
+    if (!args.user_id) return { patched: 0 };
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const convs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) =>
+        q.eq("user_id", args.user_id!).gte("updated_at", cutoff)
+      )
+      .collect();
+
+    let maxUserMsgAt = 0;
+    let patched = 0;
+    for (const conv of convs) {
+      if (!conv.last_user_message_at) {
+        const lastUserMsg = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
+          .filter((q) => q.eq(q.field("role"), "user"))
+          .order("desc")
+          .first();
+        if (lastUserMsg) {
+          await ctx.db.patch(conv._id, { last_user_message_at: lastUserMsg.timestamp });
+          maxUserMsgAt = Math.max(maxUserMsgAt, lastUserMsg.timestamp);
+          patched++;
+        }
+      } else {
+        maxUserMsgAt = Math.max(maxUserMsgAt, conv.last_user_message_at);
+      }
+    }
+
+    if (maxUserMsgAt > 0) {
+      const user = await ctx.db.get(args.user_id);
+      if (user && (!user.last_message_sent_at || user.last_message_sent_at < maxUserMsgAt)) {
+        await ctx.db.patch(args.user_id, { last_message_sent_at: maxUserMsgAt });
+      }
+    }
+
+    return { patched, maxUserMsgAt: maxUserMsgAt > 0 ? new Date(maxUserMsgAt).toISOString() : "none" };
   },
 });
