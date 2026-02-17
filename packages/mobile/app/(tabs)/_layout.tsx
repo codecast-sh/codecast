@@ -85,6 +85,7 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Sessions',
+          headerShown: false,
           tabBarIcon: ({ color }) => <TabBarIcon name="comments" color={color} />,
         }}
       />

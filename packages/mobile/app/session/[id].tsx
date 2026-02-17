@@ -9,7 +9,10 @@ import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { PermissionCard } from '@/components/PermissionCard';
 import { Theme, Spacing } from '@/constants/Theme';
-import { LinearGradient } from 'expo-linear-gradient';
+const LinearGradient = ({ colors, style, children, pointerEvents }: { colors: string[]; style?: any; children?: any; pointerEvents?: string }) => {
+  const bg = colors?.[colors.length - 1] || 'transparent';
+  return <RNView style={[style, { backgroundColor: bg }]} pointerEvents={pointerEvents as any}>{children}</RNView>;
+};
 
 function Toast({ message, visible }: { message: string; visible: boolean }) {
   const opacity = useRef(new Animated.Value(0)).current;

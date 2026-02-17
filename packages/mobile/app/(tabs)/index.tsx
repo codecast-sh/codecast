@@ -1,4 +1,5 @@
 import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, SectionList, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
@@ -20,7 +21,19 @@ type Conversation = {
   is_own: boolean;
   agent_type?: string;
   project_path?: string | null;
+  git_root?: string | null;
 };
+
+function deriveGitRoot(c: Conversation): string | null {
+  if (c.git_root) return c.git_root;
+  if (!c.project_path) return null;
+  const parts = c.project_path.split('/');
+  const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
+  if (srcIndex >= 0 && srcIndex < parts.length - 1) {
+    return parts.slice(0, srcIndex + 2).join('/');
+  }
+  return c.project_path;
+}
 
 type SearchResult = {
   conversationId: string;
@@ -101,10 +114,10 @@ function durationColor(ms: number): string {
   return Theme.red;
 }
 
-function projectName(path?: string): string | null {
+function projectName(conv: { git_root?: string | null; project_path?: string | null }): string | null {
+  const path = conv.git_root || conv.project_path;
   if (!path) return null;
-  const parts = path.split('/');
-  return parts[parts.length - 1] || null;
+  return path.split('/').pop() || null;
 }
 
 function ConversationItem({ conversation, onPress, onLongPress }: {
@@ -112,7 +125,7 @@ function ConversationItem({ conversation, onPress, onLongPress }: {
   onPress: () => void;
   onLongPress?: () => void;
 }) {
-  const project = projectName(conversation.project_path ?? undefined);
+  const project = projectName(conversation);
   const agent = agentLabel(conversation.agent_type ?? "");
   const durationMs = conversation.duration_ms ?? (conversation.updated_at - conversation.started_at);
   const dColor = durationColor(durationMs);
@@ -460,19 +473,21 @@ export default function SessionsScreen() {
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
 
   const projects = useMemo(() => {
-    const map = new Map<string, string>();
+    const dirLastUpdated = new Map<string, number>();
     for (const c of allConversations) {
-      const path = c.project_path;
-      if (!path) continue;
-      const name = path.split('/').pop() || path;
-      if (!map.has(path)) map.set(path, name);
+      const dir = deriveGitRoot(c);
+      if (!dir) continue;
+      const existing = dirLastUpdated.get(dir) || 0;
+      if (c.updated_at > existing) dirLastUpdated.set(dir, c.updated_at);
     }
-    return Array.from(map.entries()).map(([path, name]) => ({ path, name }));
+    return Array.from(dirLastUpdated.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([path]) => ({ path, name: path.split('/').pop() || path }));
   }, [allConversations]);
 
   const filteredConversations = useMemo(() => {
     if (!projectFilter) return allConversations;
-    return allConversations.filter(c => c.project_path === projectFilter);
+    return allConversations.filter(c => deriveGitRoot(c) === projectFilter);
   }, [allConversations, projectFilter]);
 
   const handleLoadMore = useCallback(() => {
@@ -555,7 +570,7 @@ export default function SessionsScreen() {
   };
 
   return (
-    <RNView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <RNView style={styles.searchContainer}>
         <RNView style={styles.searchInputRow}>
           <FontAwesome name="search" size={14} color={Theme.textMuted0} style={styles.searchIcon} />
@@ -665,9 +680,9 @@ export default function SessionsScreen() {
         onPress={() => setShowNewSession(true)}
         activeOpacity={0.8}
       >
-        <FontAwesome name="plus" size={20} color={Theme.bg} />
+        <FontAwesome name="plus" size={16} color={Theme.textMuted} />
       </TouchableOpacity>
-    </RNView>
+    </SafeAreaView>
   );
 }
 
@@ -679,8 +694,8 @@ const styles = StyleSheet.create({
   searchContainer: {
     backgroundColor: Theme.bgAlt,
     paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.sm,
+    paddingTop: Spacing.xs,
+    paddingBottom: Spacing.xs,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
   },
@@ -690,7 +705,7 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.bg,
     borderRadius: 10,
     paddingHorizontal: Spacing.md,
-    height: 38,
+    height: 34,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
@@ -711,7 +726,7 @@ const styles = StyleSheet.create({
   },
   tab: {
     flex: 1,
-    paddingVertical: 14,
+    paddingVertical: 10,
     alignItems: 'center',
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
@@ -930,6 +945,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   projectFilterRow: {
+    flexGrow: 0,
+    flexShrink: 0,
     backgroundColor: Theme.bgAlt,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
@@ -938,10 +955,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: 10,
     gap: 8,
+    alignItems: 'center',
   },
   projectChip: {
     paddingHorizontal: 14,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 16,
     backgroundColor: Theme.bg,
     borderWidth: 1,
@@ -955,6 +973,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: Theme.textMuted,
+    lineHeight: 16,
   },
   projectChipTextActive: {
     color: Theme.bg,
@@ -963,16 +982,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 24,
     right: 20,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: Theme.accent,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: 1,
+    borderColor: Theme.border,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
   },
 });
