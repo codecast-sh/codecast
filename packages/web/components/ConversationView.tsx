@@ -197,6 +197,8 @@ type ConversationViewProps = {
   showMessageInput?: boolean;
   targetMessageId?: string;
   isOwner?: boolean;
+  onSendAndAdvance?: () => void;
+  autoFocusInput?: boolean;
 };
 
 export interface ConversationViewHandle {
@@ -1725,6 +1727,27 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
+function isInterruptMessage(content: string): boolean {
+  const trimmed = content.trim();
+  return trimmed === "[Request interrupted by user]" || trimmed === "[Request cancelled by user]";
+}
+
+function InterruptStatusLine({ timestamp }: { timestamp: number }) {
+  return (
+    <div className="mb-2 flex items-center gap-3">
+      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sol-text-dim/20 to-transparent" />
+      <div className="flex items-center gap-1.5 text-sol-text-dim text-xs">
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+        <span>Interrupted</span>
+        <span className="text-sol-text-dim/50" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sol-text-dim/20 to-transparent" />
+    </div>
+  );
+}
+
 const USER_CONTENT_MAX_HEIGHT = 1800;
 
 function parseSkillBlocks(text: string): { parts: Array<{ type: 'text' | 'skill'; content: string; skillName?: string; skillDesc?: string; skillPath?: string }>} {
@@ -3104,7 +3127,7 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
-function MessageInput({ conversationId, status, embedded }: { conversationId: string; status?: string; embedded?: boolean }) {
+function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean }) {
   const [message, setMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
@@ -3126,6 +3149,12 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
     resetTextareaHeight();
   }, [message]);
 
+  useEffect(() => {
+    if (autoFocusInput && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [autoFocusInput, conversationId]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!message.trim() || isSubmitting) return;
@@ -3140,7 +3169,6 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
       });
       setLastStatus("delivered");
       setMessage("");
-      toast.success("Message sent");
 
       setTimeout(() => setLastStatus(null), 2000);
     } catch (error) {
@@ -3152,6 +3180,11 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && e.altKey && onSendAndAdvance) {
+      e.preventDefault();
+      handleSubmit(e).then(() => onSendAndAdvance());
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
@@ -3220,7 +3253,7 @@ function MessageInput({ conversationId, status, embedded }: { conversationId: st
 }
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
@@ -3517,6 +3550,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (msg.role === "system") return false;
         if (msg.role === "user" && msg.tool_results) return false;
         if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return false;
+        if (msg.role === "user" && msg.content && isInterruptMessage(msg.content)) return false;
         return msg.content && msg.content.trim().length > 0;
       })
       .map((msg) => {
@@ -3609,6 +3643,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (collapsed) {
         if (msg.role === "system") return 0;
         if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return 0;
+        if (msg.role === "user" && msg.content && isInterruptMessage(msg.content)) return 0;
         if (msg.role === "assistant") {
           const hasTextContent = msg.content && msg.content.trim().length > 0;
           if (!hasTextContent) return 0;
@@ -3629,6 +3664,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (msg.role === "system") return 8;
       if (msg.role === "user") {
         if (msg.content && isCommandMessage(msg.content)) return 30;
+        if (msg.content && isInterruptMessage(msg.content)) return 30;
         const lines = (msg.content || "").split("\n").length;
         return Math.max(60, lines * 18 + 40);
       }
@@ -3684,16 +3720,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
 
       if (scrollProgressRef.current) {
-        const items = virtualizer.getVirtualItems();
-        if (items.length > 0) {
-          const centerIdx = items[Math.floor(items.length / 2)].index;
-          const totalMessages = conversation?.message_count || messages.length;
-          const loadedMessages = messages.length;
-          const startOffset = conversation?.loaded_start_index ?? 0;
-          const tLen = Math.max(timeline.length, 1);
-          const progress = totalMessages > 0 ? Math.max(0, Math.min(1, (startOffset + (centerIdx / tLen) * loadedMessages) / totalMessages)) : 1;
-          scrollProgressRef.current.style.height = `${progress * 100}%`;
+        const totalMessages = conversation?.message_count || messages.length;
+        const isPaginated = totalMessages > 150;
+        let progress: number;
+        if (isPaginated) {
+          const items = virtualizer.getVirtualItems();
+          if (items.length > 0) {
+            const centerIdx = items[Math.floor(items.length / 2)].index;
+            const loadedMessages = messages.length;
+            const startOffset = conversation?.loaded_start_index ?? 0;
+            const tLen = Math.max(timeline.length, 1);
+            progress = totalMessages > 0 ? Math.max(0, Math.min(1, (startOffset + (centerIdx / tLen) * loadedMessages) / totalMessages)) : 1;
+          } else {
+            progress = 0;
+          }
+        } else {
+          const maxScroll = scrollHeight - clientHeight;
+          progress = maxScroll > 0 ? scrollTop / maxScroll : 1;
         }
+        scrollProgressRef.current.style.height = `${progress * 100}%`;
       }
 
       // Load older messages when near top (within 300px)
@@ -3730,14 +3775,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   useEffect(() => {
     if (!scrollProgressRef.current) return;
-    const items = virtualizer.getVirtualItems();
-    if (items.length === 0) return;
-    const centerIdx = items[Math.floor(items.length / 2)].index;
     const totalMessages = conversation?.message_count || messages.length;
-    const loadedMessages = messages.length;
-    const startOffset = conversation?.loaded_start_index ?? 0;
-    const tLen = Math.max(timeline.length, 1);
-    const progress = totalMessages > 0 ? Math.max(0, Math.min(1, (startOffset + (centerIdx / tLen) * loadedMessages) / totalMessages)) : 1;
+    const isPaginated = totalMessages > 150;
+    let progress: number;
+    if (isPaginated) {
+      const items = virtualizer.getVirtualItems();
+      if (items.length === 0) return;
+      const centerIdx = items[Math.floor(items.length / 2)].index;
+      const loadedMessages = messages.length;
+      const startOffset = conversation?.loaded_start_index ?? 0;
+      const tLen = Math.max(timeline.length, 1);
+      progress = totalMessages > 0 ? Math.max(0, Math.min(1, (startOffset + (centerIdx / tLen) * loadedMessages) / totalMessages)) : 1;
+    } else {
+      const scrollEl = containerRef.current;
+      if (!scrollEl) return;
+      const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
+      progress = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 1;
+    }
     scrollProgressRef.current.style.height = `${progress * 100}%`;
   });
 
@@ -4020,6 +4074,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (isCommandMessage(msg.content)) {
           if (collapsed) return null;
           return <CommandStatusLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
+        }
+        if (isInterruptMessage(msg.content)) {
+          if (collapsed) return null;
+          return <InterruptStatusLine key={msg._id} timestamp={msg.timestamp} />;
         }
         // Check if previous message was a compact_boundary - if so, render as compaction summary
         const prevItem = index > 0 ? timeline[index - 1] : null;
@@ -4597,13 +4655,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {showMessageInput && conversation && (
-        <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} />
+        <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} />
       )}
 
       {timeline.length > 0 && (
         <div className="fixed bottom-24 right-8 z-30 flex items-center gap-2.5">
           <div className="flex flex-col gap-2">
-            {(!isNearTop || hasMoreAbove) && (
               <button
                 onClick={() => {
                   if (hasMoreAbove && onJumpToStart) {
@@ -4623,7 +4680,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     virtualizer.scrollToIndex(0, { align: "start" });
                   }
                 }}
-                className="p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all"
+                className={`p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${(!isNearTop || hasMoreAbove) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label="Scroll to top"
               >
                 {isLoadingOlder ? (
@@ -4637,7 +4694,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </svg>
                 )}
               </button>
-            )}
             {(userScrolled || hasMoreBelow) && (
               <button
                 onClick={() => {
@@ -4675,15 +4731,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </button>
             )}
           </div>
-          {(conversation?.message_count ?? 0) > 150 && (!isNearTop || userScrolled || hasMoreAbove || hasMoreBelow) && (
-            <div className="w-2 h-16 rounded-full relative shadow-[0_0_4px_1px_rgba(0,0,0,0.12)]">
-              <div className="w-full h-full rounded-full bg-black/[0.06] overflow-hidden">
-                <div
-                  ref={scrollProgressRef}
-                  className="w-full rounded-full bg-sol-cyan"
-                  style={{ height: '0%', transition: 'height 0.15s ease-out' }}
-                />
-              </div>
+          {(!isNearTop || userScrolled || hasMoreAbove || hasMoreBelow) && (
+            <div className="w-1.5 h-16 rounded-sm relative border border-sol-border overflow-hidden">
+              <div
+                ref={scrollProgressRef}
+                className="w-full bg-sol-cyan/60"
+                style={{ height: '0%', transition: 'height 0.15s ease-out' }}
+              />
             </div>
           )}
         </div>

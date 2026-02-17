@@ -139,7 +139,7 @@ export function GlobalSearch() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      if ((e.metaKey || e.ctrlKey) && e.key === "/") {
         e.preventDefault();
         setIsOpen(true);
         setTimeout(() => inputRef.current?.focus(), 0);
@@ -229,7 +229,7 @@ export function GlobalSearch() {
         />
         <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
           <kbd className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-sol-base00 bg-sol-base02 bg-sol-bg-alt rounded border border-sol-base01 border-sol-border">
-            <span className="text-xs">&#8984;</span>K
+            <span className="text-xs">&#8984;</span>/
           </kbd>
         </div>
       </div>

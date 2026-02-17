@@ -12,6 +12,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useActiveTeamStore } from "../store/activeTeamStore";
+import { useNewSessionStore } from "../store/newSessionStore";
 
 function VisibilityDropdown({
   conversationId,
@@ -481,7 +482,7 @@ function createConversationAriaLabel(conv: Conversation): string {
   return `${title}, ${agentType}, ${time}${status}`;
 }
 
-function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [agentType, setAgentType] = useState<"claude" | "codex" | "gemini">("claude");
   const [projectPath, setProjectPath] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -528,7 +529,7 @@ function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm">
       <div ref={modalRef} className="bg-white dark:bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
         <div className="px-5 pt-5 pb-3">
           <h3 className="text-base font-semibold text-sol-text">New Session</h3>
@@ -636,7 +637,9 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("all");
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const [showNewSession, setShowNewSession] = useState(false);
+  const showNewSession = useNewSessionStore((s) => s.isOpen);
+  const openNewSession = useNewSessionStore((s) => s.open);
+  const closeNewSession = useNewSessionStore((s) => s.close);
   const listRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
@@ -838,12 +841,11 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
         }
       }}
       onBlur={() => setFocusedIndex(-1)}>
-      <NewSessionModal isOpen={showNewSession} onClose={() => setShowNewSession(false)} />
       {/* Filter bar */}
       <div className="flex flex-wrap gap-1.5 sm:gap-2 items-center pt-2">
         {filter === "my" && (
           <button
-            onClick={() => setShowNewSession(true)}
+            onClick={openNewSession}
             className="px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 hover:bg-sol-yellow/30"
           >
             <span className="flex items-center gap-1">
@@ -890,29 +892,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
           Active{counts.active > 0 && ` (${counts.active})`}
         </button>
 
-        {/* Member filter (team only) */}
-        {filter === "team" && teamMembers && teamMembers.length > 0 && (
-          <>
-            <div className="w-px bg-sol-border/30 mx-1" />
-            <select
-              value={memberFilter || ""}
-              onChange={(e) => onMemberFilterChange?.(e.target.value || null)}
-              className={`px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap ${
-                memberFilter
-                  ? "bg-purple-500/20 text-purple-400 border border-purple-500/40"
-                  : "bg-sol-bg-alt/60 text-sol-text-muted border border-sol-border/40 hover:border-sol-border"
-              }`}
-            >
-              <option value="">All Members</option>
-              {teamMembers.filter((m): m is NonNullable<typeof m> => m !== null).map((member) => (
-                <option key={member._id} value={member._id}>
-                  {member.name || member.email}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
-
         <div className="w-px bg-sol-border/30 mx-1" />
 
         {/* Subagent filters */}
@@ -938,6 +917,30 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
           <span className="sm:hidden">Sub</span>
           {counts.subagent > 0 && ` (${counts.subagent})`}
         </button>
+
+        {/* Member filter (team only) */}
+        {filter === "team" && teamMembers && teamMembers.length > 0 && (
+          <>
+            <div className="w-px bg-sol-border/30 mx-1" />
+            <select
+              value={memberFilter || ""}
+              onChange={(e) => onMemberFilterChange?.(e.target.value || null)}
+              className={`appearance-none cursor-pointer px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 pr-7 text-xs sm:text-sm rounded-lg transition-colors whitespace-nowrap border ${
+                memberFilter
+                  ? "bg-purple-500/20 text-purple-400 border-purple-500/40"
+                  : "bg-sol-bg-alt text-sol-text-muted border-sol-border/30 hover:border-sol-border/50"
+              }`}
+              style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23888'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`, backgroundSize: '12px', backgroundPosition: 'right 8px center', backgroundRepeat: 'no-repeat' }}
+            >
+              <option value="">All {activeTeam?.name || "Team"}</option>
+              {teamMembers.filter((m): m is NonNullable<typeof m> => m !== null).map((member) => (
+                <option key={member._id} value={member._id}>
+                  {member.name || member.email}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
       </div>
 
       {/* Screen reader announcement for focused item */}

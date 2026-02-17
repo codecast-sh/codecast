@@ -48,10 +48,20 @@ export function UserMenu() {
             )}
           </div>
           <button
-            onClick={() => {
-              setOpen(false);
-              router.push("/settings");
-            }}
+            onClick={() => { setOpen(false); router.push("/timeline"); }}
+            className="w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors"
+          >
+            Timeline
+          </button>
+          <button
+            onClick={() => { setOpen(false); router.push("/feed"); }}
+            className="w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors"
+          >
+            Feed
+          </button>
+          <div className="border-t border-sol-border my-1" />
+          <button
+            onClick={() => { setOpen(false); router.push("/settings"); }}
             className="w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors"
           >
             Settings

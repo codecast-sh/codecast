@@ -18,11 +18,15 @@ import { Label } from "./ui/label";
 import { copyToClipboard } from "../lib/utils";
 
 interface InviteModalProps {
-  trigger: React.ReactNode;
+  trigger?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function InviteModal({ trigger }: InviteModalProps) {
-  const [open, setOpen] = useState(false);
+export function InviteModal({ trigger, open: controlledOpen, onOpenChange }: InviteModalProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const user = useQuery(api.users.getCurrentUser);
   const team = useQuery(
     api.teams.getTeam,
@@ -90,7 +94,7 @@ export function InviteModal({ trigger }: InviteModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
       <DialogContent className="bg-sol-bg border-sol-border">
         <DialogHeader>
           <DialogTitle className="text-sol-text">Invite Team Member</DialogTitle>

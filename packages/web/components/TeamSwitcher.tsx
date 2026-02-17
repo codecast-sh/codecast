@@ -13,9 +13,11 @@ import {
   DropdownMenuLabel,
 } from "./ui/dropdown-menu";
 import { Check, ChevronDown, Plus, UserPlus } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { TeamIcon } from "./TeamIcon";
+
+const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
 
 export function TeamSwitcher() {
   const router = useRouter();
@@ -23,6 +25,8 @@ export function TeamSwitcher() {
   const teams = useQuery(api.teams.getUserTeams);
   const saveActiveTeam = useMutation(api.teams.setActiveTeam);
   const { activeTeamId, setActiveTeam } = useActiveTeamStore();
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const isAdmin = user?.role === "admin";
 
   useEffect(() => {
     if (user && !activeTeamId && user.active_team_id) {
@@ -109,7 +113,24 @@ export function TeamSwitcher() {
           <UserPlus className="w-4 h-4" />
           <span>Join Team</span>
         </DropdownMenuItem>
+        {isAdmin && (
+          <>
+            <DropdownMenuSeparator className="bg-sol-border" />
+            <DropdownMenuItem
+              onClick={() => setInviteOpen(true)}
+              className="flex items-center gap-2 cursor-pointer text-sol-base1 hover:bg-sol-base02/50"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Invite</span>
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
+      {isAdmin && (
+        <Suspense fallback={null}>
+          <InviteModal open={inviteOpen} onOpenChange={setInviteOpen} />
+        </Suspense>
+      )}
     </DropdownMenu>
   );
 }

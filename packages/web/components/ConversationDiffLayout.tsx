@@ -48,6 +48,9 @@ interface ConversationDiffLayoutProps {
   onClearHighlight?: () => void;
   targetMessageId?: string;
   isOwner?: boolean;
+  onSendAndAdvance?: () => void;
+  autoFocusInput?: boolean;
+  backHref?: string;
 }
 
 export function ConversationDiffLayout({
@@ -68,6 +71,9 @@ export function ConversationDiffLayout({
   targetMessageId,
   onClearHighlight,
   isOwner,
+  onSendAndAdvance,
+  autoFocusInput,
+  backHref: backHrefProp,
 }: ConversationDiffLayoutProps) {
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
@@ -152,7 +158,7 @@ export function ConversationDiffLayout({
   const conversationViewProps = {
     ref: conversationRef,
     conversation,
-    backHref: "/dashboard",
+    backHref: backHrefProp || "/dashboard",
     headerExtra,
     commits: commits || [],
     pullRequests: pullRequests || [],
@@ -169,6 +175,8 @@ export function ConversationDiffLayout({
     embedded,
     targetMessageId,
     isOwner,
+    onSendAndAdvance,
+    autoFocusInput,
   };
 
   // Mobile: tabs layout
