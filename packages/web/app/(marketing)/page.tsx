@@ -244,19 +244,17 @@ export default function LandingPage() {
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-6 pt-20 pb-8">
         <div className="text-center max-w-3xl mx-auto">
-          <div className="flex flex-wrap gap-2 justify-center mb-6">
-            <Link href="#mobile-app" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium hover:bg-amber-100 transition-colors">
+          <div className="flex flex-wrap gap-3 justify-center mb-6">
+            <Link href="#mobile-app" className="group inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md bg-amber-50/80 text-amber-700/90 hover:bg-amber-100/80 transition-all">
               <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75"></span>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-50"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
               </span>
-              iOS App
+              <span className="tracking-wider font-mono text-[11px] uppercase font-medium">iOS App</span>
             </Link>
-            <Link href="#memory" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium hover:bg-purple-100 transition-colors">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-              </svg>
-              Global Agent Memory
+            <Link href="#memory" className="group inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md bg-purple-50/80 text-purple-700/90 hover:bg-purple-100/80 transition-all">
+              <span className="h-2 w-2 rounded-full bg-purple-400/80"></span>
+              <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Agent Memory</span>
             </Link>
           </div>
 
@@ -265,8 +263,11 @@ export default function LandingPage() {
             <span className="text-stone-400">accessible everywhere</span>
           </h1>
 
+          <p className="text-lg text-stone-600 leading-relaxed mb-1 whitespace-nowrap">
+            Real-time sync for <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="rose">Gemini</Highlight>, and <Highlight color="blue">Cursor</Highlight>.
+          </p>
           <p className="text-xl text-stone-600 leading-relaxed mb-4 max-w-2xl mx-auto">
-            Real-time sync for <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="rose">Gemini CLI</Highlight>, and <Highlight color="blue">Cursor</Highlight>. Watch your agent work from any device,
+            Watch your agent work from any device,
             share sessions with your team, and give it memory across every session.
           </p>
 
@@ -339,7 +340,7 @@ export default function LandingPage() {
               <div className="font-mono text-sm text-stone-400 mb-2">$ claude / codex / gemini / cursor</div>
               <h3 className="text-xl font-semibold text-stone-900 mb-2">Code with your AI</h3>
               <p className="text-stone-500">
-                Use Claude Code, Codex, Gemini CLI, or Cursor as normal. Every session syncs in real-time to your dashboard.
+                Use Claude Code, Codex, Gemini, or Cursor as normal. Every session syncs in real-time to your dashboard.
               </p>
             </div>
           </div>
@@ -360,18 +361,16 @@ export default function LandingPage() {
       {/* Memory Comparison */}
       <section id="memory" className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-12">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium mb-6">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-            </svg>
-            Global Agent Memory
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md bg-purple-50/80 text-purple-700/90 mb-6">
+            <span className="h-2 w-2 rounded-full bg-purple-400/80"></span>
+            <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Agent Memory</span>
           </div>
           <h2 className="text-3xl font-bold text-stone-900 mb-4">
             Your agent finally remembers
           </h2>
           <p className="text-lg text-stone-500 max-w-2xl mx-auto">
             Every AI session starts fresh. Codecast changes that by giving your agent
-            searchable access to all past sessions -- across Claude Code, Codex, Gemini CLI, and Cursor.
+            searchable access to all past sessions -- across Claude Code, Codex, Gemini, and Cursor.
           </p>
         </div>
 
@@ -443,7 +442,7 @@ export default function LandingPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-lg mb-1">Team visibility</h3>
-                    <p className="text-stone-300">See what your teammates are building across Claude Code, Codex, Gemini CLI, and Cursor. Share sessions, pick up where they left off, learn from their debugging.</p>
+                    <p className="text-stone-300">See what your teammates are building across Claude Code, Codex, Gemini, and Cursor. Share sessions, pick up where they left off, learn from their debugging.</p>
                   </div>
                 </div>
 
@@ -533,11 +532,9 @@ export default function LandingPage() {
       <section id="cli" className="max-w-6xl mx-auto px-6 py-20">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
-            <Link href="/features" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium mb-4 hover:bg-purple-100 transition-colors">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              CLI for Agent Memory
+            <Link href="/features" className="group inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md bg-purple-50/80 text-purple-700/90 hover:bg-purple-100/80 transition-all mb-4">
+              <span className="h-2 w-2 rounded-full bg-purple-400/80"></span>
+              <span className="tracking-wider font-mono text-[11px] uppercase font-medium">CLI for Agent Memory</span>
             </Link>
             <h2 className="text-3xl font-bold text-stone-900 mb-4">
               How agents access memory
@@ -629,11 +626,9 @@ export default function LandingPage() {
       {/* Security & Privacy */}
       <section className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-12">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-50 border border-green-200 text-green-700 text-sm font-medium mb-6">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
-            Privacy-first
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md bg-emerald-50/80 text-emerald-700/90 mb-6">
+            <span className="h-2 w-2 rounded-full bg-emerald-400/80"></span>
+            <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Privacy-first</span>
           </div>
           <h2 className="text-3xl font-bold text-stone-900 mb-4">
             Your code stays yours
@@ -775,8 +770,12 @@ export default function LandingPage() {
       <section id="mobile-app" className="max-w-6xl mx-auto px-6 py-20">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium mb-4">
-              iOS App
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md bg-amber-50/80 text-amber-700/90 mb-4">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-50"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+              </span>
+              <span className="tracking-wider font-mono text-[11px] uppercase font-medium">iOS App</span>
             </div>
             <h2 className="text-3xl font-bold text-stone-900 mb-4">
               Code on the go
@@ -894,7 +893,7 @@ export default function LandingPage() {
             <div>
               <Logo size="md" className="text-stone-900 mb-4" />
               <p className="text-sm text-stone-500">
-                Real-time sync for Claude Code, Codex, Gemini CLI, and Cursor.
+                Real-time sync for Claude Code, Codex, Gemini, and Cursor.
               </p>
             </div>
             <div>

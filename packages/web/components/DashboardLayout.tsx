@@ -1,6 +1,8 @@
 "use client";
-import { ReactNode, useState, useEffect } from "react";
-import { usePathname } from "next/navigation";
+import { ReactNode, useState, useEffect, useCallback, useRef } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
@@ -15,7 +17,12 @@ import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose, Plus } 
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { useNewSessionStore } from "../store/newSessionStore";
+import { useCurrentConversationStore } from "../store/currentConversationStore";
 import { NewSessionModal } from "./ConversationList";
+import { getCached, setCached } from "../store/queryCache";
+import { queryCacheKey } from "../hooks/useCachedQuery";
+import { useQueueStore } from "../store/queueStore";
+import { usePendingSessionStore } from "../store/pendingSessionStore";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -54,11 +61,18 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
   const diffPanelOpen = useDiffViewerStore((state) => state.diffPanelOpen);
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
   const openNewSession = useNewSessionStore((state) => state.open);
   const newSessionOpen = useNewSessionStore((state) => state.isOpen);
   const closeNewSession = useNewSessionStore((state) => state.close);
+  const currentConvContext = useCurrentConversationStore((s) => s.context);
+  const createQuickSession = useMutation(api.conversations.createQuickSession);
+  const injectSession = useQueueStore((s) => s.injectSession);
+  const replaceSessionId = useQueueStore((s) => s.replaceSessionId);
+  const resolveSession = usePendingSessionStore((s) => s.resolve);
+  const creatingRef = useRef(false);
 
   const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
   const isOnCommitPage = pathname?.includes("/commit/") ?? false;
@@ -86,10 +100,88 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     localStorage.setItem("sidebarCollapsed", String(newValue));
   };
 
+  const handleQuickCreate = useCallback(() => {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    const path = currentConvContext.projectPath || currentConvContext.gitRoot;
+    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
+    const now = Date.now();
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    if (isOnInboxPage) {
+      const stubSession = {
+        _id: tempId,
+        session_id: "",
+        title: "New session",
+        updated_at: now,
+        project_path: path,
+        git_root: currentConvContext.gitRoot || path,
+        agent_type: agentType,
+        message_count: 0,
+        is_idle: true,
+        has_pending: false,
+        last_user_message: null,
+      };
+      injectSession(stubSession);
+      const cacheKey = queryCacheKey(api.conversations.getAllMessages, {
+        conversation_id: tempId,
+        limit: 100,
+      });
+      setCached(cacheKey, {
+        _id: tempId, _creationTime: now, user_id: "", agent_type: agentType,
+        session_id: "", project_path: path, git_root: currentConvContext.gitRoot || path,
+        started_at: now, updated_at: now, message_count: 0, status: "active",
+        title: "New session", messages: [], user: null,
+        child_conversations: [], child_conversation_map: {},
+        has_more_above: false, oldest_timestamp: null, last_timestamp: null,
+        fork_count: 0, forked_from_details: null, compaction_count: 0,
+        fork_children: [], parent_conversation_id: null,
+      });
+    } else {
+      const cacheKey = queryCacheKey(api.conversations.getAllMessages, {
+        conversation_id: tempId,
+        limit: 100,
+      });
+      setCached(cacheKey, {
+        _id: tempId, _creationTime: now, user_id: "", agent_type: agentType,
+        session_id: "", project_path: path, git_root: currentConvContext.gitRoot || path,
+        started_at: now, updated_at: now, message_count: 0, status: "active",
+        title: "New session", messages: [], user: null,
+        child_conversations: [], child_conversation_map: {},
+        has_more_above: false, oldest_timestamp: null, last_timestamp: null,
+        fork_count: 0, forked_from_details: null, compaction_count: 0,
+        fork_children: [], parent_conversation_id: null,
+      });
+      router.push(`/conversation/${tempId}?focus=1`);
+    }
+
+    createQuickSession({
+      agent_type: agentType,
+      project_path: path,
+      git_root: currentConvContext.gitRoot || path,
+    }).then((conversationId) => {
+      const realId = conversationId as unknown as string;
+      resolveSession(tempId, realId);
+      const oldKey = queryCacheKey(api.conversations.getAllMessages, { conversation_id: tempId, limit: 100 });
+      const cached = getCached(oldKey);
+      if (cached) {
+        const newKey = queryCacheKey(api.conversations.getAllMessages, { conversation_id: realId, limit: 100 });
+        setCached(newKey, { ...cached, _id: realId, last_timestamp: 0 });
+      }
+      if (isOnInboxPage) {
+        replaceSessionId(tempId, realId);
+      } else {
+        router.replace(`/conversation/${realId}?focus=1`);
+      }
+      creatingRef.current = false;
+    }).catch(() => {
+      creatingRef.current = false;
+    });
+  }, [createQuickSession, currentConvContext, router, isOnInboxPage, injectSession, replaceSessionId, resolveSession]);
+
   useEffect(() => {
-    if (hideSidebar) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "s" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      if (!hideSidebar && e.key === "s" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         const target = e.target as HTMLElement;
         if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
           return;
@@ -97,10 +189,20 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         e.preventDefault();
         toggleSidebar();
       }
+      if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        if (currentConvContext.projectPath || currentConvContext.gitRoot) {
+          handleQuickCreate();
+        } else {
+          openNewSession({
+            source: isOnInboxPage ? "inbox" : "sessions",
+          });
+        }
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hideSidebar, isSidebarCollapsed]);
+  }, [hideSidebar, isSidebarCollapsed, isOnInboxPage, currentConvContext, openNewSession, handleQuickCreate]);
 
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
@@ -167,8 +269,15 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
               </button>
             )}
             <button
-              onClick={openNewSession}
+              onClick={() => {
+                if (currentConvContext.projectPath || currentConvContext.gitRoot) {
+                  handleQuickCreate();
+                } else {
+                  openNewSession({});
+                }
+              }}
               className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:border-sol-cyan/50 transition-all"
+              title="New session (Ctrl+N)"
             >
               <Plus className="w-4 h-4" />
               New Session
@@ -204,7 +313,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             onLayoutChange={handleLayoutChange}
           >
             <Panel id="sidebar" minSize={0}>
-              <div className="h-full bg-sol-bg-alt overflow-auto border-r border-sol-border/50">
+              <div className="h-full bg-sol-bg-alt overflow-auto">
                 <Sidebar
                   filter={filter}
                   onFilterChange={onFilterChange}
@@ -215,7 +324,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                 />
               </div>
             </Panel>
-            <Separator className="w-1.5 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors" />
+            <Separator className="w-px bg-sol-border hover:w-1.5 hover:bg-sol-cyan data-[resize-handle-active]:w-1.5 data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-[width,background-color] duration-150" />
             <Panel id="main" minSize={0}>
               {isFullWidthPage ? (
                 <div className="h-full">

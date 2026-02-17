@@ -13,6 +13,8 @@ import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useSharedConversationMessages } from "../../../hooks/useSharedConversationMessages";
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
+import { registerMutation } from "../../../store/convexCache";
+import { useCurrentConversationStore } from "../../../store/currentConversationStore";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONVEX_ID_REGEX = /^[a-z0-9]{32}$/;
@@ -81,16 +83,39 @@ function OwnerView({
   onClearHighlight,
   targetMessageId,
   isOwner,
+  autoFocusInput,
 }: {
   id: string;
   highlightQuery?: string;
   onClearHighlight: () => void;
   targetMessageId?: string;
   isOwner: boolean;
+  autoFocusInput?: boolean;
 }) {
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
+  const patchConv = useMutation(api.conversations.patchConversation);
+
+  useEffect(() => {
+    registerMutation("conversations", (docId, fields) =>
+      patchConv({ id: docId as Id<"conversations">, fields })
+    );
+  }, [patchConv]);
 
   const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
+  const setCurrentConversation = useCurrentConversationStore((s) => s.set);
+
+  useEffect(() => {
+    if (conversation) {
+      setCurrentConversation({
+        conversationId: conversation._id,
+        projectPath: (conversation as any).project_path,
+        gitRoot: (conversation as any).git_root,
+        agentType: conversation.agent_type,
+        source: "sessions",
+      });
+    }
+  }, [conversation?._id, (conversation as any)?.project_path, (conversation as any)?.git_root, conversation?.agent_type, setCurrentConversation]);
+
   const commits = useQuery(api.commits.getCommitsForConversation, {
     conversation_id: id as Id<"conversations">,
   });
@@ -181,6 +206,7 @@ function OwnerView({
         embedded
         targetMessageId={targetMessageId}
         isOwner={isOwner}
+        autoFocusInput={autoFocusInput}
       />
     </DashboardLayout>
   );
@@ -413,6 +439,7 @@ export default function ConversationPage() {
         onClearHighlight={handleClearHighlight}
         targetMessageId={targetMessageId}
         isOwner={publicData.access_level === "owner"}
+        autoFocusInput={searchParams.get("focus") === "1"}
       />
     );
   }

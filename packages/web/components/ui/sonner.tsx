@@ -15,12 +15,20 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         classNames: {
           toast:
-            "group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg",
-          description: "group-[.toast]:text-muted-foreground",
+            "group toast group-[.toaster]:bg-sol-bg-alt group-[.toaster]:text-sol-text group-[.toaster]:border-sol-border group-[.toaster]:shadow-lg group-[.toaster]:rounded-lg group-[.toaster]:text-sm",
+          description: "group-[.toast]:text-sol-text-muted",
           actionButton:
-            "group-[.toast]:bg-primary group-[.toast]:text-primary-foreground",
+            "group-[.toast]:bg-sol-yellow group-[.toast]:text-sol-bg",
           cancelButton:
-            "group-[.toast]:bg-muted group-[.toast]:text-muted-foreground",
+            "group-[.toast]:bg-sol-bg-highlight group-[.toast]:text-sol-text-muted",
+          success:
+            "group-[.toaster]:!bg-sol-bg-alt group-[.toaster]:!text-sol-green group-[.toaster]:!border-sol-green/30",
+          error:
+            "group-[.toaster]:!bg-sol-bg-alt group-[.toaster]:!text-sol-red group-[.toaster]:!border-sol-red/30",
+          info:
+            "group-[.toaster]:!bg-sol-bg-alt group-[.toaster]:!text-sol-blue group-[.toaster]:!border-sol-blue/30",
+          warning:
+            "group-[.toaster]:!bg-sol-bg-alt group-[.toaster]:!text-sol-orange group-[.toaster]:!border-sol-orange/30",
         },
       }}
       {...props}

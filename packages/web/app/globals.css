@@ -238,14 +238,15 @@
     scrollbar-color: transparent transparent;
   }
   .scrollbar-auto::-webkit-scrollbar {
-    width: 6px;
+    width: 4px;
   }
   .scrollbar-auto::-webkit-scrollbar-track {
     background: transparent;
   }
   .scrollbar-auto::-webkit-scrollbar-thumb {
     background: transparent;
-    border-radius: 3px;
+    border-radius: 0;
+    transition: background 0.2s;
   }
   .scrollbar-auto:hover {
     scrollbar-color: var(--sol-border) transparent;
@@ -289,6 +290,24 @@
   box-shadow: 0 0 10px hsl(var(--accent)), 0 0 5px hsl(var(--accent));
   opacity: 1.0;
   transform: rotate(3deg) translate(0px, -4px);
+}
+
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-message-in {
+  animation: messageSlideIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes fadeSlideIn {

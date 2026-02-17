@@ -24,11 +24,13 @@ export const metadata: Metadata = {
     siteName: "codecast",
     type: "website",
     url: "https://codecast.sh",
+    images: [{ url: "/logo-final.png", width: 1024, height: 1024, alt: "codecast" }],
   },
   twitter: {
     card: "summary",
     title: "codecast",
     description: "Sync coding agent conversations to a shared database",
+    images: ["/logo-final.png"],
   },
 };
 

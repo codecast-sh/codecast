@@ -49,12 +49,14 @@ export async function generateMetadata({
         url: `${BASE_URL}/conversation/${id}`,
         siteName: "codecast",
         type: "article",
+        images: [{ url: `${BASE_URL}/logo-final.png`, width: 1024, height: 1024, alt: "codecast" }],
         ...(meta.author && { authors: [meta.author] }),
       },
       twitter: {
         card: "summary",
         title,
         description,
+        images: [`${BASE_URL}/logo-final.png`],
       },
     };
   } catch {

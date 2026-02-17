@@ -14,7 +14,7 @@ export function BatchCompletionModal() {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[200]">
       <div className="sol-card p-6 max-w-md w-full mx-4">
         <h2 className="text-xl font-semibold text-sol-text mb-4">
           Batch Review Complete
