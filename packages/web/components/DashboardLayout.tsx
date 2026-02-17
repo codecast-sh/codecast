@@ -1,23 +1,21 @@
 "use client";
-import { ReactNode, useState, useEffect, lazy, Suspense } from "react";
-import { useQuery } from "convex/react";
+import { ReactNode, useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
+import { CommandPalette } from "./CommandPalette";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
-import { Button } from "./ui/button";
 import { Logo } from "./Logo";
-import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose, Plus } from "lucide-react";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { SetupPromptBanner } from "./SetupPromptBanner";
-
-const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
+import { useNewSessionStore } from "../store/newSessionStore";
+import { NewSessionModal } from "./ConversationList";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -58,11 +56,15 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const pathname = usePathname();
   const diffPanelOpen = useDiffViewerStore((state) => state.diffPanelOpen);
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
+  const openNewSession = useNewSessionStore((state) => state.open);
+  const newSessionOpen = useNewSessionStore((state) => state.isOpen);
+  const closeNewSession = useNewSessionStore((state) => state.close);
 
   const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
   const isOnCommitPage = pathname?.includes("/commit/") ?? false;
   const isOnPRPage = pathname?.includes("/pr/") ?? false;
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage;
+  const isOnInboxPage = pathname === "/inbox" || (pathname?.startsWith("/inbox/") ?? false);
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage;
 
   useEffect(() => {
     setMounted(true);
@@ -99,9 +101,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [hideSidebar, isSidebarCollapsed]);
-
-  const user = useQuery(api.users.getCurrentUser);
-  const isAdmin = user?.role === "admin";
 
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
@@ -167,19 +166,13 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                 )}
               </button>
             )}
-            {isAdmin && (
-              <div className="hidden md:block">
-                <Suspense fallback={<Button variant="outline" size="sm" disabled>Invite</Button>}>
-                  <InviteModal
-                    trigger={
-                      <Button variant="outline" size="sm">
-                        Invite
-                      </Button>
-                    }
-                  />
-                </Suspense>
-              </div>
-            )}
+            <button
+              onClick={openNewSession}
+              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:border-sol-cyan/50 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              New Session
+            </button>
             <ThemeToggle />
             <NotificationBell />
             <UserMenu />
@@ -259,6 +252,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
           </div>
         </>
       )}
+      <CommandPalette />
+      <NewSessionModal isOpen={newSessionOpen} onClose={closeNewSession} />
     </div>
   );
 }

@@ -47,6 +47,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
   const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
   const isFeed = pathname === "/feed" || pathname?.startsWith("/feed/");
+  const isInbox = pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.email === "ashot@almostcandid.com";
@@ -59,6 +60,8 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
   const markTeamSeen = useMutation(api.conversations.markTeamConversationsSeen);
+  const activeSessions = useQuery(api.conversations.listIdleSessions);
+  const idleCount = activeSessions?.filter((s: any) => s.is_idle).length ?? 0;
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -167,6 +170,29 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
             </svg>
             {!isNarrow && <span>My Sessions</span>}
           </button>
+          <Link
+            href="/inbox"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+              isInbox
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+            }`}
+            title="Inbox"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+            </svg>
+            {!isNarrow && (
+              <>
+                <span>Inbox</span>
+                {idleCount > 0 && (
+                  <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-xs font-semibold bg-sol-orange text-sol-bg rounded-full">
+                    {idleCount}
+                  </span>
+                )}
+              </>
+            )}
+          </Link>
           <button
             onClick={() => handleFilterClick("team")}
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
@@ -194,34 +220,6 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
               </>
             )}
           </button>
-          <Link
-            href="/timeline"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
-              isTimeline
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
-            }`}
-            title="Timeline"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            {!isNarrow && <span>Timeline</span>}
-          </Link>
-          <Link
-            href="/feed"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
-              isFeed
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
-            }`}
-            title="Feed"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
-            </svg>
-            {!isNarrow && <span>Feed</span>}
-          </Link>
           {isAdmin && (
             <Link
               href="/admin/daemon-logs"
