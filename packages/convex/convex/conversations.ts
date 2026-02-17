@@ -2031,6 +2031,33 @@ export const diagnoseTeamIds = internalQuery({
   },
 });
 
+export const backfillUserTeamIds = internalMutation({
+  args: { userId: v.string(), teamId: v.string() },
+  handler: async (ctx, args) => {
+    const userId = args.userId as any;
+    const teamId = args.teamId as any;
+    let updated = 0;
+    let alreadyHad = 0;
+    let cursor: string | null = null;
+    do {
+      const result = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+        .paginate({ cursor: cursor ?? null, numItems: 100 });
+      for (const conv of result.page) {
+        if (conv.team_id) {
+          alreadyHad++;
+          continue;
+        }
+        await ctx.db.patch(conv._id, { team_id: teamId });
+        updated++;
+      }
+      cursor = result.continueCursor;
+      if (result.isDone) break;
+    } while (true);
+    return { updated, alreadyHad };
+  },
+});
 
 export const getConversationBySessionId = query({
   args: {
@@ -4352,4 +4379,52 @@ export const getConversationsBySessionIds = query({
   },
 });
 
+export const listIdleSessions = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
 
+    const now = Date.now();
+    const ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+
+    const recentConversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) =>
+        q.eq("user_id", userId).gt("updated_at", now - ACTIVE_WINDOW_MS)
+      )
+      .order("desc")
+      .collect();
+
+    const results = [];
+    for (const conv of recentConversations) {
+      if (conv.status !== "active") continue;
+
+      const pendingMsg = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .filter((q) => q.eq(q.field("status"), "pending"))
+        .first();
+
+      if (pendingMsg) continue;
+
+      results.push({
+        _id: conv._id,
+        session_id: conv.session_id,
+        title: conv.title,
+        subtitle: conv.subtitle,
+        updated_at: conv.updated_at,
+        project_path: conv.project_path,
+        git_root: conv.git_root,
+        git_branch: conv.git_branch,
+        agent_type: conv.agent_type,
+        message_count: conv.message_count,
+        idle_summary: conv.idle_summary,
+      });
+    }
+
+    results.sort((a, b) => a.updated_at - b.updated_at);
+
+    return results;
+  },
+});
