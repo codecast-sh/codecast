@@ -458,6 +458,41 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "escape": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId = parsed.conversation_id;
+        if (!conversationId) {
+          error = "Missing conversation_id";
+          break;
+        }
+        const cache = readConversationCache();
+        const reverse = buildReverseConversationCache(cache);
+        const sessionId = reverse[conversationId];
+        if (!sessionId) {
+          error = `No session found for conversation ${conversationId}`;
+          break;
+        }
+        const proc = await findSessionProcess(sessionId);
+        if (!proc) {
+          error = `No running process for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+        if (tmuxTarget) {
+          await execAsync(`tmux send-keys -t '${tmuxTarget}' Escape`);
+          result = "escape_sent";
+          log(`[REMOTE] Sent Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
+        } else {
+          try {
+            process.kill(proc.pid, "SIGINT");
+            result = "escape_sent_sigint";
+            log(`[REMOTE] Sent SIGINT to session ${sessionId.slice(0, 8)} pid=${proc.pid}`);
+          } catch (killErr) {
+            error = `Failed to send SIGINT to pid ${proc.pid}: ${killErr}`;
+          }
+        }
+        break;
+      }
       default:
         error = `Unknown command: ${command}`;
     }
@@ -804,7 +839,8 @@ async function processSessionFile(
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
   titleCache: TitleCache,
-  updateStateCallback: () => void
+  updateStateCallback: () => void,
+  parentConversationId?: string,
 ): Promise<void> {
     let lastPosition = getPosition(filePath);
   let stats;
@@ -898,9 +934,39 @@ async function processSessionFile(
       const firstUserMessage = messages.find(msg => msg.role === "user");
       const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
+      // Detect parent conversation from file path (subagents/) or content (plan handoff)
+      let isPlanHandoff = false;
+      if (!parentConversationId) {
+        const parts = filePath.split(path.sep);
+        const isSubagentFile = parts.includes("subagents");
+        if (isSubagentFile) {
+          const subagentsIdx = parts.lastIndexOf("subagents");
+          const parentSessionId = parts[subagentsIdx - 1];
+          if (parentSessionId && conversationCache[parentSessionId]) {
+            parentConversationId = conversationCache[parentSessionId];
+            log(`Detected subagent parent for ${sessionId}: ${parentConversationId}`);
+          }
+        }
+      }
+      if (!parentConversationId && firstUserMessage?.content) {
+        const handoffMatch = firstUserMessage.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
+        if (handoffMatch) {
+          const jsonlPath = handoffMatch[1];
+          const parentSessionMatch = jsonlPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
+          if (parentSessionMatch) {
+            const parentSessionId = parentSessionMatch[1];
+            if (conversationCache[parentSessionId]) {
+              parentConversationId = conversationCache[parentSessionId];
+              isPlanHandoff = true;
+              log(`Detected plan handoff parent for ${sessionId}: ${parentConversationId} (from ${parentSessionId})`);
+            }
+          }
+        }
+      }
+
       let matchedStartedConversation: string | null = null;
       for (const [convId, entry] of startedSessionTmux.entries()) {
-        if (entry.projectPath === actualProjectPath && Date.now() - entry.startedAt < 120_000) {
+        if (entry.projectPath === actualProjectPath && Date.now() - entry.startedAt < 300_000) {
           matchedStartedConversation = convId;
           break;
         }
@@ -923,7 +989,8 @@ async function processSessionFile(
           slug,
           title,
           startedAt: firstMessageTimestamp,
-          parentMessageUuid,
+          parentMessageUuid: isPlanHandoff ? "plan-handoff" : parentMessageUuid,
+          parentConversationId,
           gitInfo,
         });
         conversationCache[sessionId] = conversationId;
@@ -1074,8 +1141,8 @@ async function processSessionFile(
 
     const lastMessage = messages[messages.length - 1];
     const wasInterrupted = lastMessage?.role === "user" &&
-      (lastMessage.content?.trim() === "[Request interrupted by user]" ||
-       lastMessage.content?.trim() === "[Request cancelled by user]");
+      (lastMessage.content?.trim().startsWith("[Request interrupted") ||
+       lastMessage.content?.trim().startsWith("[Request cancelled"));
 
     const lastAssistantMessage = messages.filter(m => m.role === "assistant").pop();
     if (lastAssistantMessage && conversationId) {
@@ -2513,6 +2580,22 @@ async function materializeSession(
   return promise;
 }
 
+async function downloadImage(storageId: string, syncService: SyncService): Promise<string | null> {
+  const destPath = `/tmp/codecast/images/${storageId}.png`;
+  if (fs.existsSync(destPath)) return destPath;
+
+  const imageUrl = await syncService.getClient().query("images:getImageUrl" as any, { storageId });
+  if (!imageUrl) return null;
+
+  const dir = path.dirname(destPath);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const resp = await fetch(imageUrl);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  fs.writeFileSync(destPath, Buffer.from(await resp.arrayBuffer()));
+  return destPath;
+}
+
 async function deliverMessage(
   conversationId: string,
   content: string,
@@ -3720,7 +3803,15 @@ async function main(): Promise<void> {
       for (const filePath of unsyncedFiles) {
         const parts = filePath.split(path.sep);
         const sessionId = parts[parts.length - 1].replace(".jsonl", "");
-        const projectDirName = parts[parts.length - 2];
+
+        const isSubagentFile = parts.includes("subagents");
+        let projectDirName: string;
+        if (isSubagentFile) {
+          const subagentsIdx = parts.lastIndexOf("subagents");
+          projectDirName = parts[subagentsIdx - 2] || parts[parts.length - 2];
+        } else {
+          projectDirName = parts[parts.length - 2];
+        }
         const projectPath = projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
 
         if (config.excluded_paths && isPathExcluded(projectPath, config.excluded_paths)) {
@@ -3731,7 +3822,16 @@ async function main(): Promise<void> {
           continue;
         }
 
-        log(`Startup scan: Syncing ${sessionId}`);
+        let parentConversationId: string | undefined;
+        if (isSubagentFile) {
+          const subagentsIdx = parts.lastIndexOf("subagents");
+          const parentSessionId = parts[subagentsIdx - 1];
+          if (parentSessionId && conversationCache[parentSessionId]) {
+            parentConversationId = conversationCache[parentSessionId];
+          }
+        }
+
+        log(`Startup scan: Syncing ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId})` : ""}`);
 
         await processSessionFile(
           filePath,
@@ -3744,7 +3844,8 @@ async function main(): Promise<void> {
           retryQueue,
           pendingMessages,
           titleCache,
-          updateState
+          updateState,
+          parentConversationId,
         );
       }
 
@@ -4015,12 +4116,28 @@ async function main(): Promise<void> {
           if (Array.isArray(messages)) {
             log(`Received array with ${messages.length} pending message(s)`);
             for (const msg of messages) {
-              log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}"`);
+              log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}" image_storage_id=${msg.image_storage_id || "none"}`);
+
+              let messageContent = msg.content;
+              if (msg.image_storage_id) {
+                try {
+                  const imagePath = await downloadImage(msg.image_storage_id, syncService);
+                  if (imagePath) {
+                    const realText = msg.content.replace(/^\[image\]$/i, "").trim();
+                    messageContent = realText
+                      ? `${realText} [Image ${imagePath}]`
+                      : `[Image ${imagePath}]`;
+                    log(`Downloaded image to ${imagePath}`);
+                  }
+                } catch (err) {
+                  log(`Failed to download image: ${err instanceof Error ? err.message : String(err)}`);
+                }
+              }
 
               try {
                 const delivered = await deliverMessage(
                   msg.conversation_id,
-                  msg.content,
+                  messageContent,
                   conversationCache,
                   syncService,
                   msg._id,
