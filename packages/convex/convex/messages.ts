@@ -122,6 +122,24 @@ export const addMessage = mutation({
       }
     }
 
+    let images = args.images;
+    if (args.role === "user" && (!images || images.length === 0)) {
+      const pendingWithImage = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+        .filter((q) => q.neq(q.field("image_storage_id"), undefined))
+        .order("desc")
+        .first();
+      if (pendingWithImage?.image_storage_id) {
+        const c = (args.content || "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
+          const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
+          const contentMatch = c === pc;
+        if (contentMatch) {
+          images = [{ media_type: "image/png", storage_id: pendingWithImage.image_storage_id }];
+        }
+      }
+    }
+
     const messageId = await ctx.db.insert("messages", {
       conversation_id: args.conversation_id,
       message_uuid: args.message_uuid,
@@ -130,7 +148,7 @@ export const addMessage = mutation({
       thinking: args.thinking,
       tool_calls: args.tool_calls,
       tool_results: args.tool_results,
-      images: args.images,
+      images,
       subtype: args.subtype,
       timestamp: msgTimestamp,
     });
@@ -255,6 +273,24 @@ export const addMessages = mutation({
         }
       }
 
+      let images = msg.images;
+      if (msg.role === "user" && (!images || images.length === 0)) {
+        const pendingWithImage = await ctx.db
+          .query("pending_messages")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+          .filter((q) => q.neq(q.field("image_storage_id"), undefined))
+          .order("desc")
+          .first();
+        if (pendingWithImage?.image_storage_id) {
+          const c = (msg.content || "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
+            const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
+            const contentMatch = c === pc;
+          if (contentMatch) {
+            images = [{ media_type: "image/png", storage_id: pendingWithImage.image_storage_id }];
+          }
+        }
+      }
+
       const messageId = await ctx.db.insert("messages", {
         conversation_id: args.conversation_id,
         message_uuid: msg.message_uuid,
@@ -263,7 +299,7 @@ export const addMessages = mutation({
         thinking: msg.thinking,
         tool_calls: msg.tool_calls,
         tool_results: msg.tool_results,
-        images: msg.images,
+        images,
         subtype: msg.subtype,
         timestamp: msgTimestamp,
       });

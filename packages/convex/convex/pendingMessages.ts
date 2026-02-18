@@ -27,6 +27,7 @@ export const sendMessageToSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
     content: v.string(),
+    image_storage_id: v.optional(v.id("_storage")),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -44,13 +45,11 @@ export const sendMessageToSession = mutation({
       throw new Error("Unauthorized: can only send messages to your own conversations");
     }
 
-    // Allow sending to both active and completed conversations
-    // The daemon will auto-resume completed sessions
-
     const messageId = await ctx.db.insert("pending_messages", {
       conversation_id: args.conversation_id,
       from_user_id: authUserId,
       content: args.content,
+      image_storage_id: args.image_storage_id,
       status: "pending" as const,
       created_at: Date.now(),
       retry_count: 0,
