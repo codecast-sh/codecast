@@ -33,7 +33,7 @@ import { copyToClipboard } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "./tools/MarkdownRenderer";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
-import { patch as cachePatch } from "../store/convexCache";
+import { setDraft, getDraft, clearDraft } from "../store/convexCache";
 import { usePendingSessionStore } from "../store/pendingSessionStore";
 import { useOptimisticMessagesStore } from "../store/optimisticMessagesStore";
 
@@ -99,7 +99,7 @@ export type ConversationData = {
   messages: Message[];
   user?: { name?: string; email?: string; avatar_url?: string | null } | null;
   parent_conversation_id?: string | null;
-  child_conversations?: Array<{ _id: string; title: string }>;
+  child_conversations?: Array<{ _id: string; title: string; is_subagent?: boolean }>;
   child_conversation_map?: Record<string, string>;
   git_branch?: string | null;
   git_status?: string | null;
@@ -276,7 +276,7 @@ function formatTimestamp(ts: number) {
 function formatDuration(startTs: number): string {
   const diff = Date.now() - startTs;
   const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return '<1m';
+  if (minutes < 1) return '';
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   const remainMin = minutes % 60;
@@ -1172,6 +1172,17 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
                       </button>
                     </>
                   )}
+                  {onStartShareSelection && messageId && !shareSelectionMode && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onStartShareSelection(messageId); }}
+                      className="text-xs font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors flex items-center gap-1"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                      </svg>
+                      Share
+                    </button>
+                  )}
                 </div>
                 {mdFullscreen && createPortal(
                   <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setMdFullscreen(false)}>
@@ -1506,8 +1517,12 @@ function SkillBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
-function PlanModeBlock({ tool }: { tool: ToolCall }) {
+function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
   const isEnter = tool.name === "EnterPlanMode";
+  const isExit = tool.name === "ExitPlanMode";
+  const isWaitingForApproval = isExit && !result && !!onSendMessage;
+  const [sent, setSent] = useState(false);
+
   return (
     <div className="my-0.5">
       <div className="flex items-center gap-1.5 text-xs">
@@ -1519,13 +1534,33 @@ function PlanModeBlock({ tool }: { tool: ToolCall }) {
           {isEnter ? "enter" : "exit"}
         </span>
       </div>
+      {isWaitingForApproval && !sent && (
+        <div className="flex items-center gap-1.5 mt-1.5 ml-0.5">
+          <button
+            onClick={() => { setSent(true); onSendMessage("continue"); }}
+            className="text-[11px] px-2.5 py-1 rounded border border-sol-green/40 bg-sol-green/10 text-sol-green hover:bg-sol-green/20 transition-colors cursor-pointer"
+          >
+            Start implementing
+          </button>
+          <button
+            onClick={() => { setSent(true); onSendMessage("adjust the plan"); }}
+            className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text-muted hover:bg-sol-bg-alt/80 transition-colors cursor-pointer"
+          >
+            Adjust plan
+          </button>
+        </div>
+      )}
+      {sent && (
+        <div className="text-[10px] text-sol-text-dim mt-1 ml-0.5 italic">Message sent</div>
+      )}
     </div>
   );
 }
 
-function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
   let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
+  const [sentOption, setSentOption] = useState<string | null>(null);
 
   const questions = parsedInput.questions || [];
   if (questions.length === 0) return null;
@@ -1540,6 +1575,8 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
       answers[match[1]] = match[2];
     }
   }
+
+  const isInteractive = !result && !!onSendMessage && !sentOption;
 
   return (
     <div className="my-1.5 ml-1 border-l-2 border-sol-violet/30 pl-3 space-y-2.5">
@@ -1562,16 +1599,25 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
               {q.options.map((opt, j) => {
                 const cleanLabel = opt.label.replace(" (Recommended)", "");
                 const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
-                return (
+                const isSentChoice = sentOption === cleanLabel;
+                return isInteractive ? (
+                  <button
+                    key={j}
+                    onClick={() => { setSentOption(cleanLabel); onSendMessage(cleanLabel); }}
+                    className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-sol-violet/30 text-sol-violet/80 hover:bg-sol-violet/15 hover:border-sol-violet/50 hover:text-sol-violet transition-colors cursor-pointer"
+                  >
+                    {opt.label}
+                  </button>
+                ) : (
                   <span
                     key={j}
                     className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${
-                      isSelected
+                      isSelected || isSentChoice
                         ? "bg-sol-green/15 border-sol-green/40 text-sol-green"
                         : "border-sol-border/30 text-sol-text-dim"
                     }`}
                   >
-                    {isSelected && (
+                    {(isSelected || isSentChoice) && (
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
@@ -1723,7 +1769,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
 
 function isInterruptMessage(content: string): boolean {
   const trimmed = content.trim();
-  return trimmed === "[Request interrupted by user]" || trimmed === "[Request cancelled by user]";
+  return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
 }
 
 function InterruptStatusLine() {
@@ -1959,14 +2005,18 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string }>; messageUuid?: string }) {
+function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string }>; messageUuid?: string; images?: ImageData[] }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
   const [contentExpanded, setContentExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const isMarkdown = hasRichMarkdown(content);
+  const displayContent = content
+    .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
+    .replace(/\[image\]/gi, "")
+    .trim();
+  const isMarkdown = hasRichMarkdown(displayContent);
 
   const effectivelyCollapsed = collapsed && !isExpanded;
 
@@ -2042,7 +2092,19 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
 
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
-      <div className={`absolute top-2 right-2 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+      <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+        {onStartShareSelection && (
+          <button
+            onClick={() => onStartShareSelection(messageId)}
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            title="Share message"
+            aria-label="Share message"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+            </svg>
+          </button>
+        )}
         <button
           onClick={handleCopyLink}
           className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
@@ -2079,7 +2141,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         {onForkFromMessage && messageUuid && (
           <button
             onClick={() => onForkFromMessage(messageUuid)}
-            className="p-1.5 rounded hover:bg-purple-500/20 text-purple-400"
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
             title="Fork from this message"
             aria-label="Fork from this message"
           >
@@ -2116,15 +2178,15 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
           </svg>
         )}
       </div>
-      <div
+      {displayContent ? <div
         ref={contentRef}
         className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : isMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}
         style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
       >
-        {effectivelyCollapsed ? content : (() => {
-          const hasTeammate = content.includes('<teammate-message');
+        {effectivelyCollapsed ? displayContent : (() => {
+          const hasTeammate = displayContent.includes('<teammate-message');
           if (hasTeammate) {
-            const tmParts = parseTeammateMessages(content);
+            const tmParts = parseTeammateMessages(displayContent);
             return (
               <div className="space-y-1">
                 {tmParts.map((part, i) => part.type === 'teammate' ? (
@@ -2147,9 +2209,9 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
               </div>
             );
           }
-          const hasSkill = content.includes('<skill>');
+          const hasSkill = displayContent.includes('<skill>');
           if (hasSkill) {
-            const { parts } = parseSkillBlocks(content);
+            const { parts } = parseSkillBlocks(displayContent);
             return (
               <div className="space-y-2">
                 {parts.map((part, i) => part.type === 'skill' ? (
@@ -2189,10 +2251,15 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                   return <pre {...props}>{children}</pre>;
                 },
               }}
-            >{content}</ReactMarkdown>
-          ) : content;
+            >{displayContent}</ReactMarkdown>
+          ) : displayContent;
         })()}
-      </div>
+      </div> : null}
+      {!effectivelyCollapsed && images && images.length > 0 && (
+        <div className="pl-8 mt-2">
+          {images.map((img, i) => <ImageBlock key={i} image={img} />)}
+        </div>
+      )}
       {isTruncated && (
         <button
           onClick={handleToggleExpand}
@@ -2322,6 +2389,8 @@ function AssistantBlock({
   onForkFromMessage,
   forkChildren,
   model,
+  onSendInlineMessage,
+  isConversationActive,
 }: {
   content?: string;
   timestamp: number;
@@ -2352,9 +2421,11 @@ function AssistantBlock({
   onForkFromMessage?: (messageUuid: string) => void;
   forkChildren?: Array<{ _id: string; title: string; short_id?: string }>;
   model?: string;
+  onSendInlineMessage?: (content: string) => void;
+  isConversationActive?: boolean;
 }) {
   const COLLAPSED_LINES = 2;
-  const CONTENT_MAX_HEIGHT = 300;
+  const CONTENT_MAX_HEIGHT = 800;
 
   const [contentExpanded, setContentExpanded] = useState(true);
   const [isOverflowing, setIsOverflowing] = useState(false);
@@ -2450,9 +2521,9 @@ function AssistantBlock({
     }
   };
 
-  // Only show Claude header for first message in sequence and messages with actual content
+  // Show Claude header for first message in sequence (regardless of content type)
   const visibleThinking = hasThinking && showThinking;
-  const shouldShowHeader = showHeader && (hasContent || visibleThinking);
+  const shouldShowHeader = showHeader;
   const onlyToolCalls = hasToolCalls && !hasContent && !visibleThinking;
   const hasVisibleContent = hasContent || visibleThinking || hasToolCalls || hasImages;
 
@@ -2468,9 +2539,21 @@ function AssistantBlock({
   }
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       {(hasContent || hasToolCalls) && (
-        <div className={`absolute top-2 right-2 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+        <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+          {onStartShareSelection && (
+            <button
+              onClick={() => onStartShareSelection(messageId)}
+              className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+              title="Share message"
+              aria-label="Share message"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={handleCopyLink}
             className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
@@ -2507,7 +2590,7 @@ function AssistantBlock({
           {onForkFromMessage && messageUuid && (
             <button
               onClick={() => onForkFromMessage(messageUuid)}
-              className="p-1.5 rounded hover:bg-purple-500/20 text-purple-400"
+              className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
               title="Fork from this message"
               aria-label="Fork from this message"
             >
@@ -2569,7 +2652,7 @@ function AssistantBlock({
           ) : tc.name === "TodoWrite" ? (
             <TodoWriteBlock key={tc.id} tool={tc} />
           ) : tc.name === "AskUserQuestion" ? (
-            <AskUserQuestionBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
+            <AskUserQuestionBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={isConversationActive ? onSendInlineMessage : undefined} />
           ) : tc.name === "TaskList" ? (
             <TaskListBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
@@ -2581,7 +2664,7 @@ function AssistantBlock({
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
           ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
-            <PlanModeBlock key={tc.id} tool={tc} />
+            <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={isConversationActive ? onSendInlineMessage : undefined} />
           ) : (
             <ToolBlock
               key={tc.id}
@@ -2653,12 +2736,13 @@ function AssistantBlock({
                 </button>
                 <button
                   onClick={() => setFullscreen(true)}
-                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors"
+                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
                   title="Fullscreen"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
                   </svg>
+                  <span className="text-xs text-sol-text-dim">Full Screen</span>
                 </button>
               </div>
             )}
@@ -2886,7 +2970,21 @@ function PlanBlock({ content, timestamp, collapsed, messageId, onStartShareSelec
   }
 
   return (
-    <div className="mb-6 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 overflow-hidden">
+    <div className="group/plan relative mb-6 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 overflow-hidden">
+      {onStartShareSelection && messageId && !shareSelectionMode && (
+        <div className="absolute -top-2 right-0 transition-opacity opacity-0 group-hover/plan:opacity-100 z-10 bg-sol-bg rounded shadow-md px-0.5 flex gap-0.5">
+          <button
+            onClick={() => onStartShareSelection(messageId)}
+            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
+            title="Share message"
+            aria-label="Share message"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+            </svg>
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between px-4 py-2 border-b border-sol-border/40">
         <div className="flex items-center gap-2">
           <svg className="w-3.5 h-3.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2895,28 +2993,15 @@ function PlanBlock({ content, timestamp, collapsed, messageId, onStartShareSelec
           <span className="text-xs font-medium text-sol-text-muted">Plan</span>
           <span className="text-xs text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
         </div>
-        <div className="flex items-center gap-1">
-          {onStartShareSelection && messageId && !shareSelectionMode && (
-            <button
-              onClick={() => onStartShareSelection(messageId)}
-              className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors"
-              title="Share"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-              </svg>
-            </button>
-          )}
-          <button
-            onClick={() => setFullscreen(true)}
-            className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors"
-            title="Fullscreen"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-            </svg>
-          </button>
-        </div>
+        <button
+          onClick={() => setFullscreen(true)}
+          className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          title="Fullscreen"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          </svg>
+        </button>
       </div>
       <div className="px-4 py-3">
         <div
@@ -3129,27 +3214,55 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
-function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string }) {
-  const [message, setMessage] = useState(initialDraft || "");
+function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean }) {
+  console.log('[DRAFT] MessageInput MOUNT/RENDER', conversationId.slice(-8));
+  const cached = getDraft(conversationId);
+  const [message, setMessage] = useState(() => {
+    const val = cached?.draft_message ?? initialDraft ?? "";
+    console.log('[DRAFT] useState init', conversationId.slice(-8), 'cached:', !!cached, 'initialDraft:', initialDraft, 'result:', val);
+    return val;
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
   const [isFocused, setIsFocused] = useState(false);
+  const [pastedImage, setPastedImage] = useState<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean } | null>(() => {
+    if (cached?.draft_image_storage_id) {
+      return { file: new File([], cached.draft_image_name || "image"), previewUrl: cached.draft_image_preview || "", storageId: cached.draft_image_storage_id, uploading: false };
+    }
+    return null;
+  });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const getRealId = usePendingSessionStore((s) => s.getRealId);
   const addOptimistic = useOptimisticMessagesStore((s) => s.add);
-  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    draftTimerRef.current = setTimeout(() => {
-      cachePatch("conversations", conversationId, { draft_message: message || null });
-    }, 1500);
-    return () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); };
-  }, [message, conversationId]);
+  const updateDraft = useCallback((text: string, image?: { storageId?: string; previewUrl?: string; name?: string } | null) => {
+    if (!text && !image) {
+      clearDraft(conversationId);
+    } else {
+      setDraft(conversationId, {
+        draft_message: text || null,
+        draft_image_storage_id: image?.storageId || null,
+        draft_image_preview: image?.previewUrl || null,
+        draft_image_name: image?.name || null,
+      });
+    }
+  }, [conversationId]);
+
+  const handleMessageChange = useCallback((val: string) => {
+    setMessage(val);
+    const existing = getDraft(conversationId);
+    if (!val && !existing?.draft_image_storage_id) {
+      clearDraft(conversationId);
+    } else {
+      setDraft(conversationId, { ...existing, draft_message: val || null });
+    }
+  }, [conversationId]);
 
   const isInactive = status && status !== "active";
-  const isExpanded = !!onSendAndAdvance || isFocused || message.length > 0;
+  const hasContent = message.trim().length > 0 || !!pastedImage;
+  const isExpanded = !!onSendAndAdvance || isFocused || message.length > 0 || !!pastedImage;
 
   const resetTextareaHeight = () => {
     if (textareaRef.current) {
@@ -3168,9 +3281,51 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     }
   }, [autoFocusInput, conversationId]);
 
+  const clearImage = useCallback(() => {
+    if (pastedImage) {
+      URL.revokeObjectURL(pastedImage.previewUrl);
+      setPastedImage(null);
+      updateDraft(message, null);
+    }
+  }, [pastedImage, updateDraft, message]);
+
+  const uploadImage = useCallback(async (file: File) => {
+    const previewUrl = URL.createObjectURL(file);
+    setPastedImage({ file, previewUrl, uploading: true });
+    try {
+      const uploadUrl = await generateUploadUrl({});
+      const result = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      const { storageId } = await result.json();
+      setPastedImage(prev => prev ? { ...prev, storageId, uploading: false } : null);
+      updateDraft(message, { storageId, previewUrl, name: file.name });
+    } catch {
+      toast.error("Failed to upload image");
+      URL.revokeObjectURL(previewUrl);
+      setPastedImage(null);
+    }
+  }, [generateUploadUrl, updateDraft, message]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (file) uploadImage(file);
+        return;
+      }
+    }
+  }, [uploadImage]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!message.trim() || isSubmitting) return;
+    const canSend = message.trim() || (pastedImage && !pastedImage.uploading && pastedImage.storageId);
+    if (!canSend || isSubmitting) return;
 
     setIsSubmitting(true);
     setLastStatus(null);
@@ -3180,16 +3335,17 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
       if (realId.startsWith("temp_")) {
         throw new Error("Session is still being created, please try again in a moment");
       }
-      const trimmed = message.trim();
+      const trimmed = message.trim() || (pastedImage ? "[image]" : "");
       await sendMessage({
         conversation_id: realId as Id<"conversations">,
         content: trimmed,
+        image_storage_id: pastedImage?.storageId ?? undefined,
       });
-      addOptimistic(realId, trimmed);
+      addOptimistic(realId, trimmed, pastedImage?.storageId ? [{ media_type: pastedImage.file.type, storage_id: pastedImage.storageId as string }] : undefined);
       setLastStatus("delivered");
       setMessage("");
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-      cachePatch("conversations", conversationId, { draft_message: null });
+      clearImage();
+      updateDraft("", null);
 
       setTimeout(() => setLastStatus(null), 2000);
     } catch (error) {
@@ -3212,6 +3368,8 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     }
   };
 
+  const canSubmit = hasContent && !isSubmitting && !(pastedImage?.uploading);
+
   return (
     <div className="shrink-0 z-30 pointer-events-none sticky bottom-0">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
@@ -3227,40 +3385,72 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
               </p>
             </div>
           )}
+          {isWaitingForResponse && (
+            <div className={`mx-auto px-4 mb-1.5 ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+              <div className="flex items-center gap-2 text-[11px] text-sol-text-dim">
+                <ClaudeIcon />
+                <span>Waiting for response...</span>
+              </div>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className={`mx-auto px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
-            <div className={`flex items-end gap-2 bg-sol-bg-alt border border-sol-border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"}`}>
-              <textarea
-                ref={textareaRef}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onFocus={() => setIsFocused(true)}
-                onBlur={() => setIsFocused(false)}
-                disabled={isSubmitting}
-                placeholder="Send a message to this session..."
-                rows={1}
-                className="flex-1 bg-transparent text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1"
-              />
-              <button
-                type="submit"
-                disabled={!message.trim() || isSubmitting}
-                className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center shrink-0 border ${!message.trim() || isSubmitting ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
-              >
-                {isSubmitting ? (
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                ) : lastStatus === "delivered" ? (
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : (
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
-                  </svg>
-                )}
-              </button>
+            <div className={`flex flex-col bg-sol-bg-alt border border-sol-border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"}`}>
+              {pastedImage && (
+                <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50">
+                  <div className="relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0">
+                    <img src={pastedImage.previewUrl} alt="Pasted" className="h-full w-full object-cover" />
+                    {pastedImage.uploading && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <svg className="w-5 h-5 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-xs text-sol-text-secondary truncate flex-1">{pastedImage.file.name || "Pasted image"}</span>
+                  <button type="button" onClick={clearImage} className="w-6 h-6 rounded-full bg-sol-bg hover:bg-sol-border flex items-center justify-center text-sol-text-secondary hover:text-sol-text transition-colors shrink-0">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <textarea
+                  ref={textareaRef}
+                  value={message}
+                  onChange={(e) => handleMessageChange(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
+                  onFocus={() => setIsFocused(true)}
+                  onBlur={() => setIsFocused(false)}
+                  disabled={isSubmitting}
+                  placeholder="Send a message to this session..."
+                  rows={1}
+                  className="flex-1 bg-transparent text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1"
+                />
+                <button
+                  type="submit"
+                  disabled={!canSubmit}
+                  className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center shrink-0 border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
+                >
+                  {isSubmitting ? (
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  ) : lastStatus === "delivered" ? (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </div>
           </form>
         </div>
@@ -3296,11 +3486,46 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
   const [stickyMsgVisible, setStickyMsgVisible] = useState(false);
+  const prevStickyMsgIdRef = useRef<string | null>(null);
+  const prevStickyIdxRef = useRef<number | null>(null);
+  const stickyGapRef = useRef<{ prevIdx: number } | null>(null);
   const headerRef = useRef<HTMLElement>(null);
   const [headerHeight, setHeaderHeight] = useState(32);
 
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
+  const sendEscape = useMutation(api.conversations.sendEscapeToSession);
+  const sendInlineMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const addOptimisticMsg = useOptimisticMessagesStore((s) => s.add);
+
+  const handleSendInlineMessage = useCallback(async (content: string) => {
+    if (!conversation) return;
+    try {
+      await sendInlineMessage({ conversation_id: conversation._id, content });
+      addOptimisticMsg(conversation._id, content);
+    } catch {
+      toast.error("Failed to send message");
+    }
+  }, [conversation, sendInlineMessage, addOptimisticMsg]);
+  const managedSession = useQuery(
+    api.managedSessions.isSessionManaged,
+    conversation && isOwner && conversation.status === "active" && !conversation._id.startsWith("temp_")
+      ? { conversation_id: conversation._id }
+      : "skip"
+  );
+  const isSessionLive = managedSession?.managed === true;
+
+  useEffect(() => {
+    if (!conversation || !isOwner || conversation.status !== "active") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      sendEscape({ conversation_id: conversation._id });
+      toast.info("Escape sent to session");
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [conversation, isOwner, sendEscape]);
 
   const messages = conversation?.messages || [];
 
@@ -3414,10 +3639,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (item.type !== 'message') return true;
       const msg = item.data as Message;
       if (msg.role === "user" && msg.tool_results && msg.tool_results.length > 0) return false;
-      if (msg.role === "user" && (!msg.content || !msg.content.trim())) return false;
+      if (msg.role === "user" && (!msg.content || !msg.content.trim()) && !(msg.images && msg.images.length > 0)) return false;
       return true;
     });
   }, [messages, commits, pullRequests]);
+
+  const isWaitingForResponse = useMemo(() => {
+    if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
+    const last = timeline[timeline.length - 1];
+    return last.type === 'message' && (last.data as Message).role === 'user';
+  }, [conversation, timeline, hasMoreBelow]);
 
   const stickyUserMsgIndices = useMemo(() => {
     const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "continue", "<task-notification>"];
@@ -3430,6 +3661,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const t = msg.content.trim();
       if (t.length < 4 || NOISE_PREFIXES.some(p => t.startsWith(p))) continue;
       if (isCommandMessage(t) || isInterruptMessage(t)) continue;
+      const stripped = t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
+      if (!stripped || stripped.length < 4) continue;
       indices.push(i);
     }
     return indices;
@@ -3762,29 +3995,33 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
 
   useEffect(() => {
-    if (stickyUserMsgIndices.length === 0) {
-      if (fallbackStickyContent) {
-        setActiveStickyMsg({ index: -1, content: fallbackStickyContent, id: '__fallback__' });
-        setStickyMsgVisible(true);
-      } else {
+    const el = containerRef.current;
+    if (!el) {
+      if (stickyUserMsgIndices.length === 0 && !fallbackStickyContent) {
         setActiveStickyMsg(null);
         setStickyMsgVisible(false);
       }
       return;
     }
-    const el = containerRef.current;
-    if (!el) return;
     let ticking = false;
     const check = () => {
       ticking = false;
       const scrollTop = el.scrollTop;
+      if (scrollTop <= headerHeight + 40) {
+        prevStickyMsgIdRef.current = null;
+        prevStickyIdxRef.current = null;
+        stickyGapRef.current = null;
+        setActiveStickyMsg(null);
+        setStickyMsgVisible(false);
+        return;
+      }
       const virtualItems = virtualizer.getVirtualItems();
       let bestIdx: number | null = null;
       for (let i = stickyUserMsgIndices.length - 1; i >= 0; i--) {
         const tlIdx = stickyUserMsgIndices[i];
         const vItem = virtualItems.find(v => v.index === tlIdx);
         if (vItem) {
-          if (vItem.start + vItem.size <= scrollTop + 80) {
+          if (vItem.start + vItem.size <= scrollTop + 80 && vItem.start < scrollTop - headerHeight) {
             bestIdx = tlIdx;
             break;
           }
@@ -3798,12 +4035,41 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (bestIdx !== null) {
         const item = timeline[bestIdx];
         const msg = item.data as Message;
-        setActiveStickyMsg({ index: bestIdx, content: msg.content!, id: msg._id });
-        setStickyMsgVisible(true);
+        const msgId = msg._id;
+        const prevId = prevStickyMsgIdRef.current;
+        if (msgId !== prevId) {
+          if (prevId !== null && prevId !== '__fallback__' && prevStickyIdxRef.current !== null) {
+            stickyGapRef.current = { prevIdx: prevStickyIdxRef.current };
+          }
+          prevStickyMsgIdRef.current = msgId;
+          prevStickyIdxRef.current = bestIdx;
+        }
+        let inGap = false;
+        if (stickyGapRef.current) {
+          const gapVItem = virtualItems.find(v => v.index === stickyGapRef.current!.prevIdx);
+          if (gapVItem) {
+            const prevMsgTopVisual = gapVItem.start - scrollTop;
+            if (prevMsgTopVisual < headerHeight + 200) {
+              inGap = true;
+            } else {
+              stickyGapRef.current = null;
+            }
+          } else {
+            stickyGapRef.current = null;
+          }
+        }
+        setActiveStickyMsg({ index: bestIdx, content: msg.content!, id: msgId });
+        setStickyMsgVisible(!inGap);
       } else if (fallbackStickyContent) {
+        prevStickyMsgIdRef.current = '__fallback__';
+        prevStickyIdxRef.current = null;
+        stickyGapRef.current = null;
         setActiveStickyMsg({ index: -1, content: fallbackStickyContent, id: '__fallback__' });
         setStickyMsgVisible(true);
       } else {
+        prevStickyMsgIdRef.current = null;
+        prevStickyIdxRef.current = null;
+        stickyGapRef.current = null;
         setActiveStickyMsg(null);
         setStickyMsgVisible(false);
       }
@@ -3812,7 +4078,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent]);
+  }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent, headerHeight]);
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: (messageId: string) => {
@@ -3960,6 +4226,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow]);
 
+  useEffect(() => {
+    if (isWaitingForResponse && containerRef.current && isNearBottomRef.current) {
+      requestAnimationFrame(() => {
+        if (containerRef.current) {
+          containerRef.current.scrollTop = containerRef.current.scrollHeight;
+        }
+      });
+    }
+  }, [isWaitingForResponse]);
+
   const hasInitialScrolled = useRef(false);
   useEffect(() => {
     if (timeline.length > 0 && !hasInitialScrolled.current && !window.location.hash && !highlightQuery) {
@@ -4075,7 +4351,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  const title = conversation?.title || `Session ${conversation?.session_id?.slice(0, 8) || "..."}`;
+  const title = conversation?.title || "New Session";
   const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
   const latestMessageTimestamp = useMemo(() => {
     if (!conversation?.messages || conversation.messages.length === 0) return undefined;
@@ -4230,15 +4506,32 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <PlanBlock key={msg._id} content={planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} onStartShareSelection={handleStartShareSelection} shareSelectionMode={shareSelectionMode} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} />;
+        return <UserPrompt key={msg._id} content={msg.content} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} />;
+      }
+      if (msg.images && msg.images.length > 0) {
+        const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
+        return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} />;
       }
       return null;
     }
 
     if (msg.role === "assistant") {
-      // Find previous non-commit item to determine if this is first in assistant sequence
+      // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
+      // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
       let prevIdx = index - 1;
-      while (prevIdx >= 0 && timeline[prevIdx].type === 'commit') prevIdx--;
+      while (prevIdx >= 0) {
+        const checkItem = timeline[prevIdx];
+        if (checkItem.type === 'commit') { prevIdx--; continue; }
+        if (checkItem.type !== 'message') break;
+        const checkMsg = checkItem.data as Message;
+        if (checkMsg.role !== 'assistant') break;
+        const hasVisibleContent = (checkMsg.content && stripSystemTags(checkMsg.content).trim().length > 0)
+          || (checkMsg.tool_calls && checkMsg.tool_calls.length > 0)
+          || (showThinking && checkMsg.thinking && checkMsg.thinking.trim().length > 0)
+          || (checkMsg.images && checkMsg.images.length > 0);
+        if (hasVisibleContent) break;
+        prevIdx--;
+      }
       const prevItem = prevIdx >= 0 ? timeline[prevIdx] : null;
       const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
       const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
@@ -4349,6 +4642,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           onForkFromMessage={handleForkFromMessage}
           forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined}
           model={conversation?.model}
+          onSendInlineMessage={handleSendInlineMessage}
+          isConversationActive={conversation?.status === "active"}
         />
       );
     }
@@ -4623,13 +4918,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         {conversation.compaction_count} compaction{conversation.compaction_count === 1 ? '' : 's'}
                       </DropdownMenuItem>
                     )}
-                    {conversation.child_conversations && conversation.child_conversations.length > 0 && (
-                      <DropdownMenuItem disabled>
-                        <svg className="w-3 h-3 mr-1.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                        </svg>
-                        {conversation.child_conversations.length} subagent{conversation.child_conversations.length > 1 ? "s" : ""}
-                      </DropdownMenuItem>
+                    {conversation.child_conversations && conversation.child_conversations.filter(c => c.is_subagent).length > 0 && (
+                      <>
+                        <DropdownMenuItem disabled className="text-[10px] uppercase tracking-wider text-sol-text-dim">
+                          Subagents ({conversation.child_conversations.filter(c => c.is_subagent).length})
+                        </DropdownMenuItem>
+                        {conversation.child_conversations.filter(c => c.is_subagent).map((child) => (
+                          <DropdownMenuItem key={child._id} asChild>
+                            <Link href={`/conversation/${child._id}`} className="text-xs">
+                              <svg className="w-3 h-3 mr-1.5 text-sol-cyan flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                              </svg>
+                              <span className="truncate">{child.title}</span>
+                            </Link>
+                          </DropdownMenuItem>
+                        ))}
+                      </>
                     )}
                     {taskStats && (
                       <DropdownMenuItem disabled>
@@ -4676,7 +4980,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <UserIcon />
                 <span className="text-sol-blue text-xs font-medium">{conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
               </div>
-              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8">{activeStickyMsg.content}</div>
+              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8">{activeStickyMsg.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim()}</div>
             </div>
           </div>
         </div>
@@ -4694,8 +4998,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         {!conversation ? (
           <ConversationSkeleton />
         ) : timeline.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center text-sol-text-dim text-sm">
-            No messages in this conversation
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 text-sol-text-dim text-sm">
+            {conversation.status === "active" && (conversation.message_count ?? 0) > 0 ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 animate-spin text-sol-cyan/60" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <span>Starting session...</span>
+                </div>
+                <span className="text-xs text-sol-text-dim/60">Agent is initializing</span>
+              </>
+            ) : conversation.status !== "active" ? (
+              "No messages in this conversation"
+            ) : null}
           </div>
         ) : (
           <>
@@ -4795,25 +5112,36 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </div>
             )}
           </div>
-          {conversation?.child_conversations && conversation.child_conversations.length > 0 && !hasMoreBelow && (
-            <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[10px] text-sol-text-dim uppercase tracking-wider">Subagents</span>
-                {conversation.child_conversations.map((child) => (
-                  <Link
-                    key={child._id}
-                    href={`/conversation/${child._id}`}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-sol-cyan/10 text-sol-cyan/70 border border-sol-cyan/20 hover:bg-sol-cyan/20 hover:text-sol-cyan transition-colors truncate max-w-[200px]"
-                  >
-                    <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                    </svg>
-                    {child.title}
-                  </Link>
-                ))}
+          {conversation?.child_conversations && conversation.child_conversations.length > 0 && !hasMoreBelow && (() => {
+            const childMap = conversation.child_conversation_map || {};
+            const messageUuids = new Set(messages.map(m => m.message_uuid).filter(Boolean));
+            const renderedInlineIds = new Set(
+              Object.entries(childMap)
+                .filter(([uuid]) => messageUuids.has(uuid))
+                .map(([, childId]) => childId)
+            );
+            const continuationChildren = conversation.child_conversations.filter(c => !renderedInlineIds.has(c._id) && !c.is_subagent);
+            if (continuationChildren.length === 0) return null;
+            return (
+              <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] text-sol-text-dim uppercase tracking-wider">Continued in</span>
+                  {continuationChildren.map((child) => (
+                    <Link
+                      key={child._id}
+                      href={`/conversation/${child._id}`}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-sol-cyan/10 text-sol-cyan/70 border border-sol-cyan/20 hover:bg-sol-cyan/20 hover:text-sol-cyan transition-colors truncate max-w-[200px]"
+                    >
+                      <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                      </svg>
+                      {child.title}
+                    </Link>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           </>
         )}
 
@@ -4821,11 +5149,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {showMessageInput && conversation && (
-        <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} />
+        <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} />
       )}
 
       {timeline.length > 0 && (
-        <div className="absolute bottom-24 right-8 z-30 flex items-center gap-2.5">
+        <div className="absolute bottom-24 right-8 z-30 flex items-stretch gap-2.5">
           <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
@@ -4882,10 +5210,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </button>
           </div>
           {(isScrollable && (!isNearTop || userScrolled) || hasMoreAbove || hasMoreBelow) && (
-            <div className="w-1.5 h-16 rounded-sm relative border border-sol-border overflow-hidden">
+            <div className="w-1.5 relative border border-sol-border overflow-hidden">
               <div
                 ref={scrollProgressRef}
-                className="w-full bg-sol-cyan/60"
+                className="w-full bg-sol-cyan/60 absolute inset-x-0 top-0"
                 style={{ height: '0%', transition: 'height 0.15s ease-out' }}
               />
             </div>

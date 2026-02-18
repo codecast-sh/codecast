@@ -5,11 +5,13 @@ type MutationFn = (id: string, fields: Record<string, any>) => Promise<any>;
 interface ConvexCacheState {
   _pending: Record<string, Record<string, any>>;
   _mutations: Record<string, MutationFn>;
+  _drafts: Record<string, Record<string, any>>;
 }
 
 export const useConvexCacheStore = create<ConvexCacheState>(() => ({
   _pending: {},
   _mutations: {},
+  _drafts: {},
 }));
 
 export function registerMutation(table: string, fn: MutationFn): void {
@@ -41,6 +43,22 @@ export function patch(table: string, id: string, fields: Record<string, any>): v
       }
     });
   }
+}
+
+export function setDraft(id: string, fields: Record<string, any>): void {
+  console.log('[DRAFT] setDraft', id.slice(-8), fields);
+  useConvexCacheStore.getState()._drafts[id] = fields;
+}
+
+export function getDraft(id: string): Record<string, any> | undefined {
+  const val = useConvexCacheStore.getState()._drafts[id];
+  console.log('[DRAFT] getDraft', id.slice(-8), val ? 'HIT' : 'MISS', val);
+  return val;
+}
+
+export function clearDraft(id: string): void {
+  console.log('[DRAFT] clearDraft', id.slice(-8));
+  delete useConvexCacheStore.getState()._drafts[id];
 }
 
 export function apply<T extends { _id: string }>(doc: T): T {

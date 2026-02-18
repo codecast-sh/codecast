@@ -306,7 +306,7 @@ export function useConversationMessages(
       const removeMatching = useOptimisticMessagesStore.getState().removeMatching;
       for (const msg of newMessagesResult.messages) {
         if (msg.role === "user" && msg.content?.trim()) {
-          removeMatching(conversationId, msg.content);
+          removeMatching(conversationId, msg.content.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim() || msg.content);
         }
       }
 
@@ -460,13 +460,14 @@ export function useConversationMessages(
 
   const mergedMessages = useMemo(() => {
     if (optimisticMsgs.length === 0) return cachedMessages;
+    const stripImageRef = (s: string) => s.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
     const existingContents = new Set(
       cachedMessages
         .filter((m) => m.role === "user" && m.content)
-        .map((m) => m.content!.trim())
+        .map((m) => stripImageRef(m.content!))
     );
     const fresh = optimisticMsgs.filter(
-      (m) => !existingContents.has(m.content.trim())
+      (m) => !existingContents.has(stripImageRef(m.content))
     );
     if (fresh.length === 0) return cachedMessages;
     return [...cachedMessages, ...fresh].sort(

@@ -6,18 +6,19 @@ interface OptimisticMessage {
   content: string;
   timestamp: number;
   _isOptimistic?: true;
+  images?: Array<{ media_type: string; storage_id?: string }>;
 }
 
 interface OptimisticMessagesStore {
   messages: Record<string, OptimisticMessage[]>;
-  add: (conversationId: string, content: string) => string;
+  add: (conversationId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) => string;
   remove: (conversationId: string, messageId: string) => void;
   removeMatching: (conversationId: string, content: string) => void;
 }
 
 export const useOptimisticMessagesStore = create<OptimisticMessagesStore>((set, get) => ({
   messages: {},
-  add: (conversationId, content) => {
+  add: (conversationId, content, images) => {
     const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const msg: OptimisticMessage = {
       _id: id,
@@ -25,6 +26,7 @@ export const useOptimisticMessagesStore = create<OptimisticMessagesStore>((set, 
       content,
       timestamp: Date.now(),
       _isOptimistic: true,
+      ...(images && images.length > 0 ? { images } : {}),
     };
     set((s) => ({
       messages: {
@@ -50,10 +52,11 @@ export const useOptimisticMessagesStore = create<OptimisticMessagesStore>((set, 
     set((s) => {
       const current = s.messages[conversationId];
       if (!current) return s;
-      const trimmed = content.trim();
+      const normalize = (s: string) => s.replace(/\[image\]/gi, "").trim();
+      const trimmed = normalize(content);
       let removed = false;
       const filtered = current.filter((m) => {
-        if (!removed && m.content.trim() === trimmed) {
+        if (!removed && normalize(m.content) === trimmed) {
           removed = true;
           return false;
         }
