@@ -15,6 +15,7 @@ export type InboxSession = {
   idle_summary?: string;
   is_idle: boolean;
   has_pending: boolean;
+  is_deferred?: boolean;
   last_user_message?: string | null;
 };
 
@@ -32,6 +33,7 @@ interface InboxState {
   advanceToNext: () => void;
   stashSession: (id: string) => void;
   unstashSession: (id: string) => void;
+  deferSession: (id: string) => void;
   navigateUp: () => void;
   navigateDown: () => void;
   setCurrentIndex: (index: number) => void;
@@ -156,6 +158,21 @@ export const useQueueStore = create<InboxState>((set, get) => ({
     set({ dismissedIds: newDismissed });
 
     cachePatch("conversations", id, { inbox_dismissed_at: null });
+  },
+
+  deferSession: (id) => {
+    const { sessions, currentIndex } = get();
+    const idx = sessions.findIndex((s) => s._id === id);
+    if (idx < 0 || sessions.length <= 1) return;
+    const session = { ...sessions[idx], is_deferred: true };
+    const updated = [...sessions];
+    updated.splice(idx, 1);
+    updated.push(session);
+    let newIndex = currentIndex;
+    if (idx < currentIndex) newIndex--;
+    set({ sessions: updated, currentIndex: Math.min(Math.max(0, newIndex), updated.length - 1) });
+
+    cachePatch("conversations", id, { inbox_deferred_at: Date.now() });
   },
 
   navigateUp: () => {

@@ -90,6 +90,7 @@ function SessionCard({
   globalIndex,
   onSelect,
   onDismiss,
+  onDefer,
   onRestore,
   variant = "default",
 }: {
@@ -98,6 +99,7 @@ function SessionCard({
   globalIndex: number;
   onSelect: (index: number) => void;
   onDismiss?: (id: string) => void;
+  onDefer?: (id: string) => void;
   onRestore?: (id: string) => void;
   variant?: "default" | "working" | "dismissed";
 }) {
@@ -166,22 +168,43 @@ function SessionCard({
           </div>
         )}
       </button>
-      {onDismiss && (
-        <TooltipProvider delayDuration={300}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                className="absolute top-2 right-1.5 p-1 rounded text-sol-text-dim hover:text-sol-red opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
-                </svg>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="left">Dismiss</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+      {(onDismiss || onDefer) && (
+        <div className="absolute top-1.5 right-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          {onDefer && (
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDefer(session._id); }}
+                    className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v14m0 0l-6-6m6 6l6-6M5 21h14" />
+                    </svg>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Defer</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {onDismiss && (
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
+                    className="p-1 rounded text-sol-text-dim hover:text-sol-red transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
+                    </svg>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Dismiss</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+        </div>
       )}
       {onRestore && (
         <TooltipProvider delayDuration={300}>
@@ -217,6 +240,7 @@ function InboxSessionPanel({
   const currentIndex = useQueueStore((s) => s.currentIndex);
   const setCurrentIndex = useQueueStore((s) => s.setCurrentIndex);
   const stashSession = useQueueStore((s) => s.stashSession);
+  const deferSession = useQueueStore((s) => s.deferSession);
   const unstashSession = useQueueStore((s) => s.unstashSession);
   const showDismissed = useQueueStore((s) => s.showDismissed);
   const setShowDismissed = useQueueStore((s) => s.setShowDismissed);
@@ -261,6 +285,7 @@ function InboxSessionPanel({
                 globalIndex={getGlobalIndex(session)}
                 onSelect={setCurrentIndex}
                 onDismiss={stashSession}
+                onDefer={deferSession}
               />
             ))}
           </>
@@ -281,6 +306,7 @@ function InboxSessionPanel({
                 globalIndex={getGlobalIndex(session)}
                 onSelect={setCurrentIndex}
                 onDismiss={stashSession}
+                onDefer={deferSession}
               />
             ))}
           </>
@@ -301,6 +327,7 @@ function InboxSessionPanel({
                 globalIndex={getGlobalIndex(session)}
                 onSelect={setCurrentIndex}
                 onDismiss={stashSession}
+                onDefer={deferSession}
                 variant="working"
               />
             ))}
@@ -366,9 +393,22 @@ export function QueuePageClient() {
   const navigateUp = useQueueStore((s) => s.navigateUp);
   const navigateDown = useQueueStore((s) => s.navigateDown);
   const stashSession = useQueueStore((s) => s.stashSession);
+  const deferSession = useQueueStore((s) => s.deferSession);
   const rawSetCurrentIndex = useQueueStore((s) => s.setCurrentIndex);
   const viewingDismissedId = useQueueStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useQueueStore((s) => s.setViewingDismissedId);
+
+  const [showShortcuts, setShowShortcuts] = useState(() => {
+    if (typeof window === "undefined") return true;
+    try { return localStorage.getItem("inbox-shortcuts") !== "hidden"; } catch { return true; }
+  });
+  const toggleShortcuts = useCallback(() => {
+    setShowShortcuts((v) => {
+      const next = !v;
+      try { localStorage.setItem("inbox-shortcuts", next ? "visible" : "hidden"); } catch {}
+      return next;
+    });
+  }, []);
 
   const [inboxLayout, setInboxLayout] = useState<{ [key: string]: number }>(() => {
     if (typeof window === "undefined") return { "inbox-main": 76, "inbox-sidebar": 24 };
@@ -462,6 +502,11 @@ export function QueuePageClient() {
     if (current) handleDismiss(current._id);
   }, [sessions, currentIndex, handleDismiss]);
 
+  const handleDeferCurrent = useCallback(() => {
+    const current = sessions[currentIndex];
+    if (current) deferSession(current._id);
+  }, [sessions, currentIndex, deferSession]);
+
   const handleSendAndAdvance = useCallback(() => {
     advanceToNext();
   }, [advanceToNext]);
@@ -522,6 +567,12 @@ export function QueuePageClient() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (e.key === "?" && !e.ctrlKey && !e.altKey && !e.metaKey && tag !== "INPUT" && tag !== "TEXTAREA" && !(e.target as HTMLElement)?.isContentEditable) {
+        e.preventDefault();
+        toggleShortcuts();
+        return;
+      }
       if (e.ctrlKey && e.key === "j") {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -540,6 +591,12 @@ export function QueuePageClient() {
         handleDismissCurrent();
         return;
       }
+      if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === "Backspace") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        handleDeferCurrent();
+        return;
+      }
       if (e.ctrlKey && e.key === "i") {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -553,7 +610,7 @@ export function QueuePageClient() {
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [navigateDown, navigateUp, handleDismissCurrent, sessions, setCurrentIndex]);
+  }, [navigateDown, navigateUp, handleDismissCurrent, handleDeferCurrent, toggleShortcuts, sessions, setCurrentIndex]);
 
   const prefetchIds: string[] = [];
   const seen = new Set<string>();
@@ -567,7 +624,8 @@ export function QueuePageClient() {
 
   return (
     <DashboardLayout>
-      <Group orientation="horizontal" className="h-full" defaultLayout={inboxLayout} onLayoutChange={handleInboxLayoutChange}>
+      <div className="flex flex-col h-full">
+      <Group orientation="horizontal" className="flex-1 min-h-0" defaultLayout={inboxLayout} onLayoutChange={handleInboxLayoutChange}>
         <Panel id="inbox-main" defaultSize="76%" minSize="30%">
           {viewingDismissedSession ? (
             <InboxConversation
@@ -604,6 +662,35 @@ export function QueuePageClient() {
           <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={dismissedSessions} />
         </Panel>
       </Group>
+      {showShortcuts && (
+        <div className="flex-shrink-0 px-3 py-1.5 border-t border-sol-border/50 bg-sol-bg-alt/40 flex items-center gap-4 text-[10px] text-sol-text-dim">
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">J/K</kbd>
+            nav
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">I</kbd>
+            needs input
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Shift</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Bksp</kbd>
+            defer
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Bksp</kbd>
+            dismiss
+          </span>
+          <button onClick={toggleShortcuts} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">?</kbd>
+            hide
+          </button>
+        </div>
+      )}
+      </div>
       {prefetchIds.map((id) => (
         <Prefetch key={id} sessionId={id} />
       ))}
