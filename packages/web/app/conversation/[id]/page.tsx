@@ -30,18 +30,18 @@ export async function generateMetadata({
 
     if (!meta) {
       return {
-        title: "codecast",
-        description: "Coding agent conversation",
+        title: "Coding Session - codecast",
+        description: "A coding agent conversation",
       };
     }
 
     const title = meta.title;
+    const pageTitle = `${title} - codecast`;
     const description = meta.description
-      || (meta.author ? `${meta.message_count} messages by ${meta.author}` : `${meta.message_count} messages`)
-      + (meta.project_path ? ` in ${meta.project_path.split("/").pop()}` : "");
+      || (meta.author ? `${meta.message_count} messages by ${meta.author}` : `${meta.message_count} messages`);
 
     return {
-      title: `${title} - codecast`,
+      title: pageTitle,
       description,
       openGraph: {
         title,
@@ -61,8 +61,8 @@ export async function generateMetadata({
     };
   } catch {
     return {
-      title: "codecast",
-      description: "Coding agent conversation",
+      title: "Coding Session - codecast",
+      description: "A coding agent conversation",
     };
   }
 }

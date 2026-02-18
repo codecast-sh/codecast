@@ -21,20 +21,16 @@ export async function generateMetadata({
     if (!meta) {
       return {
         title: "Shared Message - codecast",
-        description: "A shared coding conversation message",
+        description: "A shared coding conversation",
       };
     }
 
-    const title = meta.title
-      ? `${meta.title} - codecast`
-      : meta.author
-        ? `Shared by ${meta.author} - codecast`
-        : "Shared Message - codecast";
-
-    const description = meta.note || meta.description || "A shared coding conversation message";
+    const title = meta.title;
+    const pageTitle = `${title} - codecast`;
+    const description = meta.description || "A shared coding conversation";
 
     return {
-      title,
+      title: pageTitle,
       description,
       openGraph: {
         title,
@@ -55,7 +51,7 @@ export async function generateMetadata({
   } catch {
     return {
       title: "Shared Message - codecast",
-      description: "A shared coding conversation message",
+      description: "A shared coding conversation",
     };
   }
 }
