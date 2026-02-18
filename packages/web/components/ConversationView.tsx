@@ -6,7 +6,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, isSkillExpansion, extractSkillInfo } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { toast } from "sonner";
@@ -106,6 +106,8 @@ export type ConversationData = {
   git_diff?: string | null;
   git_diff_staged?: string | null;
   git_remote_url?: string | null;
+  project_path?: string | null;
+  git_root?: string | null;
   short_id?: string;
   status?: "active" | "completed";
   fork_count?: number;
@@ -208,6 +210,71 @@ type ConversationViewProps = {
 
 export interface ConversationViewHandle {
   scrollToMessage: (messageId: string) => void;
+}
+
+function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
+  const patchConversation = useMutation(api.conversations.patchConversation);
+  const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
+  const [switching, setSwitching] = useState(false);
+
+  const currentPath = conversation.git_root || conversation.project_path;
+  const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
+
+  const otherProjects = useMemo(() => {
+    if (!recentProjects) return [];
+    return recentProjects.filter((p) => p.path !== currentPath);
+  }, [recentProjects, currentPath]);
+
+  const handleSwitch = useCallback(async (projectPath: string) => {
+    if (switching) return;
+    setSwitching(true);
+    try {
+      await patchConversation({
+        id: conversation._id,
+        fields: { project_path: projectPath, git_root: projectPath },
+      });
+    } catch {
+    } finally {
+      setSwitching(false);
+    }
+  }, [switching, patchConversation, conversation._id]);
+
+  if (!otherProjects.length) return null;
+
+  return (
+    <div className="flex flex-col items-center gap-3 mt-4">
+      <div className="flex items-center gap-2 text-sol-text-muted text-xs">
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+        </svg>
+        <span className="font-medium text-sol-text">{currentName}</span>
+      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            disabled={switching}
+            className="text-xs text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-sol-bg-alt"
+          >
+            {switching ? "Switching..." : "Switch project"}
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="center" className="min-w-[200px]">
+          {otherProjects.map((p) => {
+            const name = p.path.split("/").filter(Boolean).pop();
+            return (
+              <DropdownMenuItem key={p.path} onSelect={() => handleSwitch(p.path)}>
+                <span className="truncate">{name}</span>
+                <span className="ml-auto text-[10px] text-sol-text-dim truncate max-w-[120px]">{p.path}</span>
+              </DropdownMenuItem>
+            );
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
 }
 
 function ConversationSkeleton() {
@@ -1754,7 +1821,15 @@ function UserIcon() {
 
 function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
   const cmdType = getCommandType(content);
-  const displayText = cleanContent(content).slice(0, 100) || content.replace(/<[^>]+>/g, "").slice(0, 100);
+  const cmdNameMatch = content.match(/<command-name>([^<]*)<\/command-name>/);
+  const cmdName = cmdNameMatch?.[1];
+  const cleaned = cleanContent(content);
+  const isSkillCmd = cmdType === "cmd" && cmdName && cleaned.length > 200;
+  const displayText = cleaned.slice(0, 100) || content.replace(/<[^>]+>/g, "").slice(0, 100);
+
+  if (isSkillCmd) {
+    return <SkillExpansionBlock content={content} timestamp={timestamp} cmdName={cmdName} />;
+  }
 
   return (
     <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-sol-text-dim">
@@ -1763,6 +1838,42 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
         {cmdType || "status"}
       </span>
       <span className="font-mono truncate">{displayText}</span>
+    </div>
+  );
+}
+
+function SkillExpansionBlock({ content, timestamp, cmdName }: { content: string; timestamp: number; cmdName?: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const info = extractSkillInfo(content);
+  const skillName = cmdName || info?.name || "skill";
+
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="group flex items-center gap-2 px-3 py-2 rounded-md bg-sol-bg-alt/40 border border-sol-border/30 hover:border-sol-cyan/30 transition-colors w-full text-left"
+      >
+        <svg className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+        </svg>
+        <span className="font-mono text-xs text-sol-cyan/80 font-medium">/{skillName}</span>
+        {info?.preview && !expanded && (
+          <span className="text-[11px] text-sol-text-dim truncate">{info.preview}</span>
+        )}
+        <span className="ml-auto text-sol-text-dim text-[10px] shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <svg className={`w-3 h-3 text-sol-text-dim transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {expanded && (
+        <div className="mt-1 rounded-md bg-sol-bg-alt/25 border border-sol-border/20 p-3 text-xs text-sol-text-muted whitespace-pre-wrap overflow-y-auto font-mono leading-relaxed">
+          {content
+            .replace(/<command-name>[^<]*<\/command-name>\s*/g, "")
+            .replace(/^Base directory for this skill:[^\n]*\n?/, "")
+            .replace(/<[^>]+>/g, "")
+            .trim()}
+        </div>
+      )}
     </div>
   );
 }
@@ -3190,7 +3301,7 @@ function GitDiffView({ diff }: { diff: string }) {
   const lines = diff.split('\n');
 
   return (
-    <div className="font-mono text-xs p-2 overflow-x-auto">
+    <div className="font-mono text-xs p-2 overflow-x-auto scrollbar-auto">
       <div className="min-w-fit">
       {lines.map((line, i) => {
         let className = 'whitespace-pre text-sol-text-muted';
@@ -3229,13 +3340,64 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isConversationLive }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isConversationLive?: boolean }) {
+function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string }) {
   const cached = getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
   const [isFocused, setIsFocused] = useState(false);
   const [shortcutTooltip, setShortcutTooltip] = useState<{ x: number; y: number } | null>(null);
+  const [pendingMessageId, setPendingMessageId] = useState<Id<"pending_messages"> | null>(null);
+  const [sentAt, setSentAt] = useState<number | null>(null);
+  const [showStuckBanner, setShowStuckBanner] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
+  const resumeSessionMutation = useMutation(api.users.resumeSession);
+  const getRealId = usePendingSessionStore((s) => s.getRealId);
+  const addOptimistic = useOptimisticMessagesStore((s) => s.add);
+
+  const messageStatus = useQuery(
+    api.pendingMessages.getMessageStatus,
+    pendingMessageId ? { message_id: pendingMessageId } : "skip"
+  );
+
+  const realId = getRealId(conversationId);
+  const isRealConvId = realId.length > 10 && !realId.startsWith("pending-");
+  const existingPending = useQuery(
+    api.pendingMessages.getConversationPendingMessage,
+    isRealConvId ? { conversation_id: realId as Id<"conversations"> } : "skip"
+  );
+
+  useEffect(() => {
+    if (pendingMessageId) return;
+    if (!existingPending) {
+      setShowStuckBanner(false);
+      return;
+    }
+    const age = Date.now() - existingPending.created_at;
+    if (age > 15_000) {
+      setShowStuckBanner(true);
+    } else {
+      const timer = setTimeout(() => setShowStuckBanner(true), 15_000 - age);
+      return () => clearTimeout(timer);
+    }
+  }, [existingPending, pendingMessageId]);
+
+  useEffect(() => {
+    if (!sentAt || !pendingMessageId) return;
+    if (messageStatus?.status === "delivered") {
+      setPendingMessageId(null);
+      setSentAt(null);
+      setShowStuckBanner(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (messageStatus?.status === "pending") {
+        setShowStuckBanner(true);
+      }
+    }, 15_000);
+    return () => clearTimeout(timer);
+  }, [sentAt, pendingMessageId, messageStatus?.status]);
+
   const sendRef = useRef<HTMLDivElement>(null);
   const [pastedImages, setPastedImages] = useState<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>(() => {
     if (cached?.draft_image_storage_ids) {
@@ -3254,8 +3416,21 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
-  const getRealId = usePendingSessionStore((s) => s.getRealId);
-  const addOptimistic = useOptimisticMessagesStore((s) => s.add);
+
+  const handleForceResume = useCallback(async () => {
+    if (isResuming) return;
+    setIsResuming(true);
+    try {
+      const realId = getRealId(conversationId);
+      await resumeSessionMutation({ conversation_id: realId as Id<"conversations"> });
+      toast.success("Resuming session...");
+      setShowStuckBanner(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to resume session");
+    } finally {
+      setIsResuming(false);
+    }
+  }, [conversationId, getRealId, resumeSessionMutation, isResuming]);
 
   const updateDraft = useCallback((text: string, images?: Array<{ storageId?: string; previewUrl?: string; name?: string }> | null) => {
     if (!text && (!images || images.length === 0)) {
@@ -3374,11 +3549,14 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
       }
       const trimmed = message.trim() || (readyImages.length > 0 ? "[image]" : "");
       const storageIds = readyImages.map(img => img.storageId!);
-      await sendMessage({
+      const msgId = await sendMessage({
         conversation_id: realId as Id<"conversations">,
         content: trimmed,
         image_storage_ids: storageIds.length > 0 ? storageIds : undefined,
       });
+      setPendingMessageId(msgId);
+      setSentAt(Date.now());
+      setShowStuckBanner(false);
       const optimisticImages = readyImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
       addOptimistic(realId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
       setLastStatus("delivered");
@@ -3415,10 +3593,28 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         <div className="relative">
-          {(isFocused || shortcutTooltip || isWaitingForResponse || isConversationLive) && (
+          {(isFocused || shortcutTooltip || isWaitingForResponse || isThinking || isConversationLive || showStuckBanner) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
               <p className="text-[11px] text-sol-text-dim/70">
-                {isWaitingForResponse ? (
+                {showStuckBanner && sessionId ? (
+                  <span className="flex items-center gap-1.5 text-sol-orange">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" />
+                    Message not reaching session
+                    <button
+                      type="button"
+                      onClick={handleForceResume}
+                      disabled={isResuming}
+                      className="ml-1 px-1.5 py-0.5 rounded bg-sol-orange/10 hover:bg-sol-orange/20 border border-sol-orange/30 text-sol-orange transition-colors text-[10px] disabled:opacity-50"
+                    >
+                      {isResuming ? "Resuming..." : "Force resume"}
+                    </button>
+                  </span>
+                ) : isThinking ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sol-violet/50 animate-pulse" />
+                    Thinking...
+                  </span>
+                ) : isWaitingForResponse ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Waiting for response...
@@ -3426,7 +3622,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
                 ) : isConversationLive ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Session live
+                    Working
                   </span>
                 ) : isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
               </p>
@@ -3538,7 +3734,8 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
             <ShortcutHint keys={["Ctrl", "I"]} label="Jump to needs input" />
             <ShortcutHint keys={["Ctrl", "J"]} label="Next session" />
             <ShortcutHint keys={["Ctrl", "K"]} label="Previous session" />
-            <ShortcutHint keys={["Ctrl", "Bksp"]} label="Interrupt session" />
+            <ShortcutHint keys={["Shift", "Bksp"]} label="Defer session" />
+            <ShortcutHint keys={["Ctrl", "Bksp"]} label="Dismiss session" />
             <ShortcutHint keys={["Esc"]} label="Escape to session" />
             <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Collapse tool blocks" />
             <div className="border-t border-sol-border/20 my-1.5" />
@@ -3755,6 +3952,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return true;
   }, [conversation, timeline, hasMoreBelow]);
 
+  const isThinking = useMemo(() => {
+    if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
+    const last = timeline[timeline.length - 1];
+    if (last.type !== 'message') return false;
+    const msg = last.data as Message;
+    if (msg.role !== 'assistant') return false;
+    const hasThinkingContent = msg.thinking && msg.thinking.trim().length > 0;
+    const hasVisibleContent = (msg.content && stripSystemTags(msg.content).trim().length > 0) || (msg.tool_calls && msg.tool_calls.length > 0);
+    return !!(hasThinkingContent && !hasVisibleContent);
+  }, [conversation, timeline, hasMoreBelow]);
+
   const stickyUserMsgIndices = useMemo(() => {
     const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "continue", "<task-notification>"];
     const indices: number[] = [];
@@ -3765,7 +3973,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (msg.role !== 'user' || !msg.content?.trim()) continue;
       const t = msg.content.trim();
       if (t.length < 4 || NOISE_PREFIXES.some(p => t.startsWith(p))) continue;
-      if (isCommandMessage(t) || isInterruptMessage(t)) continue;
+      if (isCommandMessage(t) || isInterruptMessage(t) || isSkillExpansion(t)) continue;
       const stripped = t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
       if (!stripped || stripped.length < 4) continue;
       indices.push(i);
@@ -3953,6 +4161,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (msg.role === "user" && msg.tool_results) return false;
         if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return false;
         if (msg.role === "user" && msg.content && isInterruptMessage(msg.content)) return false;
+        if (msg.role === "user" && msg.content && isSkillExpansion(msg.content)) return false;
         return msg.content && msg.content.trim().length > 0;
       })
       .map((msg) => {
@@ -4046,6 +4255,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (msg.role === "system") return 0;
         if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return 0;
         if (msg.role === "user" && msg.content && isInterruptMessage(msg.content)) return 0;
+        if (msg.role === "user" && msg.content && isSkillExpansion(msg.content)) return 0;
         if (msg.role === "user" && msg.content && isTaskNotification(msg.content)) return 0;
         if (msg.role === "assistant") {
           const hasTextContent = msg.content && msg.content.trim().length > 0;
@@ -4068,6 +4278,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (msg.role === "user") {
         if (msg.content && isCommandMessage(msg.content)) return 30;
         if (msg.content && isInterruptMessage(msg.content)) return 30;
+        if (msg.content && isSkillExpansion(msg.content)) return 44;
         if (msg.content && isTaskNotification(msg.content)) return 40;
         const lines = (msg.content || "").split("\n").length;
         return Math.max(60, lines * 18 + 40);
@@ -4388,10 +4599,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [isWaitingForResponse]);
 
   const hasInitialScrolled = useRef(false);
+  const [initialScrollDone, setInitialScrollDone] = useState(false);
   useEffect(() => {
-    if (timeline.length > 0 && !hasInitialScrolled.current && !window.location.hash && !highlightQuery) {
+    if (timeline.length > 0 && !hasInitialScrolled.current) {
       hasInitialScrolled.current = true;
-      // Re-scroll multiple times as measurements settle to fix over-estimated total size
+      if (window.location.hash || highlightQuery) {
+        setInitialScrollDone(true);
+        return;
+      }
+      const sc = containerRef.current;
+      if (sc) sc.scrollTop = sc.scrollHeight;
       let lastScrollHeight = 0;
       const stabilize = (attempt: number) => {
         virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
@@ -4400,13 +4617,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (attempt < 5 && currentHeight !== lastScrollHeight) {
           lastScrollHeight = currentHeight;
           setTimeout(() => stabilize(attempt + 1), 100);
-        } else if (sc) {
-          const canScroll = sc.scrollHeight > sc.clientHeight + 10;
-          setIsScrollable(canScroll);
-          setIsNearTop(sc.scrollTop < 300);
-          if (canScroll && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 100) {
-            setUserScrolled(false);
+        } else {
+          if (sc) {
+            sc.scrollTop = sc.scrollHeight;
+            const canScroll = sc.scrollHeight > sc.clientHeight + 10;
+            setIsScrollable(canScroll);
+            setIsNearTop(false);
+            if (canScroll) {
+              setUserScrolled(false);
+            }
           }
+          setInitialScrollDone(true);
         }
       };
       setTimeout(() => stabilize(0), 100);
@@ -4513,7 +4734,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return conversation.messages[conversation.messages.length - 1]?.timestamp;
   }, [conversation?.messages]);
   const lastActivityAt = latestMessageTimestamp ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
-  const isConversationLive = !!conversation && conversation.status === "active" && (Date.now() - lastActivityAt) < 5 * 60 * 1000;
+  const lastMessageRole = useMemo(() => {
+    if (!conversation?.messages || conversation.messages.length === 0) return undefined;
+    for (let i = conversation.messages.length - 1; i >= 0; i--) {
+      if (conversation.messages[i].role !== "system") return conversation.messages[i].role;
+    }
+    return undefined;
+  }, [conversation?.messages]);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 10_000);
+    return () => clearInterval(id);
+  }, []);
+  const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
+  const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
+  const isConversationLive = isWorking;
 
   useEffect(() => {
     if (conversation) {
@@ -4641,6 +4876,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (isInterruptMessage(msg.content)) {
           if (collapsed) return null;
           return <InterruptStatusLine key={msg._id} />;
+        }
+        if (isSkillExpansion(msg.content)) {
+          if (collapsed) return null;
+          return <SkillExpansionBlock key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
         }
         if (isTaskNotification(msg.content)) {
           if (collapsed) return null;
@@ -4829,7 +5068,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             {isConversationLive && (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex-shrink-0">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Live
+                Working
               </span>
             )}
 
@@ -5166,7 +5405,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         />
       )}
 
-      <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "auto" }}>
+      <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "auto", opacity: initialScrollDone || !conversation || timeline.length === 0 ? 1 : 0 }}>
         <div className="flex flex-col">
         {!conversation ? (
           <ConversationSkeleton />
@@ -5186,6 +5425,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             ) : conversation.status !== "active" ? (
               "No messages in this conversation"
             ) : null}
+            {conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (conversation.project_path || conversation.git_root) && (
+              <ProjectSwitcher conversation={conversation} />
+            )}
           </div>
         ) : (
           <>
@@ -5323,7 +5565,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {showMessageInput && conversation && (
         <div ref={messageInputRef}>
-          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isConversationLive={isConversationLive} />
+          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} />
         </div>
       )}
 
