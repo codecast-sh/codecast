@@ -130,7 +130,10 @@ function SessionCard({
             {session.title || "New Session"}
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            {session.has_pending && (
+            {session.is_unresponsive && (
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
+            )}
+            {session.has_pending && !session.is_unresponsive && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
             )}
             {isWorking && (
@@ -429,6 +432,7 @@ export function QueuePageClient() {
   }, [patchConv]);
   const isPopstateRef = useRef(false);
   const lastAppliedParamId = useRef<string | null>(null);
+  const paramProcessedRef = useRef(!searchParams.get("s"));
 
   useEffect(() => {
     if (activeSessions) {
@@ -464,6 +468,7 @@ export function QueuePageClient() {
     if (idx >= 0) {
       rawSetCurrentIndex(idx);
       setPendingInjectId(null);
+      paramProcessedRef.current = true;
     } else {
       setPendingInjectId(paramSessionId);
     }
@@ -476,6 +481,7 @@ export function QueuePageClient() {
     if (already >= 0) {
       rawSetCurrentIndex(already);
       setPendingInjectId(null);
+      paramProcessedRef.current = true;
       return;
     }
     injectSession({
@@ -491,6 +497,7 @@ export function QueuePageClient() {
       has_pending: false,
     });
     setPendingInjectId(null);
+    paramProcessedRef.current = true;
   }, [pendingInjectId, directConv, sessions, rawSetCurrentIndex, injectSession]);
 
   const handleDismiss = useCallback((id: string) => {
@@ -535,9 +542,10 @@ export function QueuePageClient() {
     }
   }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation]);
 
-  // Sync URL when current session changes
+  // Sync URL when current session changes (but not before initial param is resolved)
   useEffect(() => {
     if (!currentSession) return;
+    if (!paramProcessedRef.current) return;
     if (isPopstateRef.current) {
       isPopstateRef.current = false;
       return;

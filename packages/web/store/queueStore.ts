@@ -14,6 +14,7 @@ export type InboxSession = {
   message_count: number;
   idle_summary?: string;
   is_idle: boolean;
+  is_unresponsive?: boolean;
   has_pending: boolean;
   is_deferred?: boolean;
   last_user_message?: string | null;

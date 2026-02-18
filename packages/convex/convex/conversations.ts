@@ -4786,7 +4786,7 @@ export const listIdleSessions = query({
       const recentlyActive = (now - conv.updated_at) < 10 * 60 * 1000;
       const recentlyUpdated = (now - conv.updated_at) < 45 * 1000;
 
-      if (!hasPending && lastRoleIsUser && !daemonAlive && !recentlyActive) continue;
+      const isUnresponsive = !hasPending && lastRoleIsUser && !daemonAlive && !recentlyActive;
 
       const isIdle = daemonAlive
         ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
@@ -4832,6 +4832,7 @@ export const listIdleSessions = query({
         message_count: conv.message_count,
         idle_summary: conv.idle_summary,
         is_idle: isIdle,
+        is_unresponsive: isUnresponsive,
         has_pending: !!hasPending,
         is_deferred: !!deferred,
         last_user_message: lastUserMsg?.content?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200) || null,

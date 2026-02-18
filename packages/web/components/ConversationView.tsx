@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -3398,6 +3398,14 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     return () => clearTimeout(timer);
   }, [sentAt, pendingMessageId, messageStatus?.status]);
 
+  useEffect(() => {
+    if (!isWaitingForResponse || isConversationLive || isThinking || showStuckBanner) return;
+    const timer = setTimeout(() => {
+      if (!showStuckBanner) setShowStuckBanner(true);
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [isWaitingForResponse, isConversationLive, isThinking, showStuckBanner]);
+
   const sendRef = useRef<HTMLDivElement>(null);
   const [pastedImages, setPastedImages] = useState<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>(() => {
     if (cached?.draft_image_storage_ids) {
@@ -4572,11 +4580,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     });
   }, [timeline, virtualizer]);
 
+  const hasInitialScrolled = useRef(false);
+  const [initialScrollDone, setInitialScrollDone] = useState(false);
+
   useEffect(() => {
     const hasNewMessages = timeline.length > prevTimelineLengthRef.current;
     prevTimelineLengthRef.current = timeline.length;
 
-    // Only auto-scroll for real-time new messages, not forward pagination
+    if (!initialScrollDone) return;
+
     if (hasNewMessages && isPaginatingRef.current) {
       isPaginatingRef.current = false;
       return;
@@ -4586,7 +4598,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
       setUserScrolled(false);
     }
-  }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow]);
+  }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow, initialScrollDone]);
 
   useEffect(() => {
     if (isWaitingForResponse && containerRef.current && isNearBottomRef.current) {
@@ -4598,8 +4610,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [isWaitingForResponse]);
 
-  const hasInitialScrolled = useRef(false);
-  const [initialScrollDone, setInitialScrollDone] = useState(false);
   useEffect(() => {
     if (timeline.length > 0 && !hasInitialScrolled.current) {
       hasInitialScrolled.current = true;
@@ -4633,6 +4643,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       setTimeout(() => stabilize(0), 100);
     }
   }, [timeline.length, virtualizer, highlightQuery]);
+
+  useLayoutEffect(() => {
+    if (!initialScrollDone || !containerRef.current) return;
+    const sc = containerRef.current;
+    sc.scrollTop = sc.scrollHeight;
+    const raf = requestAnimationFrame(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollTop = containerRef.current.scrollHeight;
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [initialScrollDone]);
 
   // Scroll after jump to start/end
   useEffect(() => {
