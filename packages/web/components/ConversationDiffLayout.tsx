@@ -138,6 +138,7 @@ export function ConversationDiffLayout({
           toggleFileTree();
           break;
         case "Escape":
+          if (conversation?.status === "active") return;
           e.preventDefault();
           clearSelection();
           break;
@@ -287,10 +288,10 @@ function computeCumulativeFiles(changes: FileChange[], upToIndex: number | null)
 
   const files: (DiffFile & { lastIndex: number })[] = [];
   fileMap.forEach(({ change, lastIndex }) => {
-    const oldLines = (change.oldContent || "").split("\n").length;
-    const newLines = change.newContent.split("\n").length;
-    const additions = Math.max(0, newLines - oldLines);
-    const deletions = Math.max(0, oldLines - newLines);
+    const patch = generateUnifiedPatch(change.filePath, change.oldContent || "", change.newContent);
+    const patchLines = patch.split('\n');
+    const additions = patchLines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length;
+    const deletions = patchLines.filter(l => l.startsWith('-') && !l.startsWith('---')).length;
 
     files.push({
       filename: change.filePath,
@@ -298,7 +299,7 @@ function computeCumulativeFiles(changes: FileChange[], upToIndex: number | null)
       additions,
       deletions,
       changes: additions + deletions,
-      patch: generateUnifiedPatch(change.filePath, change.oldContent || "", change.newContent),
+      patch,
       lastIndex,
     });
   });

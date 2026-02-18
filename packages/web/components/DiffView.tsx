@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Prism from "prismjs";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-javascript";
@@ -12,13 +12,12 @@ import "prismjs/components/prism-bash";
 import "prismjs/components/prism-css";
 import "prismjs/components/prism-markdown";
 import "prismjs/components/prism-yaml";
+import type { PatchHunk } from "../lib/patchParser";
 
 function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'added' | 'removed' | 'context'; content: string }> {
-  // Simple LCS-based diff
   const m = oldLines.length;
   const n = newLines.length;
 
-  // Build LCS table
   const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
@@ -30,7 +29,6 @@ function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'add
     }
   }
 
-  // Backtrack to build diff
   const result: Array<{ type: 'added' | 'removed' | 'context'; content: string }> = [];
   let i = m, j = n;
   const temp: typeof result = [];
@@ -52,41 +50,150 @@ function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'add
 }
 
 function highlightCode(code: string, language?: string): string {
-  if (!language) return code;
+  if (!language) return escapeHtml(code);
 
   try {
     const grammar = Prism.languages[language];
-    if (!grammar) return code;
-
+    if (!grammar) return escapeHtml(code);
     return Prism.highlight(code, grammar, language);
-  } catch (e) {
-    return code;
+  } catch {
+    return escapeHtml(code);
   }
 }
 
-export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxLines = 10, language }: { oldStr: string; newStr: string; contextLines?: number; startLine?: number; maxLines?: number; language?: string }) {
-  const [fullyExpanded, setFullyExpanded] = useState(false);
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-  const changes = computeDiff(oldLines, newLines);
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
-  // Build flat list with line numbers
-  type DiffLine = { type: 'added' | 'removed' | 'context'; content: string; oldNum?: number; newNum?: number };
-  const allLines: DiffLine[] = [];
+interface WordDiffToken {
+  text: string;
+  highlighted: boolean;
+}
+
+function computeWordDiff(oldLine: string, newLine: string): { oldTokens: WordDiffToken[]; newTokens: WordDiffToken[] } {
+  let prefixLen = 0;
+  const minLen = Math.min(oldLine.length, newLine.length);
+  while (prefixLen < minLen && oldLine[prefixLen] === newLine[prefixLen]) {
+    prefixLen++;
+  }
+
+  let suffixLen = 0;
+  while (
+    suffixLen < minLen - prefixLen &&
+    oldLine[oldLine.length - 1 - suffixLen] === newLine[newLine.length - 1 - suffixLen]
+  ) {
+    suffixLen++;
+  }
+
+  const oldPrefix = oldLine.slice(0, prefixLen);
+  const oldMiddle = oldLine.slice(prefixLen, oldLine.length - suffixLen);
+  const oldSuffix = oldLine.slice(oldLine.length - suffixLen);
+
+  const newPrefix = newLine.slice(0, prefixLen);
+  const newMiddle = newLine.slice(prefixLen, newLine.length - suffixLen);
+  const newSuffix = newLine.slice(newLine.length - suffixLen);
+
+  const oldTokens: WordDiffToken[] = [];
+  if (oldPrefix) oldTokens.push({ text: oldPrefix, highlighted: false });
+  if (oldMiddle) oldTokens.push({ text: oldMiddle, highlighted: true });
+  if (oldSuffix) oldTokens.push({ text: oldSuffix, highlighted: false });
+
+  const newTokens: WordDiffToken[] = [];
+  if (newPrefix) newTokens.push({ text: newPrefix, highlighted: false });
+  if (newMiddle) newTokens.push({ text: newMiddle, highlighted: true });
+  if (newSuffix) newTokens.push({ text: newSuffix, highlighted: false });
+
+  return { oldTokens, newTokens };
+}
+
+function renderTokensWithHighlight(
+  tokens: WordDiffToken[],
+  highlightClass: string,
+  language?: string
+): string {
+  return tokens.map(t => {
+    const html = language ? highlightCode(t.text, language) : escapeHtml(t.text);
+    if (t.highlighted) {
+      return `<span class="${highlightClass}">${html}</span>`;
+    }
+    return html;
+  }).join("");
+}
+
+type DiffLineType = 'added' | 'removed' | 'context';
+
+interface FlatDiffLine {
+  type: DiffLineType;
+  content: string;
+  oldNum?: number;
+  newNum?: number;
+  wordDiffHtml?: string;
+}
+
+interface HunkSeparator {
+  type: 'separator';
+}
+
+type DisplayItem = FlatDiffLine | HunkSeparator;
+
+function hunksToDisplayItems(
+  hunks: PatchHunk[],
+  language?: string
+): { items: DisplayItem[]; maxLineNum: number } {
+  const items: DisplayItem[] = [];
+  let maxLineNum = 0;
+
+  for (let h = 0; h < hunks.length; h++) {
+    if (h > 0) {
+      items.push({ type: 'separator' });
+    }
+
+    const hunk = hunks[h];
+    const lines = hunk.lines;
+
+    const processed = lines.map(l => ({
+      type: (l.type === 'addition' ? 'added' : l.type === 'deletion' ? 'removed' : 'context') as DiffLineType,
+      content: l.content,
+      oldNum: l.oldLineNumber,
+      newNum: l.newLineNumber,
+    }));
+
+    const withWordDiff = applyWordDiffToBlock(processed, language);
+
+    for (const line of withWordDiff) {
+      if (line.oldNum && line.oldNum > maxLineNum) maxLineNum = line.oldNum;
+      if (line.newNum && line.newNum > maxLineNum) maxLineNum = line.newNum;
+      items.push(line);
+    }
+  }
+
+  return { items, maxLineNum };
+}
+
+function diffToDisplayItems(
+  changes: Array<{ type: 'added' | 'removed' | 'context'; content: string }>,
+  startLine: number,
+  contextLines: number,
+  language?: string
+): { items: DisplayItem[]; maxLineNum: number; totalCodeLines: number } {
+  const allLines: FlatDiffLine[] = [];
   let oldLineNum = startLine;
   let newLineNum = startLine;
 
   for (const change of changes) {
     if (change.type === 'added') {
-      allLines.push({ ...change, newNum: newLineNum++ });
+      allLines.push({ type: 'added', content: change.content, newNum: newLineNum++ });
     } else if (change.type === 'removed') {
-      allLines.push({ ...change, oldNum: oldLineNum++ });
+      allLines.push({ type: 'removed', content: change.content, oldNum: oldLineNum++ });
     } else {
-      allLines.push({ ...change, oldNum: oldLineNum++, newNum: newLineNum++ });
+      allLines.push({ type: 'context', content: change.content, oldNum: oldLineNum++, newNum: newLineNum++ });
     }
   }
 
-  // Mark which context lines to show (within N lines of a change)
   const showLine = new Set<number>();
   for (let i = 0; i < allLines.length; i++) {
     if (allLines[i].type !== 'context') {
@@ -96,41 +203,119 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
     }
   }
 
-  // Build output with separators for gaps
-  type HunkHeader = { type: 'hunk'; oldStart: number; oldCount: number; newStart: number; newCount: number; skippedLines: number };
-  const output: Array<DiffLine | HunkHeader> = [];
+  const items: DisplayItem[] = [];
   let lastShown = -1;
+
+  const visibleLines: FlatDiffLine[] = [];
+  const visibleIndices: number[] = [];
   for (let i = 0; i < allLines.length; i++) {
     if (showLine.has(i)) {
       if (lastShown >= 0 && i > lastShown + 1) {
-        const skippedCount = i - lastShown - 1;
-        const prevLine = allLines[lastShown];
-        const nextLine = allLines[i];
-        output.push({
-          type: 'hunk',
-          oldStart: (prevLine.oldNum || prevLine.newNum || 0) + 1,
-          oldCount: skippedCount,
-          newStart: (prevLine.newNum || prevLine.oldNum || 0) + 1,
-          newCount: skippedCount,
-          skippedLines: skippedCount,
-        });
+        items.push({ type: 'separator' });
       }
-      output.push(allLines[i]);
+      visibleLines.push(allLines[i]);
+      visibleIndices.push(items.length);
+      items.push(allLines[i]);
       lastShown = i;
     }
   }
 
-  // Count actual lines (not hunk headers)
-  const totalLines = output.filter(item => !('type' in item && item.type === 'hunk')).length;
-  const needsTruncation = totalLines > maxLines && !fullyExpanded;
+  const withWordDiff = applyWordDiffToBlock(visibleLines, language);
+  for (let k = 0; k < withWordDiff.length; k++) {
+    items[visibleIndices[k]] = withWordDiff[k];
+  }
 
-  // Truncate output if needed
-  let displayOutput = output;
-  if (needsTruncation) {
+  const maxLineNum = Math.max(oldLineNum, newLineNum) - 1;
+  const totalCodeLines = items.filter(i => i.type !== 'separator').length;
+
+  return { items, maxLineNum, totalCodeLines };
+}
+
+function applyWordDiffToBlock(lines: FlatDiffLine[], language?: string): FlatDiffLine[] {
+  const result = [...lines];
+
+  let i = 0;
+  while (i < result.length) {
+    if (result[i].type === 'removed') {
+      const removeStart = i;
+      while (i < result.length && result[i].type === 'removed') i++;
+      const removeEnd = i;
+
+      const addStart = i;
+      while (i < result.length && result[i].type === 'added') i++;
+      const addEnd = i;
+
+      const removeCount = removeEnd - removeStart;
+      const addCount = addEnd - addStart;
+      const pairCount = Math.min(removeCount, addCount);
+
+      for (let p = 0; p < pairCount; p++) {
+        const ri = removeStart + p;
+        const ai = addStart + p;
+        const { oldTokens, newTokens } = computeWordDiff(result[ri].content, result[ai].content);
+
+        if (oldTokens.some(t => t.highlighted) || newTokens.some(t => t.highlighted)) {
+          result[ri] = {
+            ...result[ri],
+            wordDiffHtml: renderTokensWithHighlight(oldTokens, "diff-word-removed", language),
+          };
+          result[ai] = {
+            ...result[ai],
+            wordDiffHtml: renderTokensWithHighlight(newTokens, "diff-word-added", language),
+          };
+        }
+      }
+      continue;
+    }
+    i++;
+  }
+
+  return result;
+}
+
+interface DiffViewProps {
+  oldStr?: string;
+  newStr?: string;
+  hunks?: PatchHunk[];
+  contextLines?: number;
+  startLine?: number;
+  maxLines?: number;
+  language?: string;
+}
+
+export function DiffView({
+  oldStr,
+  newStr,
+  hunks,
+  contextLines = 3,
+  startLine = 1,
+  maxLines = 10,
+  language,
+}: DiffViewProps) {
+  const [fullyExpanded, setFullyExpanded] = useState(false);
+
+  const { items, totalCodeLines } = useMemo(() => {
+    if (hunks && hunks.length > 0) {
+      const { items } = hunksToDisplayItems(hunks, language);
+      const totalCodeLines = items.filter(i => i.type !== 'separator').length;
+      return { items, totalCodeLines };
+    }
+
+    const oldLines = (oldStr || "").split('\n');
+    const newLines = (newStr || "").split('\n');
+    const changes = computeDiff(oldLines, newLines);
+    const result = diffToDisplayItems(changes, startLine, contextLines, language);
+    return { items: result.items, totalCodeLines: result.totalCodeLines };
+  }, [hunks, oldStr, newStr, startLine, contextLines, language]);
+
+  const needsTruncation = totalCodeLines > maxLines && !fullyExpanded;
+
+  const displayItems = useMemo(() => {
+    if (!needsTruncation) return items;
     let lineCount = 0;
-    const truncated: typeof output = [];
-    for (const item of output) {
-      if ('type' in item && item.type === 'hunk') {
+    const truncated: DisplayItem[] = [];
+    for (const item of items) {
+      if (item.type === 'separator') {
         truncated.push(item);
       } else {
         if (lineCount < maxLines) {
@@ -139,74 +324,65 @@ export function DiffView({ oldStr, newStr, contextLines = 3, startLine = 1, maxL
         }
       }
     }
-    displayOutput = truncated;
-  }
-
-  const maxLineNum = Math.max(oldLineNum, newLineNum);
-  const lineNumWidth = String(maxLineNum).length;
+    return truncated;
+  }, [items, needsTruncation, maxLines]);
 
   return (
-    <div className="font-mono text-xs overflow-x-auto">
-      {language && (
-        <div className="text-[10px] px-2 py-1 border-b border-sol-border/20 text-sol-text-dim">
-          {language}
-        </div>
-      )}
-      <div className="p-2">
-        {displayOutput.map((item, i) => {
-          if ('type' in item && item.type === 'hunk') {
-            return (
-              <div key={`hunk-${i}`} className="py-1 px-2 my-1 bg-sol-blue/10 text-sol-blue text-[10px] font-mono rounded">
-                @@ -{item.oldStart},{item.oldCount} +{item.newStart},{item.newCount} @@ <span className="text-sol-text-dim">({item.skippedLines} lines hidden)</span>
-              </div>
-            );
-          }
-          const { type, content, oldNum, newNum } = item as DiffLine;
-          const lineNum = type === 'removed' ? oldNum : newNum;
-          const lineNumStr = lineNum !== undefined ? String(lineNum).padStart(lineNumWidth) : ' '.repeat(lineNumWidth);
-          const prefix = type === 'added' ? '+' : type === 'removed' ? '-' : ' ';
-          const bgClass = type === 'added'
-            ? 'diff-line-added'
-            : type === 'removed'
-            ? 'diff-line-removed'
-            : '';
-          const prefixClass = type === 'added'
-            ? 'text-sol-green/70'
-            : type === 'removed'
-            ? 'text-sol-red/70'
-            : 'text-sol-text-dim';
-
-          const highlightedContent = language ? highlightCode(content, language) : null;
-
+    <div className="overflow-x-auto font-mono text-[13px] leading-[22px]">
+      {displayItems.map((item, i) => {
+        if (item.type === 'separator') {
           return (
-            <div key={i} className={`whitespace-pre ${bgClass}`}>
-              <span className="select-none text-sol-text-dim">{lineNumStr}</span>
-              <span className={`select-none ${prefixClass}`}> {prefix} </span>
-              {highlightedContent ? (
-                <span dangerouslySetInnerHTML={{ __html: highlightedContent }} />
-              ) : (
-                <span className="text-sol-text-secondary">{content}</span>
-              )}
+            <div key={`sep-${i}`} className="text-center text-[11px] text-sol-text-dim/40 select-none">
+              &#8943;
             </div>
           );
-        })}
-        {needsTruncation && (
-          <button
-            onClick={() => setFullyExpanded(true)}
-            className="mt-1 text-[10px] text-sol-blue hover:text-sol-cyan"
-          >
-            show {totalLines - maxLines} more lines
-          </button>
-        )}
-        {fullyExpanded && totalLines > maxLines && (
-          <button
-            onClick={() => setFullyExpanded(false)}
-            className="mt-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted"
-          >
-            collapse
-          </button>
-        )}
-      </div>
+        }
+
+        const line = item as FlatDiffLine;
+        const prefix = line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ';
+        const rowBg = line.type === 'added'
+          ? 'diff-line-added'
+          : line.type === 'removed'
+          ? 'diff-line-removed'
+          : '';
+        const prefixColor = line.type === 'added'
+          ? 'text-sol-green/60'
+          : line.type === 'removed'
+          ? 'text-sol-red/60'
+          : 'text-transparent';
+
+        let contentHtml: string;
+        if (line.wordDiffHtml) {
+          contentHtml = line.wordDiffHtml;
+        } else if (language) {
+          contentHtml = highlightCode(line.content, language);
+        } else {
+          contentHtml = escapeHtml(line.content);
+        }
+
+        return (
+          <div key={i} className={`${rowBg} whitespace-pre`}>
+            <span className={`select-none ${prefixColor}`}>{prefix} </span>
+            <span dangerouslySetInnerHTML={{ __html: contentHtml || ' ' }} />
+          </div>
+        );
+      })}
+      {needsTruncation && (
+        <button
+          onClick={() => setFullyExpanded(true)}
+          className="block w-full text-center py-1 text-[11px] text-sol-blue hover:text-sol-cyan bg-sol-blue/5 hover:bg-sol-blue/10 transition-colors"
+        >
+          show {totalCodeLines - maxLines} more lines
+        </button>
+      )}
+      {fullyExpanded && totalCodeLines > maxLines && (
+        <button
+          onClick={() => setFullyExpanded(false)}
+          className="block w-full text-center py-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted bg-sol-bg-alt/30 hover:bg-sol-bg-alt/50 transition-colors"
+        >
+          collapse
+        </button>
+      )}
     </div>
   );
 }

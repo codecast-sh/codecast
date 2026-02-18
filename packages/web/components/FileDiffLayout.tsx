@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import {
   ChevronRight,
   ChevronDown,
   FileText,
   Keyboard,
-  MessageSquare,
+
   Copy,
   Check,
   Search,
@@ -579,79 +579,51 @@ function FileDiffContent({
     );
   }
 
-  const { oldContent, newContent } = parsePatch(file.patch);
+  const { hunks } = parsePatch(file.patch);
 
   return (
-    <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 bg-sol-bg border-b border-sol-border px-4 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0">
-            {onToggleSidebar && (
-              <button
-                onClick={onToggleSidebar}
-                className="p-1 -ml-1 rounded hover:bg-sol-bg-alt/50 text-sol-text-dim hover:text-sol-text-muted transition-colors shrink-0"
-                title={sidebarOpen ? "Hide file tree (b)" : "Show file tree (b)"}
-              >
-                {sidebarOpen ? (
-                  <PanelLeftClose className="w-4 h-4" />
-                ) : (
-                  <PanelLeft className="w-4 h-4" />
-                )}
-              </button>
-            )}
-            <span
-              className={cn(
-                "w-5 h-5 rounded text-[11px] font-bold flex items-center justify-center shrink-0",
-                status.bgColor,
-                status.color
-              )}
+    <div className="h-full overflow-y-auto overflow-x-hidden">
+      <div className="sticky top-0 z-10 bg-sol-bg/95 backdrop-blur-sm border-b border-sol-border/30 px-3 py-1 flex items-center justify-between">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {onToggleSidebar && (
+            <button
+              onClick={onToggleSidebar}
+              className="p-0.5 -ml-0.5 rounded hover:bg-sol-bg-alt/50 text-sol-text-dim hover:text-sol-text-muted transition-colors shrink-0"
+              title={sidebarOpen ? "Hide file tree (b)" : "Show file tree (b)"}
             >
-              {status.label}
-            </span>
-            <h3 className="font-mono text-sm font-medium text-sol-text truncate">
-              {file.filename}
-            </h3>
-            <CopyButton text={file.filename} />
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {showNav && (
-              <span className="text-xs text-sol-text-dim">
-                {fileIndex + 1} of {totalFiles}
-              </span>
-            )}
-            {onComment && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => onComment(file.filename)}
-              >
-                <MessageSquare className="w-3 h-3 mr-1" />
-                Comment
-              </Button>
-            )}
-          </div>
+              {sidebarOpen ? (
+                <PanelLeftClose className="w-3.5 h-3.5" />
+              ) : (
+                <PanelLeft className="w-3.5 h-3.5" />
+              )}
+            </button>
+          )}
+          <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
+            {status.label}
+          </span>
+          <span className="font-mono text-xs text-sol-text-muted truncate">
+            {file.filename}
+          </span>
+          <CopyButton text={file.filename} />
         </div>
-        <div className="flex items-center gap-3 mt-1 text-xs text-sol-text-muted">
-          <span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[11px] text-sol-text-dim">
             <span className="text-sol-green">+{file.additions}</span>
-            <span className="mx-1">/</span>
+            <span className="mx-0.5 text-sol-text-dim/30">/</span>
             <span className="text-sol-red">-{file.deletions}</span>
           </span>
-          {language && <span className="text-sol-text-dim">{language}</span>}
+          {showNav && (
+            <span className="text-[11px] text-sol-text-dim/50">
+              {fileIndex + 1}/{totalFiles}
+            </span>
+          )}
         </div>
       </div>
-      <div className="p-4">
-        <div className="rounded overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
-          <DiffView
-            oldStr={oldContent}
-            newStr={newContent}
-            language={language}
-            contextLines={3}
-            maxLines={100}
-          />
-        </div>
-      </div>
+      <DiffView
+        hunks={hunks}
+        language={language}
+        maxLines={100}
+      />
       {renderExtra && renderExtra(file)}
     </div>
   );
@@ -667,78 +639,49 @@ function UnifiedDiffView({
   renderExtra?: (file: DiffFile) => React.ReactNode;
 }) {
   return (
-    <div className="h-full overflow-auto">
-      <div className="divide-y divide-sol-border">
-        {files.map((file, index) => {
-          const status = getFileStatus(file.status);
-          const language = getFileExtension(file.filename);
-          const { oldContent, newContent } = file.patch ? parsePatch(file.patch) : { oldContent: "", newContent: "" };
+    <div className="h-full overflow-y-auto overflow-x-hidden">
+      {files.map((file, index) => {
+        const status = getFileStatus(file.status);
+        const language = getFileExtension(file.filename);
+        const patchData = file.patch ? parsePatch(file.patch) : null;
 
-          return (
-            <div key={file.filename} className="bg-sol-bg" id={`file-${index}`}>
-              <div className="sticky top-0 z-10 bg-sol-bg-alt border-b border-sol-border px-4 py-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className={cn(
-                        "w-5 h-5 rounded text-[11px] font-bold flex items-center justify-center shrink-0",
-                        status.bgColor,
-                        status.color
-                      )}
-                    >
-                      {status.label}
-                    </span>
-                    <h3 className="font-mono text-sm font-medium text-sol-text truncate">
-                      {file.filename}
-                    </h3>
-                    <CopyButton text={file.filename} />
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs text-sol-text-muted">
-                      <span className="text-sol-green">+{file.additions}</span>
-                      <span className="mx-1">/</span>
-                      <span className="text-sol-red">-{file.deletions}</span>
-                    </span>
-                    {onComment && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => onComment(file.filename)}
-                      >
-                        <MessageSquare className="w-3 h-3 mr-1" />
-                        Comment
-                      </Button>
-                    )}
-                  </div>
-                </div>
+        return (
+          <div key={file.filename} className="overflow-hidden" id={`file-${index}`}>
+            <div className="sticky top-0 z-10 bg-sol-bg/95 backdrop-blur-sm px-3 py-1 flex items-center justify-between border-b border-sol-border/30">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
+                  {status.label}
+                </span>
+                <span className="font-mono text-xs text-sol-text-muted truncate">
+                  {file.filename}
+                </span>
+                <CopyButton text={file.filename} />
               </div>
-              <div className="p-4">
-                {file.patch ? (
-                  <div className="rounded overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
-                    <DiffView
-                      oldStr={oldContent}
-                      newStr={newContent}
-                      language={language}
-                      contextLines={3}
-                      maxLines={500}
-                    />
-                  </div>
-                ) : (
-                  <div className="text-sol-text-muted text-sm py-4 text-center">
-                    {file.status === "added"
-                      ? "Binary file or new file (no diff available)"
-                      : file.status === "removed" || file.status === "deleted"
-                      ? "File deleted"
-                      : "No changes to display"}
-                  </div>
-                )}
-              </div>
-              {renderExtra && renderExtra(file)}
+              <span className="text-[11px] text-sol-text-dim shrink-0">
+                <span className="text-sol-green">+{file.additions}</span>
+                <span className="mx-0.5 text-sol-text-dim/30">/</span>
+                <span className="text-sol-red">-{file.deletions}</span>
+              </span>
             </div>
-          );
-        })}
-      </div>
+            {patchData ? (
+              <DiffView
+                hunks={patchData.hunks}
+                language={language}
+                maxLines={500}
+              />
+            ) : (
+              <div className="text-sol-text-muted text-sm py-4 text-center">
+                {file.status === "added"
+                  ? "Binary file or new file (no diff available)"
+                  : file.status === "removed" || file.status === "deleted"
+                  ? "File deleted"
+                  : "No changes to display"}
+              </div>
+            )}
+            {renderExtra && renderExtra(file)}
+          </div>
+        );
+      })}
     </div>
   );
 }

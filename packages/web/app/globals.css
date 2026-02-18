@@ -527,23 +527,38 @@ pre[class*="language-"] {
 
 /* Diff-specific styles - subdued backgrounds with preserved syntax highlighting */
 .diff-line-added {
-  background-color: color-mix(in srgb, var(--sol-green) 15%, transparent);
-  border-left: 2px solid color-mix(in srgb, var(--sol-green) 60%, transparent);
+  background-color: color-mix(in srgb, var(--sol-green) 10%, transparent);
 }
 
 .diff-line-removed {
-  background-color: color-mix(in srgb, var(--sol-red) 12%, transparent);
-  border-left: 2px solid color-mix(in srgb, var(--sol-red) 60%, transparent);
+  background-color: color-mix(in srgb, var(--sol-red) 8%, transparent);
 }
 
 .dark .diff-line-added {
-  background-color: color-mix(in srgb, var(--sol-green) 18%, transparent);
-  border-left: 2px solid color-mix(in srgb, var(--sol-green) 50%, transparent);
+  background-color: color-mix(in srgb, var(--sol-green) 12%, transparent);
 }
 
 .dark .diff-line-removed {
-  background-color: color-mix(in srgb, var(--sol-red) 15%, transparent);
-  border-left: 2px solid color-mix(in srgb, var(--sol-red) 50%, transparent);
+  background-color: color-mix(in srgb, var(--sol-red) 10%, transparent);
+}
+
+/* Word-level diff highlights */
+.diff-word-added {
+  background-color: color-mix(in srgb, var(--sol-green) 25%, transparent);
+  border-radius: 2px;
+}
+
+.diff-word-removed {
+  background-color: color-mix(in srgb, var(--sol-red) 22%, transparent);
+  border-radius: 2px;
+}
+
+.dark .diff-word-added {
+  background-color: color-mix(in srgb, var(--sol-green) 30%, transparent);
+}
+
+.dark .diff-word-removed {
+  background-color: color-mix(in srgb, var(--sol-red) 25%, transparent);
 }
 
 @keyframes highlightPulse {
