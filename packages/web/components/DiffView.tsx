@@ -328,46 +328,49 @@ export function DiffView({
   }, [items, needsTruncation, maxLines]);
 
   return (
-    <div className="overflow-x-auto font-mono text-[13px] leading-[22px]">
-      <div className="min-w-fit">
-      {displayItems.map((item, i) => {
-        if (item.type === 'separator') {
+    <div className="font-mono text-[13px] leading-[22px]">
+      <div className="overflow-x-auto scrollbar-auto">
+        <div className="min-w-fit">
+        {displayItems.map((item, i) => {
+          if (item.type === 'separator') {
+            return (
+              <div key={`sep-${i}`} className="text-center text-[11px] text-sol-text-dim/40 select-none">
+                &#8943;
+              </div>
+            );
+          }
+
+          const line = item as FlatDiffLine;
+          const prefix = line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ';
+          const rowBg = line.type === 'added'
+            ? 'diff-line-added'
+            : line.type === 'removed'
+            ? 'diff-line-removed'
+            : '';
+          const prefixColor = line.type === 'added'
+            ? 'text-sol-green/60'
+            : line.type === 'removed'
+            ? 'text-sol-red/60'
+            : 'text-transparent';
+
+          let contentHtml: string;
+          if (line.wordDiffHtml) {
+            contentHtml = line.wordDiffHtml;
+          } else if (language) {
+            contentHtml = highlightCode(line.content, language);
+          } else {
+            contentHtml = escapeHtml(line.content);
+          }
+
           return (
-            <div key={`sep-${i}`} className="text-center text-[11px] text-sol-text-dim/40 select-none">
-              &#8943;
+            <div key={i} className={`${rowBg} whitespace-pre`}>
+              <span className={`select-none ${prefixColor}`}>{prefix} </span>
+              <span dangerouslySetInnerHTML={{ __html: contentHtml || ' ' }} />
             </div>
           );
-        }
-
-        const line = item as FlatDiffLine;
-        const prefix = line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ';
-        const rowBg = line.type === 'added'
-          ? 'diff-line-added'
-          : line.type === 'removed'
-          ? 'diff-line-removed'
-          : '';
-        const prefixColor = line.type === 'added'
-          ? 'text-sol-green/60'
-          : line.type === 'removed'
-          ? 'text-sol-red/60'
-          : 'text-transparent';
-
-        let contentHtml: string;
-        if (line.wordDiffHtml) {
-          contentHtml = line.wordDiffHtml;
-        } else if (language) {
-          contentHtml = highlightCode(line.content, language);
-        } else {
-          contentHtml = escapeHtml(line.content);
-        }
-
-        return (
-          <div key={i} className={`${rowBg} whitespace-pre`}>
-            <span className={`select-none ${prefixColor}`}>{prefix} </span>
-            <span dangerouslySetInnerHTML={{ __html: contentHtml || ' ' }} />
-          </div>
-        );
-      })}
+        })}
+        </div>
+      </div>
       {needsTruncation && (
         <button
           onClick={() => setFullyExpanded(true)}
@@ -384,7 +387,6 @@ export function DiffView({
           collapse
         </button>
       )}
-      </div>
     </div>
   );
 }

@@ -239,6 +239,7 @@
   }
   .scrollbar-auto::-webkit-scrollbar {
     width: 4px;
+    height: 4px;
   }
   .scrollbar-auto::-webkit-scrollbar-track {
     background: transparent;

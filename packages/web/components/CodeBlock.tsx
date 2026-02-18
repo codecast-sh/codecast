@@ -33,7 +33,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
           {language}{code.split('\n').length > 1 ? ` \u00b7 ${code.split('\n').length} lines` : ''}
         </div>
       )}
-      <pre className="!m-0 !p-3 !border-0 overflow-x-auto text-sm bg-sol-bg-alt">
+      <pre className="!m-0 !p-3 !border-0 overflow-x-auto scrollbar-auto text-sm bg-sol-bg-alt">
         <code className="font-mono text-sol-text-secondary">{code}</code>
       </pre>
     </div>
