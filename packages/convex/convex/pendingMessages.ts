@@ -153,6 +153,26 @@ export const getPendingMessages = query({
   },
 });
 
+export const getConversationPendingMessage = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) return null;
+
+    const msg = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .filter((q) => q.eq(q.field("status"), "pending"))
+      .first();
+
+    if (!msg) return null;
+    if (msg.from_user_id.toString() !== authUserId.toString()) return null;
+    return { created_at: msg.created_at };
+  },
+});
+
 export const getMessageStatus = query({
   args: {
     message_id: v.id("pending_messages"),

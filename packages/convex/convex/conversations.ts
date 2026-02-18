@@ -4816,6 +4816,8 @@ export const listIdleSessions = query({
         }
       }
 
+      const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
+
       results.push({
         _id: conv._id,
         session_id: conv.session_id,
@@ -4831,6 +4833,7 @@ export const listIdleSessions = query({
         idle_summary: conv.idle_summary,
         is_idle: isIdle,
         has_pending: !!hasPending,
+        is_deferred: !!deferred,
         last_user_message: lastUserMsg?.content?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200) || null,
       });
     }
@@ -4840,6 +4843,7 @@ export const listIdleSessions = query({
       const bNew = b.message_count === 0;
       if (aNew !== bNew) return aNew ? -1 : 1;
       if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
+      if (a.is_deferred !== b.is_deferred) return a.is_deferred ? 1 : -1;
       if (a.is_idle) return a.updated_at - b.updated_at;
       return b.started_at - a.started_at;
     });
@@ -4865,7 +4869,10 @@ export const dismissFromInbox = mutation({
 
 const PATCHABLE_FIELDS = new Set([
   "inbox_dismissed_at",
+  "inbox_deferred_at",
   "draft_message",
+  "project_path",
+  "git_root",
 ]);
 
 export const patchConversation = mutation({

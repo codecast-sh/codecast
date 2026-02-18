@@ -68,7 +68,8 @@ export default defineSchema({
       v.literal("force_update"),
       v.literal("version"),
       v.literal("start_session"),
-      v.literal("escape")
+      v.literal("escape"),
+      v.literal("resume_session")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),
@@ -154,6 +155,7 @@ export default defineSchema({
     skip_title_generation: v.optional(v.boolean()),
     idle_summary: v.optional(v.string()),
     inbox_dismissed_at: v.optional(v.number()),
+    inbox_deferred_at: v.optional(v.number()),
     draft_message: v.optional(v.string()),
     last_user_message_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),

@@ -170,7 +170,8 @@ export const sendDaemonCommand = mutation({
       v.literal("force_update"),
       v.literal("version"),
       v.literal("start_session"),
-      v.literal("escape")
+      v.literal("escape"),
+      v.literal("resume_session")
     ),
     args_json: v.optional(v.string()),
   },
@@ -189,6 +190,45 @@ export const sendDaemonCommand = mutation({
       user_id: args.user_id,
       command: args.command,
       args: args.args_json,
+      created_at: Date.now(),
+    });
+
+    return { command_id: commandId };
+  },
+});
+
+export const resumeSession = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
+
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Unauthorized");
+    }
+    if (!conversation.session_id) {
+      throw new Error("No session ID on this conversation");
+    }
+
+    const agentType = conversation.agent_type === "codex" ? "codex" : conversation.agent_type === "gemini" ? "gemini" : "claude";
+
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: authUserId,
+      command: "resume_session",
+      args: JSON.stringify({
+        session_id: conversation.session_id,
+        agent_type: agentType,
+        conversation_id: args.conversation_id,
+        project_path: conversation.git_root || conversation.project_path,
+      }),
       created_at: Date.now(),
     });
 
