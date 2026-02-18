@@ -6,6 +6,8 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cleanTitle, isSystemMessage } from "../lib/conversationProcessor";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
+import { useStableOrder } from "../hooks/useStableOrder";
+import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -633,16 +635,20 @@ interface ConversationListProps {
 
 export function ConversationList({ filter, directoryFilter, memberFilter, onMemberFilterChange }: ConversationListProps) {
   const router = useRouter();
-  const { conversations, hasMore, loadMore, isLoadingMore, isLoading } = useConversationsWithError(filter, memberFilter);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("all");
+  const serverSubagentFilter = subagentFilter === "all" ? null : subagentFilter;
+  const { conversations, hasMore, loadMore, isLoadingMore, isLoading, hasSubagents } = useConversationsWithError(filter, memberFilter, serverSubagentFilter);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const showNewSession = useNewSessionStore((s) => s.isOpen);
   const openNewSession = useNewSessionStore((s) => s.open);
   const closeNewSession = useNewSessionStore((s) => s.close);
   const listRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const isHoveredRef = useRef(false);
+  const { containerRef: flipContainerRef, beforeReorder } = useFlipAnimation();
+  const getConvKey = useCallback((c: Conversation) => c._id, []);
 
   const user = useQuery(api.users.getCurrentUser);
   const { activeTeamId } = useActiveTeamStore();
@@ -727,7 +733,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
     const counts = {
       long: nonTrivialConvs.filter(c => c.duration_ms >= 20 * 60 * 1000).length,
       active: nonTrivialConvs.filter(c => c.is_active).length,
-      subagent: nonTrivialConvs.filter(c => isSubagent(c)).length,
       main: nonTrivialConvs.filter(c => !isSubagent(c)).length,
     };
 
@@ -737,27 +742,28 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
       filtered = filtered.filter(c => deriveGitRoot(c) === directoryFilter);
     }
 
-    // memberFilter is now handled server-side for proper pagination
-
     if (timeFilter === "long") {
       filtered = filtered.filter(c => c.duration_ms >= 20 * 60 * 1000);
     } else if (timeFilter === "active") {
       filtered = filtered.filter(c => c.is_active);
     }
 
-    if (subagentFilter === "main") {
-      filtered = filtered.filter(c => !isSubagent(c));
-    } else if (subagentFilter === "subagent") {
-      filtered = filtered.filter(c => isSubagent(c));
-    }
+    // subagentFilter is now handled server-side via the query
 
     // Sort by updated_at descending - all conversations shown flat (no nesting)
     filtered.sort((a, b) => b.updated_at - a.updated_at);
 
     return { filteredConversations: filtered, counts, directories };
-  }, [conversations, filter, timeFilter, subagentFilter, directoryFilter]);
+  }, [conversations, filter, timeFilter, directoryFilter]);
 
-  const flatConversations = filteredConversations;
+  const stableConversations = useStableOrder({
+    items: filteredConversations,
+    getKey: getConvKey,
+    isHovered: isHoveredRef,
+    onBeforeReorder: beforeReorder,
+  });
+
+  const flatConversations = stableConversations;
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -826,7 +832,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
     );
   }
 
-  const groups = groupByTime(filteredConversations);
+  const groups = groupByTime(stableConversations);
 
   return (
     <div
@@ -836,6 +842,8 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
       role="list"
       aria-label="Conversation list"
       onKeyDown={handleKeyDown}
+      onMouseEnter={() => { isHoveredRef.current = true; }}
+      onMouseLeave={() => { isHoveredRef.current = false; }}
       onFocus={() => {
         if (focusedIndex === -1 && flatConversations.length > 0) {
           setFocusedIndex(0);
@@ -916,7 +924,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
         >
           <span className="hidden sm:inline">Subagent</span>
           <span className="sm:hidden">Sub</span>
-          {counts.subagent > 0 && ` (${counts.subagent})`}
+          {hasSubagents && subagentFilter !== "subagent" && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-sol-violet/60 inline-block" />}
         </button>
 
         {/* Member filter (team only) */}
@@ -951,6 +959,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
         )}
       </div>
 
+      <div ref={flipContainerRef}>
       {groups.length === 0 && (
         <div className="text-center py-8 text-sol-text-muted0">
           No conversations match these filters
@@ -1001,6 +1010,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                       href={`/conversation/${conv._id}`}
                       className="group block relative"
                       role="listitem"
+                      data-flip-key={conv._id}
                     >
                       <div className="relative bg-blue-50/50 dark:bg-blue-950/20 border-2 border-blue-300/50 dark:border-blue-500/30 rounded-lg p-3 hover:border-blue-400 transition-colors">
                         {minimalContent}
@@ -1014,6 +1024,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                     key={conv._id}
                     className="relative bg-sol-bg-alt/30 border border-sol-border/30 rounded-lg p-3"
                     role="listitem"
+                    data-flip-key={conv._id}
                   >
                     {minimalContent}
                   </div>
@@ -1034,6 +1045,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                   aria-label={createConversationAriaLabel(conv)}
                   aria-current={isFocused ? "true" : undefined}
                   onClick={isOthersRestrictedView ? (e) => e.preventDefault() : undefined}
+                  data-flip-key={conv._id}
                 >
                   <div className={`relative border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 transition-all duration-200 shadow-sm dark:shadow-none ${
                     isOthersRestrictedView
@@ -1112,19 +1124,22 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                           </svg>
                           <span>sub of</span>
-                          <Link
-                            href={`/conversation/${conv.parent_conversation_id}`}
-                            className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[200px] transition-colors"
-                            onClick={(e) => e.stopPropagation()}
+                          <button
+                            className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[200px] transition-colors text-left"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              router.push(`/conversation/${conv.parent_conversation_id}`);
+                            }}
                           >
                             {conv.parent_title || "parent session"}
-                          </Link>
+                          </button>
                         </div>
                       )}
 
                       {/* Subtitle - shown for full/detailed/summary modes */}
                       {conv.subtitle && conv.visibility_mode !== "minimal" && (
-                        <p className="text-sm text-sol-text-muted mb-2 line-clamp-4 whitespace-pre-line">{conv.subtitle}</p>
+                        <p className="text-sm text-sol-text-muted mb-2 line-clamp-2 whitespace-pre-line">{conv.subtitle}</p>
                       )}
 
                       {(() => {
@@ -1157,7 +1172,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                                 {(conv.author_name?.charAt(0) || "U").toUpperCase()}
                               </span>
                             )}
-                            <span className="truncate min-w-0 text-sol-text-muted leading-relaxed">{m.cleanContent}</span>
+                            <span className={`truncate min-w-0 leading-relaxed ${m.role === "user" ? "text-sky-700 dark:text-sky-300" : "text-sol-text-muted"}`}>{m.cleanContent}</span>
                           </div>
                         );
 
@@ -1264,6 +1279,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
           </div>
         </div>
       ))}
+      </div>
 
       {hasMore && (
         <div ref={loadMoreRef} className="flex justify-center pt-4 pb-8">

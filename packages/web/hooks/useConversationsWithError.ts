@@ -7,7 +7,11 @@ import { useActiveTeamStore } from "../store/activeTeamStore";
 
 type ConversationResult = ReturnType<typeof useQuery<typeof api.conversations.listConversations>>;
 
-export function useConversationsWithError(filter: "my" | "team", memberId?: string | null) {
+export function useConversationsWithError(
+  filter: "my" | "team",
+  memberId?: string | null,
+  subagentFilter?: "main" | "subagent" | null,
+) {
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [allConversations, setAllConversations] = useState<any[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -19,6 +23,7 @@ export function useConversationsWithError(filter: "my" | "team", memberId?: stri
     include_message_previews: true,
     memberId: memberId ? (memberId as Id<"users">) : undefined,
     activeTeamId: filter === "team" && activeTeamId ? activeTeamId : undefined,
+    subagentFilter: subagentFilter || undefined,
   });
   const [hasShownError, setHasShownError] = useState(false);
   const loadingStartTime = useRef<number | null>(null);
@@ -78,11 +83,11 @@ export function useConversationsWithError(filter: "my" | "team", memberId?: stri
     }
   }, [result, cursor]);
 
-  // Reset when filter, memberId, or activeTeamId changes
+  // Reset when filter, memberId, activeTeamId, or subagentFilter changes
   useEffect(() => {
     setCursor(undefined);
     setAllConversations([]);
-  }, [filter, memberId, activeTeamId]);
+  }, [filter, memberId, activeTeamId, subagentFilter]);
 
   const loadMore = useCallback(() => {
     if (result?.nextCursor && !isLoadingMore) {
@@ -97,5 +102,6 @@ export function useConversationsWithError(filter: "my" | "team", memberId?: stri
     loadMore,
     isLoadingMore,
     isLoading: result === undefined,
+    hasSubagents: result?.hasSubagents ?? false,
   };
 }
