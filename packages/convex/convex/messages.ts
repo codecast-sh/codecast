@@ -577,11 +577,21 @@ export const getSharedMessageMeta = query({
     const user = await ctx.db.get(conversation.user_id);
 
     const raw = message.content?.trim() || "";
-    const plain = raw.replace(/[*_`#~\[\]()>]/g, "").replace(/\n{2,}/g, " ").replace(/\n/g, " ");
-    const description = plain.length > 200 ? plain.slice(0, 200) + "..." : plain;
+    const plain = raw.replace(/[*_`#~\[\]()>]/g, "").replace(/\n{2,}/g, " ").replace(/\n/g, " ").trim();
+    const messagePreview = plain.length > 200 ? plain.slice(0, 200) + "..." : plain;
+
+    const title = conversation.title
+      || conversation.subtitle
+      || "Coding Session";
+
+    const description = share.note
+      || messagePreview
+      || conversation.subtitle
+      || conversation.idle_summary
+      || `Shared ${message.role === "user" ? "prompt" : "response"}${user?.name ? ` from ${user.name}` : ""}`;
 
     return {
-      title: conversation.title || null,
+      title,
       description,
       role: message.role,
       author: user?.name || null,

@@ -1166,18 +1166,40 @@ export const listConversations = query({
     };
 
     let conversations;
-    let subagentCount: number | undefined;
     if (args.filter === "my") {
-      if (args.subagentFilter === "subagent") {
-        const query = ctx.db
-          .query("conversations")
-          .withIndex("by_user_subagent_updated", (q) =>
-            cursorTimestamp
-              ? q.eq("user_id", userId).eq("is_subagent", true).lt("updated_at", cursorTimestamp)
-              : q.eq("user_id", userId).eq("is_subagent", true)
-          )
-          .order("desc");
-        conversations = await query.take(limit + 1);
+      if (args.subagentFilter === "subagent" || args.subagentFilter === "main") {
+        const wantSubagent = args.subagentFilter === "subagent";
+        const results: any[] = [];
+        let scanCursor = cursorTimestamp;
+        const batchSize = limit * 4;
+        const maxBatches = 5;
+
+        for (let i = 0; i < maxBatches && results.length < limit + 1; i++) {
+          const batch = await ctx.db
+            .query("conversations")
+            .withIndex("by_user_updated", (q) =>
+              scanCursor
+                ? q.eq("user_id", userId).lt("updated_at", scanCursor)
+                : q.eq("user_id", userId)
+            )
+            .order("desc")
+            .take(batchSize);
+
+          if (batch.length === 0) break;
+
+          for (const c of batch) {
+            const isSub = !!(c.parent_conversation_id && !c.parent_message_uuid);
+            if (wantSubagent === isSub) {
+              results.push(c);
+              if (results.length >= limit + 1) break;
+            }
+          }
+
+          scanCursor = batch[batch.length - 1].updated_at;
+          if (batch.length < batchSize) break;
+        }
+
+        conversations = results;
       } else {
         const query = ctx.db
           .query("conversations")
@@ -1188,15 +1210,6 @@ export const listConversations = query({
           )
           .order("desc");
         conversations = await query.take(limit + 1);
-      }
-      if (!cursorTimestamp) {
-        const subagentSample = await ctx.db
-          .query("conversations")
-          .withIndex("by_user_subagent_updated", (q) =>
-            q.eq("user_id", userId).eq("is_subagent", true)
-          )
-          .take(1);
-        subagentCount = subagentSample.length > 0 ? -1 : 0;
       }
     } else if (args.memberId) {
       // Filter by specific team member - use index for efficient pagination
@@ -1281,8 +1294,8 @@ export const listConversations = query({
           membershipVisibilityMap.get(c.user_id.toString()),
           args.filter === "team"
         );
-        const authorName = conversationUser?.name || conversationUser?.email?.split("@")[0] || "Unknown";
-        const authorAvatar = conversationUser?.image || conversationUser?.github_avatar_url || null;
+        const authorName = (conversationUser as any)?.name || (conversationUser as any)?.email?.split("@")[0] || "Unknown";
+        const authorAvatar = (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null;
         const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
         const durationMs = c.updated_at - c.started_at;
         const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
@@ -1533,7 +1546,7 @@ export const listConversations = query({
     return {
       conversations: conversationsWithUsers.sort((a, b) => (b as { updated_at: number }).updated_at - (a as { updated_at: number }).updated_at),
       nextCursor,
-      hasSubagents: subagentCount !== 0,
+      hasSubagents: true,
     };
   },
 });
@@ -1660,11 +1673,16 @@ export const getSharedConversationMeta = query({
     const title = conversation.title
       || firstUserMessage
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
-      || "New Session";
+      || "Coding Session";
+
+    const description = conversation.subtitle
+      || conversation.idle_summary
+      || (conversation.title ? firstUserMessage : null)
+      || `${conversation.message_count || 0} messages${user?.name ? ` by ${user.name}` : ""}${conversation.project_path ? ` in ${conversation.project_path.split("/").pop()}` : ""}`;
 
     return {
       title,
-      description: firstUserMessage || conversation.subtitle || null,
+      description,
       author: user?.name || null,
       message_count: conversation.message_count || 0,
     };
@@ -4437,13 +4455,6 @@ export const getConversationMeta = query({
       return null;
     }
 
-    if (!conversation.share_token) {
-      const authUserId = await getAuthUserId(ctx);
-      if (!authUserId || conversation.user_id.toString() !== authUserId.toString()) {
-        return null;
-      }
-    }
-
     const user = await ctx.db.get(conversation.user_id);
 
     const messages = await ctx.db
@@ -4468,12 +4479,18 @@ export const getConversationMeta = query({
     }
 
     const title = conversation.title
+      || firstUserMessage
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
-      || "New Session";
+      || "Coding Session";
+
+    const description = conversation.subtitle
+      || conversation.idle_summary
+      || (conversation.title ? firstUserMessage : null)
+      || `${conversation.message_count || 0} messages${user?.name ? ` by ${user.name}` : ""}${conversation.project_path ? ` in ${conversation.project_path.split("/").pop()}` : ""}`;
 
     return {
       title,
-      description: firstUserMessage || conversation.subtitle || null,
+      description,
       author: user?.name || null,
       message_count: conversation.message_count || 0,
       project_path: conversation.project_path || null,
