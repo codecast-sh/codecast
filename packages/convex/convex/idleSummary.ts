@@ -55,7 +55,19 @@ export const generateIdleSummary = internalAction({
       .map((m) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
       .join("\n\n");
 
-    const prompt = `This agent session is idle and waiting for user input. Based on the recent conversation below, write ONE short sentence describing what the agent needs from the user next. Be specific and actionable. Do not use quotes or JSON formatting.
+    const prompt = `This agent session is idle. Based on the recent conversation below, write ONE short sentence.
+
+If the agent is clearly blocked waiting for specific user input, write an imperative action starting with a verb:
+  "Confirm the exact UI change needed"
+  "Provide the API endpoint details"
+  "Choose between the two proposed approaches"
+
+If there is no clear next action needed from the user (agent just finished work, delivered results, or is at a natural stopping point), summarize what was last completed:
+  "Deployed auth fix and verified tests pass"
+  "Refactored the payment module into three files"
+  "Fixed the infinite scroll regression"
+
+Rules: never use "please", "the user", or "you". Start with a verb. Be specific. One sentence max. No quotes or JSON formatting.
 
 Conversation:
 ${messageText}`;
