@@ -67,7 +67,8 @@ export default defineSchema({
       v.literal("restart"),
       v.literal("force_update"),
       v.literal("version"),
-      v.literal("start_session")
+      v.literal("start_session"),
+      v.literal("escape")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),
@@ -155,9 +156,11 @@ export default defineSchema({
     inbox_dismissed_at: v.optional(v.number()),
     draft_message: v.optional(v.string()),
     last_user_message_at: v.optional(v.number()),
+    is_subagent: v.optional(v.boolean()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
+    .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
@@ -383,6 +386,7 @@ export default defineSchema({
     conversation_id: v.id("conversations"),
     from_user_id: v.id("users"),
     content: v.string(),
+    image_storage_id: v.optional(v.id("_storage")),
     status: v.union(
       v.literal("pending"),
       v.literal("delivered"),
