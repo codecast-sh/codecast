@@ -961,9 +961,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
 
       <div ref={flipContainerRef}>
       {groups.length === 0 && (
-        <div className="text-center py-8 text-sol-text-muted0">
-          No conversations match these filters
-        </div>
+        <LoadingSkeleton />
       )}
       {groups.map((group) => (
         <div key={group.label}>

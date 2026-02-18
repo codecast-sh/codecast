@@ -329,6 +329,7 @@ export function DiffView({
 
   return (
     <div className="overflow-x-auto font-mono text-[13px] leading-[22px]">
+      <div className="min-w-fit">
       {displayItems.map((item, i) => {
         if (item.type === 'separator') {
           return (
@@ -370,7 +371,7 @@ export function DiffView({
       {needsTruncation && (
         <button
           onClick={() => setFullyExpanded(true)}
-          className="block w-full text-center py-1 text-[11px] text-sol-blue hover:text-sol-cyan bg-sol-blue/5 hover:bg-sol-blue/10 transition-colors"
+          className="block w-full text-center py-1 text-[11px] text-sol-blue hover:text-sol-cyan transition-colors"
         >
           show {totalCodeLines - maxLines} more lines
         </button>
@@ -378,11 +379,12 @@ export function DiffView({
       {fullyExpanded && totalCodeLines > maxLines && (
         <button
           onClick={() => setFullyExpanded(false)}
-          className="block w-full text-center py-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted bg-sol-bg-alt/30 hover:bg-sol-bg-alt/50 transition-colors"
+          className="block w-full text-center py-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
         >
           collapse
         </button>
       )}
+      </div>
     </div>
   );
 }

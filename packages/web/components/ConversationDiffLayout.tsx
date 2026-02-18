@@ -419,6 +419,17 @@ function DiffPane() {
   if (changes.length === 0) {
     return (
       <div className="h-full w-full flex flex-col bg-background">
+        <div className="flex items-center justify-end px-2 py-1.5 border-b border-sol-border/50">
+          <button
+            onClick={() => useDiffViewerStore.getState().setDiffPanelOpen(false)}
+            className="p-1 rounded hover:bg-sol-bg-alt text-muted-foreground hover:text-foreground transition-colors"
+            title="Close panel"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
         <div className="flex-1 flex items-center justify-center text-muted-foreground">
           <div className="text-center">
             <p className="text-lg font-medium">No changes yet</p>
