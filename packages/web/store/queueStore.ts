@@ -23,6 +23,7 @@ interface InboxState {
   dismissedSessions: InboxSession[];
   currentIndex: number;
   dismissedIds: Set<string>;
+  injectedIds: Set<string>;
   showDismissed: boolean;
   viewingDismissedId: string | null;
 
@@ -46,6 +47,7 @@ export const useQueueStore = create<InboxState>((set, get) => ({
   dismissedSessions: [],
   currentIndex: 0,
   dismissedIds: new Set(),
+  injectedIds: new Set(),
   showDismissed: false,
   viewingDismissedId: null,
 
@@ -68,9 +70,16 @@ export const useQueueStore = create<InboxState>((set, get) => ({
     const merged: InboxSession[] = [];
     const seen = new Set<string>();
 
+    const { injectedIds } = get();
     for (const old of prev) {
       if (old._id.startsWith("temp_")) {
         merged.push(old);
+        seen.add(old._id);
+        continue;
+      }
+      if (injectedIds.has(old._id) && !dismissedIds.has(old._id)) {
+        const fresh = incomingById.get(old._id);
+        merged.push(fresh || old);
         seen.add(old._id);
         continue;
       }
@@ -127,13 +136,15 @@ export const useQueueStore = create<InboxState>((set, get) => ({
   },
 
   stashSession: (id) => {
-    const { sessions, currentIndex, dismissedIds } = get();
+    const { sessions, currentIndex, dismissedIds, injectedIds } = get();
     const newDismissed = new Set(dismissedIds);
     newDismissed.add(id);
+    const newInjected = new Set(injectedIds);
+    newInjected.delete(id);
 
     const visible = sessions.filter((s) => !newDismissed.has(s._id));
     const newIndex = Math.min(currentIndex, Math.max(0, visible.length - 1));
-    set({ dismissedIds: newDismissed, sessions: visible, currentIndex: newIndex });
+    set({ dismissedIds: newDismissed, injectedIds: newInjected, sessions: visible, currentIndex: newIndex });
 
     cachePatch("conversations", id, { inbox_dismissed_at: Date.now() });
   },
@@ -180,8 +191,10 @@ export const useQueueStore = create<InboxState>((set, get) => ({
   },
 
   injectSession: (session) => {
-    const { sessions } = get();
-    set({ sessions: [session, ...sessions], currentIndex: 0 });
+    const { sessions, injectedIds } = get();
+    const next = new Set(injectedIds);
+    next.add(session._id);
+    set({ sessions: [session, ...sessions], currentIndex: 0, injectedIds: next });
   },
 
   replaceSessionId: (tempId, realId) => {

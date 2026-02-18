@@ -13,6 +13,7 @@ import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useQueueStore, InboxSession } from "../../store/queueStore";
 import { registerMutation } from "../../store/convexCache";
 import { useCurrentConversationStore } from "../../store/currentConversationStore";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -166,26 +167,38 @@ function SessionCard({
         )}
       </button>
       {onDismiss && (
-        <button
-          onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-          className="absolute top-2 right-1.5 p-1 rounded text-sol-text-dim hover:text-sol-red opacity-0 group-hover:opacity-100 transition-opacity"
-          title="Dismiss (Ctrl+Backspace)"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
+                className="absolute top-2 right-1.5 p-1 rounded text-sol-text-dim hover:text-sol-red opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
+                </svg>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">Dismiss</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
       {onRestore && (
-        <button
-          onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-          className="absolute top-2 right-1.5 p-1 rounded text-sol-text-dim hover:text-sol-cyan opacity-0 group-hover:opacity-100 transition-opacity"
-          title="Restore to inbox"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a5 5 0 010 10H9M3 10l4-4M3 10l4 4" />
-          </svg>
-        </button>
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
+                className="absolute top-2 right-1.5 p-1 rounded text-sol-text-dim hover:text-sol-cyan opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
+                </svg>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">Restore</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
     </div>
   );
@@ -353,7 +366,7 @@ export function QueuePageClient() {
   const navigateUp = useQueueStore((s) => s.navigateUp);
   const navigateDown = useQueueStore((s) => s.navigateDown);
   const stashSession = useQueueStore((s) => s.stashSession);
-  const setCurrentIndex = useQueueStore((s) => s.setCurrentIndex);
+  const rawSetCurrentIndex = useQueueStore((s) => s.setCurrentIndex);
   const viewingDismissedId = useQueueStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useQueueStore((s) => s.setViewingDismissedId);
 
@@ -389,17 +402,56 @@ export function QueuePageClient() {
     }
   }, [dismissedQuery, syncDismissedFromConvex]);
 
-  // Select session from URL param (works on initial load and client-side navigation)
+  const injectSession = useQueueStore((s) => s.injectSession);
+  const setCurrentIndex = rawSetCurrentIndex;
+
+  // ID we're trying to navigate to that isn't yet in the queue
+  const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
+
+  // Query conversation for sessions not in the queue
+  const directConv = useQuery(
+    api.conversations.getConversation,
+    pendingInjectId ? { conversation_id: pendingInjectId as Id<"conversations">, limit: 1 } : "skip"
+  );
+
+  // Select session from URL param -- only when the param actually changes
+  const paramSessionId = searchParams.get("s");
   useEffect(() => {
-    const paramId = searchParams.get("s");
-    if (!paramId || sessions.length === 0) return;
-    if (paramId === lastAppliedParamId.current) return;
-    const idx = sessions.findIndex((s) => s._id === paramId);
-    if (idx >= 0 && idx !== currentIndex) {
-      setCurrentIndex(idx);
-      lastAppliedParamId.current = paramId;
+    if (!paramSessionId || paramSessionId === lastAppliedParamId.current) return;
+    if (sessions.length === 0 && activeSessions === undefined) return;
+    lastAppliedParamId.current = paramSessionId;
+    const idx = sessions.findIndex((s) => s._id === paramSessionId);
+    if (idx >= 0) {
+      rawSetCurrentIndex(idx);
+      setPendingInjectId(null);
+    } else {
+      setPendingInjectId(paramSessionId);
     }
-  }, [searchParams, sessions, currentIndex, setCurrentIndex]);
+  }, [paramSessionId, sessions, rawSetCurrentIndex, activeSessions]);
+
+  // Once we have the conversation data, inject it into the queue
+  useEffect(() => {
+    if (!pendingInjectId || !directConv) return;
+    const already = sessions.findIndex((s) => s._id === pendingInjectId);
+    if (already >= 0) {
+      rawSetCurrentIndex(already);
+      setPendingInjectId(null);
+      return;
+    }
+    injectSession({
+      _id: pendingInjectId,
+      session_id: directConv.session_id || pendingInjectId,
+      title: directConv.title,
+      updated_at: directConv.updated_at,
+      project_path: directConv.project_path,
+      git_root: directConv.git_root,
+      agent_type: directConv.agent_type || "claude_code",
+      message_count: directConv.message_count || 0,
+      is_idle: true,
+      has_pending: false,
+    });
+    setPendingInjectId(null);
+  }, [pendingInjectId, directConv, sessions, rawSetCurrentIndex, injectSession]);
 
   const handleDismiss = useCallback((id: string) => {
     stashSession(id);
@@ -488,11 +540,20 @@ export function QueuePageClient() {
         handleDismissCurrent();
         return;
       }
+      if (e.ctrlKey && e.key === "i") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const firstNeedsInput = sessions.findIndex((s) => s.is_idle && s.message_count > 0);
+        if (firstNeedsInput >= 0) {
+          setCurrentIndex(firstNeedsInput);
+        }
+        return;
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [navigateDown, navigateUp, handleDismissCurrent]);
+  }, [navigateDown, navigateUp, handleDismissCurrent, sessions, setCurrentIndex]);
 
   const prefetchIds: string[] = [];
   const seen = new Set<string>();

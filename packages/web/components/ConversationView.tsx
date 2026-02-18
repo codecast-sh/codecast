@@ -3233,7 +3233,8 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
   const [isFocused, setIsFocused] = useState(false);
-  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [shortcutTooltip, setShortcutTooltip] = useState<{ x: number; y: number } | null>(null);
+  const sendRef = useRef<HTMLDivElement>(null);
   const [pastedImages, setPastedImages] = useState<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>(() => {
     if (cached?.draft_image_storage_ids) {
       return (cached.draft_image_storage_ids as Array<{ storageId: string; previewUrl: string; name: string }>).map(img => ({
@@ -3427,7 +3428,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
               <p className="text-[11px] text-sol-text-dim/70">
                 {isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
               </p>
-              <div className="flex items-center gap-2 relative">
+              <div className="flex items-center gap-2">
                 <p className="text-[9px] opacity-[0.55] flex items-center gap-2">
                   <span className="flex items-center gap-0.5">
                     <kbd className="px-0.5 rounded border border-current/30 text-[8px] leading-tight">Shift</kbd>
@@ -3445,31 +3446,22 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
                 </p>
                 <button
                   type="button"
-                  onClick={() => setShowShortcuts(s => !s)}
-                  className="text-[9px] opacity-40 hover:opacity-70 transition-opacity w-4 h-4 flex items-center justify-center rounded border border-current/20"
+                  onClick={() => {
+                    const rect = sendRef.current?.getBoundingClientRect();
+                    if (rect) setShortcutTooltip(prev => prev ? null : { x: rect.right, y: rect.top });
+                  }}
+                  onMouseEnter={() => {
+                    const rect = sendRef.current?.getBoundingClientRect();
+                    if (rect) setShortcutTooltip({ x: rect.right, y: rect.top });
+                  }}
+                  onMouseLeave={(e) => {
+                    const related = e.relatedTarget as Element | null;
+                    if (!related?.closest?.('[data-shortcut-tooltip]')) setShortcutTooltip(null);
+                  }}
+                  className="text-[9px] text-sol-text-dim hover:text-sol-text transition-colors w-4 h-4 flex items-center justify-center rounded-full border border-sol-text-dim/50 hover:border-sol-text-dim bg-sol-bg-alt font-semibold"
                 >
                   ?
                 </button>
-                {showShortcuts && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowShortcuts(false)} />
-                    <div className="absolute bottom-6 right-0 z-50 bg-sol-bg border border-sol-border rounded-lg shadow-xl p-3 w-64">
-                      <div className="text-[11px] font-medium text-sol-text mb-2">Keyboard Shortcuts</div>
-                      <div className="space-y-1.5 text-[10px] text-sol-text-dim">
-                        <ShortcutHint keys={["⌘", "K"]} label="Command palette" />
-                        <ShortcutHint keys={["Ctrl", "J"]} label="Next session" />
-                        <ShortcutHint keys={["Ctrl", "K"]} label="Previous session" />
-                        <ShortcutHint keys={["Ctrl", "⌫"]} label="Dismiss session" />
-                        <ShortcutHint keys={["Esc"]} label="Send escape to session" />
-                        <ShortcutHint keys={["⌘", "⇧", "C"]} label="Collapse all tool blocks" />
-                        <div className="border-t border-sol-border/30 my-1.5" />
-                        <ShortcutHint keys={["Shift", "↵"]} label="New line" />
-                        <ShortcutHint keys={["Opt", "↵"]} label="Send & next session" />
-                        <ShortcutHint keys={["↵"]} label="Send message" />
-                      </div>
-                    </div>
-                  </>
-                )}
               </div>
             </div>
           )}
@@ -3513,31 +3505,56 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
                   rows={1}
                   className="flex-1 bg-transparent text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1"
                 />
-                <button
-                  type="submit"
-                  disabled={!canSubmit}
-                  className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center shrink-0 border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
-                >
-                  {isSubmitting ? (
-                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                  ) : lastStatus === "delivered" ? (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
-                    </svg>
-                  )}
-                </button>
+                <div ref={sendRef} className="shrink-0">
+                  <button
+                    type="submit"
+                    disabled={!canSubmit}
+                    className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
+                  >
+                    {isSubmitting ? (
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                    ) : lastStatus === "delivered" ? (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           </form>
         </div>
       </div>
+      {shortcutTooltip && (
+        <div
+          data-shortcut-tooltip
+          className="fixed z-[100] bg-sol-bg border border-sol-border/60 rounded-lg shadow-lg p-3 w-56 transition-opacity duration-150"
+          style={{ top: shortcutTooltip.y - 4, left: shortcutTooltip.x, transform: 'translate(-100%, -100%)' }}
+          onMouseLeave={() => setShortcutTooltip(null)}
+        >
+          <div className="text-[10px] font-medium text-sol-text/80 mb-2">Keyboard Shortcuts</div>
+          <div className="space-y-1.5 text-[9px] text-sol-text-dim/70">
+            <ShortcutHint keys={["Cmd", "K"]} label="Command palette" />
+            <ShortcutHint keys={["Ctrl", "I"]} label="Jump to needs input" />
+            <ShortcutHint keys={["Ctrl", "J"]} label="Next session" />
+            <ShortcutHint keys={["Ctrl", "K"]} label="Previous session" />
+            <ShortcutHint keys={["Ctrl", "Bksp"]} label="Dismiss session" />
+            <ShortcutHint keys={["Esc"]} label="Escape to session" />
+            <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Collapse tool blocks" />
+            <div className="border-t border-sol-border/20 my-1.5" />
+            <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
+            <ShortcutHint keys={["Opt", "Enter"]} label="Send & next" />
+            <ShortcutHint keys={["Enter"]} label="Send message" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
