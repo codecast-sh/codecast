@@ -201,7 +201,7 @@ export function CommandPalette() {
                   <CommandPrimitive.Item
                     key={`fav-${fav._id}`}
                     value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
-                    onSelect={() => navigate(`/conversation/${fav._id}`)}
+                    onSelect={() => navigate(`/inbox?s=${fav._id}`)}
                     className="flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text"
                   >
                     <span className="text-amber-400 flex-shrink-0">
@@ -266,7 +266,7 @@ export function CommandPalette() {
                   <CommandPrimitive.Item
                     key={`recent-${conv._id}`}
                     value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
-                    onSelect={() => navigate(`/conversation/${conv._id}`)}
+                    onSelect={() => navigate(`/inbox?s=${conv._id}`)}
                     className="flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text group"
                   >
                     <span className="text-sol-text-dim flex-shrink-0">

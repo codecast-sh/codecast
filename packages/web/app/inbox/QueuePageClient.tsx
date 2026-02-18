@@ -375,7 +375,7 @@ export function QueuePageClient() {
     );
   }, [patchConv]);
   const isPopstateRef = useRef(false);
-  const initialParamId = useRef(searchParams.get("s"));
+  const lastAppliedParamId = useRef<string | null>(null);
 
   useEffect(() => {
     if (activeSessions) {
@@ -389,16 +389,17 @@ export function QueuePageClient() {
     }
   }, [dismissedQuery, syncDismissedFromConvex]);
 
-  // On initial load, select session from URL param
+  // Select session from URL param (works on initial load and client-side navigation)
   useEffect(() => {
-    const paramId = initialParamId.current;
+    const paramId = searchParams.get("s");
     if (!paramId || sessions.length === 0) return;
+    if (paramId === lastAppliedParamId.current) return;
     const idx = sessions.findIndex((s) => s._id === paramId);
     if (idx >= 0 && idx !== currentIndex) {
       setCurrentIndex(idx);
+      lastAppliedParamId.current = paramId;
     }
-    initialParamId.current = null;
-  }, [sessions, currentIndex, setCurrentIndex]);
+  }, [searchParams, sessions, currentIndex, setCurrentIndex]);
 
   const handleDismiss = useCallback((id: string) => {
     stashSession(id);
