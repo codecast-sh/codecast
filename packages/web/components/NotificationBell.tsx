@@ -264,12 +264,12 @@ export function NotificationBell() {
             <div className="px-5 py-3 border-t border-sol-border">
               <button
                 onClick={() => {
-                  router.push('/inbox');
+                  router.push('/notifications');
                   setIsOpen(false);
                 }}
                 className="text-sm text-sol-yellow hover:text-sol-yellow-bright transition-colors w-full text-center"
               >
-                View all in inbox
+                View all
               </button>
             </div>
           )}
