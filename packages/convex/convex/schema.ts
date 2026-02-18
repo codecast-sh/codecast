@@ -387,6 +387,7 @@ export default defineSchema({
     from_user_id: v.id("users"),
     content: v.string(),
     image_storage_id: v.optional(v.id("_storage")),
+    image_storage_ids: v.optional(v.array(v.id("_storage"))),
     status: v.union(
       v.literal("pending"),
       v.literal("delivered"),

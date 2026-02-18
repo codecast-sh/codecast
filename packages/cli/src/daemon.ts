@@ -4116,21 +4116,27 @@ async function main(): Promise<void> {
           if (Array.isArray(messages)) {
             log(`Received array with ${messages.length} pending message(s)`);
             for (const msg of messages) {
-              log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}" image_storage_id=${msg.image_storage_id || "none"}`);
+              const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
+              log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}" images=${imageIds.length}`);
 
               let messageContent = msg.content;
-              if (msg.image_storage_id) {
-                try {
-                  const imagePath = await downloadImage(msg.image_storage_id, syncService);
-                  if (imagePath) {
-                    const realText = msg.content.replace(/^\[image\]$/i, "").trim();
-                    messageContent = realText
-                      ? `${realText} [Image ${imagePath}]`
-                      : `[Image ${imagePath}]`;
-                    log(`Downloaded image to ${imagePath}`);
+              if (imageIds.length > 0) {
+                const imagePaths: string[] = [];
+                for (const storageId of imageIds) {
+                  try {
+                    const imagePath = await downloadImage(storageId, syncService);
+                    if (imagePath) {
+                      imagePaths.push(imagePath);
+                      log(`Downloaded image to ${imagePath}`);
+                    }
+                  } catch (err) {
+                    log(`Failed to download image: ${err instanceof Error ? err.message : String(err)}`);
                   }
-                } catch (err) {
-                  log(`Failed to download image: ${err instanceof Error ? err.message : String(err)}`);
+                }
+                if (imagePaths.length > 0) {
+                  const realText = msg.content.replace(/^\[image\]$/i, "").trim();
+                  const imageTags = imagePaths.map(p => `[Image ${p}]`).join(" ");
+                  messageContent = realText ? `${realText} ${imageTags}` : imageTags;
                 }
               }
 

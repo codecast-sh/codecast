@@ -2541,7 +2541,7 @@ function AssistantBlock({
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       {(hasContent || hasToolCalls) && (
-        <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
+        <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : "-top-2"} right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {onStartShareSelection && (
             <button
               onClick={() => onStartShareSelection(messageId)}
@@ -3214,22 +3214,39 @@ function GitDiffView({ diff }: { diff: string }) {
   );
 }
 
+function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-sol-text/70">{label}</span>
+      <span className="flex items-center gap-0.5">
+        {keys.map((k, i) => (
+          <kbd key={i} className="px-1 py-px rounded border border-sol-border/40 bg-sol-bg-alt text-[9px] font-mono leading-tight min-w-[18px] text-center">{k}</kbd>
+        ))}
+      </span>
+    </div>
+  );
+}
+
 function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean }) {
-  console.log('[DRAFT] MessageInput MOUNT/RENDER', conversationId.slice(-8));
   const cached = getDraft(conversationId);
-  const [message, setMessage] = useState(() => {
-    const val = cached?.draft_message ?? initialDraft ?? "";
-    console.log('[DRAFT] useState init', conversationId.slice(-8), 'cached:', !!cached, 'initialDraft:', initialDraft, 'result:', val);
-    return val;
-  });
+  const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
   const [isFocused, setIsFocused] = useState(false);
-  const [pastedImage, setPastedImage] = useState<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean } | null>(() => {
-    if (cached?.draft_image_storage_id) {
-      return { file: new File([], cached.draft_image_name || "image"), previewUrl: cached.draft_image_preview || "", storageId: cached.draft_image_storage_id, uploading: false };
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [pastedImages, setPastedImages] = useState<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>(() => {
+    if (cached?.draft_image_storage_ids) {
+      return (cached.draft_image_storage_ids as Array<{ storageId: string; previewUrl: string; name: string }>).map(img => ({
+        file: new File([], img.name || "image"),
+        previewUrl: img.previewUrl || "",
+        storageId: img.storageId as Id<"_storage">,
+        uploading: false,
+      }));
     }
-    return null;
+    if (cached?.draft_image_storage_id) {
+      return [{ file: new File([], cached.draft_image_name || "image"), previewUrl: cached.draft_image_preview || "", storageId: cached.draft_image_storage_id, uploading: false }];
+    }
+    return [];
   });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
@@ -3237,15 +3254,13 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   const getRealId = usePendingSessionStore((s) => s.getRealId);
   const addOptimistic = useOptimisticMessagesStore((s) => s.add);
 
-  const updateDraft = useCallback((text: string, image?: { storageId?: string; previewUrl?: string; name?: string } | null) => {
-    if (!text && !image) {
+  const updateDraft = useCallback((text: string, images?: Array<{ storageId?: string; previewUrl?: string; name?: string }> | null) => {
+    if (!text && (!images || images.length === 0)) {
       clearDraft(conversationId);
     } else {
       setDraft(conversationId, {
         draft_message: text || null,
-        draft_image_storage_id: image?.storageId || null,
-        draft_image_preview: image?.previewUrl || null,
-        draft_image_name: image?.name || null,
+        draft_image_storage_ids: images && images.length > 0 ? images : null,
       });
     }
   }, [conversationId]);
@@ -3253,7 +3268,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   const handleMessageChange = useCallback((val: string) => {
     setMessage(val);
     const existing = getDraft(conversationId);
-    if (!val && !existing?.draft_image_storage_id) {
+    if (!val && !existing?.draft_image_storage_ids?.length) {
       clearDraft(conversationId);
     } else {
       setDraft(conversationId, { ...existing, draft_message: val || null });
@@ -3261,8 +3276,8 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   }, [conversationId]);
 
   const isInactive = status && status !== "active";
-  const hasContent = message.trim().length > 0 || !!pastedImage;
-  const isExpanded = !!onSendAndAdvance || isFocused || message.length > 0 || !!pastedImage;
+  const hasContent = message.trim().length > 0 || pastedImages.length > 0;
+  const isExpanded = !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0;
 
   const resetTextareaHeight = () => {
     if (textareaRef.current) {
@@ -3276,22 +3291,37 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   }, [message]);
 
   useEffect(() => {
-    if (autoFocusInput && textareaRef.current) {
-      textareaRef.current.focus();
+    if (textareaRef.current) {
+      const len = textareaRef.current.value.length;
+      if (len > 0) {
+        textareaRef.current.focus();
+        textareaRef.current.select();
+      } else if (autoFocusInput) {
+        textareaRef.current.focus();
+      }
     }
   }, [autoFocusInput, conversationId]);
 
-  const clearImage = useCallback(() => {
-    if (pastedImage) {
-      URL.revokeObjectURL(pastedImage.previewUrl);
-      setPastedImage(null);
-      updateDraft(message, null);
-    }
-  }, [pastedImage, updateDraft, message]);
+  const clearImage = useCallback((index: number) => {
+    setPastedImages(prev => {
+      const img = prev[index];
+      if (img) URL.revokeObjectURL(img.previewUrl);
+      const next = prev.filter((_, i) => i !== index);
+      updateDraft(message, next.length > 0 ? next.map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name })) : null);
+      return next;
+    });
+  }, [updateDraft, message]);
+
+  const clearAllImages = useCallback(() => {
+    pastedImages.forEach(img => URL.revokeObjectURL(img.previewUrl));
+    setPastedImages([]);
+    updateDraft(message, null);
+  }, [pastedImages, updateDraft, message]);
 
   const uploadImage = useCallback(async (file: File) => {
     const previewUrl = URL.createObjectURL(file);
-    setPastedImage({ file, previewUrl, uploading: true });
+    const placeholder = { file, previewUrl, uploading: true };
+    setPastedImages(prev => [...prev, placeholder]);
     try {
       const uploadUrl = await generateUploadUrl({});
       const result = await fetch(uploadUrl, {
@@ -3300,31 +3330,35 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
         body: file,
       });
       const { storageId } = await result.json();
-      setPastedImage(prev => prev ? { ...prev, storageId, uploading: false } : null);
-      updateDraft(message, { storageId, previewUrl, name: file.name });
+      setPastedImages(prev => {
+        const next = prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img);
+        updateDraft(message, next.map(i => ({ storageId: i.storageId as string, previewUrl: i.previewUrl, name: i.file.name })));
+        return next;
+      });
     } catch {
       toast.error("Failed to upload image");
       URL.revokeObjectURL(previewUrl);
-      setPastedImage(null);
+      setPastedImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
     }
   }, [generateUploadUrl, updateDraft, message]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (!items) return;
+    let hasImage = false;
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.startsWith("image/")) {
-        e.preventDefault();
+        if (!hasImage) { e.preventDefault(); hasImage = true; }
         const file = items[i].getAsFile();
         if (file) uploadImage(file);
-        return;
       }
     }
   }, [uploadImage]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const canSend = message.trim() || (pastedImage && !pastedImage.uploading && pastedImage.storageId);
+    const readyImages = pastedImages.filter(img => !img.uploading && img.storageId);
+    const canSend = message.trim() || readyImages.length > 0;
     if (!canSend || isSubmitting) return;
 
     setIsSubmitting(true);
@@ -3335,19 +3369,22 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
       if (realId.startsWith("temp_")) {
         throw new Error("Session is still being created, please try again in a moment");
       }
-      const trimmed = message.trim() || (pastedImage ? "[image]" : "");
+      const trimmed = message.trim() || (readyImages.length > 0 ? "[image]" : "");
+      const storageIds = readyImages.map(img => img.storageId!);
       await sendMessage({
         conversation_id: realId as Id<"conversations">,
         content: trimmed,
-        image_storage_id: pastedImage?.storageId ?? undefined,
+        image_storage_ids: storageIds.length > 0 ? storageIds : undefined,
       });
-      addOptimistic(realId, trimmed, pastedImage?.storageId ? [{ media_type: pastedImage.file.type, storage_id: pastedImage.storageId as string }] : undefined);
+      const optimisticImages = readyImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
+      addOptimistic(realId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
       setLastStatus("delivered");
       setMessage("");
-      clearImage();
+      clearAllImages();
       updateDraft("", null);
 
       setTimeout(() => setLastStatus(null), 2000);
+      requestAnimationFrame(() => textareaRef.current?.focus());
     } catch (error) {
       setLastStatus("failed");
       toast.error(error instanceof Error ? error.message : "Failed to send message");
@@ -3368,52 +3405,98 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     }
   };
 
-  const canSubmit = hasContent && !isSubmitting && !(pastedImage?.uploading);
+  const canSubmit = hasContent && !isSubmitting && !pastedImages.some(img => img.uploading);
 
   return (
     <div className="shrink-0 z-30 pointer-events-none sticky bottom-0">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         <div className="relative">
-          {isFocused && (
-            <div className={`mx-auto px-4 mb-1 flex justify-between ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
-              <p className="text-[11px] text-sol-text-dim">
+          <div
+            className={`mx-auto px-4 flex justify-between overflow-hidden transition-all ${isWaitingForResponse ? "max-h-8 opacity-100 translate-y-0 mb-1 duration-300 ease-out" : "max-h-0 opacity-0 translate-y-2 mb-0 duration-150 ease-in"} ${isExpanded ? "max-w-4xl" : "max-w-md"}`}
+          >
+            <p className="text-[11px] text-sol-text-dim/70">
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/50 animate-pulse" />
+                Waiting for response...
+              </span>
+            </p>
+          </div>
+          {isFocused && !isWaitingForResponse && (
+            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+              <p className="text-[11px] text-sol-text-dim/70">
                 {isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
               </p>
-              <p className="text-[11px] text-sol-text-dim">
-                Shift + Enter for new line
-              </p>
-            </div>
-          )}
-          {isWaitingForResponse && (
-            <div className={`mx-auto px-4 mb-1.5 ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
-              <div className="flex items-center gap-2 text-[11px] text-sol-text-dim">
-                <ClaudeIcon />
-                <span>Waiting for response...</span>
+              <div className="flex items-center gap-2 relative">
+                <p className="text-[9px] opacity-[0.55] flex items-center gap-2">
+                  <span className="flex items-center gap-0.5">
+                    <kbd className="px-0.5 rounded border border-current/30 text-[8px] leading-tight">Shift</kbd>
+                    <span className="text-[7px]">+</span>
+                    <kbd className="px-0.5 rounded border border-current/30 text-[8px] leading-tight">↵</kbd>
+                    <span className="ml-0.5">new line</span>
+                  </span>
+                  <span>·</span>
+                  <span className="flex items-center gap-0.5">
+                    <kbd className="px-0.5 rounded border border-current/30 text-[8px] leading-tight">Opt</kbd>
+                    <span className="text-[7px]">+</span>
+                    <kbd className="px-0.5 rounded border border-current/30 text-[8px] leading-tight">↵</kbd>
+                    <span className="ml-0.5">send &amp; next</span>
+                  </span>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowShortcuts(s => !s)}
+                  className="text-[9px] opacity-40 hover:opacity-70 transition-opacity w-4 h-4 flex items-center justify-center rounded border border-current/20"
+                >
+                  ?
+                </button>
+                {showShortcuts && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowShortcuts(false)} />
+                    <div className="absolute bottom-6 right-0 z-50 bg-sol-bg border border-sol-border rounded-lg shadow-xl p-3 w-64">
+                      <div className="text-[11px] font-medium text-sol-text mb-2">Keyboard Shortcuts</div>
+                      <div className="space-y-1.5 text-[10px] text-sol-text-dim">
+                        <ShortcutHint keys={["⌘", "K"]} label="Command palette" />
+                        <ShortcutHint keys={["Ctrl", "J"]} label="Next session" />
+                        <ShortcutHint keys={["Ctrl", "K"]} label="Previous session" />
+                        <ShortcutHint keys={["Ctrl", "⌫"]} label="Dismiss session" />
+                        <ShortcutHint keys={["Esc"]} label="Send escape to session" />
+                        <ShortcutHint keys={["⌘", "⇧", "C"]} label="Collapse all tool blocks" />
+                        <div className="border-t border-sol-border/30 my-1.5" />
+                        <ShortcutHint keys={["Shift", "↵"]} label="New line" />
+                        <ShortcutHint keys={["Opt", "↵"]} label="Send & next session" />
+                        <ShortcutHint keys={["↵"]} label="Send message" />
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
           <form onSubmit={handleSubmit} className={`mx-auto px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
             <div className={`flex flex-col bg-sol-bg-alt border border-sol-border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"}`}>
-              {pastedImage && (
-                <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50">
-                  <div className="relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0">
-                    <img src={pastedImage.previewUrl} alt="Pasted" className="h-full w-full object-cover" />
-                    {pastedImage.uploading && (
-                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                        <svg className="w-5 h-5 animate-spin text-white" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
+              {pastedImages.length > 0 && (
+                <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50 flex-wrap">
+                  {pastedImages.map((img, idx) => (
+                    <div key={idx} className="relative group">
+                      <div className="relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0">
+                        <img src={img.previewUrl} alt="Pasted" className="h-full w-full object-cover" />
+                        {img.uploading && (
+                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                            <svg className="w-5 h-5 animate-spin text-white" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                  <span className="text-xs text-sol-text-secondary truncate flex-1">{pastedImage.file.name || "Pasted image"}</span>
-                  <button type="button" onClick={clearImage} className="w-6 h-6 rounded-full bg-sol-bg hover:bg-sol-border flex items-center justify-center text-sol-text-secondary hover:text-sol-text transition-colors shrink-0">
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
+                      <button type="button" onClick={() => clearImage(idx)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-sol-bg-alt border border-sol-border flex items-center justify-center text-sol-text-secondary hover:text-sol-text transition-colors opacity-0 group-hover:opacity-100">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
               <div className="flex items-end gap-2">

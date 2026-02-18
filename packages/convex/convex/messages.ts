@@ -127,15 +127,21 @@ export const addMessage = mutation({
       const pendingWithImage = await ctx.db
         .query("pending_messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-        .filter((q) => q.neq(q.field("image_storage_id"), undefined))
+        .filter((q) => q.or(
+          q.neq(q.field("image_storage_id"), undefined),
+          q.neq(q.field("image_storage_ids"), undefined)
+        ))
         .order("desc")
         .first();
-      if (pendingWithImage?.image_storage_id) {
+      if (pendingWithImage) {
         const c = (args.content || "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
-          const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
-          const contentMatch = c === pc;
+        const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
+        const contentMatch = c === pc;
         if (contentMatch) {
-          images = [{ media_type: "image/png", storage_id: pendingWithImage.image_storage_id }];
+          const ids = pendingWithImage.image_storage_ids ?? (pendingWithImage.image_storage_id ? [pendingWithImage.image_storage_id] : []);
+          if (ids.length > 0) {
+            images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
+          }
         }
       }
     }
@@ -278,15 +284,21 @@ export const addMessages = mutation({
         const pendingWithImage = await ctx.db
           .query("pending_messages")
           .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-          .filter((q) => q.neq(q.field("image_storage_id"), undefined))
+          .filter((q) => q.or(
+            q.neq(q.field("image_storage_id"), undefined),
+            q.neq(q.field("image_storage_ids"), undefined)
+          ))
           .order("desc")
           .first();
-        if (pendingWithImage?.image_storage_id) {
+        if (pendingWithImage) {
           const c = (msg.content || "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
-            const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
-            const contentMatch = c === pc;
+          const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
+          const contentMatch = c === pc;
           if (contentMatch) {
-            images = [{ media_type: "image/png", storage_id: pendingWithImage.image_storage_id }];
+            const ids = pendingWithImage.image_storage_ids ?? (pendingWithImage.image_storage_id ? [pendingWithImage.image_storage_id] : []);
+            if (ids.length > 0) {
+              images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
+            }
           }
         }
       }

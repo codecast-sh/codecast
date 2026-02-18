@@ -28,6 +28,7 @@ export const sendMessageToSession = mutation({
     conversation_id: v.id("conversations"),
     content: v.string(),
     image_storage_id: v.optional(v.id("_storage")),
+    image_storage_ids: v.optional(v.array(v.id("_storage"))),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -50,6 +51,7 @@ export const sendMessageToSession = mutation({
       from_user_id: authUserId,
       content: args.content,
       image_storage_id: args.image_storage_id,
+      image_storage_ids: args.image_storage_ids,
       status: "pending" as const,
       created_at: Date.now(),
       retry_count: 0,
