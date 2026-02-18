@@ -61,17 +61,15 @@ export const generateTitle = internalAction({
       })
       .join("\n\n");
 
-    const prompt = `Summarize this coding conversation with a title and subtitle.
+    const prompt = `Generate a title and subtitle for this coding session. Be direct and information-dense. Never use filler phrases like "Please", "Let me", "I'll help", "Sure", etc.
 
-Title: 3-8 words, captures the main topic/goal
+Title: 3-8 words. The specific task, e.g. "Fix auth redirect loop" or "Add dark mode to settings page"
 
-Subtitle: Bullet points (preferred) or a concise narrative describing:
-- What was built, fixed, or changed
-- Key files or components affected
-- Current state (working, in progress, blocked)
-Use bullet points for clarity when multiple things happened.
+Subtitle: 1-2 short lines. State what was done or is being done. Use telegraphic style - omit articles and filler.
+Good: "Refactored auth middleware to handle OAuth refresh tokens. Fixed race condition in session validation."
+Bad: "Please let me explain what was accomplished in this session..."
 
-Respond in this exact JSON format only, no markdown:
+Output ONLY valid JSON, no markdown:
 {"title": "...", "subtitle": "..."}
 
 Conversation:
