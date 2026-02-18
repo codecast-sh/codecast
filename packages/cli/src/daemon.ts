@@ -493,6 +493,29 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "resume_session": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const sessionId = parsed.session_id;
+        const conversationId = parsed.conversation_id;
+        if (!sessionId) {
+          error = "Missing session_id";
+          break;
+        }
+        log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}`);
+        const resumed = await autoResumeSession(sessionId, "", readTitleCache(), false);
+        if (resumed) {
+          if (conversationId) {
+            const cache = readConversationCache();
+            cache[sessionId] = conversationId;
+            saveConversationCache(cache);
+          }
+          result = JSON.stringify({ resumed: true, session_id: sessionId });
+          log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
+        } else {
+          error = `Failed to resume session ${sessionId.slice(0, 8)} — session file may not exist locally`;
+        }
+        break;
+      }
       default:
         error = `Unknown command: ${command}`;
     }
