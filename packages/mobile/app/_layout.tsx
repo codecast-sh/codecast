@@ -13,8 +13,6 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
-import * as Updates from 'expo-updates';
-
 const secureStorage = {
   getItem: async (key: string) => {
     return await SecureStore.getItemAsync(key);
@@ -58,6 +56,7 @@ export default function RootLayout() {
       if (__DEV__) return;
 
       try {
+        const Updates = await import('expo-updates');
         const update = await Updates.checkForUpdateAsync();
         if (update.isAvailable) {
           await Updates.fetchUpdateAsync();

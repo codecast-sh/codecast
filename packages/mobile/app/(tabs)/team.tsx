@@ -354,7 +354,7 @@ export default function TeamScreen() {
           activeOpacity={0.7}
         >
           <RNText style={[styles.tabText, view === "directory" && styles.tabTextActive]}>
-            Directory
+            Members
           </RNText>
         </TouchableOpacity>
       </RNView>
@@ -450,19 +450,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filterContainer: {
-    maxHeight: 52,
     backgroundColor: Theme.bg,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.bgHighlight,
   },
   filterContent: {
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 12,
     gap: 8,
   },
   filterChip: {
     paddingHorizontal: 16,
-    paddingVertical: 7,
+    paddingVertical: 8,
     borderRadius: 18,
     backgroundColor: Theme.bgAlt,
     borderWidth: 1,
