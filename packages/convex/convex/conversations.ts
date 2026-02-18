@@ -57,7 +57,7 @@ async function findChildConversations(
   ctx: { db: any },
   conversationId: Id<"conversations">,
   messages: Array<{ message_uuid?: string }>,
-): Promise<{ children: Array<{ _id: string; title: string }>; map: Record<string, string> }> {
+): Promise<{ children: Array<{ _id: string; title: string; is_subagent?: boolean }>; map: Record<string, string> }> {
   const map: Record<string, string> = {};
 
   const allChildren = await ctx.db
@@ -67,7 +67,8 @@ async function findChildConversations(
 
   const children = allChildren.map((conv: any) => ({
     _id: conv._id,
-    title: conv.title || `Session ${conv.session_id.slice(0, 8)}`,
+    title: conv.title || "New Session",
+    is_subagent: conv.is_subagent || !conv.parent_message_uuid,
   }));
 
   const childByParentUuid = new Map<string, string>(
@@ -257,6 +258,7 @@ export const createConversation = mutation({
     title: v.optional(v.string()),
     started_at: v.optional(v.number()),
     parent_message_uuid: v.optional(v.string()),
+    parent_conversation_id: v.optional(v.string()),
     git_commit_hash: v.optional(v.string()),
     git_branch: v.optional(v.string()),
     git_remote_url: v.optional(v.string()),
@@ -284,6 +286,13 @@ export const createConversation = mutation({
       .first();
 
     if (existing) {
+      if (args.parent_conversation_id && !existing.parent_conversation_id) {
+        const isSubagent = !!args.parent_conversation_id && !args.parent_message_uuid;
+        await ctx.db.patch(existing._id, {
+          parent_conversation_id: args.parent_conversation_id as Id<"conversations">,
+          is_subagent: isSubagent || undefined,
+        });
+      }
       return existing._id;
     }
 
@@ -336,7 +345,9 @@ export const createConversation = mutation({
     }
 
     let parentConversationId: Id<"conversations"> | undefined;
-    if (args.parent_message_uuid) {
+    if (args.parent_conversation_id) {
+      parentConversationId = args.parent_conversation_id as Id<"conversations">;
+    } else if (args.parent_message_uuid) {
       const parentMsg = await ctx.db
         .query("messages")
         .withIndex("by_message_uuid", (q) => q.eq("message_uuid", args.parent_message_uuid!))
@@ -363,6 +374,7 @@ export const createConversation = mutation({
       status: "active",
       parent_message_uuid: args.parent_message_uuid,
       parent_conversation_id: parentConversationId,
+      is_subagent: (!!parentConversationId && !args.parent_message_uuid) || undefined,
       git_commit_hash: args.git_commit_hash,
       git_branch: args.git_branch,
       git_remote_url: args.git_remote_url,
@@ -375,6 +387,16 @@ export const createConversation = mutation({
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),
     });
+
+    // Auto-dismiss parent for plan handoffs and continuation children
+    if (parentConversationId && (!args.parent_message_uuid || args.parent_message_uuid === "plan-handoff")) {
+      const parent = await ctx.db.get(parentConversationId);
+      if (parent && !parent.inbox_dismissed_at) {
+        await ctx.db.patch(parentConversationId, {
+          inbox_dismissed_at: Date.now(),
+        });
+      }
+    }
 
     if (args.api_token) {
       await ctx.db.patch(args.user_id, {
@@ -600,7 +622,7 @@ export const getConversation = query({
     const title = conversation.title
       || firstUserMessage
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
-      || `Session ${conversation.session_id.slice(0, 8)}`;
+      || "New Session";
 
     return {
       ...conversation,
@@ -680,7 +702,7 @@ export const getAllMessages = query({
     const title = conversation.title
       || firstUserMessage
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
-      || `Session ${conversation.session_id.slice(0, 8)}`;
+      || "New Session";
 
     const { children: childConversations, map: childConversationMap } =
       messages.length > 0
@@ -723,7 +745,7 @@ export const getAllMessages = query({
         const forkUser = await ctx.db.get(fork.user_id);
         return {
           _id: fork._id,
-          title: fork.title || `Session ${fork.session_id.slice(0, 8)}`,
+          title: fork.title || "New Session",
           short_id: fork.short_id,
           started_at: fork.started_at,
           username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
@@ -832,7 +854,7 @@ export const getMessagesAroundTimestamp = query({
     const title = conversation.title
       || firstUserMessage
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
-      || `Session ${conversation.session_id.slice(0, 8)}`;
+      || "New Session";
 
     const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
     const newestTimestamp = messages.length > 0 ? messages[messages.length - 1].timestamp : null;
@@ -1067,6 +1089,7 @@ export const listConversations = query({
     include_message_previews: v.optional(v.boolean()),
     memberId: v.optional(v.id("users")),
     activeTeamId: v.optional(v.id("teams")),
+    subagentFilter: v.optional(v.union(v.literal("main"), v.literal("subagent"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1078,7 +1101,7 @@ export const listConversations = query({
       return { conversations: [], nextCursor: null };
     }
 
-    const limit = Math.min(args.limit ?? 20, 50);
+    const limit = Math.min(args.limit ?? 20, 200);
     const includeMessagePreviews = args.include_message_previews ?? false;
     const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
@@ -1143,18 +1166,38 @@ export const listConversations = query({
     };
 
     let conversations;
+    let subagentCount: number | undefined;
     if (args.filter === "my") {
-      // Use by_user_updated index to sort by updated_at (most recent activity first)
-      const query = ctx.db
-        .query("conversations")
-        .withIndex("by_user_updated", (q) =>
-          cursorTimestamp
-            ? q.eq("user_id", userId).lt("updated_at", cursorTimestamp)
-            : q.eq("user_id", userId)
-        )
-        .order("desc");
-
-      conversations = await query.take(limit + 1);
+      if (args.subagentFilter === "subagent") {
+        const query = ctx.db
+          .query("conversations")
+          .withIndex("by_user_subagent_updated", (q) =>
+            cursorTimestamp
+              ? q.eq("user_id", userId).eq("is_subagent", true).lt("updated_at", cursorTimestamp)
+              : q.eq("user_id", userId).eq("is_subagent", true)
+          )
+          .order("desc");
+        conversations = await query.take(limit + 1);
+      } else {
+        const query = ctx.db
+          .query("conversations")
+          .withIndex("by_user_updated", (q) =>
+            cursorTimestamp
+              ? q.eq("user_id", userId).lt("updated_at", cursorTimestamp)
+              : q.eq("user_id", userId)
+          )
+          .order("desc");
+        conversations = await query.take(limit + 1);
+      }
+      if (!cursorTimestamp) {
+        const subagentSample = await ctx.db
+          .query("conversations")
+          .withIndex("by_user_subagent_updated", (q) =>
+            q.eq("user_id", userId).eq("is_subagent", true)
+          )
+          .take(1);
+        subagentCount = subagentSample.length > 0 ? -1 : 0;
+      }
     } else if (args.memberId) {
       // Filter by specific team member - use index for efficient pagination
       const targetMember = teamUserMap.get(args.memberId.toString());
@@ -1244,7 +1287,7 @@ export const listConversations = query({
         const durationMs = c.updated_at - c.started_at;
         const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
         const isActive = c.status === "active" && c.updated_at > fiveMinutesAgo;
-        const title = c.title || `Session ${c.session_id.slice(0, 8)}`;
+        const title = c.title || "New Session";
 
         if (visibilityMode === "minimal") {
           return {
@@ -1288,7 +1331,7 @@ export const listConversations = query({
         }
 
         if (!includeMessagePreviews) {
-          const fullTitle = c.title || `Session ${c.session_id.slice(0, 8)}`;
+          const fullTitle = c.title || "New Session";
           return {
             _id: c._id,
             user_id: c.user_id,
@@ -1313,7 +1356,7 @@ export const listConversations = query({
             author_name: authorName,
             author_avatar: authorAvatar,
             is_own: c.user_id.toString() === userId.toString(),
-            parent_conversation_id: null,
+            parent_conversation_id: c.parent_conversation_id || null,
             parent_title: null,
             latest_todos: undefined,
             project_path: c.project_path || null,
@@ -1426,21 +1469,23 @@ export const listConversations = query({
         const firstUserMessage = messageAlternates.find(m => m.role === "user")?.content || "";
         const firstAssistantMessage = messageAlternates.find(m => m.role === "assistant")?.content || "";
 
-        const fullTitle = c.title || firstUserMessage || `Session ${c.session_id.slice(0, 8)}`;
+        const fullTitle = c.title || firstUserMessage || "New Session";
 
-        let parentConversationId: string | null = null;
+        let parentConversationId: string | null = c.parent_conversation_id || null;
         let parentTitle: string | null = null;
-        if (c.parent_message_uuid) {
+        if (!parentConversationId && c.parent_message_uuid) {
           const parentMsg = await ctx.db
             .query("messages")
             .withIndex("by_message_uuid", (q) => q.eq("message_uuid", c.parent_message_uuid))
             .first();
           if (parentMsg) {
             parentConversationId = parentMsg.conversation_id;
-            const parentConv = await ctx.db.get(parentMsg.conversation_id as Id<"conversations">);
-            if (parentConv) {
-              parentTitle = parentConv.title || `Session ${parentConv.session_id.slice(0, 8)}`;
-            }
+          }
+        }
+        if (parentConversationId) {
+          const parentConv = await ctx.db.get(parentConversationId as Id<"conversations">);
+          if (parentConv) {
+            parentTitle = parentConv.title || "New Session";
           }
         }
 
@@ -1488,6 +1533,7 @@ export const listConversations = query({
     return {
       conversations: conversationsWithUsers.sort((a, b) => (b as { updated_at: number }).updated_at - (a as { updated_at: number }).updated_at),
       nextCursor,
+      hasSubagents: subagentCount !== 0,
     };
   },
 });
@@ -1562,7 +1608,7 @@ export const getSharedConversation = query({
     const title = conversation.title
       || firstUserMessage
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
-      || `Session ${conversation.session_id.slice(0, 8)}`;
+      || "New Session";
 
     return {
       ...conversation,
@@ -1614,7 +1660,7 @@ export const getSharedConversationMeta = query({
     const title = conversation.title
       || firstUserMessage
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
-      || `Session ${conversation.session_id.slice(0, 8)}`;
+      || "New Session";
 
     return {
       title,
@@ -1684,7 +1730,7 @@ export const getConversationPublic = query({
     const title = conversation.title
       || firstUserMessage
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
-      || `Session ${conversation.session_id.slice(0, 8)}`;
+      || "New Session";
 
     let parentConversationId: string | null = null;
     if (conversation.parent_message_uuid) {
@@ -1846,7 +1892,7 @@ export const searchConversations = query({
       const title = conv.title
         || firstUserMessage
         || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
-        || `Session ${conv.session_id.slice(0, 8)}`;
+        || "New Session";
 
       const proximityScore = calculateProximityScore(messages, terms);
 
@@ -2506,7 +2552,7 @@ export const searchForCLI = query({
       const title = conv.title
         || firstUserMessage
         || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
-        || `Session ${conv.session_id.slice(0, 8)}`;
+        || "New Session";
 
       const matchedMessages = messages.slice(0, 5);
       totalMatches += matchedMessages.length;
@@ -2656,7 +2702,7 @@ export const readConversationMessages = query({
     const title = conv.title
       || firstUserMessage
       || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
-      || `Session ${conv.session_id.slice(0, 8)}`;
+      || "New Session";
 
     // Get all messages and filter out empty ones (streaming artifacts)
     const allMessages = await ctx.db
@@ -2767,7 +2813,7 @@ export const exportConversationMessages = query({
     return {
       conversation: {
         id: conv._id,
-        title: conv.title || `Session ${conv.session_id.slice(0, 8)}`,
+        title: conv.title || "New Session",
         session_id: conv.session_id,
         agent_type: conv.agent_type,
         project_path: conv.project_path || null,
@@ -2850,7 +2896,7 @@ export const exportConversationMessagesPage = query({
     return {
       conversation: {
         id: conv._id,
-        title: conv.title || `Session ${conv.session_id.slice(0, 8)}`,
+        title: conv.title || "New Session",
         session_id: conv.session_id,
         agent_type: conv.agent_type,
         project_path: conv.project_path || null,
@@ -3018,7 +3064,7 @@ export const listPrivateConversations = query({
         const title = c.title
           || firstUserMessage
           || (c.slug ? formatSlugAsTitle(c.slug) : null)
-          || `Session ${c.session_id.slice(0, 8)}`;
+          || "New Session";
 
         return {
           conversation_id: c._id,
@@ -3429,7 +3475,7 @@ export const getConversationTree = query({
       return {
         id: node._id.toString(),
         short_id: node.short_id,
-        title: node.title || `Session ${node.session_id.slice(0, 8)}`,
+        title: node.title || "New Session",
         message_count: node.message_count,
         parent_message_uuid: node.parent_message_uuid,
         started_at: node.started_at,
@@ -3555,7 +3601,7 @@ export const getMessageFeed = query({
       const convUser = await ctx.db.get(conv.user_id);
       const info = {
         hasAccess: true,
-        title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : `Session ${conv.session_id.slice(0, 8)}`),
+        title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : "New Session"),
         session_id: conv.session_id,
         author_name: convUser?.name || convUser?.email?.split("@")[0] || "Unknown",
         is_own: isOwn,
@@ -3997,7 +4043,7 @@ export const feedForCLI = query({
       const title = conv.title
         || firstUserMessage
         || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
-        || `Session ${conv.session_id.slice(0, 8)}`;
+        || "New Session";
 
       const preview: Array<{
         line: number;
@@ -4423,7 +4469,7 @@ export const getConversationMeta = query({
 
     const title = conversation.title
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
-      || `Session ${conversation.session_id.slice(0, 8)}`;
+      || "New Session";
 
     return {
       title,
@@ -4482,6 +4528,54 @@ export const backfillAutoSharedConversations = internalMutation({
 
     const nextCursor = !result.isDone ? result.continueCursor : null;
     return { scanned: result.page.length, fixed, nextCursor, dry_run: !!args.dry_run };
+  },
+});
+
+export const setParentConversation = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    parent_conversation_id: v.id("conversations"),
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not found");
+    if (conv.parent_conversation_id) return;
+    const isSubagent = !conv.parent_message_uuid;
+    await ctx.db.patch(args.conversation_id, {
+      parent_conversation_id: args.parent_conversation_id,
+      is_subagent: isSubagent || undefined,
+    });
+  },
+});
+
+export const backfillIsSubagent = mutation({
+  args: {
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const batchSize = args.limit ?? 200;
+    const result = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .paginate({ numItems: batchSize, cursor: args.cursor ?? null });
+
+    let patched = 0;
+    for (const conv of result.page) {
+      if (conv.is_subagent !== undefined) continue;
+      if (conv.parent_conversation_id && !conv.parent_message_uuid) {
+        await ctx.db.patch(conv._id, { is_subagent: true });
+        patched++;
+      }
+    }
+    const nextCursor = !result.isDone ? result.continueCursor : null;
+    return { scanned: result.page.length, patched, nextCursor };
   },
 });
 
@@ -4560,7 +4654,7 @@ export const getConversationsBySessionIds = query({
           : null;
       }
 
-      const title = conv.title || (preview ? preview.slice(0, 80) : `Session ${sessionId.slice(0, 8)}`);
+      const title = conv.title || (preview ? preview.slice(0, 80) : "New Session");
 
       results.push({
         conversation_id: conv._id.toString(),
@@ -4623,7 +4717,7 @@ export const listIdleSessions = query({
 
     const candidates = [];
     for (const conv of conversations) {
-      if (conv.parent_conversation_id) continue;
+      if (conv.parent_conversation_id && !conv.parent_message_uuid) continue;
       if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff) continue;
 
       const title = conv.title?.trim() || "";
@@ -4673,10 +4767,13 @@ export const listIdleSessions = query({
 
       const lastRoleIsUser = lastMsg?.role === "user";
       const recentlyActive = (now - conv.updated_at) < 10 * 60 * 1000;
+      const recentlyUpdated = (now - conv.updated_at) < 45 * 1000;
 
       if (!hasPending && lastRoleIsUser && !daemonAlive && !recentlyActive) continue;
 
-      const isIdle = !daemonAlive || (!hasPending && !lastRoleIsUser);
+      const isIdle = daemonAlive
+        ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
+        : !recentlyUpdated;
 
       let lastUserMsg = null;
       if (lastMsg?.role === "user" && lastMsg.content?.trim() && !isNoiseMsg(lastMsg.content)) {
@@ -4717,11 +4814,14 @@ export const listIdleSessions = query({
         idle_summary: conv.idle_summary,
         is_idle: isIdle,
         has_pending: !!hasPending,
-        last_user_message: lastUserMsg?.content?.slice(0, 200) || null,
+        last_user_message: lastUserMsg?.content?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200) || null,
       });
     }
 
     results.sort((a, b) => {
+      const aNew = a.message_count === 0;
+      const bNew = b.message_count === 0;
+      if (aNew !== bNew) return aNew ? -1 : 1;
       if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
       if (a.is_idle) return a.updated_at - b.updated_at;
       return b.started_at - a.started_at;
@@ -4816,7 +4916,7 @@ export const listDismissedSessions = query({
     const results = [];
 
     for (const conv of conversations) {
-      if (conv.parent_conversation_id) continue;
+      if (conv.parent_conversation_id && !conv.parent_message_uuid) continue;
 
       const title = conv.title?.trim() || "";
       if (title.toLowerCase() === "warmup") continue;
@@ -4887,5 +4987,25 @@ export const backfillLastUserMessageAt = internalMutation({
     }
 
     return { patched, maxUserMsgAt: maxUserMsgAt > 0 ? new Date(maxUserMsgAt).toISOString() : "none" };
+  },
+});
+
+export const sendEscapeToSession = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "escape",
+      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      created_at: Date.now(),
+    });
   },
 });

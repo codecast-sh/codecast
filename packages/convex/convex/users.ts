@@ -169,7 +169,8 @@ export const sendDaemonCommand = mutation({
       v.literal("restart"),
       v.literal("force_update"),
       v.literal("version"),
-      v.literal("start_session")
+      v.literal("start_session"),
+      v.literal("escape")
     ),
     args_json: v.optional(v.string()),
   },
