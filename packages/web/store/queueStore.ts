@@ -87,6 +87,17 @@ export const useQueueStore = create<InboxState>((set, get) => ({
       }
     }
 
+    merged.sort((a, b) => {
+      if (a._id.startsWith("temp_") !== b._id.startsWith("temp_")) {
+        return a._id.startsWith("temp_") ? -1 : 1;
+      }
+      const aNew = a.message_count === 0;
+      const bNew = b.message_count === 0;
+      if (aNew !== bNew) return aNew ? -1 : 1;
+      if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
+      return 0;
+    });
+
     const currentSession = prev[currentIndex];
     let newIndex = currentIndex;
     if (currentSession) {
@@ -137,17 +148,15 @@ export const useQueueStore = create<InboxState>((set, get) => ({
   },
 
   navigateUp: () => {
-    const { currentIndex } = get();
-    if (currentIndex > 0) {
-      set({ currentIndex: currentIndex - 1 });
-    }
+    const { sessions, currentIndex } = get();
+    if (sessions.length === 0) return;
+    set({ currentIndex: (currentIndex - 1 + sessions.length) % sessions.length });
   },
 
   navigateDown: () => {
     const { sessions, currentIndex } = get();
-    if (currentIndex < sessions.length - 1) {
-      set({ currentIndex: currentIndex + 1 });
-    }
+    if (sessions.length === 0) return;
+    set({ currentIndex: (currentIndex + 1) % sessions.length });
   },
 
   setCurrentIndex: (index) => {

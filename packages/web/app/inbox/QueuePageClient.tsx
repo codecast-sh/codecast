@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
+import { Panel, Group, Separator } from "react-resizable-panels";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -72,7 +73,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, onSendAnd
       onSendAndAdvance={onSendAndAdvance}
       autoFocusInput
       backHref="/inbox"
-      fallbackStickyContent={lastUserMessage}
+      fallbackStickyContent={lastUserMessage?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim() || null}
     />
   );
 });
@@ -120,9 +121,11 @@ function SessionCard({
         className="w-full text-left px-3 py-2 pr-8"
       >
         <div className="flex items-center justify-between gap-2 mb-0.5">
-          <span className={`text-[11px] truncate ${
-            isWorking ? "font-semibold text-sol-green" : "font-medium text-sol-cyan"
-          }`}>{project}</span>
+          <div className={`text-sm truncate leading-tight ${
+            isActive ? "text-sol-text font-semibold" : isWorking ? "text-sol-text font-medium" : "text-sol-text"
+          }`}>
+            {session.title || "New Session"}
+          </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
             {session.has_pending && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
@@ -138,20 +141,27 @@ function SessionCard({
             </span>
           </div>
         </div>
-        <div className={`text-sm truncate leading-tight ${
-          isActive ? "text-sol-text font-semibold" : isWorking ? "text-sol-text font-medium" : "text-sol-text"
-        }`}>
-          {session.title || `Session ${session.session_id?.slice(0, 8)}`}
-        </div>
-        {(session.idle_summary || session.subtitle) && (
-          <div className="text-[11px] text-sol-text-muted mt-0.5 truncate leading-snug">
-            {session.idle_summary || session.subtitle}
+        <span className={`text-[11px] truncate block ${
+          isWorking ? "font-semibold text-sol-green" : "font-medium text-sol-cyan"
+        }`}>{project}</span>
+        {session.message_count === 0 && !session.last_user_message && (
+          <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-cyan/60">
+            <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span>Starting...</span>
           </div>
         )}
         {session.last_user_message && (
-          <div className="text-[10px] text-sol-text-dim mt-0.5 truncate leading-snug font-mono">
-            <span className="text-sol-cyan/60 mr-0.5">&gt;</span>
-            {session.last_user_message}
+          <div className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug">
+            <span className="text-sky-600/60 dark:text-sky-400/50 mr-0.5">&gt;</span>
+            {session.last_user_message.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim() || "[image]"}
+          </div>
+        )}
+        {(session.idle_summary || session.subtitle) && (
+          <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug">
+            {session.idle_summary || session.subtitle}
           </div>
         )}
       </button>
@@ -200,14 +210,15 @@ function InboxSessionPanel({
   const viewingDismissedId = useQueueStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useQueueStore((s) => s.setViewingDismissedId);
 
-  const needsInput = sessions.filter((s) => s.is_idle);
-  const working = sessions.filter((s) => !s.is_idle);
+  const newSessions = sessions.filter((s) => s.message_count === 0);
+  const needsInput = sessions.filter((s) => s.is_idle && s.message_count > 0);
+  const working = sessions.filter((s) => !s.is_idle && s.message_count > 0);
 
   const getGlobalIndex = (session: InboxSession) =>
     sessions.findIndex((s) => s._id === session._id);
 
   return (
-    <div className="h-full flex flex-col bg-sol-bg-alt border-l border-sol-border/50 overflow-hidden">
+    <div className="h-full w-full flex flex-col bg-sol-bg-alt border-l border-sol-border/50 overflow-hidden">
       <div className="px-3 py-3 border-b border-sol-border/50 flex-shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
@@ -222,6 +233,26 @@ function InboxSessionPanel({
         </div>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
+        {newSessions.length > 0 && (
+          <>
+            <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-blue">
+                New ({newSessions.length})
+              </span>
+            </div>
+            {newSessions.map((session) => (
+              <SessionCard
+                key={session._id}
+                session={session}
+                isActive={getGlobalIndex(session) === currentIndex}
+                globalIndex={getGlobalIndex(session)}
+                onSelect={setCurrentIndex}
+                onDismiss={stashSession}
+              />
+            ))}
+          </>
+        )}
+
         {needsInput.length > 0 && (
           <>
             <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
@@ -325,6 +356,18 @@ export function QueuePageClient() {
   const setCurrentIndex = useQueueStore((s) => s.setCurrentIndex);
   const viewingDismissedId = useQueueStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useQueueStore((s) => s.setViewingDismissedId);
+
+  const [inboxLayout, setInboxLayout] = useState<{ [key: string]: number }>(() => {
+    if (typeof window === "undefined") return { "inbox-main": 76, "inbox-sidebar": 24 };
+    try {
+      const stored = localStorage.getItem("inbox-layout");
+      return stored ? JSON.parse(stored) : { "inbox-main": 76, "inbox-sidebar": 24 };
+    } catch { return { "inbox-main": 76, "inbox-sidebar": 24 }; }
+  });
+  const handleInboxLayoutChange = useCallback((layout: { [key: string]: number }) => {
+    setInboxLayout(layout);
+    localStorage.setItem("inbox-layout", JSON.stringify(layout));
+  }, []);
 
   useEffect(() => {
     registerMutation("conversations", (id, fields) =>
@@ -462,8 +505,8 @@ export function QueuePageClient() {
 
   return (
     <DashboardLayout>
-      <div className="h-full flex">
-        <div className="flex-1 min-w-0">
+      <Group orientation="horizontal" className="h-full" defaultLayout={inboxLayout} onLayoutChange={handleInboxLayoutChange}>
+        <Panel id="inbox-main" defaultSize="76%" minSize="30%">
           {viewingDismissedSession ? (
             <InboxConversation
               key={viewingDismissedSession._id}
@@ -493,11 +536,12 @@ export function QueuePageClient() {
               </div>
             </div>
           )}
-        </div>
-        <div className="w-72 flex-shrink-0 hidden md:block">
+        </Panel>
+        <Separator className="w-px bg-sol-border hover:w-1.5 hover:bg-sol-cyan data-[resize-handle-active]:w-1.5 data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-[width,background-color] duration-150" />
+        <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
           <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={dismissedSessions} />
-        </div>
-      </div>
+        </Panel>
+      </Group>
       {prefetchIds.map((id) => (
         <Prefetch key={id} sessionId={id} />
       ))}
