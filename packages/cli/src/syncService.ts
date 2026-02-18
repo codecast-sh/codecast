@@ -77,6 +77,7 @@ export interface CreateConversationParams {
   title?: string;
   startedAt?: number;
   parentMessageUuid?: string;
+  parentConversationId?: string;
   gitCommitHash?: string;
   gitInfo?: GitInfo;
 }
@@ -170,6 +171,7 @@ export class SyncService {
           title: params.title,
           started_at: params.startedAt,
           parent_message_uuid: params.parentMessageUuid,
+          parent_conversation_id: params.parentConversationId,
           git_commit_hash: gitInfo?.commitHash || params.gitCommitHash,
           git_branch: gitInfo?.branch,
           git_remote_url: gitInfo?.remoteUrl,
