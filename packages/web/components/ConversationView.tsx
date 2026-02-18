@@ -3730,7 +3730,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
     const last = timeline[timeline.length - 1];
-    return last.type === 'message' && (last.data as Message).role === 'user';
+    if (last.type !== 'message') return false;
+    const msg = last.data as Message;
+    if (msg.role !== 'user') return false;
+    if (msg.content && isInterruptMessage(msg.content)) return false;
+    return true;
   }, [conversation, timeline, hasMoreBelow]);
 
   const stickyUserMsgIndices = useMemo(() => {
