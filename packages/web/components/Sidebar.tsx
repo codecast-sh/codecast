@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -39,6 +39,79 @@ function getShortPath(projectPath: string): string {
   const parts = projectPath.split("/").filter(Boolean);
   if (parts.length === 0) return projectPath;
   return parts[parts.length - 1];
+}
+
+const INITIAL_SESSION_LIMIT = 30;
+const SESSION_PAGE_SIZE = 50;
+
+function RecentSessions({
+  groupedSessions,
+  totalCount,
+  onMobileClose,
+}: {
+  groupedSessions: Record<string, any[]>;
+  totalCount: number;
+  onMobileClose?: () => void;
+}) {
+  const [visibleCount, setVisibleCount] = useState(INITIAL_SESSION_LIMIT);
+  const showMore = useCallback(() => setVisibleCount(c => c + SESSION_PAGE_SIZE), []);
+  const groups = ["Last Hour", "Last 6 Hours", "Last Day", "Yesterday", "This Week", "This Month", "Older"];
+
+  let rendered = 0;
+  const hiddenCount = totalCount - Math.min(visibleCount, totalCount);
+
+  return (
+    <div className="mt-4">
+      <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
+        Recent Sessions
+      </div>
+      <div className="space-y-2">
+        {groups.map((group) => {
+          if (rendered >= visibleCount) return null;
+          const items = groupedSessions[group];
+          if (!items || items.length === 0) return null;
+          const remaining = visibleCount - rendered;
+          const visible = items.slice(0, remaining);
+          rendered += visible.length;
+          return (
+            <div key={group}>
+              <div className="text-[10px] font-medium text-sol-text-dim px-3 py-0.5">{group}</div>
+              <div className="space-y-0.5">
+                {visible.map((conv: any) => (
+                  <Link
+                    key={conv._id}
+                    href={`/inbox?s=${conv._id}`}
+                    onClick={onMobileClose}
+                    className="flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+                  >
+                    {conv.is_active ? (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+                    ) : conv.is_favorite ? (
+                      <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                      </svg>
+                    ) : (
+                      <span className="w-3 h-3 flex-shrink-0" />
+                    )}
+                    <span className="truncate flex-1 leading-tight">{cleanTitle(conv.title || "Untitled")}</span>
+                    <span className="text-[10px] text-sol-text-dim flex-shrink-0 tabular-nums">{conv.message_count}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {hiddenCount > 0 && (
+          <button
+            onClick={showMore}
+            className="w-full px-3 py-1.5 text-xs text-sol-text-dim hover:text-sol-text transition-colors text-left"
+          >
+            {hiddenCount} more...
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
@@ -250,7 +323,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
               {favorites.slice(0, 5).map((fav) => (
                 <Link
                   key={fav._id}
-                  href={`/conversation/${fav._id}`}
+                  href={`/inbox?s=${fav._id}`}
                   onClick={onMobileClose}
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors group"
                 >
@@ -319,48 +392,11 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
         )}
 
         {!isNarrow && filteredConversations.length > 0 && (
-          <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
-              Recent Sessions
-            </div>
-            <div className="space-y-2">
-              {["Last Hour", "Last 6 Hours", "Last Day", "Yesterday", "This Week", "This Month", "Older"].map((group) => {
-                const items = groupedSessions[group];
-                if (!items || items.length === 0) return null;
-                return (
-                  <div key={group}>
-                    <div className="text-[10px] font-medium text-sol-text-dim px-3 py-0.5">{group}</div>
-                    <div className="space-y-0.5">
-                      {items.map((conv) => (
-                        <Link
-                          key={conv._id}
-                          href={`/conversation/${conv._id}`}
-                          onClick={onMobileClose}
-                          className={`flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group ${
-                            pathname === `/conversation/${conv._id}`
-                              ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                              : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
-                          }`}
-                        >
-                          {conv.is_active ? (
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
-                          ) : conv.is_favorite ? (
-                            <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                            </svg>
-                          ) : (
-                            <span className="w-3 h-3 flex-shrink-0" />
-                          )}
-                          <span className="truncate flex-1 leading-tight">{cleanTitle(conv.title || "Untitled")}</span>
-                          <span className="text-[10px] text-sol-text-dim flex-shrink-0 tabular-nums">{conv.message_count}</span>
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <RecentSessions
+            groupedSessions={groupedSessions}
+            totalCount={filteredConversations.length}
+            onMobileClose={onMobileClose}
+          />
         )}
       </div>
     </>
