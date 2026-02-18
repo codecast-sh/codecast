@@ -3191,6 +3191,7 @@ function GitDiffView({ diff }: { diff: string }) {
 
   return (
     <div className="font-mono text-xs p-2 overflow-x-auto">
+      <div className="min-w-fit">
       {lines.map((line, i) => {
         let className = 'whitespace-pre text-sol-text-muted';
 
@@ -3210,6 +3211,7 @@ function GitDiffView({ diff }: { diff: string }) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -3227,7 +3229,7 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean }) {
+function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isConversationLive }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isConversationLive?: boolean }) {
   const cached = getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -3409,40 +3411,31 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   const canSubmit = hasContent && !isSubmitting && !pastedImages.some(img => img.uploading);
 
   return (
-    <div className="shrink-0 z-30 pointer-events-none sticky bottom-0">
+    <div className="shrink-0 z-40 pointer-events-none sticky bottom-0">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         <div className="relative">
-          <div
-            className={`mx-auto px-4 flex justify-between overflow-hidden transition-all ${isWaitingForResponse ? "max-h-8 opacity-100 translate-y-0 mb-1 duration-300 ease-out" : "max-h-0 opacity-0 translate-y-2 mb-0 duration-150 ease-in"} ${isExpanded ? "max-w-4xl" : "max-w-md"}`}
-          >
-            <p className="text-[11px] text-sol-text-dim/70">
-              <span className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/50 animate-pulse" />
-                Waiting for response...
-              </span>
-            </p>
-          </div>
-          {isFocused && !isWaitingForResponse && (
+          {(isFocused || shortcutTooltip || isWaitingForResponse || isConversationLive) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
               <p className="text-[11px] text-sol-text-dim/70">
-                {isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
+                {isWaitingForResponse ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/50 animate-pulse" />
+                    Waiting for response...
+                  </span>
+                ) : isConversationLive ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Session live
+                  </span>
+                ) : isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
               </p>
               <div className="flex items-center gap-2">
-                <p className="text-[9px] opacity-[0.55] flex items-center gap-2">
-                  <span className="flex items-center gap-0.5">
-                    <kbd className="px-0.5 rounded border border-current/30 text-[8px] leading-tight">Shift</kbd>
-                    <span className="text-[7px]">+</span>
-                    <kbd className="px-0.5 rounded border border-current/30 text-[8px] leading-tight">↵</kbd>
-                    <span className="ml-0.5">new line</span>
-                  </span>
-                  <span>·</span>
-                  <span className="flex items-center gap-0.5">
-                    <kbd className="px-0.5 rounded border border-current/30 text-[8px] leading-tight">Opt</kbd>
-                    <span className="text-[7px]">+</span>
-                    <kbd className="px-0.5 rounded border border-current/30 text-[8px] leading-tight">↵</kbd>
-                    <span className="ml-0.5">send &amp; next</span>
-                  </span>
+                <p className="text-[11px] opacity-[0.55] flex items-center gap-1">
+                  <kbd className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">Alt</kbd>
+                  <span className="text-[9px]">+</span>
+                  <kbd className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">↵</kbd>
+                  <span className="ml-1.5 text-[10px] opacity-80">reply and advance</span>
                 </p>
                 <button
                   type="button"
@@ -3536,7 +3529,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
         <div
           data-shortcut-tooltip
           className="fixed z-[100] bg-sol-bg border border-sol-border/60 rounded-lg shadow-lg p-3 w-56 transition-opacity duration-150"
-          style={{ top: shortcutTooltip.y - 4, left: shortcutTooltip.x, transform: 'translate(-100%, -100%)' }}
+          style={{ top: shortcutTooltip.y - 30, left: shortcutTooltip.x, transform: 'translate(-100%, -100%)' }}
           onMouseLeave={() => setShortcutTooltip(null)}
         >
           <div className="text-[10px] font-medium text-sol-text/80 mb-2">Keyboard Shortcuts</div>
@@ -3545,12 +3538,12 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
             <ShortcutHint keys={["Ctrl", "I"]} label="Jump to needs input" />
             <ShortcutHint keys={["Ctrl", "J"]} label="Next session" />
             <ShortcutHint keys={["Ctrl", "K"]} label="Previous session" />
-            <ShortcutHint keys={["Ctrl", "Bksp"]} label="Dismiss session" />
+            <ShortcutHint keys={["Ctrl", "Bksp"]} label="Interrupt session" />
             <ShortcutHint keys={["Esc"]} label="Escape to session" />
             <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Collapse tool blocks" />
             <div className="border-t border-sol-border/20 my-1.5" />
             <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
-            <ShortcutHint keys={["Opt", "Enter"]} label="Send & next" />
+            <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
             <ShortcutHint keys={["Enter"]} label="Send message" />
           </div>
         </div>
@@ -3589,8 +3582,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const prevStickyMsgIdRef = useRef<string | null>(null);
   const prevStickyIdxRef = useRef<number | null>(null);
   const stickyGapRef = useRef<{ prevIdx: number } | null>(null);
+  const dismissedStickyIdsRef = useRef<Set<string>>(new Set());
+  const stickyElRef = useRef<HTMLDivElement>(null);
+  const [stickyDisabled, setStickyDisabled] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('stickyHeadersDisabled') === 'true';
+  });
   const headerRef = useRef<HTMLElement>(null);
   const [headerHeight, setHeaderHeight] = useState(32);
+  const messageInputRef = useRef<HTMLDivElement>(null);
+  const [messageInputHeight, setMessageInputHeight] = useState(0);
 
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
@@ -4097,6 +4098,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => ro.disconnect();
   }, []);
 
+  useEffect(() => {
+    const el = messageInputRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setMessageInputHeight(el.offsetHeight));
+    setMessageInputHeight(el.offsetHeight);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
 
   useEffect(() => {
     const el = containerRef.current;
@@ -4119,24 +4129,61 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         setStickyMsgVisible(false);
         return;
       }
+      if (stickyDisabled) {
+        setActiveStickyMsg(null);
+        setStickyMsgVisible(false);
+        return;
+      }
       const virtualItems = virtualizer.getVirtualItems();
       let bestIdx: number | null = null;
+      let bestArrayIdx: number | null = null;
       for (let i = stickyUserMsgIndices.length - 1; i >= 0; i--) {
         const tlIdx = stickyUserMsgIndices[i];
+        const item = timeline[tlIdx];
+        if (item?.type === 'message') {
+          const msgId = (item.data as Message)._id;
+          if (dismissedStickyIdsRef.current.has(msgId)) continue;
+        }
         const vItem = virtualItems.find(v => v.index === tlIdx);
         if (vItem) {
-          if (vItem.start + vItem.size <= scrollTop + 80 && vItem.start < scrollTop - headerHeight) {
+          const domEl = el.querySelector(`[data-index="${tlIdx}"]`);
+          if (!domEl) continue;
+          const msgBottom = domEl.getBoundingClientRect().bottom - el.getBoundingClientRect().top;
+          if (msgBottom <= 0) {
             bestIdx = tlIdx;
+            bestArrayIdx = i;
             break;
           }
         } else {
-          if (tlIdx < (virtualItems[0]?.index ?? 0)) {
+          if (tlIdx < (virtualItems[0]?.index ?? 0) && scrollTop > el.clientHeight) {
             bestIdx = tlIdx;
+            bestArrayIdx = i;
             break;
           }
         }
       }
       if (bestIdx !== null) {
+        const viewportHeight = el.clientHeight;
+        let hideForNextMsg = false;
+        const stickyBottom = headerHeight + (stickyElRef.current?.offsetHeight ?? 0);
+        if (bestArrayIdx !== null) {
+          const nextArrayIdx = bestArrayIdx + 1;
+          if (nextArrayIdx < stickyUserMsgIndices.length) {
+            const nextTlIdx = stickyUserMsgIndices[nextArrayIdx];
+            const nextVItem = virtualItems.find(v => v.index === nextTlIdx);
+            if (nextVItem) {
+              const nextMsgTop = nextVItem.start - scrollTop;
+              if (nextMsgTop < stickyBottom) {
+                hideForNextMsg = true;
+              }
+            }
+          } else {
+            const contentBottom = virtualizer.getTotalSize() - scrollTop;
+            if (contentBottom < viewportHeight + 100) {
+              hideForNextMsg = true;
+            }
+          }
+        }
         const item = timeline[bestIdx];
         const msg = item.data as Message;
         const msgId = msg._id;
@@ -4163,8 +4210,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           }
         }
         setActiveStickyMsg({ index: bestIdx, content: msg.content!, id: msgId });
-        setStickyMsgVisible(!inGap);
-      } else if (fallbackStickyContent) {
+        setStickyMsgVisible(!inGap && !hideForNextMsg);
+      } else if (fallbackStickyContent && scrollTop > el.clientHeight) {
         prevStickyMsgIdRef.current = '__fallback__';
         prevStickyIdxRef.current = null;
         stickyGapRef.current = null;
@@ -4182,7 +4229,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(check); } };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
-  }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent, headerHeight]);
+  }, [stickyUserMsgIndices, virtualizer, timeline, fallbackStickyContent, headerHeight, stickyDisabled]);
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: (messageId: string) => {
@@ -4945,14 +4992,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </Tooltip>
                   <DropdownMenuContent align="end">
                     {conversation?.short_id && (
-                      <DropdownMenuItem onClick={() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }}>
+                      <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
                         </svg>
                         Copy ID ({conversation.short_id})
                       </DropdownMenuItem>
                     )}
-                    <DropdownMenuItem onClick={handleCopyAll}>
+                    <DropdownMenuItem onSelect={() => setTimeout(handleCopyAll)}>
                       <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                       </svg>
@@ -4960,13 +5007,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </DropdownMenuItem>
                     {conversation?.session_id && (
                       <>
-                        <DropdownMenuItem onClick={() => handleCopyResumeCommand("claude")}>
+                        <DropdownMenuItem onSelect={() => setTimeout(() => handleCopyResumeCommand("claude"))}>
                           <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                           </svg>
                           Copy Claude resume
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleCopyResumeCommand("codex")}>
+                        <DropdownMenuItem onSelect={() => setTimeout(() => handleCopyResumeCommand("codex"))}>
                           <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                           </svg>
@@ -4977,6 +5024,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>
                       {showThinking ? "Hide thinking" : "Show thinking"}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => {
+                      const next = !stickyDisabled;
+                      setStickyDisabled(next);
+                      localStorage.setItem('stickyHeadersDisabled', String(next));
+                      if (next) { setStickyMsgVisible(false); setActiveStickyMsg(null); }
+                    }}>
+                      {stickyDisabled ? "Enable sticky headers" : "Disable sticky headers"}
                     </DropdownMenuItem>
                     {conversation.git_branch && (
                       <DropdownMenuItem onClick={() => setDiffExpanded(!diffExpanded)}>
@@ -5068,6 +5123,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {stickyMsgVisible && activeStickyMsg && (
         <div
+          ref={stickyElRef}
           className="absolute left-0 right-0 z-[15] px-2 sm:px-3 md:px-4 pt-1 cursor-pointer"
           style={{ top: headerHeight }}
           onClick={() => {
@@ -5079,12 +5135,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           }}
         >
           <div className="max-w-4xl mx-auto">
-            <div className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg">
+            <div className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg relative group">
+              <button
+                className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  dismissedStickyIdsRef.current.add(activeStickyMsg!.id);
+                  setStickyMsgVisible(false);
+                  setActiveStickyMsg(null);
+                }}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
               <div className="flex items-center gap-2 mb-1">
                 <UserIcon />
                 <span className="text-sol-blue text-xs font-medium">{conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
               </div>
-              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8">{activeStickyMsg.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim()}</div>
+              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8 pr-4">{activeStickyMsg.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim()}</div>
             </div>
           </div>
         </div>
@@ -5253,11 +5322,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {showMessageInput && conversation && (
-        <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} />
+        <div ref={messageInputRef}>
+          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isConversationLive={isConversationLive} />
+        </div>
       )}
 
       {timeline.length > 0 && (
-        <div className="absolute bottom-24 right-8 z-30 flex items-stretch gap-2.5">
+        <div className="absolute right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115) }}>
           <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
