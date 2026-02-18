@@ -243,6 +243,8 @@ interface Config {
   codex_args?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];
+  stable_mode?: "solo" | "team";
+  stable_global?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -6817,6 +6819,133 @@ function formatRunAt(timestamp: number): string {
   if (diff < 0) return "overdue";
   return `in ${formatMs(diff)}`;
 }
+
+// --- Stable Mode ---
+
+function installStableHook(): void {
+  const home = process.env.HOME || "";
+  const hookFile = path.join(home, ".claude", "hooks", "stable-feed.sh");
+  const settingsFile = path.join(home, ".claude", "settings.json");
+
+  if (!fs.existsSync(hookFile)) {
+    console.error(`Hook script not found: ${hookFile}`);
+    process.exit(1);
+  }
+
+  let settings: any = {};
+  if (fs.existsSync(settingsFile)) {
+    settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+  }
+  if (!settings.hooks) settings.hooks = {};
+  if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+
+  const hookArray = settings.hooks.SessionStart as any[];
+  const alreadyPresent = hookArray.some((matcher: any) =>
+    (matcher.hooks || []).some((h: any) => h.command?.includes("stable-feed.sh"))
+  );
+
+  if (!alreadyPresent) {
+    const hookEntry = { type: "command", command: hookFile, timeout: 30 };
+    if (hookArray.length > 0 && hookArray[0].matcher === "") {
+      hookArray[0].hooks = hookArray[0].hooks || [];
+      hookArray[0].hooks.push(hookEntry);
+    } else {
+      hookArray.unshift({ matcher: "", hooks: [hookEntry] });
+    }
+    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+  }
+}
+
+function removeStableHook(): void {
+  const home = process.env.HOME || "";
+  const settingsFile = path.join(home, ".claude", "settings.json");
+
+  if (!fs.existsSync(settingsFile)) return;
+
+  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+  if (!settings.hooks?.SessionStart) return;
+
+  for (const matcher of settings.hooks.SessionStart) {
+    if (matcher.hooks) {
+      matcher.hooks = matcher.hooks.filter((h: any) => !h.command?.includes("stable-feed.sh"));
+    }
+  }
+  settings.hooks.SessionStart = settings.hooks.SessionStart.filter(
+    (m: any) => m.hooks && m.hooks.length > 0
+  );
+
+  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+}
+
+program
+  .command("stable")
+  .description(
+    "Enable stable mode — inject recent session history into every new conversation\n\n" +
+    "Modes:\n" +
+    "  solo   Your recent sessions (last 7 days)\n" +
+    "  team   All team activity (last 14 days)\n" +
+    "  off    Disable stable mode\n\n" +
+    "By default, feeds are scoped to the current project.\n" +
+    "Use -g to include sessions from all projects.\n\n" +
+    "Examples:\n" +
+    "  codecast stable solo       # Current project only\n" +
+    "  codecast stable solo -g    # All projects\n" +
+    "  codecast stable team -g    # Team, all projects\n" +
+    "  codecast stable off        # Disable\n" +
+    "  codecast stable            # Show current status"
+  )
+  .argument("[mode]", "solo, team, or off")
+  .option("-g, --global", "Include sessions from all projects (default: current project only)")
+  .action(async (mode, options) => {
+    const config = readConfig() || {} as Config;
+
+    if (!mode) {
+      const current = (config as any).stable_mode;
+      if (current) {
+        const isGlobal = (config as any).stable_global === true;
+        const scope = isGlobal ? "all projects" : "current project";
+        console.log(`${fmt.accent("◉")} Stable mode: ${c.bold}${current}${c.reset} ${fmt.muted(`(${scope})`)}`);
+        if (current === "solo") {
+          console.log(`  ${fmt.muted("Injects your last 10 sessions (7d) on session start")}`);
+        } else {
+          console.log(`  ${fmt.muted("Injects team's last 15 sessions (14d) on session start")}`);
+        }
+      } else {
+        console.log(`${fmt.muted("○")} Stable mode: ${fmt.muted("off")}`);
+        console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast stable solo")} ${fmt.muted("or")} ${fmt.cmd("codecast stable team")} ${fmt.muted("to enable")}`);
+      }
+      return;
+    }
+
+    if (!["solo", "team", "off"].includes(mode)) {
+      console.error(`Unknown mode: ${mode}. Use solo, team, or off.`);
+      process.exit(1);
+    }
+
+    if (mode === "off") {
+      delete (config as any).stable_mode;
+      delete (config as any).stable_global;
+      writeConfig(config);
+      removeStableHook();
+      console.log(`${fmt.muted("○")} Stable mode disabled`);
+      return;
+    }
+
+    const isGlobal = !!options.global;
+    (config as any).stable_mode = mode;
+    (config as any).stable_global = isGlobal;
+    writeConfig(config);
+    installStableHook();
+
+    const scope = isGlobal ? "all projects" : "current project";
+    console.log(`${fmt.accent("◉")} Stable mode: ${c.bold}${mode}${c.reset} ${fmt.muted(`(${scope})`)}`);
+    if (mode === "solo") {
+      console.log(`  ${fmt.muted("Each session will start with your recent 10 sessions (7d)")}`);
+    } else {
+      console.log(`  ${fmt.muted("Each session will start with team's recent 15 sessions (14d)")}`);
+    }
+    console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast stable off")} ${fmt.muted("to disable")}`);
+  });
 
 program
   .command("claude")
