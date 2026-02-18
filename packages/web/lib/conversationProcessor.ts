@@ -22,6 +22,25 @@ const COMMAND_PATTERNS = [
   /^Caveat:/,
 ];
 
+const SKILL_EXPANSION_PATTERN = /Base directory for this skill:\s*([^\n]+)/;
+
+export function isSkillExpansion(content: string): boolean {
+  return SKILL_EXPANSION_PATTERN.test(content.trim());
+}
+
+export function extractSkillInfo(content: string): { name: string; path: string; preview: string } | null {
+  const match = content.match(SKILL_EXPANSION_PATTERN);
+  if (!match) return null;
+  const fullPath = match[1].trim();
+  const segments = fullPath.replace(/\/+$/, "").split("/");
+  const name = segments[segments.length - 1] || "skill";
+  const shortPath = fullPath.replace(/^\/Users\/[^/]+\//, "~/");
+  const afterBase = content.slice((match.index || 0) + match[0].length).trim();
+  const lines = afterBase.split("\n").filter(l => l.trim());
+  const preview = lines.slice(0, 2).join(" ").slice(0, 120);
+  return { name, path: shortPath, preview };
+}
+
 export function isSystemMessage(content: string): boolean {
   return SYSTEM_MESSAGE_PREFIXES.some(prefix => content.startsWith(prefix));
 }
