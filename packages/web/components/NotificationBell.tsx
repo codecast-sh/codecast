@@ -151,7 +151,9 @@ export function NotificationBell() {
   const handleNotificationClick = async (notificationId: Id<"notifications">, conversationId?: Id<"conversations">) => {
     await markAsRead({ notificationId });
     if (conversationId) {
-      router.push(`/conversation/${conversationId}`);
+      router.push(`/inbox?s=${conversationId}`);
+    } else {
+      router.push('/inbox');
     }
     setIsOpen(false);
   };
@@ -262,12 +264,12 @@ export function NotificationBell() {
             <div className="px-5 py-3 border-t border-sol-border">
               <button
                 onClick={() => {
-                  router.push('/notifications');
+                  router.push('/inbox');
                   setIsOpen(false);
                 }}
                 className="text-sm text-sol-yellow hover:text-sol-yellow-bright transition-colors w-full text-center"
               >
-                View all notifications
+                View all in inbox
               </button>
             </div>
           )}

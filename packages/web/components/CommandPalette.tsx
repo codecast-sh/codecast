@@ -79,7 +79,7 @@ export function CommandPalette() {
   const { conversations: recentConversations } =
     useQuery(api.conversations.listConversations, {
       filter: "my",
-      limit: 50,
+      limit: 200,
       include_message_previews: false,
     }) ?? { conversations: [] };
 
@@ -197,7 +197,7 @@ export function CommandPalette() {
                 heading="Favorites"
                 className="px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70"
               >
-                {favorites!.slice(0, 5).map((fav) => (
+                {(query ? favorites! : favorites!.slice(0, 5)).map((fav) => (
                   <CommandPrimitive.Item
                     key={`fav-${fav._id}`}
                     value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
@@ -207,7 +207,7 @@ export function CommandPalette() {
                     <span className="text-amber-400 flex-shrink-0">
                       <NavIcon type="star" />
                     </span>
-                    <span className="truncate flex-1">{cleanTitle(fav.title || `Session ${fav.session_id?.slice(0, 8)}`)}</span>
+                    <span className="truncate flex-1">{cleanTitle(fav.title || "New Session")}</span>
                     <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
                   </CommandPrimitive.Item>
                 ))}
@@ -219,7 +219,7 @@ export function CommandPalette() {
                 heading="Bookmarks"
                 className="px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70"
               >
-                {bookmarks!.slice(0, 6).map((bm) => (
+                {(query ? bookmarks! : bookmarks!.slice(0, 6)).map((bm) => (
                   <CommandPrimitive.Item
                     key={`bm-${bm._id}`}
                     value={`bookmark ${bm.message_preview || bm.conversation_title || ""}|||${bm._id}`}
@@ -262,7 +262,7 @@ export function CommandPalette() {
                 heading="Recent Sessions"
                 className="px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70"
               >
-                {recentConversations!.slice(0, 12).map((conv) => (
+                {(query ? recentConversations! : recentConversations!.slice(0, 20)).map((conv) => (
                   <CommandPrimitive.Item
                     key={`recent-${conv._id}`}
                     value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}

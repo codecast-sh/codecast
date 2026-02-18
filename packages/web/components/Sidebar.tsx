@@ -257,7 +257,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
                   <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
                     <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
                   </svg>
-                  <span className="truncate text-sm flex-1">{cleanTitle(fav.title || `Session ${fav.session_id?.slice(0, 8)}`)}</span>
+                  <span className="truncate text-sm flex-1">{cleanTitle(fav.title || "New Session")}</span>
                   <span className="text-[10px] text-sol-text-dim">{fav.message_count}</span>
                 </Link>
               ))}
