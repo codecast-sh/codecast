@@ -93,6 +93,64 @@ const toolColors: Record<string, string> = {
   TodoWrite: "text-sol-magenta/80",
 };
 
+function isPlanWriteToolCall(tool: any): boolean {
+  if (tool.name !== "Write") return false;
+  try {
+    const parsed = JSON.parse(tool.input);
+    return String(parsed.file_path || "").includes('.claude/plans/');
+  } catch {
+    return false;
+  }
+}
+
+function getPlanContent(tool: any): string | null {
+  try {
+    const parsed = JSON.parse(tool.input);
+    return parsed.content || null;
+  } catch {
+    return null;
+  }
+}
+
+function PlanBlock({ content, timestamp }: { content: string; timestamp?: number }) {
+  const title = content.match(/^#\s+(.+)$/m)?.[1] || "Plan";
+
+  return (
+    <div className="mb-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/40">
+        <svg className="w-3.5 h-3.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+        </svg>
+        <span className="text-xs font-medium text-sol-text-muted">Plan</span>
+        {timestamp && (
+          <span className="text-xs text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
+        )}
+      </div>
+      <div className="px-4 py-3 prose prose-invert prose-sm max-w-none text-sol-text">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeHighlight]}
+          components={{
+            pre: ({ node, children, ...props }) => {
+              const codeElement = node?.children?.[0];
+              if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                const className = codeElement.properties?.className as string[] | undefined;
+                const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                const codeContent = codeElement.children?.[0];
+                const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                if (code) return <CodeBlock code={code} language={language} />;
+              }
+              return <pre {...props}>{children}</pre>;
+            },
+          }}
+        >
+          {content}
+        </ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
 function ToolCallBlock({ tool }: { tool: any }) {
   const summary = getToolSummary(tool);
   const color = toolColors[tool.name] || (tool.name.startsWith("mcp__") ? "text-sol-cyan/80" : "text-sol-text-dim");
@@ -153,9 +211,15 @@ function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean 
               {formatRelativeTime(message.timestamp)}
             </span>
           </div>
-          {hasToolCalls && message.tool_calls.map((tc: any) => (
-            <ToolCallBlock key={tc.id} tool={tc} />
-          ))}
+          {hasToolCalls && message.tool_calls.map((tc: any) => {
+            if (isPlanWriteToolCall(tc)) {
+              const planContent = getPlanContent(tc);
+              if (planContent) {
+                return <PlanBlock key={tc.id} content={planContent} timestamp={message.timestamp} />;
+              }
+            }
+            return <ToolCallBlock key={tc.id} tool={tc} />;
+          })}
           {hasContent && (
             <div className="pl-7 prose prose-invert prose-sm max-w-none text-sol-text">
               <ReactMarkdown
