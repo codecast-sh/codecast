@@ -181,10 +181,12 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
         } catch {}
       };
 
+      let activeSessionId = sessionId;
+
       const sendHeartbeat = async () => {
         try {
           await client.mutation("managedSessions:heartbeat" as any, {
-            session_id: sessionId,
+            session_id: activeSessionId,
             api_token: config.auth_token,
           });
         } catch {}
@@ -224,6 +226,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                   new_session_id: claudeSessionId,
                   api_token: config.auth_token,
                 });
+                activeSessionId = claudeSessionId;
                 log(`Updated managed session ID: ${sessionId.slice(0, 8)} -> ${claudeSessionId.slice(0, 8)}`);
               } catch (err) {
                 log(`Failed to update managed session ID: ${err}`);
@@ -332,10 +335,12 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
     }
   };
 
+  let activeSessionId = sessionId;
+
   const sendHeartbeat = async () => {
     try {
       await client.mutation("managedSessions:heartbeat" as any, {
-        session_id: sessionId,
+        session_id: activeSessionId,
         api_token: config.auth_token,
       });
     } catch {
@@ -345,8 +350,6 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
 
   pollInterval = setInterval(pollForMessages, 2000);
   heartbeatInterval = setInterval(sendHeartbeat, 30000);
-
-  let activeSessionId = sessionId;
 
   const updateSessionIdIfNeeded = async (claudeSessionId: string) => {
     if (claudeSessionId === sessionId || activeSessionId !== sessionId) return;
