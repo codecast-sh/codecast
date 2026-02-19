@@ -26,6 +26,7 @@ export function useConversationMessages(
   targetMessageId?: string,
   highlightQuery?: string
 ) {
+  const isTempId = conversationId.startsWith("temp_");
   const initialArgs = { conversation_id: conversationId as Id<"conversations">, limit: 100 };
   const initialCacheKey = queryCacheKey(api.conversations.getAllMessages, initialArgs);
   const snapshot = getCached<any>(initialCacheKey);
@@ -55,7 +56,7 @@ export function useConversationMessages(
   // Query for target message timestamp if we have a target
   const targetMessageTimestamp = useQuery(
     api.messages.getMessageTimestamp,
-    targetMessageId
+    !isTempId && targetMessageId
       ? {
           conversation_id: conversationId as Id<"conversations">,
           message_id: targetMessageId as Id<"messages">,
@@ -67,7 +68,7 @@ export function useConversationMessages(
   const cleanedHighlightQuery = highlightQuery?.replace(/^"|"$/g, "").trim();
   const highlightMessageResult = useQuery(
     api.messages.findMessageByContent,
-    cleanedHighlightQuery
+    !isTempId && cleanedHighlightQuery
       ? {
           conversation_id: conversationId as Id<"conversations">,
           search_term: cleanedHighlightQuery,
@@ -82,7 +83,7 @@ export function useConversationMessages(
   // When we have a target with timestamp, use aroundData to load messages centered on it
   const aroundData = useQuery(
     api.conversations.getMessagesAroundTimestamp,
-    targetTimestampReady && !initializedRef.current
+    !isTempId && targetTimestampReady && !initializedRef.current
       ? {
           conversation_id: conversationId as Id<"conversations">,
           center_timestamp: effectiveTargetTimestamp!,
@@ -96,7 +97,7 @@ export function useConversationMessages(
   // But don't use initialData if we have a target and are waiting for timestamp
   const initialData = useCachedQuery(
     api.conversations.getAllMessages,
-    !hasTarget && !initializedRef.current
+    !isTempId && !hasTarget && !initializedRef.current
       ? initialArgs
       : "skip"
   );
@@ -104,7 +105,7 @@ export function useConversationMessages(
   // Pagination queries
   const olderMessagesData = useQuery(
     api.conversations.getAllMessages,
-    loadOlderTimestamp !== undefined
+    !isTempId && loadOlderTimestamp !== undefined
       ? {
           conversation_id: conversationId as Id<"conversations">,
           limit: 50,
@@ -115,7 +116,7 @@ export function useConversationMessages(
 
   const jumpStartData = useQuery(
     api.conversations.getMessagesAroundTimestamp,
-    jumpMode === 'start'
+    !isTempId && jumpMode === 'start'
       ? {
           conversation_id: conversationId as Id<"conversations">,
           center_timestamp: 0,
@@ -127,14 +128,14 @@ export function useConversationMessages(
 
   const jumpEndData = useQuery(
     api.conversations.getAllMessages,
-    jumpMode === 'end'
+    !isTempId && jumpMode === 'end'
       ? { conversation_id: conversationId as Id<"conversations">, limit: 100 }
       : "skip"
   );
 
   const newerMessagesData = useQuery(
     api.conversations.getMessagesAroundTimestamp,
-    loadNewerTimestamp !== undefined
+    !isTempId && loadNewerTimestamp !== undefined
       ? {
           conversation_id: conversationId as Id<"conversations">,
           center_timestamp: loadNewerTimestamp,
@@ -146,7 +147,7 @@ export function useConversationMessages(
 
   const newMessagesResult = useQuery(
     api.conversations.getNewMessages,
-    lastTimestamp !== null && !hasMoreBelow
+    !isTempId && lastTimestamp !== null && !hasMoreBelow
       ? {
           conversation_id: conversationId as Id<"conversations">,
           after_timestamp: lastTimestamp,
@@ -180,9 +181,14 @@ export function useConversationMessages(
   }, [aroundData]);
 
   // Initialize from initialData when it loads (no target case)
+  // Don't lock initialization until we have messages for active conversations,
+  // so the reactive query keeps updating until messages arrive from the daemon.
   useEffect(() => {
     if (initialData && !initializedRef.current) {
-      initializedRef.current = true;
+      const hasMessages = (initialData.messages?.length ?? 0) > 0;
+      if (hasMessages || initialData.status !== "active") {
+        initializedRef.current = true;
+      }
       setCachedConversation(initialData);
       setCachedMessages(initialData.messages || []);
       setLastTimestamp(initialData.last_timestamp);
@@ -204,6 +210,7 @@ export function useConversationMessages(
         is_private: latestData.is_private,
         share_token: latestData.share_token,
         title: latestData.title,
+        message_count: latestData.message_count,
       }));
     }
   }, [initialData, aroundData, cachedConversation]);
