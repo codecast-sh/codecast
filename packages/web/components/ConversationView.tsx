@@ -6,7 +6,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, isSkillExpansion, extractSkillInfo } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { toast } from "sonner";
@@ -36,6 +36,7 @@ import { ConversationTree } from "./ConversationTree";
 import { setDraft, getDraft, clearDraft } from "../store/convexCache";
 import { usePendingSessionStore } from "../store/pendingSessionStore";
 import { useOptimisticMessagesStore } from "../store/optimisticMessagesStore";
+import { useQueueStore } from "../store/queueStore";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -215,9 +216,10 @@ export interface ConversationViewHandle {
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const patchConversation = useMutation(api.conversations.patchConversation);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
-  const [switching, setSwitching] = useState(false);
+  const [switching, setSwitching] = useState<string | null>(null);
+  const [optimisticPath, setOptimisticPath] = useState<string | null>(null);
 
-  const currentPath = conversation.git_root || conversation.project_path;
+  const currentPath = optimisticPath || conversation.git_root || conversation.project_path;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
 
   const otherProjects = useMemo(() => {
@@ -226,54 +228,75 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   }, [recentProjects, currentPath]);
 
   const handleSwitch = useCallback(async (projectPath: string) => {
-    if (switching) return;
-    setSwitching(true);
+    if (switching || !projectPath.trim()) return;
+    const trimmed = projectPath.trim();
+    setSwitching(trimmed);
+    setOptimisticPath(trimmed);
     try {
       await patchConversation({
         id: conversation._id,
-        fields: { project_path: projectPath, git_root: projectPath },
+        fields: { project_path: trimmed, git_root: trimmed },
       });
     } catch {
+      setOptimisticPath(null);
     } finally {
-      setSwitching(false);
+      setSwitching(null);
     }
   }, [switching, patchConversation, conversation._id]);
 
-  if (!otherProjects.length) return null;
-
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="flex flex-col items-center gap-3 mt-4">
-      <div className="flex items-center gap-2 text-sol-text-muted text-xs">
-        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-        </svg>
-        <span className="font-medium text-sol-text">{currentName}</span>
-      </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            disabled={switching}
-            className="text-xs text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-sol-bg-alt"
-          >
-            {switching ? "Switching..." : "Switch project"}
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="center" className="min-w-[200px]">
-          {otherProjects.map((p) => {
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+              </svg>
+              <span className="font-medium text-sol-text">{currentName}</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs font-mono">
+            {currentPath}
+          </TooltipContent>
+        </Tooltip>
+
+      {otherProjects.length > 0 && (
+        <div className="flex flex-wrap justify-center gap-1.5">
+          {otherProjects.slice(0, 6).map((p) => {
             const name = p.path.split("/").filter(Boolean).pop();
+            const isLoading = switching === p.path;
             return (
-              <DropdownMenuItem key={p.path} onSelect={() => handleSwitch(p.path)}>
-                <span className="truncate">{name}</span>
-                <span className="ml-auto text-[10px] text-sol-text-dim truncate max-w-[120px]">{p.path}</span>
-              </DropdownMenuItem>
+              <Tooltip key={p.path}>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => handleSwitch(p.path)}
+                    disabled={!!switching}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                      </svg>
+                    )}
+                    <span>{name}</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs font-mono">
+                  {p.path}
+                </TooltipContent>
+              </Tooltip>
             );
           })}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        </div>
+      )}
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -629,6 +652,7 @@ function truncateLines(text: string, maxLines: number): { text: string; truncate
 
 
 function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; result?: ToolResult; childConversationId?: string }) {
+  const isCompleted = !!result;
   const [expanded, setExpanded] = useState(false);
 
   let parsedInput: Record<string, unknown> = {};
@@ -656,6 +680,80 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
   };
 
   const colors = subagentColors[subagentType] || { bg: "bg-sol-bg-alt/60", border: "border-sol-border/50", text: "text-sol-text-muted" };
+
+  const resultSummary = result?.content
+    ? result.content.length > 200 ? result.content.slice(0, 200) + "..." : result.content
+    : null;
+
+  if (isCompleted) {
+    return (
+      <div className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : "bg-sol-bg-alt/40 border-sol-border/30"} border overflow-hidden`}>
+        <div
+          className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className={`text-[10px] ${result?.is_error ? "text-sol-red" : "text-emerald-400"}`}>
+            {result?.is_error ? "\u2717" : "\u2713"}
+          </span>
+          <span className={`font-mono text-xs font-medium ${result?.is_error ? "text-sol-red" : "text-sol-text-muted"}`}>
+            Task
+          </span>
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
+            {subagentType}
+          </span>
+          {description && (
+            <span className="text-sol-text-dim text-xs truncate flex-1">
+              {description}
+            </span>
+          )}
+          {childConversationId && (
+            <Link
+              href={`/conversation/${childConversationId}`}
+              onClick={(e) => e.stopPropagation()}
+              className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
+            >
+              view
+            </Link>
+          )}
+          <span className="text-sol-text-dim text-[10px] ml-auto">
+            {expanded ? "collapse" : "expand"}
+          </span>
+        </div>
+
+        {resultSummary && !expanded && (
+          <div className="px-3 pb-2">
+            <pre className={`text-xs font-mono whitespace-pre-wrap break-words leading-relaxed ${
+              result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"
+            }`}>
+              {resultSummary}
+            </pre>
+          </div>
+        )}
+
+        {expanded && (
+          <>
+            <div className="border-t border-sol-border/30 px-3 py-2">
+              <div className="text-[10px] text-sol-text-dim mb-1">Prompt</div>
+              <div className="text-sol-text-dim text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-40 overflow-y-auto">
+                {prompt}
+              </div>
+            </div>
+            {result && (
+              <div className="border-t border-sol-border/30 px-3 py-2">
+                <div className="text-[10px] text-sol-text-dim mb-1">Result</div>
+                <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
+                  result.is_error ? "text-sol-red" : "text-sol-text-muted"
+                }`}>
+                  {result.content}
+                </pre>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
   const truncatedPrompt = prompt.length > 300 && !expanded ? prompt.slice(0, 300) + "..." : prompt;
 
   return (
@@ -715,17 +813,6 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
           </button>
         )}
       </div>
-
-      {expanded && result && (
-        <div className="border-t border-sol-border/50 px-3 py-2">
-          <div className="text-[10px] text-sol-text-dim mb-1">Result</div>
-          <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
-            result.is_error ? "text-sol-red" : "text-sol-text-muted"
-          }`}>
-            {result.content}
-          </pre>
-        </div>
-      )}
     </div>
   );
 }
@@ -1821,14 +1908,25 @@ function UserIcon() {
 
 function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
   const cmdType = getCommandType(content);
-  const cmdNameMatch = content.match(/<command-name>([^<]*)<\/command-name>/);
-  const cmdName = cmdNameMatch?.[1];
+  const cmdNameMatch = content.match(/<command-name>([^<]*)<\/command-name>/) || content.match(/<command-message>([^<]*)<\/command-message>/);
+  const cmdName = cmdNameMatch?.[1]?.replace(/^\//, "");
   const cleaned = cleanContent(content);
-  const isSkillCmd = cmdType === "cmd" && cmdName && cleaned.length > 200;
-  const displayText = cleaned.slice(0, 100) || content.replace(/<[^>]+>/g, "").slice(0, 100);
+  const isSkillCmd = cmdName && cleaned.length > 200;
+  const rawDisplay = cleaned.slice(0, 100) || content.replace(/<[^>]+>/g, "").slice(0, 100);
+  const displayText = cmdName ? rawDisplay.replace(new RegExp(`(/?${cmdName}\\s*)+`), "").trim() : rawDisplay;
 
   if (isSkillCmd) {
     return <SkillExpansionBlock content={content} timestamp={timestamp} cmdName={cmdName} />;
+  }
+
+  if (cmdName) {
+    return (
+      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-sol-text-dim">
+        <span className="text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>
+        {displayText && <span className="truncate text-sol-text-dim">{displayText}</span>}
+      </div>
+    );
   }
 
   return (
@@ -1869,6 +1967,7 @@ function SkillExpansionBlock({ content, timestamp, cmdName }: { content: string;
         <div className="mt-1 rounded-md bg-sol-bg-alt/25 border border-sol-border/20 p-3 text-xs text-sol-text-muted whitespace-pre-wrap overflow-y-auto font-mono leading-relaxed">
           {content
             .replace(/<command-name>[^<]*<\/command-name>\s*/g, "")
+            .replace(/<command-message>[^<]*<\/command-message>\s*/g, "")
             .replace(/^Base directory for this skill:[^\n]*\n?/, "")
             .replace(/<[^>]+>/g, "")
             .trim()}
@@ -2833,6 +2932,16 @@ function AssistantBlock({
             {!collapsed && (isOverflowing || !contentExpanded) && (
               <div className="flex items-center gap-1 mt-2">
                 <button
+                  onClick={() => setFullscreen(true)}
+                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
+                  title="Fullscreen"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+                  </svg>
+                  <span className="text-xs text-sol-text-dim">Full Screen</span>
+                </button>
+                <button
                   onClick={() => setContentExpanded(e => !e)}
                   className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors"
                   title={contentExpanded ? "Collapse" : "Expand"}
@@ -2844,16 +2953,6 @@ function AssistantBlock({
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
                     )}
                   </svg>
-                </button>
-                <button
-                  onClick={() => setFullscreen(true)}
-                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
-                  title="Fullscreen"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
-                  </svg>
-                  <span className="text-xs text-sol-text-dim">Full Screen</span>
                 </button>
               </div>
             )}
@@ -3340,7 +3439,7 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string }) {
+function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isUnresponsive, sessionId, agentType }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isUnresponsive?: boolean; sessionId?: string; agentType?: string }) {
   const cached = getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -3354,6 +3453,9 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   const resumeSessionMutation = useMutation(api.users.resumeSession);
   const getRealId = usePendingSessionStore((s) => s.getRealId);
   const addOptimistic = useOptimisticMessagesStore((s) => s.add);
+  const queueSession = useQueueStore((s) => s.sessions.find((sess) => sess._id === conversationId));
+  const serverUnresponsive = queueSession?.is_unresponsive ?? false;
+  const effectiveUnresponsive = isUnresponsive || serverUnresponsive;
 
   const messageStatus = useQuery(
     api.pendingMessages.getMessageStatus,
@@ -3361,7 +3463,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   );
 
   const realId = getRealId(conversationId);
-  const isRealConvId = realId.length > 10 && !realId.startsWith("pending-");
+  const isRealConvId = realId.length > 10 && !realId.startsWith("pending-") && !realId.startsWith("temp_");
   const existingPending = useQuery(
     api.pendingMessages.getConversationPendingMessage,
     isRealConvId ? { conversation_id: realId as Id<"conversations"> } : "skip"
@@ -3370,7 +3472,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   useEffect(() => {
     if (pendingMessageId) return;
     if (!existingPending) {
-      setShowStuckBanner(false);
+      if (!isWaitingForResponse) setShowStuckBanner(false);
       return;
     }
     const age = Date.now() - existingPending.created_at;
@@ -3380,7 +3482,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
       const timer = setTimeout(() => setShowStuckBanner(true), 15_000 - age);
       return () => clearTimeout(timer);
     }
-  }, [existingPending, pendingMessageId]);
+  }, [existingPending, pendingMessageId, isWaitingForResponse]);
 
   useEffect(() => {
     if (!sentAt || !pendingMessageId) return;
@@ -3601,13 +3703,13 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         <div className="relative">
-          {(isFocused || shortcutTooltip || isWaitingForResponse || isThinking || isConversationLive || showStuckBanner) && (
+          {(isFocused || shortcutTooltip || isWaitingForResponse || isThinking || isConversationLive || showStuckBanner || effectiveUnresponsive) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
               <p className="text-[11px] text-sol-text-dim/70">
-                {showStuckBanner && sessionId ? (
+                {(showStuckBanner || effectiveUnresponsive) && sessionId ? (
                   <span className="flex items-center gap-1.5 text-sol-orange">
                     <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" />
-                    Message not reaching session
+                    {existingPending || pendingMessageId ? "Message not reaching session" : "Session not responding"}
                     <button
                       type="button"
                       onClick={handleForceResume}
@@ -3742,8 +3844,8 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
             <ShortcutHint keys={["Ctrl", "I"]} label="Jump to needs input" />
             <ShortcutHint keys={["Ctrl", "J"]} label="Next session" />
             <ShortcutHint keys={["Ctrl", "K"]} label="Previous session" />
-            <ShortcutHint keys={["Shift", "Bksp"]} label="Defer session" />
-            <ShortcutHint keys={["Ctrl", "Bksp"]} label="Dismiss session" />
+            <ShortcutHint keys={["Shift", "←"]} label="Defer session" />
+            <ShortcutHint keys={["Ctrl", "←"]} label="Dismiss session" />
             <ShortcutHint keys={["Esc"]} label="Escape to session" />
             <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Collapse tool blocks" />
             <div className="border-t border-sol-border/20 my-1.5" />
@@ -4288,6 +4390,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (msg.content && isInterruptMessage(msg.content)) return 30;
         if (msg.content && isSkillExpansion(msg.content)) return 44;
         if (msg.content && isTaskNotification(msg.content)) return 40;
+        if (msg.content && msg.content.length > 200) {
+          const pi = index > 0 ? timeline[index - 1] : null;
+          const pm = pi?.type === 'message' ? (pi.data as Message) : null;
+          if (pm?.role === 'user' && pm?.content && isCommandMessage(pm.content)) return 44;
+        }
         const lines = (msg.content || "").split("\n").length;
         return Math.max(60, lines * 18 + 40);
       }
@@ -4306,6 +4413,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     paddingStart: 16,
     paddingEnd: 100,
     isScrollingResetDelay: 150,
+    initialOffset: !(window.location.hash || highlightQuery) ? Infinity : 0,
   });
 
   useEffect(() => {
@@ -4580,9 +4688,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     });
   }, [timeline, virtualizer]);
 
-  const hasInitialScrolled = useRef(false);
   const [initialScrollDone, setInitialScrollDone] = useState(false);
 
+  // New messages auto-scroll (only after initial scroll is done)
   useEffect(() => {
     const hasNewMessages = timeline.length > prevTimelineLengthRef.current;
     prevTimelineLengthRef.current = timeline.length;
@@ -4610,51 +4718,31 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [isWaitingForResponse]);
 
-  useEffect(() => {
-    if (timeline.length > 0 && !hasInitialScrolled.current) {
-      hasInitialScrolled.current = true;
-      if (window.location.hash || highlightQuery) {
-        setInitialScrollDone(true);
-        return;
-      }
-      const sc = containerRef.current;
-      if (sc) sc.scrollTop = sc.scrollHeight;
-      let lastScrollHeight = 0;
-      const stabilize = (attempt: number) => {
-        virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
-        const sc = containerRef.current;
-        const currentHeight = sc?.scrollHeight ?? 0;
-        if (attempt < 5 && currentHeight !== lastScrollHeight) {
-          lastScrollHeight = currentHeight;
-          setTimeout(() => stabilize(attempt + 1), 100);
-        } else {
-          if (sc) {
-            sc.scrollTop = sc.scrollHeight;
-            const canScroll = sc.scrollHeight > sc.clientHeight + 10;
-            setIsScrollable(canScroll);
-            setIsNearTop(false);
-            if (canScroll) {
-              setUserScrolled(false);
-            }
-          }
-          setInitialScrollDone(true);
-        }
-      };
-      setTimeout(() => stabilize(0), 100);
-    }
-  }, [timeline.length, virtualizer, highlightQuery]);
-
+  // Initial scroll: snap to bottom before paint (chatdoc pattern: scroll(0, 9999999))
   useLayoutEffect(() => {
-    if (!initialScrollDone || !containerRef.current) return;
+    if (timeline.length === 0 || initialScrollDone) return;
+    if (window.location.hash || highlightQuery) {
+      setInitialScrollDone(true);
+      return;
+    }
     const sc = containerRef.current;
-    sc.scrollTop = sc.scrollHeight;
-    const raf = requestAnimationFrame(() => {
-      if (containerRef.current) {
-        containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      }
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [initialScrollDone]);
+    if (sc) sc.scrollTop = sc.scrollHeight;
+    setInitialScrollDone(true);
+  }, [timeline.length, highlightQuery, initialScrollDone]);
+
+  // Auto-correct on every render: like chatdoc's componentDidUpdate
+  // If user hasn't scrolled away, keep pinned to bottom as virtualizer measures items
+  const totalSize = virtualizer.getTotalSize();
+  useEffect(() => {
+    if (!initialScrollDone || userScrolled) return;
+    if (window.location.hash || highlightQuery) return;
+    const sc = containerRef.current;
+    if (!sc) return;
+    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    if (dist > 5) {
+      sc.scrollTop = sc.scrollHeight;
+    }
+  });
 
   // Scroll after jump to start/end
   useEffect(() => {
@@ -4745,7 +4833,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  const title = conversation?.title || "New Session";
+  const title = cleanTitle(conversation?.title || "New Session");
   const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
   const latestMessageTimestamp = useMemo(() => {
     if (!conversation?.messages || conversation.messages.length === 0) return undefined;
@@ -4771,6 +4859,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
+  const isUnresponsive = !!conversation && conversation.status === "active" && lastMessageRole === "user" && (now - lastActivityAt) > 2 * 60 * 1000;
 
   useEffect(() => {
     if (conversation) {
@@ -4906,6 +4995,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (isTaskNotification(msg.content)) {
           if (collapsed) return null;
           return <TaskNotificationLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
+        }
+        // Check if previous message was a command - if so, this is likely the expanded skill prompt
+        const prevItemForSkill = index > 0 ? timeline[index - 1] : null;
+        const prevMsgForSkill = prevItemForSkill?.type === 'message' ? (prevItemForSkill.data as Message) : null;
+        if (prevMsgForSkill?.role === 'user' && prevMsgForSkill?.content && isCommandMessage(prevMsgForSkill.content) && msg.content.length > 200) {
+          if (collapsed) return null;
+          const cmdMatch = prevMsgForSkill.content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
+          return <SkillExpansionBlock key={msg._id} content={msg.content} timestamp={msg.timestamp} cmdName={cmdMatch?.[1]?.replace(/^\//, "")} />;
         }
         // Check if previous message was a compact_boundary - if so, render as compaction summary
         const prevItem = index > 0 ? timeline[index - 1] : null;
@@ -5079,11 +5176,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <TooltipTrigger asChild>
                   <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1 cursor-default">{truncatedTitle}</h1>
                 </TooltipTrigger>
-                {conversation?.messages?.[0]?.content && (
-                  <TooltipContent side="bottom" className="max-w-sm bg-white text-gray-800 border border-gray-200 shadow-lg text-xs leading-relaxed">
-                    {conversation.messages[0].content.length > 200 ? conversation.messages[0].content.slice(0, 200) + "..." : conversation.messages[0].content}
-                  </TooltipContent>
-                )}
+                {conversation?.messages?.[0]?.content && (() => {
+                  const cleaned = cleanContent(conversation.messages[0].content);
+                  return cleaned ? (
+                    <TooltipContent side="bottom" className="max-w-sm bg-white text-gray-800 border border-gray-200 shadow-lg text-xs leading-relaxed">
+                      {cleaned.length > 200 ? cleaned.slice(0, 200) + "..." : cleaned}
+                    </TooltipContent>
+                  ) : null;
+                })()}
               </Tooltip>
             </TooltipProvider>
 
@@ -5427,7 +5527,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         />
       )}
 
-      <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "auto", opacity: initialScrollDone || !conversation || timeline.length === 0 ? 1 : 0 }}>
+      <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "auto" }}>
         <div className="flex flex-col">
         {!conversation ? (
           <ConversationSkeleton />
@@ -5440,10 +5540,28 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  <span>Starting session...</span>
+                  <span>Loading messages...</span>
                 </div>
-                <span className="text-xs text-sol-text-dim/60">Agent is initializing</span>
               </>
+            ) : conversation.status === "active" && (conversation.message_count ?? 0) === 0 ? (
+              isSessionLive ? (
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <span>Session ready</span>
+                </div>
+              ) : (now - (conversation.started_at ?? now)) < 2 * 60 * 1000 ? (
+                <>
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 animate-spin text-sol-cyan/60" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span>Starting session...</span>
+                  </div>
+                </>
+              ) : (
+                <span className="text-sol-text-dim/60">Waiting for agent to connect</span>
+              )
             ) : conversation.status !== "active" ? (
               "No messages in this conversation"
             ) : null}
@@ -5587,7 +5705,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {showMessageInput && conversation && (
         <div ref={messageInputRef}>
-          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} />
+          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isUnresponsive={isUnresponsive} sessionId={conversation.session_id} agentType={conversation.agent_type} />
         </div>
       )}
 
