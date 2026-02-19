@@ -2973,6 +2973,7 @@ export const updateProjectPath = mutation({
   args: {
     session_id: v.string(),
     project_path: v.string(),
+    git_root: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -2991,13 +2992,15 @@ export const updateProjectPath = mutation({
       return { updated: false };
     }
 
-    if (conversation.project_path === args.project_path) {
+    if (conversation.project_path === args.project_path && (!args.git_root || conversation.git_root === args.git_root)) {
       return { updated: false };
     }
 
-    await ctx.db.patch(conversation._id, {
-      project_path: args.project_path,
-    });
+    const patch: Record<string, string> = { project_path: args.project_path };
+    if (args.git_root) {
+      patch.git_root = args.git_root;
+    }
+    await ctx.db.patch(conversation._id, patch);
 
     return { updated: true, id: conversation._id };
   },
@@ -4786,7 +4789,10 @@ export const listIdleSessions = query({
       const recentlyActive = (now - conv.updated_at) < 10 * 60 * 1000;
       const recentlyUpdated = (now - conv.updated_at) < 45 * 1000;
 
-      const isUnresponsive = !hasPending && lastRoleIsUser && !daemonAlive && !recentlyActive;
+      const isUnresponsive = !daemonAlive && (
+        (lastRoleIsUser && !recentlyUpdated) ||
+        (!!hasPending && (now - hasPending.created_at) > 15_000)
+      );
 
       const isIdle = daemonAlive
         ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
