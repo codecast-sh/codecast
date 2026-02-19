@@ -14,6 +14,7 @@ import { useQueueStore, InboxSession } from "../../store/queueStore";
 import { registerMutation } from "../../store/convexCache";
 import { useCurrentConversationStore } from "../../store/currentConversationStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
+import { cleanTitle } from "../../lib/conversationProcessor";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -106,6 +107,8 @@ function SessionCard({
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isDismissed = variant === "dismissed";
+  const displayTitle = cleanTitle(session.title || "New Session");
+  const isSlashCommand = displayTitle.startsWith("/");
 
   return (
     <div
@@ -127,7 +130,7 @@ function SessionCard({
           <div className={`text-sm truncate leading-tight ${
             isActive ? "text-sol-text font-semibold" : isWorking ? "text-sol-text font-medium" : "text-sol-text"
           }`}>
-            {session.title || "New Session"}
+            {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
             {session.is_unresponsive && (
@@ -151,18 +154,24 @@ function SessionCard({
           isWorking ? "font-semibold text-sol-green" : "font-medium text-sol-cyan"
         }`}>{project}</span>
         {session.message_count === 0 && !session.last_user_message && (
-          <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-cyan/60">
-            <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            <span>Starting...</span>
-          </div>
+          (Date.now() - session.updated_at) < 2 * 60 * 1000 ? (
+            <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-cyan/60">
+              <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span>Starting...</span>
+            </div>
+          ) : (
+            <div className="text-[11px] text-sol-text-dim/60 mt-0.5">
+              Waiting for connection
+            </div>
+          )
         )}
         {session.last_user_message && (
           <div className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug">
             <span className="text-sky-600/60 dark:text-sky-400/50 mr-0.5">&gt;</span>
-            {session.last_user_message.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim() || "[image]"}
+            {session.last_user_message.replace(/<[^>]+>/g, "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim() || "[image]"}
           </div>
         )}
         {(session.idle_summary || session.subtitle) && (
@@ -452,10 +461,10 @@ export function QueuePageClient() {
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
 
-  // Query conversation for sessions not in the queue
+  // Query conversation for sessions not in the queue (skip temp IDs)
   const directConv = useQuery(
     api.conversations.getConversation,
-    pendingInjectId ? { conversation_id: pendingInjectId as Id<"conversations">, limit: 1 } : "skip"
+    pendingInjectId && !pendingInjectId.startsWith("temp_") ? { conversation_id: pendingInjectId as Id<"conversations">, limit: 1 } : "skip"
   );
 
   // Select session from URL param -- only when the param actually changes
@@ -684,12 +693,12 @@ export function QueuePageClient() {
           </span>
           <span className="flex items-center gap-1">
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Shift</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Bksp</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">←</kbd>
             defer
           </span>
           <span className="flex items-center gap-1">
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Bksp</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">←</kbd>
             dismiss
           </span>
           <button onClick={toggleShortcuts} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
