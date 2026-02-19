@@ -154,6 +154,7 @@ const syncStats = {
 
 let lastWatcherEventTime = Date.now();
 let lastWatcherIdleLogTime = 0;
+const projectPathUpdated = new Set<string>();
 
 const HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -621,11 +622,23 @@ function generateTitleFromMessage(content: string): string {
     return "";
   }
 
-  if (trimmed.length <= 50) {
-    return trimmed;
+  const cmdNameMatch = trimmed.match(/<command-name>([^<]*)<\/command-name>/);
+  if (cmdNameMatch) return `/${cmdNameMatch[1].replace(/^\//, "")}`;
+
+  const cmdMsgMatch = trimmed.match(/<command-message>([^<]*)<\/command-message>/);
+  if (cmdMsgMatch) return `/${cmdMsgMatch[1].replace(/^\//, "")}`;
+
+  const cleaned = trimmed
+    .replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, "")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+
+  const result = cleaned || trimmed;
+  if (result.length <= 50) {
+    return result;
   }
 
-  return trimmed.slice(0, 50) + "...";
+  return result.slice(0, 50) + "...";
 }
 
 function readDaemonState(): DaemonState {
@@ -751,6 +764,24 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
     diffStaged: diffStaged ? diffStaged.slice(0, 100000) : undefined,
     root,
   };
+}
+
+function detectProjectFromMessages(messages: ParsedMessage[]): string | undefined {
+  for (const msg of messages) {
+    if (!msg.toolCalls) continue;
+    for (const tc of msg.toolCalls) {
+      const input = tc.input;
+      if (!input) continue;
+      const fp =
+        (typeof input.file_path === "string" && input.file_path.startsWith("/") ? input.file_path : undefined) ||
+        (typeof input.path === "string" && input.path.startsWith("/") ? input.path : undefined);
+      if (!fp) continue;
+      const dir = path.dirname(fp);
+      const gitInfo = getGitInfo(dir);
+      if (gitInfo?.root) return gitInfo.root;
+    }
+  }
+  return undefined;
 }
 
 async function flushPendingMessagesBatch(
@@ -1161,6 +1192,17 @@ async function processSessionFile(
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
     tryRegisterSessionProcess(sessionId, "claude");
+
+    if (conversationId && !projectPathUpdated.has(sessionId)) {
+      const detected = detectProjectFromMessages(messages);
+      if (detected) {
+        projectPathUpdated.add(sessionId);
+        const gitInfo = getGitInfo(detected);
+        syncService.updateProjectPath(sessionId, detected, gitInfo?.root).then((r) => {
+          if (r?.updated) log(`Updated project path for ${sessionId.slice(0, 8)}: ${detected}`);
+        }).catch(() => {});
+      }
+    }
 
     const lastMessage = messages[messages.length - 1];
     const wasInterrupted = lastMessage?.role === "user" &&
@@ -2779,10 +2821,13 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
 
         checked++;
 
-        const result = await syncService.updateProjectPath(sessionId, actualCwd);
+        const detected = detectProjectFromMessages(parseSessionFile(content));
+        const projectPath = detected || actualCwd;
+        const gitInfo = getGitInfo(projectPath);
+        const result = await syncService.updateProjectPath(sessionId, projectPath, gitInfo?.root);
         if (result?.updated) {
           repaired++;
-          log(`Repaired path for ${sessionId.slice(0, 8)}: ${actualCwd}`);
+          log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
         }
       } catch {
         // Skip files we can't read or sessions that don't exist in Convex

@@ -419,11 +419,12 @@ export class SyncService {
     }
   }
 
-  async updateProjectPath(sessionId: string, projectPath: string): Promise<{ updated: boolean } | null> {
+  async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string): Promise<{ updated: boolean } | null> {
     try {
       const result = await this.client.mutation("conversations:updateProjectPath" as any, {
         session_id: sessionId,
         project_path: projectPath,
+        git_root: gitRoot,
         api_token: this.apiToken,
       });
       return result as { updated: boolean } | null;
