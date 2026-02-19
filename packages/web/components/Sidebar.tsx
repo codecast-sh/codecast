@@ -133,7 +133,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
   const markTeamSeen = useMutation(api.conversations.markTeamConversationsSeen);
-  const activeSessions = useQuery(api.conversations.listIdleSessions);
+  const activeSessions = useQuery(api.conversations.listIdleSessions, {});
   const idleCount = activeSessions?.filter((s: any) => s.is_idle).length ?? 0;
 
   useEffect(() => {

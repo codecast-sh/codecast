@@ -3,7 +3,7 @@ import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { cleanTitle, isSystemMessage } from "../lib/conversationProcessor";
+import { cleanTitle, isSystemMessage, isCommandMessage } from "../lib/conversationProcessor";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useStableOrder } from "../hooks/useStableOrder";
@@ -1148,9 +1148,16 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         if (alternates.length === 0) return null;
 
                         const clean = (c: string) => c?.replace(/<[^>]+>/g, "").replace(/^\s*Caveat:.*$/gm, "").trim() || "";
+                        const commandLabel = (c: string) => {
+                          const m = c.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
+                          return m ? `/${m[1].replace(/^\//, "")}` : null;
+                        };
 
                         const processed = alternates
-                          .map(m => ({ ...m, cleanContent: clean(m.content) }))
+                          .map(m => {
+                            const isCmd = m.role === "user" && isCommandMessage(m.content);
+                            return { ...m, cleanContent: isCmd ? (commandLabel(m.content) || clean(m.content)) : clean(m.content), isCmd };
+                          })
                           .filter(m => m.cleanContent.length > 0 && !isSystemMessage(m.cleanContent));
 
                         if (processed.length === 0) return null;
@@ -1170,7 +1177,11 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                                 {(conv.author_name?.charAt(0) || "U").toUpperCase()}
                               </span>
                             )}
-                            <span className={`truncate min-w-0 leading-relaxed ${m.role === "user" ? "text-sky-700 dark:text-sky-300" : "text-sol-text-muted"}`}>{m.cleanContent}</span>
+                            {m.isCmd ? (
+                              <span className="font-mono text-sol-cyan/80 font-medium truncate min-w-0 leading-relaxed">{m.cleanContent}</span>
+                            ) : (
+                              <span className={`truncate min-w-0 leading-relaxed ${m.role === "user" ? "text-sky-700 dark:text-sky-300" : "text-sol-text-muted"}`}>{m.cleanContent}</span>
+                            )}
                           </div>
                         );
 

@@ -117,15 +117,19 @@ export function getConversationPreview(
 }
 
 export function cleanTitle(title: string): string {
-  const cleaned = cleanContent(title);
-  if (cleaned.length > 0) return cleaned;
+  // Extract command name first (before cleanContent strips it)
+  const cmdNameMatch = title.match(/<command-name>([^<]*)<\/command-name>/);
+  if (cmdNameMatch) return `/${cmdNameMatch[1].replace(/^\//, "")}`;
 
-  // If title was entirely a command, extract something useful
-  const cmdMatch = title.match(/<command-name>([^<]*)<\/command-name>/);
-  if (cmdMatch) return `/${cmdMatch[1]}`;
+  const cmdMsgMatch = title.match(/<command-message>([^<]*)<\/command-message>/);
+  if (cmdMsgMatch) return `/${cmdMsgMatch[1].replace(/^\//, "")}`;
+
+  // Strip complete tags, then also strip truncated/broken tags (e.g. "<command..." from title truncation)
+  const cleaned = cleanContent(title).replace(/<[^>]*$/, "").trim();
+  if (cleaned.length > 0) return cleaned;
 
   if (title.trim().startsWith("Caveat:")) return "System message";
   if (title.includes("<local-command-stdout>")) return "Command output";
 
-  return title.replace(/<[^>]+>/g, "").slice(0, 50) || "Untitled";
+  return title.replace(/<[^>]+>/g, "").replace(/<[^>]*$/, "").trim().slice(0, 50) || "Untitled";
 }
