@@ -79,6 +79,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function parsePollMessage(content: string): { keys: string[]; text?: string; display?: string } | null {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed.__cc_poll && Array.isArray(parsed.keys)) return parsed;
+  } catch {}
+  return null;
+}
+
 export async function runClaudeWrapper(args: string[]): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token) {
@@ -163,11 +171,27 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
           for (const msg of messages as any[]) {
             log(`Delivering message: ${msg.content.slice(0, 50)}...`);
             try {
-              const escapedContent = msg.content.replace(/'/g, "'\\''");
-              execSync(`tmux send-keys -t '${tmuxSessionName}' '${escapedContent}'`, { stdio: "ignore" });
-              await sleep(100);
-              execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
-              log(`Injected via tmux send-keys to session ${tmuxSessionName}`);
+              const poll = parsePollMessage(msg.content);
+              if (poll) {
+                for (const key of poll.keys) {
+                  execSync(`tmux send-keys -t '${tmuxSessionName}' '${key}'`, { stdio: "ignore" });
+                  await sleep(500);
+                }
+                if (poll.text) {
+                  await sleep(300);
+                  const escapedText = poll.text.replace(/'/g, "'\\''");
+                  execSync(`tmux send-keys -t '${tmuxSessionName}' -l '${escapedText}'`, { stdio: "ignore" });
+                  await sleep(150);
+                  execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                }
+                log(`Injected poll response via tmux to session ${tmuxSessionName}`);
+              } else {
+                const escapedContent = msg.content.replace(/'/g, "'\\''");
+                execSync(`tmux send-keys -t '${tmuxSessionName}' '${escapedContent}'`, { stdio: "ignore" });
+                await sleep(100);
+                execSync(`tmux send-keys -t '${tmuxSessionName}' Enter`, { stdio: "ignore" });
+                log(`Injected via tmux send-keys to session ${tmuxSessionName}`);
+              }
 
               await client.mutation("managedSessions:markMessageDelivered" as any, {
                 message_id: msg._id,
@@ -283,11 +307,27 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
   const injectMessage = async (content: string): Promise<boolean> => {
     if (tmuxPane) {
       try {
-        const escapedContent = content.replace(/'/g, "'\\''");
-        execSync(`tmux send-keys -t ${tmuxPane} '${escapedContent}'`, { stdio: "ignore" });
-        await sleep(100);
-        execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
-        log(`Injected via tmux send-keys to pane ${tmuxPane}`);
+        const poll = parsePollMessage(content);
+        if (poll) {
+          for (const key of poll.keys) {
+            execSync(`tmux send-keys -t ${tmuxPane} '${key}'`, { stdio: "ignore" });
+            await sleep(500);
+          }
+          if (poll.text) {
+            await sleep(300);
+            const escapedText = poll.text.replace(/'/g, "'\\''");
+            execSync(`tmux send-keys -t ${tmuxPane} -l '${escapedText}'`, { stdio: "ignore" });
+            await sleep(150);
+            execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+          }
+          log(`Injected poll response via tmux to pane ${tmuxPane}`);
+        } else {
+          const escapedContent = content.replace(/'/g, "'\\''");
+          execSync(`tmux send-keys -t ${tmuxPane} '${escapedContent}'`, { stdio: "ignore" });
+          await sleep(100);
+          execSync(`tmux send-keys -t ${tmuxPane} Enter`, { stdio: "ignore" });
+          log(`Injected via tmux send-keys to pane ${tmuxPane}`);
+        }
         return true;
       } catch (err) {
         log(`Failed to inject via tmux: ${err}`);
