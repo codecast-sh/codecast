@@ -3,7 +3,7 @@ import * as path from "path";
 import * as os from "os";
 import { execSync, spawn } from "child_process";
 
-const VERSION = "1.0.40";
+const VERSION = "1.0.41";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
