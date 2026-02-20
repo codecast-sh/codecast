@@ -182,23 +182,6 @@ function SessionCard({
       </button>
       {(onDismiss || onDefer) && (
         <div className="absolute top-1.5 right-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          {onDefer && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDefer(session._id); }}
-                    className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v14m0 0l-6-6m6 6l6-6M5 21h14" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">Defer</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
           {onDismiss && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
@@ -213,6 +196,23 @@ function SessionCard({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="left">Dismiss</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {onDefer && (
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDefer(session._id); }}
+                    className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v14m0 0l-6-6m6 6l6-6M5 21h14" />
+                    </svg>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Defer</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -661,7 +661,7 @@ export function QueuePageClient() {
             />
           ) : currentSession ? (
             <InboxConversation
-              key={currentSession._id}
+              key={currentSession.stableKey || currentSession._id}
               sessionId={currentSession._id}
               onSendAndAdvance={handleSendAndAdvance}
               lastUserMessage={currentSession.last_user_message}

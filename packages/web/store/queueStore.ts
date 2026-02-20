@@ -18,6 +18,7 @@ export type InboxSession = {
   has_pending: boolean;
   is_deferred?: boolean;
   last_user_message?: string | null;
+  stableKey?: string;
 };
 
 interface InboxState {
@@ -226,7 +227,7 @@ export const useQueueStore = create<InboxState>((set, get) => ({
       set({ sessions: updated, currentIndex: newIndex });
     } else {
       const updated = [...sessions];
-      updated[tempIdx] = { ...updated[tempIdx], _id: realId };
+      updated[tempIdx] = { ...updated[tempIdx], _id: realId, stableKey: tempId };
       set({ sessions: updated });
     }
   },
