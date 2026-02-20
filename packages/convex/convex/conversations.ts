@@ -394,6 +394,7 @@ export const createConversation = mutation({
       if (parent && !parent.inbox_dismissed_at) {
         await ctx.db.patch(parentConversationId, {
           inbox_dismissed_at: Date.now(),
+          status: "completed",
         });
       }
     }
@@ -1090,6 +1091,8 @@ export const listConversations = query({
     memberId: v.optional(v.id("users")),
     activeTeamId: v.optional(v.id("teams")),
     subagentFilter: v.optional(v.union(v.literal("main"), v.literal("subagent"))),
+    directoryFilter: v.optional(v.string()),
+    timeFilter: v.optional(v.union(v.literal("long"), v.literal("active"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1165,14 +1168,46 @@ export const listConversations = query({
       );
     };
 
+    const deriveGitRoot = (c: { git_root?: string; project_path?: string }): string | null => {
+      if (c.git_root) return c.git_root;
+      if (!c.project_path) return null;
+      const parts = c.project_path.split('/');
+      const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
+      if (srcIndex >= 0 && srcIndex < parts.length - 1) {
+        return parts.slice(0, srcIndex + 2).join('/');
+      }
+      return c.project_path;
+    };
+
+    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+    const needsBatchScan = !!(args.subagentFilter || args.directoryFilter || args.timeFilter);
+
+    const matchesFilters = (c: any): boolean => {
+      if (args.subagentFilter) {
+        const isSub = !!(c.parent_conversation_id && !c.parent_message_uuid);
+        if (args.subagentFilter === "subagent" && !isSub) return false;
+        if (args.subagentFilter === "main" && isSub) return false;
+      }
+      if (args.directoryFilter) {
+        if (deriveGitRoot(c) !== args.directoryFilter) return false;
+      }
+      if (args.timeFilter === "active") {
+        const isActive = c.status === "active" && c.updated_at > fiveMinutesAgo;
+        if (!isActive) return false;
+      }
+      if (args.timeFilter === "long") {
+        if ((c.updated_at - c.started_at) < 20 * 60 * 1000) return false;
+      }
+      return true;
+    };
+
     let conversations;
     if (args.filter === "my") {
-      if (args.subagentFilter === "subagent" || args.subagentFilter === "main") {
-        const wantSubagent = args.subagentFilter === "subagent";
+      if (needsBatchScan) {
         const results: any[] = [];
         let scanCursor = cursorTimestamp;
         const batchSize = limit * 4;
-        const maxBatches = 5;
+        const maxBatches = 10;
 
         for (let i = 0; i < maxBatches && results.length < limit + 1; i++) {
           const batch = await ctx.db
@@ -1188,8 +1223,7 @@ export const listConversations = query({
           if (batch.length === 0) break;
 
           for (const c of batch) {
-            const isSub = !!(c.parent_conversation_id && !c.parent_message_uuid);
-            if (wantSubagent === isSub) {
+            if (matchesFilters(c)) {
               results.push(c);
               if (results.length >= limit + 1) break;
             }
@@ -1231,16 +1265,42 @@ export const listConversations = query({
         )
         .order("desc");
 
-      // Filter by privacy and project visibility
-      // If user has directory mappings, respect is_private (auto-share logic applied)
-      // If user has no mappings, only hide explicitly private (team_visibility === "private")
-      const fetched = await query.take((limit + 1) * 2);
       const memberHasMappings = userHasMappings.get(args.memberId!.toString());
-      conversations = fetched.filter((c) => {
-        if (!isConversationVisibleInFeed(c, !!memberHasMappings)) return false;
-        const projectPath = c.git_root || c.project_path;
-        return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
-      }).slice(0, limit + 1);
+      if (needsBatchScan) {
+        const results: any[] = [];
+        let memberScanCursor = cursorTimestamp;
+        const memberBatchSize = limit * 4;
+        for (let i = 0; i < 10 && results.length < limit + 1; i++) {
+          const batch = await ctx.db
+            .query("conversations")
+            .withIndex("by_team_user_updated", (q) =>
+              memberScanCursor
+                ? q.eq("team_id", effectiveTeamId!).eq("user_id", args.memberId!).lt("updated_at", memberScanCursor)
+                : q.eq("team_id", effectiveTeamId!).eq("user_id", args.memberId!)
+            )
+            .order("desc")
+            .take(memberBatchSize);
+          if (batch.length === 0) break;
+          for (const c of batch) {
+            if (!isConversationVisibleInFeed(c, !!memberHasMappings)) continue;
+            const projectPath = c.git_root || c.project_path;
+            if (!isProjectVisibleToTeam(c.user_id.toString(), projectPath)) continue;
+            if (!matchesFilters(c)) continue;
+            results.push(c);
+            if (results.length >= limit + 1) break;
+          }
+          memberScanCursor = batch[batch.length - 1].updated_at;
+          if (batch.length < memberBatchSize) break;
+        }
+        conversations = results;
+      } else {
+        const fetched = await query.take((limit + 1) * 2);
+        conversations = fetched.filter((c) => {
+          if (!isConversationVisibleInFeed(c, !!memberHasMappings)) return false;
+          const projectPath = c.git_root || c.project_path;
+          return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
+        }).slice(0, limit + 1);
+      }
     } else {
       // Query recent conversations from each visible team member and merge
       // This ensures all team members' conversations appear regardless of activity level
@@ -1262,12 +1322,14 @@ export const listConversations = query({
             )
             .order("desc");
 
-          const convs = await query.take(perMemberLimit * 2);
+          const convs = await query.take(perMemberLimit * (needsBatchScan ? 4 : 2));
           const memberHasMappings = userHasMappings.get(member.user_id.toString());
           return convs.filter((c) => {
             if (!isConversationVisibleInFeed(c, !!memberHasMappings)) return false;
             const projectPath = c.git_root || c.project_path;
-            return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
+            if (!isProjectVisibleToTeam(c.user_id.toString(), projectPath)) return false;
+            if (!matchesFilters(c)) return false;
+            return true;
           }).slice(0, perMemberLimit);
         })
       );
@@ -1298,7 +1360,6 @@ export const listConversations = query({
         const authorAvatar = (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null;
         const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
         const durationMs = c.updated_at - c.started_at;
-        const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
         const isActive = c.status === "active" && c.updated_at > fiveMinutesAgo;
         const title = c.title || "New Session";
 
@@ -1370,6 +1431,8 @@ export const listConversations = query({
             author_avatar: authorAvatar,
             is_own: c.user_id.toString() === userId.toString(),
             parent_conversation_id: c.parent_conversation_id || null,
+            parent_message_uuid: c.parent_message_uuid || null,
+            is_subagent: !!(c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)),
             parent_title: null,
             latest_todos: undefined,
             project_path: c.project_path || null,
@@ -1527,6 +1590,8 @@ export const listConversations = query({
           author_avatar: authorAvatar,
           is_own: c.user_id.toString() === userId.toString(),
           parent_conversation_id: visibilityMode === "full" ? parentConversationId : null,
+          parent_message_uuid: c.parent_message_uuid || null,
+          is_subagent: !!(c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)),
           parent_title: visibilityMode === "full" ? parentTitle : null,
           latest_todos: visibilityMode === "full" ? latestTodos : undefined,
           project_path: c.project_path || null,
@@ -3511,6 +3576,68 @@ export const getConversationTree = query({
   },
 });
 
+export const getForkBranchMessages = query({
+  args: {
+    conversation_id: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
+    if (!userId) {
+      return { error: "Unauthorized" };
+    }
+
+    let conv = null;
+    try {
+      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
+    } catch {
+      // try short_id
+    }
+    if (!conv) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
+        .first();
+    }
+    if (!conv) {
+      return { error: "Conversation not found" };
+    }
+
+    const isOwner = conv.user_id.toString() === userId.toString();
+    if (!isOwner) {
+      if (!(await canTeamMemberAccess(ctx, userId, conv))) {
+        return { error: "Access denied" };
+      }
+    }
+
+    const allMessages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", conv!._id)
+      )
+      .order("asc")
+      .collect();
+
+    if (!conv.parent_message_uuid) {
+      return { messages: allMessages, fork_point_uuid: null };
+    }
+
+    const forkPointIdx = allMessages.findIndex(
+      (m) => m.message_uuid === conv!.parent_message_uuid
+    );
+
+    if (forkPointIdx === -1) {
+      return { messages: allMessages, fork_point_uuid: conv.parent_message_uuid };
+    }
+
+    const divergentMessages = allMessages.slice(forkPointIdx + 1);
+    return {
+      messages: divergentMessages,
+      fork_point_uuid: conv.parent_message_uuid,
+    };
+  },
+});
+
 export const toggleFavorite = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -4737,7 +4864,7 @@ export const listIdleSessions = query({
 
     const candidates = [];
     for (const conv of conversations) {
-      if (conv.parent_conversation_id && !conv.parent_message_uuid) continue;
+      if (conv.is_subagent || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
       if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff) continue;
 
       const title = conv.title?.trim() || "";
@@ -4789,7 +4916,7 @@ export const listIdleSessions = query({
       const recentlyActive = (now - conv.updated_at) < 10 * 60 * 1000;
       const recentlyUpdated = (now - conv.updated_at) < 45 * 1000;
 
-      const isUnresponsive = !daemonAlive && (
+      const isUnresponsive = conv.status === "active" && !daemonAlive && (
         (lastRoleIsUser && !recentlyUpdated) ||
         (!!hasPending && (now - hasPending.created_at) > 15_000)
       );
@@ -4947,7 +5074,7 @@ export const listDismissedSessions = query({
     const results = [];
 
     for (const conv of conversations) {
-      if (conv.parent_conversation_id && !conv.parent_message_uuid) continue;
+      if (conv.is_subagent || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
 
       const title = conv.title?.trim() || "";
       if (title.toLowerCase() === "warmup") continue;
