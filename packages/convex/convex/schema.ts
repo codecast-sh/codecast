@@ -16,6 +16,7 @@ export default defineSchema({
     active_team_id: v.optional(v.id("teams")),
     daemon_last_seen: v.optional(v.number()),
     last_message_sent_at: v.optional(v.number()),
+    prev_message_sent_at: v.optional(v.number()),
     theme: v.optional(v.union(v.literal("dark"), v.literal("light"))),
     github_id: v.optional(v.string()),
     github_username: v.optional(v.string()),
@@ -69,7 +70,8 @@ export default defineSchema({
       v.literal("version"),
       v.literal("start_session"),
       v.literal("escape"),
-      v.literal("resume_session")
+      v.literal("resume_session"),
+      v.literal("kill_session")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),
@@ -408,6 +410,7 @@ export default defineSchema({
     conversation_id: v.optional(v.id("conversations")),
     user_id: v.id("users"),
     pid: v.number(),
+    tmux_session: v.optional(v.string()),
     started_at: v.number(),
     last_heartbeat: v.number(),
   })
