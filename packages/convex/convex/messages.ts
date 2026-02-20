@@ -175,6 +175,9 @@ export const addMessage = mutation({
     if (args.role === "user") {
       const user = await ctx.db.get(conversation.user_id);
       if (!user?.last_message_sent_at || msgTimestamp > user.last_message_sent_at) {
+        if (user?.last_message_sent_at) {
+          userPatch.prev_message_sent_at = user.last_message_sent_at;
+        }
         userPatch.last_message_sent_at = msgTimestamp;
       }
     }
@@ -347,6 +350,9 @@ export const addMessages = mutation({
         if (lastUserTs > 0) {
           const user = await ctx.db.get(conversation.user_id);
           if (!user?.last_message_sent_at || lastUserTs > user.last_message_sent_at) {
+            if (user?.last_message_sent_at) {
+              userPatch.prev_message_sent_at = user.last_message_sent_at;
+            }
             userPatch.last_message_sent_at = lastUserTs;
           }
         }

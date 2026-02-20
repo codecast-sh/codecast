@@ -4860,7 +4860,13 @@ export const listIdleSessions = query({
 
     const user = await ctx.db.get(userId);
     const lastUserMessageAt = user?.last_message_sent_at ?? 0;
-    const clusterCutoff = lastUserMessageAt > 0 ? lastUserMessageAt - CLUSTER_WINDOW_MS : 0;
+    const prevUserMessageAt = user?.prev_message_sent_at ?? 0;
+    const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+    const gap = lastUserMessageAt - prevUserMessageAt;
+    const anchor = (prevUserMessageAt > 0 && gap > GAP_THRESHOLD_MS)
+      ? prevUserMessageAt
+      : lastUserMessageAt;
+    const clusterCutoff = anchor > 0 ? anchor - CLUSTER_WINDOW_MS : 0;
 
     const candidates = [];
     for (const conv of conversations) {
@@ -5140,7 +5146,11 @@ export const backfillLastUserMessageAt = internalMutation({
     if (maxUserMsgAt > 0) {
       const user = await ctx.db.get(args.user_id);
       if (user && (!user.last_message_sent_at || user.last_message_sent_at < maxUserMsgAt)) {
-        await ctx.db.patch(args.user_id, { last_message_sent_at: maxUserMsgAt });
+        const patch: Record<string, unknown> = { last_message_sent_at: maxUserMsgAt };
+        if (user.last_message_sent_at) {
+          patch.prev_message_sent_at = user.last_message_sent_at;
+        }
+        await ctx.db.patch(args.user_id, patch);
       }
     }
 
@@ -5164,6 +5174,67 @@ export const sendEscapeToSession = mutation({
       command: "escape",
       args: JSON.stringify({ conversation_id: args.conversation_id }),
       created_at: Date.now(),
+    });
+  },
+});
+
+export const killSession = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "kill_session",
+      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      created_at: Date.now(),
+    });
+  },
+});
+
+export const switchSessionProject = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    project_path: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+
+    const now = Date.now();
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "kill_session",
+      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      created_at: now,
+    });
+
+    await ctx.db.patch(args.conversation_id, {
+      project_path: args.project_path,
+      git_root: args.project_path,
+    });
+
+    const agentType = conv.agent_type || "claude_code";
+    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : "gemini";
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "start_session",
+      args: JSON.stringify({
+        agent_type: daemonAgentType,
+        project_path: args.project_path,
+        conversation_id: args.conversation_id,
+      }),
+      created_at: now + 1,
     });
   },
 });
