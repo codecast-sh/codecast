@@ -7,9 +7,11 @@ export type FilterableSession = {
   agent_type?: string | null;
   subagent_types?: string[];
   parent_conversation_id?: string | null;
+  is_subagent?: boolean;
 };
 
 export function isSubagent(c: FilterableSession): boolean {
+  if (c.is_subagent !== undefined) return c.is_subagent;
   return !!c.parent_conversation_id;
 }
 

@@ -238,6 +238,8 @@ type Conversation = {
   author_name: string;
   is_own: boolean;
   parent_conversation_id?: string | null;
+  parent_message_uuid?: string | null;
+  is_subagent?: boolean;
   parent_title?: string | null;
   children?: Conversation[];
   latest_todos?: { todos: Array<{ status: string; content: string; activeForm?: string }>; timestamp: number };
@@ -639,13 +641,13 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
   const [subagentFilter, setSubagentFilter] = useState<SubagentFilter>("all");
   const serverSubagentFilter = subagentFilter === "all" ? null : subagentFilter;
-  const { conversations, hasMore, loadMore, isLoadingMore, isLoading, hasSubagents } = useConversationsWithError(filter, memberFilter, serverSubagentFilter);
+  const serverTimeFilter = timeFilter === "all" ? null : timeFilter;
+  const { conversations, hasMore, loadMore, isLoadingMore, isLoading, hasSubagents } = useConversationsWithError(filter, memberFilter, serverSubagentFilter, directoryFilter, serverTimeFilter);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const showNewSession = useNewSessionStore((s) => s.isOpen);
   const openNewSession = useNewSessionStore((s) => s.open);
   const closeNewSession = useNewSessionStore((s) => s.close);
   const listRef = useRef<HTMLDivElement>(null);
-  const loadMoreRef = useRef<HTMLDivElement>(null);
   const isHoveredRef = useRef(false);
   const { containerRef: flipContainerRef, beforeReorder } = useFlipAnimation();
   const getConvKey = useCallback((c: Conversation) => c._id, []);
@@ -670,65 +672,33 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   }, []);
 
   useEffect(() => {
-    if (!loadMoreRef.current || !hasMore || isLoadingMore) return;
+    if (!hasMore || isLoadingMore) return;
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
-          loadMore();
-        }
-      },
-      { threshold: 0.1 }
-    );
+    const scrollContainer = document.querySelector("[data-main-scroll]") as HTMLElement | null;
+    if (!scrollContainer) return;
 
-    observer.observe(loadMoreRef.current);
-    return () => observer.disconnect();
+    const onScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+      if (scrollHeight - scrollTop - clientHeight < 400) {
+        loadMore();
+      }
+    };
+
+    scrollContainer.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => scrollContainer.removeEventListener("scroll", onScroll);
   }, [hasMore, isLoadingMore, loadMore]);
 
-  const { filteredConversations, counts, directories } = useMemo(() => {
-    if (!conversations || conversations.length === 0) return { filteredConversations: [], counts: { long: 0, active: 0, subagent: 0, main: 0 }, directories: [] };
+  const { filteredConversations, counts } = useMemo(() => {
+    if (!conversations || conversations.length === 0) return { filteredConversations: [], counts: { long: 0, active: 0, main: 0 } };
     const convs = conversations as Conversation[];
 
     const nonTrivialConvs = convs.filter(c => {
-      // For summary/minimal visibility, don't filter by title (they intentionally don't have titles)
       if (c.visibility_mode === "summary" || c.visibility_mode === "minimal") {
         return !isTrivialSubagent(c) && !isWarmupSession(c);
       }
-      // For team view, filter out default-titled sessions from others
       return shouldShowSession(c, { excludeDefaultTitles: filter === "team" && !c.is_own });
     });
-
-    // Derive git root from project_path if git_root is not set
-    // Common patterns: /Users/x/src/repo, /home/x/projects/repo, etc.
-    const deriveGitRoot = (c: Conversation): string | null => {
-      if (c.git_root) return c.git_root;
-      if (!c.project_path) return null;
-
-      // Try to find repo root from path
-      const parts = c.project_path.split('/');
-      // Look for common source directories
-      const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
-      if (srcIndex >= 0 && srcIndex < parts.length - 1) {
-        // Return path up to and including the first directory after src/
-        return parts.slice(0, srcIndex + 2).join('/');
-      }
-      // Fallback: use project_path as-is
-      return c.project_path;
-    };
-
-    const dirLastUpdated = new Map<string, number>();
-    for (const c of nonTrivialConvs) {
-      const dir = deriveGitRoot(c);
-      if (dir) {
-        const existing = dirLastUpdated.get(dir) || 0;
-        if (c.updated_at > existing) {
-          dirLastUpdated.set(dir, c.updated_at);
-        }
-      }
-    }
-    const directories = Array.from(dirLastUpdated.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([path]) => path);
 
     const counts = {
       long: nonTrivialConvs.filter(c => c.duration_ms >= 20 * 60 * 1000).length,
@@ -736,25 +706,11 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
       main: nonTrivialConvs.filter(c => !isSubagent(c)).length,
     };
 
-    let filtered = nonTrivialConvs;
-
-    if (directoryFilter) {
-      filtered = filtered.filter(c => deriveGitRoot(c) === directoryFilter);
-    }
-
-    if (timeFilter === "long") {
-      filtered = filtered.filter(c => c.duration_ms >= 20 * 60 * 1000);
-    } else if (timeFilter === "active") {
-      filtered = filtered.filter(c => c.is_active);
-    }
-
-    // subagentFilter is now handled server-side via the query
-
-    // Sort by updated_at descending - all conversations shown flat (no nesting)
+    const filtered = [...nonTrivialConvs];
     filtered.sort((a, b) => b.updated_at - a.updated_at);
 
-    return { filteredConversations: filtered, counts, directories };
-  }, [conversations, filter, timeFilter, directoryFilter]);
+    return { filteredConversations: filtered, counts };
+  }, [conversations, filter]);
 
   const stableConversations = useStableOrder({
     items: filteredConversations,
@@ -1273,9 +1229,14 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             {type}
                           </span>
                         ))}
-                        {(conv.parent_conversation_id || conv.title?.startsWith("Session agent-")) && (
+                        {(conv.is_subagent || conv.title?.startsWith("Session agent-")) && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
                             Subagent
+                          </span>
+                        )}
+                        {conv.parent_conversation_id && !conv.is_subagent && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-blue/20 text-sol-blue border border-sol-blue/40 text-[10px] font-medium">
+                            Plan
                           </span>
                         )}
                       </div>
@@ -1290,8 +1251,8 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
       ))}
       </div>
 
-      {hasMore && (
-        <div ref={loadMoreRef} className="flex justify-center pt-4 pb-8">
+      {(hasMore || isLoadingMore) && (
+        <div className="flex justify-center pt-4 pb-8">
           {isLoadingMore && (
             <span className="flex items-center gap-2 text-sol-text-muted">
               <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">

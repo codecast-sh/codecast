@@ -11,6 +11,8 @@ export function useConversationsWithError(
   filter: "my" | "team",
   memberId?: string | null,
   subagentFilter?: "main" | "subagent" | null,
+  directoryFilter?: string | null,
+  timeFilter?: "long" | "active" | null,
 ) {
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [allConversations, setAllConversations] = useState<any[]>([]);
@@ -24,6 +26,8 @@ export function useConversationsWithError(
     memberId: memberId ? (memberId as Id<"users">) : undefined,
     activeTeamId: filter === "team" && activeTeamId ? activeTeamId : undefined,
     subagentFilter: subagentFilter || undefined,
+    directoryFilter: directoryFilter || undefined,
+    timeFilter: timeFilter || undefined,
   });
   const [hasShownError, setHasShownError] = useState(false);
   const loadingStartTime = useRef<number | null>(null);
@@ -83,11 +87,11 @@ export function useConversationsWithError(
     }
   }, [result, cursor]);
 
-  // Reset when filter, memberId, activeTeamId, or subagentFilter changes
+  // Reset when any filter changes
   useEffect(() => {
     setCursor(undefined);
     setAllConversations([]);
-  }, [filter, memberId, activeTeamId, subagentFilter]);
+  }, [filter, memberId, activeTeamId, subagentFilter, directoryFilter, timeFilter]);
 
   const loadMore = useCallback(() => {
     if (result?.nextCursor && !isLoadingMore) {

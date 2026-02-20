@@ -485,7 +485,7 @@ export function QueuePageClient() {
 
   // Once we have the conversation data, inject it into the queue
   useEffect(() => {
-    if (!pendingInjectId || !directConv) return;
+    if (!pendingInjectId) return;
     const already = sessions.findIndex((s) => s._id === pendingInjectId);
     if (already >= 0) {
       rawSetCurrentIndex(already);
@@ -493,6 +493,7 @@ export function QueuePageClient() {
       paramProcessedRef.current = true;
       return;
     }
+    if (!directConv) return;
     injectSession({
       _id: pendingInjectId,
       session_id: directConv.session_id || pendingInjectId,
@@ -537,7 +538,10 @@ export function QueuePageClient() {
 
   const setCurrentConversation = useCurrentConversationStore((s) => s.set);
 
-  const currentSession = sessions[currentIndex];
+  const rawCurrentSession = sessions[currentIndex];
+  const currentSession = pendingInjectId && rawCurrentSession && rawCurrentSession._id !== pendingInjectId
+    ? undefined
+    : rawCurrentSession;
 
   useEffect(() => {
     if (currentSession) {
@@ -559,11 +563,15 @@ export function QueuePageClient() {
       isPopstateRef.current = false;
       return;
     }
+    // Read latest session from store to avoid stale closure when param effect
+    // updated currentIndex in the same render cycle
+    const latest = useQueueStore.getState().getCurrentSession();
+    if (!latest) return;
     const url = new URL(window.location.href);
     if (!url.pathname.startsWith("/inbox")) return;
-    if (url.searchParams.get("s") !== currentSession._id) {
-      url.searchParams.set("s", currentSession._id);
-      window.history.pushState({ inboxId: currentSession._id }, "", url.toString());
+    if (url.searchParams.get("s") !== latest._id) {
+      url.searchParams.set("s", latest._id);
+      window.history.pushState({ inboxId: latest._id }, "", url.toString());
     }
   }, [currentSession?._id]);
 

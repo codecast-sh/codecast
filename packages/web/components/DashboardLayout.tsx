@@ -299,7 +299,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
               {children}
             </div>
           ) : (
-            <div className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
+            <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
               <div className="max-w-4xl mx-auto">
                 {children}
               </div>
@@ -331,7 +331,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                   {children}
                 </div>
               ) : (
-                <div className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
+                <div data-main-scroll className="h-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-4">
                   <div className="max-w-4xl mx-auto">
                     {children}
                   </div>
