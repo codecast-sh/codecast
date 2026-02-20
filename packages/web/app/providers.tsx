@@ -5,6 +5,7 @@ import { ReactNode } from "react";
 import { ThemeProvider } from "../components/ThemeProvider";
 import { NavigationProgress } from "../components/NavigationProgress";
 import { Toaster } from "../components/ui/sonner";
+import { DesktopProvider } from "../components/DesktopProvider";
 
 const convex = new ConvexReactClient(process.env.NEXT_PUBLIC_CONVEX_URL || "https://placeholder.convex.cloud");
 
@@ -14,6 +15,7 @@ export function Providers({ children }: { children: ReactNode }) {
       <ThemeProvider>
         <NavigationProgress />
         {children}
+        <DesktopProvider />
         <Toaster position="bottom-right" />
       </ThemeProvider>
     </ConvexAuthProvider>

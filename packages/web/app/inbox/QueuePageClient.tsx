@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -93,6 +94,7 @@ function SessionCard({
   onDismiss,
   onDefer,
   onRestore,
+  onNavigateToSession,
   variant = "default",
 }: {
   session: InboxSession;
@@ -102,6 +104,7 @@ function SessionCard({
   onDismiss?: (id: string) => void;
   onDefer?: (id: string) => void;
   onRestore?: (id: string) => void;
+  onNavigateToSession?: (id: string) => void;
   variant?: "default" | "working" | "dismissed";
 }) {
   const project = getProjectName(session.git_root, session.project_path);
@@ -174,9 +177,25 @@ function SessionCard({
             {session.last_user_message.replace(/<[^>]+>/g, "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim() || "[image]"}
           </div>
         )}
-        {(session.idle_summary || session.subtitle) && (
+        {(session.idle_summary || session.subtitle) && !session.implementation_session && (
           <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug">
             {session.idle_summary || session.subtitle}
+          </div>
+        )}
+        {session.implementation_session && (
+          <div
+            className="mt-1 flex items-center gap-1 text-[11px] text-sol-cyan hover:text-sol-cyan/80 cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onNavigateToSession) onNavigateToSession(session.implementation_session!._id);
+            }}
+          >
+            <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+            <span className="truncate underline underline-offset-2">
+              {cleanTitle(session.implementation_session.title || "New Session")}
+            </span>
           </div>
         )}
       </button>
@@ -258,6 +277,16 @@ function InboxSessionPanel({
   const setShowDismissed = useQueueStore((s) => s.setShowDismissed);
   const viewingDismissedId = useQueueStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useQueueStore((s) => s.setViewingDismissedId);
+
+  const handleNavigateToSession = useCallback((targetId: string) => {
+    const idx = sessions.findIndex((s) => s._id === targetId);
+    if (idx >= 0) {
+      setCurrentIndex(idx);
+      setViewingDismissedId(null);
+    } else {
+      window.location.href = `/inbox?s=${targetId}`;
+    }
+  }, [sessions, setCurrentIndex, setViewingDismissedId]);
 
   const newSessions = sessions.filter((s) => s.message_count === 0);
   const needsInput = sessions.filter((s) => s.is_idle && s.message_count > 0);
@@ -379,6 +408,7 @@ function InboxSessionPanel({
                   globalIndex={-1}
                   onSelect={() => setViewingDismissedId(session._id)}
                   onRestore={(id) => unstashSession(id)}
+                  onNavigateToSession={handleNavigateToSession}
                   variant="dismissed"
                 />
               ))}
@@ -571,7 +601,8 @@ export function QueuePageClient() {
     if (!url.pathname.startsWith("/inbox")) return;
     if (url.searchParams.get("s") !== latest._id) {
       url.searchParams.set("s", latest._id);
-      window.history.pushState({ inboxId: latest._id }, "", url.toString());
+      // Use replaceState to avoid Next.js intercepting pushState and causing component remounts
+      window.history.replaceState({ inboxId: latest._id }, "", url.toString());
     }
   }, [currentSession?._id]);
 

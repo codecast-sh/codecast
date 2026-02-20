@@ -177,6 +177,10 @@ export const addMessage = mutation({
       if (!user?.last_message_sent_at || msgTimestamp > user.last_message_sent_at) {
         if (user?.last_message_sent_at) {
           userPatch.prev_message_sent_at = user.last_message_sent_at;
+          const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+          if (msgTimestamp - user.last_message_sent_at > GAP_THRESHOLD_MS) {
+            userPatch.work_cluster_started_at = msgTimestamp;
+          }
         }
         userPatch.last_message_sent_at = msgTimestamp;
       }
@@ -352,6 +356,10 @@ export const addMessages = mutation({
           if (!user?.last_message_sent_at || lastUserTs > user.last_message_sent_at) {
             if (user?.last_message_sent_at) {
               userPatch.prev_message_sent_at = user.last_message_sent_at;
+              const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+              if (lastUserTs - user.last_message_sent_at > GAP_THRESHOLD_MS) {
+                userPatch.work_cluster_started_at = lastUserTs;
+              }
             }
             userPatch.last_message_sent_at = lastUserTs;
           }

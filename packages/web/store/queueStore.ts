@@ -19,6 +19,7 @@ export type InboxSession = {
   is_deferred?: boolean;
   last_user_message?: string | null;
   stableKey?: string;
+  implementation_session?: { _id: string; title?: string };
 };
 
 interface InboxState {
@@ -83,13 +84,14 @@ export const useQueueStore = create<InboxState>((set, get) => ({
       }
       if (injectedIds.has(old._id) && !dismissedIds.has(old._id)) {
         const fresh = incomingById.get(old._id);
-        merged.push(fresh || old);
+        const resolved = fresh || old;
+        merged.push(old.stableKey ? { ...resolved, stableKey: old.stableKey } : resolved);
         seen.add(old._id);
         continue;
       }
       const fresh = incomingById.get(old._id);
       if (fresh && !dismissedIds.has(old._id)) {
-        merged.push(fresh);
+        merged.push(old.stableKey ? { ...fresh, stableKey: old.stableKey } : fresh);
         seen.add(old._id);
       }
     }
@@ -217,18 +219,25 @@ export const useQueueStore = create<InboxState>((set, get) => ({
   },
 
   replaceSessionId: (tempId, realId) => {
-    const { sessions, currentIndex } = get();
+    const { sessions, currentIndex, injectedIds } = get();
     const tempIdx = sessions.findIndex((s) => s._id === tempId);
     if (tempIdx < 0) return;
+    const newInjected = new Set(injectedIds);
+    newInjected.delete(tempId);
+    newInjected.add(realId);
     const realIdx = sessions.findIndex((s) => s._id === realId);
     if (realIdx >= 0) {
       const updated = sessions.filter((s) => s._id !== tempId);
+      const realInUpdated = updated.findIndex((s) => s._id === realId);
+      if (realInUpdated >= 0 && !updated[realInUpdated].stableKey) {
+        updated[realInUpdated] = { ...updated[realInUpdated], stableKey: tempId };
+      }
       const newIndex = currentIndex === tempIdx ? realIdx > tempIdx ? realIdx - 1 : realIdx : Math.min(currentIndex, updated.length - 1);
-      set({ sessions: updated, currentIndex: newIndex });
+      set({ sessions: updated, currentIndex: newIndex, injectedIds: newInjected });
     } else {
       const updated = [...sessions];
       updated[tempIdx] = { ...updated[tempIdx], _id: realId, stableKey: tempId };
-      set({ sessions: updated });
+      set({ sessions: updated, injectedIds: newInjected });
     }
   },
 }));

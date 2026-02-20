@@ -120,6 +120,11 @@ export const daemonHeartbeat = mutation({
 
     const user = await ctx.db.get(auth.userId);
 
+    const minVersionConfig = await ctx.db
+      .query("system_config")
+      .withIndex("by_key", (q) => q.eq("key", "min_cli_version"))
+      .unique();
+
     return {
       commands: pendingCommands.map((c) => ({
         id: c._id,
@@ -129,6 +134,7 @@ export const daemonHeartbeat = mutation({
       sync_mode: user?.sync_mode ?? "all",
       sync_projects: user?.sync_projects ?? [],
       team_id: user?.active_team_id ?? user?.team_id ?? undefined,
+      min_cli_version: minVersionConfig?.value ?? undefined,
     };
   },
 });

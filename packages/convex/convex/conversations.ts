@@ -53,11 +53,30 @@ async function getAuthenticatedUserIdReadOnly(
   return null;
 }
 
+function matchChildByPrompt(
+  prompt: string,
+  subagents: Array<{ _id: string; preview: string }>,
+): string | undefined {
+  if (!prompt || subagents.length === 0) return undefined;
+  const promptStart = prompt.slice(0, 100).toLowerCase().trim();
+  for (const child of subagents) {
+    const preview = child.preview.slice(0, 100).toLowerCase().trim();
+    if (promptStart === preview || promptStart.startsWith(preview) || preview.startsWith(promptStart)) {
+      return child._id;
+    }
+  }
+  return undefined;
+}
+
 async function findChildConversations(
   ctx: { db: any },
   conversationId: Id<"conversations">,
-  messages: Array<{ message_uuid?: string }>,
-): Promise<{ children: Array<{ _id: string; title: string; is_subagent?: boolean }>; map: Record<string, string> }> {
+  messages: Array<{ message_uuid?: string; tool_calls?: Array<{ name: string; input: string }> }>,
+): Promise<{
+  children: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
+  map: Record<string, string>;
+  agentNameMap: Record<string, string>;
+}> {
   const map: Record<string, string> = {};
 
   const allChildren = await ctx.db
@@ -65,10 +84,25 @@ async function findChildConversations(
     .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conversationId))
     .collect();
 
+  const subagentChildren = allChildren.filter((c: any) => c.is_subagent || !c.parent_message_uuid);
+  const firstMessagePreviews = new Map<string, string>();
+  for (const child of subagentChildren) {
+    const firstMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", child._id))
+      .first();
+    if (firstMsg?.content) {
+      const content = typeof firstMsg.content === "string" ? firstMsg.content : "";
+      const cleaned = content.replace(/<[^>]+>/g, "").trim();
+      firstMessagePreviews.set(child._id as string, cleaned.slice(0, 150));
+    }
+  }
+
   const children = allChildren.map((conv: any) => ({
     _id: conv._id,
     title: conv.title || "New Session",
     is_subagent: conv.is_subagent || !conv.parent_message_uuid,
+    first_message_preview: firstMessagePreviews.get(conv._id as string),
   }));
 
   const childByParentUuid = new Map<string, string>(
@@ -82,7 +116,55 @@ async function findChildConversations(
     }
   }
 
-  return { children, map };
+  // Build agent name -> child conversation ID map from Task tool calls
+  const agentNameMap: Record<string, string> = {};
+  if (subagentChildren.length > 0) {
+    const subagentMatchData = subagentChildren
+      .filter((c: any) => firstMessagePreviews.has(c._id as string))
+      .map((c: any) => ({ _id: c._id as string, preview: firstMessagePreviews.get(c._id as string)! }));
+
+    // First try from the provided (paginated) messages
+    for (const msg of messages) {
+      if (msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.name === "Task") {
+            try {
+              const inp = JSON.parse(tc.input);
+              if (inp.name && inp.prompt) {
+                const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
+                if (childId) agentNameMap[inp.name] = childId;
+              }
+            } catch {}
+          }
+        }
+      }
+    }
+
+    // If we didn't find all agents, scan all parent messages for Task tool calls
+    if (Object.keys(agentNameMap).length < subagentChildren.length) {
+      const allParentMessages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+        .collect();
+      for (const msg of allParentMessages) {
+        if (msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            if (tc.name === "Task" && !agentNameMap[tc.input]) {
+              try {
+                const inp = JSON.parse(tc.input);
+                if (inp.name && inp.prompt && !agentNameMap[inp.name]) {
+                  const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
+                  if (childId) agentNameMap[inp.name] = childId;
+                }
+              } catch {}
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { children, map, agentNameMap };
 }
 
 function generateShareToken(): string {
@@ -705,10 +787,10 @@ export const getAllMessages = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
-    const { children: childConversations, map: childConversationMap } =
+    const { children: childConversations, map: childConversationMap, agentNameMap } =
       messages.length > 0
         ? await findChildConversations(ctx, args.conversation_id, messages)
-        : { children: [], map: {} };
+        : { children: [], map: {}, agentNameMap: {} };
 
     let forkedFromDetails = null;
     if (conversation.forked_from) {
@@ -764,6 +846,7 @@ export const getAllMessages = query({
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
+      agent_name_map: agentNameMap,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
       has_more_above: hasMore,
       oldest_timestamp: oldestTimestamp,
@@ -871,10 +954,10 @@ export const getMessagesAroundTimestamp = query({
       }
     }
 
-    const { children: childConversations, map: childConversationMap } =
+    const { children: childConversations, map: childConversationMap, agentNameMap } =
       messages.length > 0
         ? await findChildConversations(ctx, args.conversation_id, messages)
-        : { children: [], map: {} };
+        : { children: [], map: {}, agentNameMap: {} };
 
     return {
       ...conversation,
@@ -888,6 +971,7 @@ export const getMessagesAroundTimestamp = query({
       parent_conversation_id: parentConversationId,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
+      agent_name_map: agentNameMap,
     };
   },
 });
@@ -921,15 +1005,16 @@ export const getNewMessages = query({
       .order("asc")
       .collect();
 
-    const { children: childConversations, map: childConversationMap } =
+    const { children: childConversations, map: childConversationMap, agentNameMap } =
       messages.length > 0
         ? await findChildConversations(ctx, args.conversation_id, messages)
-        : { children: [], map: {} };
+        : { children: [], map: {}, agentNameMap: {} };
 
     return {
       messages,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
+      agent_name_map: agentNameMap,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
       updated_at: conversation.updated_at,
       title: conversation.title,
@@ -977,15 +1062,16 @@ export const getConversationMessages = query({
         .collect();
     }
 
-    const { children: childConversations, map: childConversationMap } =
+    const { children: childConversations, map: childConversationMap, agentNameMap } =
       messages.length > 0
         ? await findChildConversations(ctx, args.conversation_id, messages)
-        : { children: [], map: {} };
+        : { children: [], map: {}, agentNameMap: {} };
 
     return {
       messages,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
+      agent_name_map: agentNameMap,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
     };
   },
@@ -4859,14 +4945,8 @@ export const listIdleSessions = query({
     const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 
     const user = await ctx.db.get(userId);
-    const lastUserMessageAt = user?.last_message_sent_at ?? 0;
-    const prevUserMessageAt = user?.prev_message_sent_at ?? 0;
-    const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-    const gap = lastUserMessageAt - prevUserMessageAt;
-    const anchor = (prevUserMessageAt > 0 && gap > GAP_THRESHOLD_MS)
-      ? prevUserMessageAt
-      : lastUserMessageAt;
-    const clusterCutoff = anchor > 0 ? anchor - CLUSTER_WINDOW_MS : 0;
+    const clusterStart = user?.work_cluster_started_at ?? user?.last_message_sent_at ?? 0;
+    const clusterCutoff = clusterStart > 0 ? clusterStart - CLUSTER_WINDOW_MS : 0;
 
     const candidates = [];
     for (const conv of conversations) {
@@ -5037,6 +5117,174 @@ export const patchConversation = mutation({
   },
 });
 
+export const linkSessions = mutation({
+  args: {
+    parent_conversation_id: v.id("conversations"),
+    child_conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const parent = await ctx.db.get(args.parent_conversation_id);
+    if (!parent || parent.user_id !== userId) throw new Error("Parent not found");
+
+    const child = await ctx.db.get(args.child_conversation_id);
+    if (!child || child.user_id !== userId) throw new Error("Child not found");
+
+    if (child.parent_conversation_id) return;
+
+    await ctx.db.patch(args.child_conversation_id, {
+      parent_conversation_id: args.parent_conversation_id,
+      is_subagent: true,
+      inbox_dismissed_at: Date.now(),
+    });
+  },
+});
+
+export const linkSessionsInternal = internalMutation({
+  args: {
+    parent_conversation_id: v.id("conversations"),
+    child_conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const child = await ctx.db.get(args.child_conversation_id);
+    if (!child) throw new Error("Child not found");
+    await ctx.db.patch(args.child_conversation_id, {
+      parent_conversation_id: args.parent_conversation_id,
+      is_subagent: true,
+      inbox_dismissed_at: Date.now(),
+    });
+  },
+});
+
+export const adminLookupConversation = mutation({
+  args: {
+    conversation_id: v.optional(v.id("conversations")),
+    session_id: v.optional(v.string()),
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    let conv;
+    if (args.conversation_id) {
+      conv = await ctx.db.get(args.conversation_id);
+      if (conv && conv.user_id.toString() !== userId.toString()) conv = null;
+    } else if (args.session_id) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
+        .filter((q: any) => q.eq(q.field("user_id"), userId))
+        .first();
+    }
+    if (!conv) return null;
+    return {
+      _id: conv._id,
+      session_id: conv.session_id,
+      title: conv.title,
+      parent_conversation_id: conv.parent_conversation_id,
+      is_subagent: conv.is_subagent,
+      inbox_dismissed_at: conv.inbox_dismissed_at,
+      project_path: conv.project_path,
+      created_at: conv._creationTime,
+    };
+  },
+});
+
+export const adminFindChildren = mutation({
+  args: {
+    parent_conversation_id: v.id("conversations"),
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const children = await ctx.db
+      .query("conversations")
+      .withIndex("by_parent_conversation_id", (q) =>
+        q.eq("parent_conversation_id", args.parent_conversation_id)
+      )
+      .collect();
+    return children.map((c) => ({
+      _id: c._id,
+      session_id: c.session_id,
+      title: c.title,
+      is_subagent: c.is_subagent,
+      parent_conversation_id: c.parent_conversation_id,
+    }));
+  },
+});
+
+export const adminLinkChildrenBySessionId = mutation({
+  args: {
+    parent_session_id: v.string(),
+    child_session_ids: v.array(v.string()),
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+
+    const parent = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q) => q.eq("session_id", args.parent_session_id))
+      .filter((q) => q.eq(q.field("user_id"), userId))
+      .first();
+    if (!parent) throw new Error("Parent not found");
+
+    const results: Array<{session_id: string; status: string; conversation_id?: string}> = [];
+    for (const childSessionId of args.child_session_ids) {
+      const child = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", childSessionId))
+        .filter((q) => q.eq(q.field("user_id"), userId))
+        .first();
+      if (!child) {
+        results.push({ session_id: childSessionId, status: "not_found" });
+        continue;
+      }
+      if (child.parent_conversation_id === parent._id) {
+        results.push({ session_id: childSessionId, status: "already_linked", conversation_id: child._id });
+        continue;
+      }
+      await ctx.db.patch(child._id, {
+        parent_conversation_id: parent._id,
+        is_subagent: true,
+        inbox_dismissed_at: Date.now(),
+      });
+      results.push({ session_id: childSessionId, status: "linked", conversation_id: child._id });
+    }
+    return { parent_id: parent._id, parent_session_id: parent.session_id, results };
+  },
+});
+
+export const adminUnlinkSession = mutation({
+  args: {
+    session_id: v.string(),
+    api_token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const conv = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
+      .filter((q) => q.eq(q.field("user_id"), userId))
+      .first();
+    if (!conv) throw new Error("Not found");
+    await ctx.db.patch(conv._id, {
+      parent_conversation_id: undefined,
+      is_subagent: undefined,
+      inbox_dismissed_at: undefined,
+    });
+    return { unlinked: conv._id };
+  },
+});
+
 export const updateSessionId = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -5073,7 +5321,12 @@ export const listDismissedSessions = query({
         q.eq("user_id", userId).gte("updated_at", cutoff)
       )
       .order("desc")
-      .filter((q) => q.eq(q.field("status"), "active"))
+      .filter((q) =>
+        q.or(
+          q.eq(q.field("status"), "active"),
+          q.eq(q.field("status"), "completed")
+        )
+      )
       .take(100);
 
     const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
@@ -5086,8 +5339,25 @@ export const listDismissedSessions = query({
       if (title.toLowerCase() === "warmup") continue;
       if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
 
-      const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
-      if (!dismissed) continue;
+      const isDismissedActive = conv.status === "active" && conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
+      const isDismissedCompleted = conv.status === "completed" && conv.inbox_dismissed_at;
+      if (!isDismissedActive && !isDismissedCompleted) continue;
+
+      let implementationSession: { _id: string; title?: string } | undefined;
+      if (isDismissedCompleted) {
+        const children = await ctx.db
+          .query("conversations")
+          .withIndex("by_parent_conversation_id", (q) =>
+            q.eq("parent_conversation_id", conv._id)
+          )
+          .take(5);
+        const implChild = children.find(
+          (c) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
+        );
+        if (implChild) {
+          implementationSession = { _id: implChild._id.toString(), title: implChild.title };
+        }
+      }
 
       results.push({
         _id: conv._id,
@@ -5103,6 +5373,7 @@ export const listDismissedSessions = query({
         idle_summary: conv.idle_summary,
         is_idle: true,
         has_pending: false,
+        implementation_session: implementationSession,
       });
     }
 
@@ -5110,6 +5381,7 @@ export const listDismissedSessions = query({
     return results;
   },
 });
+
 
 export const backfillLastUserMessageAt = internalMutation({
   args: { user_id: v.optional(v.id("users")) },
@@ -5149,6 +5421,10 @@ export const backfillLastUserMessageAt = internalMutation({
         const patch: Record<string, unknown> = { last_message_sent_at: maxUserMsgAt };
         if (user.last_message_sent_at) {
           patch.prev_message_sent_at = user.last_message_sent_at;
+          const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+          if (maxUserMsgAt - user.last_message_sent_at > GAP_THRESHOLD_MS) {
+            patch.work_cluster_started_at = maxUserMsgAt;
+          }
         }
         await ctx.db.patch(args.user_id, patch);
       }

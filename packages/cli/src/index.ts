@@ -27,7 +27,7 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
 } from "./jsonlGenerator.js";
 import Anthropic from "@anthropic-ai/sdk";
-import { checkbox, confirm, select } from "@inquirer/prompts";
+import { checkbox, confirm, input, select } from "@inquirer/prompts";
 
 const program = new Command();
 
@@ -1819,6 +1819,25 @@ program
   });
 
 program
+  .command("restart")
+  .description("Restart the background daemon (update if available, then start)")
+  .action(async () => {
+    stopDaemon();
+    const available = await checkForUpdates(true);
+    if (available) {
+      console.log(`Update available: v${getVersion()} -> v${available}, updating...`);
+      const success = await performUpdate();
+      if (success) {
+        console.log(`Updated to v${available}`);
+      } else {
+        console.log("Update failed, restarting with current version");
+      }
+    }
+    startDaemon();
+    ensureAutostart();
+  });
+
+program
   .command("welcome", { hidden: true })
   .description("Show welcome message")
   .action(() => {
@@ -1830,6 +1849,29 @@ program
   .description("Show daemon status, connection state, and sync information")
   .action(() => {
     showStatus();
+  });
+
+program
+  .command("attach")
+  .description("Open live tmux session TUI and attach/switch quickly")
+  .option("--plain", "Use plain list mode (no TUI)")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    if (options.plain || !process.stdout.isTTY || !process.stdin.isTTY) {
+      await selectAndAttachFromLiveSessions(config, { tmuxOnly: true });
+      return;
+    }
+
+    const { runAttachTui } = await import("./attachTui.js");
+    await runAttachTui({
+      authToken: config.auth_token,
+      convexUrl: config.convex_url,
+    });
   });
 
 program
@@ -2950,16 +2992,50 @@ interface LiveProcess {
   uptime: string;
 }
 
+interface LiveProcessDiscoveryOptions {
+  tmuxOnly?: boolean;
+  fastSessionLookup?: boolean;
+}
+
 function normalizePsTty(tty: string): string {
   if (tty.startsWith("/dev/")) return tty;
   if (/^s\d+$/.test(tty)) return `/dev/tty${tty}`;
   return `/dev/${tty}`;
 }
 
-function discoverLiveProcesses(): LiveProcess[] {
+function loadSessionRegistryLookups(): { byPid: Map<number, string>; byTty: Map<string, string> } {
+  const byPid = new Map<number, string>();
+  const byTty = new Map<string, string>();
+  const registryDir = path.join(os.homedir(), ".codecast", "session-registry");
+
+  if (!fs.existsSync(registryDir)) return { byPid, byTty };
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  for (const file of fs.readdirSync(registryDir)) {
+    if (!file.endsWith(".json")) continue;
+    const sessionId = file.slice(0, -5);
+    const filePath = path.join(registryDir, file);
+    try {
+      const reg = JSON.parse(fs.readFileSync(filePath, "utf-8")) as { pid?: unknown; tty?: unknown; ts?: unknown };
+      const ts = typeof reg.ts === "number" ? reg.ts : 0;
+      if (!ts || nowSec - ts > 2 * 24 * 60 * 60) continue;
+      if (typeof reg.pid === "number" && reg.pid > 0) byPid.set(reg.pid, sessionId);
+      if (typeof reg.tty === "string" && reg.tty && reg.tty !== "?" && reg.tty !== "??") {
+        byTty.set(normalizePsTty(reg.tty), sessionId);
+      }
+    } catch {}
+  }
+
+  return { byPid, byTty };
+}
+
+function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveProcess[] {
+  const tmuxOnly = !!options.tmuxOnly;
+  const fastSessionLookup = !!options.fastSessionLookup;
   const procs: LiveProcess[] = [];
   const seen = new Set<number>();
   const seenTty = new Set<string>();
+  const sessionRegistry = loadSessionRegistryLookups();
 
   const tmuxPanes: Record<string, string> = {};
   try {
@@ -2982,6 +3058,8 @@ function discoverLiveProcesses(): LiveProcess[] {
 
   const addProcess = (pid: number, tty: string, sessionId: string, agentType: "claude_code" | "codex") => {
     const normalTty = normalizePsTty(tty);
+    const tmuxSession = tmuxPanes[normalTty] || null;
+    if (tmuxOnly && !tmuxSession) return;
     if (seen.has(pid) || seenTty.has(normalTty)) return;
     seen.add(pid);
     seenTty.add(normalTty);
@@ -2989,7 +3067,6 @@ function discoverLiveProcesses(): LiveProcess[] {
     let startTime = "";
     try { startTime = execSync(`ps -o lstart= -p ${pid}`, { encoding: "utf-8" }).trim(); } catch {}
 
-    const tmuxSession = tmuxPanes[normalTty] || null;
     let label = "iTerm";
     if (tmuxSession) {
       if (tmuxSession.startsWith("codecast-")) label = "managed";
@@ -3078,9 +3155,12 @@ function discoverLiveProcesses(): LiveProcess[] {
       const pid = parseInt(parts[1], 10);
       const tty = parts[6];
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
+      const normalTty = normalizePsTty(tty);
+      if (tmuxOnly && !tmuxPanes[normalTty]) continue;
       const args = parts.slice(10).join(" ");
       const resumeMatch = args.match(/--resume\s+([0-9a-f-]{36})/i);
-      const sid = resumeMatch ? resumeMatch[1] : findSessionByCwd(pid);
+      const sidFromRegistry = sessionRegistry.byPid.get(pid) || sessionRegistry.byTty.get(normalTty) || null;
+      const sid = resumeMatch ? resumeMatch[1] : sidFromRegistry || (fastSessionLookup ? null : findSessionByCwd(pid));
       addProcess(pid, tty, sid || `unknown-${pid}`, "claude_code");
     }
   } catch {}
@@ -3095,7 +3175,10 @@ function discoverLiveProcesses(): LiveProcess[] {
       const pid = parseInt(parts[1], 10);
       const tty = parts[6];
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
-      const sid = findCodexSessionByCwd(pid);
+      const normalTty = normalizePsTty(tty);
+      if (tmuxOnly && !tmuxPanes[normalTty]) continue;
+      const sidFromRegistry = sessionRegistry.byPid.get(pid) || sessionRegistry.byTty.get(normalTty) || null;
+      const sid = sidFromRegistry || (fastSessionLookup ? null : findCodexSessionByCwd(pid));
       addProcess(pid, tty, sid || `unknown-codex-${pid}`, "codex");
     }
   } catch {}
@@ -3103,30 +3186,38 @@ function discoverLiveProcesses(): LiveProcess[] {
   return procs;
 }
 
-async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config, offset = 0, limit = 50): Promise<{ output: string; sessions: LiveProcess[]; total: number; hasMore: boolean }> {
-  const lines: string[] = [];
+async function selectAndAttachFromLiveSessions(
+  config: Config,
+  options: { cliOverrideArgs?: string; tmuxOnly?: boolean } = {},
+): Promise<void> {
+  const rawProcs = discoverLiveProcesses({
+    tmuxOnly: options.tmuxOnly,
+    fastSessionLookup: !!options.tmuxOnly,
+  });
 
-  if (procs.length === 0) {
-    lines.push(`${c.dim}No live sessions found${c.reset}`);
-    lines.push("");
-    lines.push(`${c.dim}Start a session with:${c.reset}  claude`);
-    lines.push(`${c.dim}Search history with:${c.reset}  codecast resume <query>`);
-    return { output: lines.join("\n"), sessions: [], total: 0, hasMore: false };
+  if (rawProcs.length === 0) {
+    if (options.tmuxOnly) {
+      console.log(`${c.dim}No live tmux sessions found${c.reset}`);
+      console.log(`\n${c.dim}Start one in tmux, then run:${c.reset}  codecast attach`);
+    } else {
+      console.log(`${c.dim}No live sessions found${c.reset}`);
+      console.log(`\n${c.dim}Start a session with:${c.reset}  claude`);
+      console.log(`${c.dim}Search history with:${c.reset}  codecast resume <query>`);
+    }
+    return;
   }
 
-  // Deduplicate: if multiple processes share the same session ID, keep the one
-  // with the most specific label (managed > resumed > tmux > iTerm) or most recent
   const dedupMap = new Map<string, LiveProcess>();
   const labelRank: Record<string, number> = { managed: 3, resumed: 2, tmux: 1, iTerm: 0 };
-  for (const p of procs) {
+  for (const p of rawProcs) {
     const existing = dedupMap.get(p.sessionId);
     if (!existing || (labelRank[p.label] ?? 0) > (labelRank[existing.label] ?? 0)) {
       dedupMap.set(p.sessionId, p);
     }
   }
-  const dedupedProcs = Array.from(dedupMap.values());
+  const sessions = Array.from(dedupMap.values());
 
-  const sessionIds = dedupedProcs.filter(p => !p.sessionId.startsWith("unknown")).map(p => p.sessionId);
+  const sessionIds = sessions.filter(p => !p.sessionId.startsWith("unknown")).map(p => p.sessionId);
   const siteUrl = config.convex_url!.replace(".cloud", ".site");
   let convexData: Record<string, { title: string; subtitle: string | null; message_count: number; updated_at: string; preview?: string | null; agent_type?: string | null; project_path: string | null }> = {};
 
@@ -3146,7 +3237,7 @@ async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config,
     } catch {}
   }
 
-  dedupedProcs.sort((a, b) => {
+  sessions.sort((a, b) => {
     const ca = convexData[a.sessionId];
     const cb = convexData[b.sessionId];
     if (ca && cb) return new Date(cb.updated_at).getTime() - new Date(ca.updated_at).getTime();
@@ -3155,77 +3246,63 @@ async function enrichAndFormatLiveSessions(procs: LiveProcess[], config: Config,
     return 0;
   });
 
-  const total = dedupedProcs.length;
-  const pageProcs = dedupedProcs.slice(offset, offset + limit);
-  const hasMore = offset + limit < total;
-
-  const pageInfo = total > limit
-    ? `${c.dim}Showing ${offset + 1}-${offset + pageProcs.length} of ${total} live sessions${c.reset}`
-    : `${c.dim}${total} live session${total === 1 ? "" : "s"}${c.reset}`;
-  lines.push(pageInfo);
-  lines.push("");
-
   const { formatRelativeTime } = await import("./formatter.js");
+  const home = os.homedir();
 
-  for (let i = 0; i < pageProcs.length; i++) {
-    const p = pageProcs[i];
+  const choices: Array<{ name: string; value: string; description?: string }> = sessions.map((p, idx) => {
     const conv = convexData[p.sessionId];
-    const num = `${c.bold}${c.cyan}[${i + 1}]${c.reset}`;
-
     const title = conv?.title || `Session ${p.sessionId.startsWith("unknown") ? `PID ${p.pid}` : p.sessionId.slice(0, 8)}`;
-    const displayTitle = title.length > 70 ? title.slice(0, 70) + "..." : title;
-    lines.push(`${num} ${c.bold}${displayTitle}${c.reset}`);
+    const displayTitle = title.length > 65 ? title.slice(0, 65) + "..." : title;
 
     const meta: string[] = [];
     if (conv) {
-      meta.push(`${c.dim}${formatRelativeTime(conv.updated_at)}${c.reset}`);
-      meta.push(`${c.dim}${conv.message_count} msgs${c.reset}`);
+      meta.push(`last msg ${formatRelativeTime(conv.updated_at)}`);
+      meta.push(`${conv.message_count} msgs`);
     } else {
-      meta.push(`${c.dim}up ${p.uptime}${c.reset}`);
+      meta.push(`up ${p.uptime}`);
     }
-
-    const labelColor = p.label === "managed" ? c.green : p.label === "resumed" ? c.yellow : c.dim;
-    meta.push(`${labelColor}${p.label}${c.reset}`);
-
-    if (p.agentType === "codex" || conv?.agent_type === "codex") {
-      meta.push(`${c.yellow}Codex${c.reset}`);
-    }
-
+    meta.push(p.label);
+    if (p.agentType === "codex" || conv?.agent_type === "codex") meta.push("Codex");
     const projectPath = conv?.project_path;
     if (projectPath) {
-      const home = os.homedir();
-      const short = projectPath.startsWith(home) ? "~" + projectPath.slice(home.length) : projectPath;
-      meta.push(`${c.dim}${short}${c.reset}`);
+      meta.push(projectPath.startsWith(home) ? "~" + projectPath.slice(home.length) : projectPath);
     }
 
-    lines.push(`    ${meta.join(" | ")}`);
-
+    let desc = meta.join(" | ");
     if (conv?.preview) {
       const msgLine = conv.preview.split("\n")[0].trim();
-      const maxLen = 85;
-      lines.push(`    ${c.green}>${c.reset} ${msgLine.length > maxLen ? msgLine.slice(0, maxLen) + "..." : msgLine}`);
+      desc += `\n     ${c.green}>${c.reset} ${msgLine.length > 75 ? msgLine.slice(0, 75) + "..." : msgLine}`;
     }
 
-    if (conv?.subtitle) {
-      const subtitleLines = conv.subtitle.split("\n").filter((l: string) => l.trim());
-      for (let j = 0; j < Math.min(subtitleLines.length, 3); j++) {
-        const raw = subtitleLines[j].trim();
-        lines.push(`      ${raw.length > 83 ? raw.slice(0, 83) + "..." : raw}`);
-      }
-      if (subtitleLines.length > 3) {
-        lines.push(`      ${c.dim}... (${subtitleLines.length - 3} more)${c.reset}`);
-      }
-    }
+    return { name: `${c.bold}${displayTitle}${c.reset}`, value: String(idx), description: desc };
+  });
 
-    lines.push("");
+  const liveLabel = options.tmuxOnly ? "tmux sessions" : "sessions";
+  console.log(`\n${c.dim}${sessions.length} live ${liveLabel}${c.reset}\n`);
+
+  const selected = await select({
+    message: "Attach to session",
+    choices,
+    pageSize: Math.min(12, choices.length),
+  });
+
+  const session = sessions[parseInt(selected, 10)];
+  if (!session) return;
+
+  if (session.tmuxSession) {
+    console.log(`\nAttaching to tmux session: ${session.tmuxSession}`);
+    spawnSync("tmux", ["attach-session", "-t", session.tmuxSession], { stdio: "inherit" });
+    return;
   }
 
-  const promptParts = ["Enter number to attach"];
-  if (hasMore) promptParts.push("n for next page");
-  promptParts.push("q to quit");
-  lines.push(`${c.dim}${promptParts.join(", ")}${c.reset}`);
+  if (!session.sessionId.startsWith("unknown")) {
+    console.log(`\nResuming: ${session.sessionId.slice(0, 8)}`);
+    const extraArgs = resolveAgentArgs(session.agentType, options.cliOverrideArgs, config);
+    launchSession(session.sessionId, session.agentType, extraArgs, !extraArgs);
+    return;
+  }
 
-  return { output: lines.join("\n"), sessions: pageProcs, total, hasMore };
+  console.log(`\nSession PID ${session.pid} on ${session.tty} -- attach manually or use tmux`);
 }
 
 program
@@ -3270,66 +3347,7 @@ program
 
     // No query: show live sessions
     if (!queryWords || queryWords.length === 0) {
-      const rawProcs = discoverLiveProcesses();
-      let currentOffset = 0;
-      const pageSize = 50;
-
-      const showPage = async (): Promise<void> => {
-        const { output, sessions, total, hasMore } = await enrichAndFormatLiveSessions(rawProcs, config, currentOffset, pageSize);
-        console.log(output);
-
-        if (total === 0) process.exit(0);
-
-        const choices: Array<{ name: string; value: string }> = sessions.map((p, idx) => {
-          const agent = p.agentType === "claude_code" ? "claude" : "codex";
-          const id = p.sessionId.startsWith("unknown") ? `PID ${p.pid}` : p.sessionId.slice(0, 8);
-          const where = p.tmuxSession ? `tmux:${p.tmuxSession}` : p.tty;
-          return { name: `[${agent}] ${id} ${fmt.muted(`(${where})`)}`, value: String(idx) };
-        });
-
-        if (currentOffset > 0) choices.push({ name: fmt.muted("Prev page"), value: "__prev__" });
-        if (hasMore) choices.push({ name: fmt.muted("Next page"), value: "__next__" });
-        choices.push({ name: fmt.muted("Quit"), value: "__quit__" });
-
-        const selected = await select({
-          message: "Select a live session:",
-          choices,
-          pageSize: Math.min(12, choices.length),
-        });
-
-        if (selected === "__quit__") process.exit(0);
-        if (selected === "__next__") {
-          currentOffset += pageSize;
-          await showPage();
-          return;
-        }
-        if (selected === "__prev__") {
-          currentOffset = Math.max(0, currentOffset - pageSize);
-          await showPage();
-          return;
-        }
-
-        const idx = parseInt(selected, 10);
-        const p = sessions[idx];
-        if (!p) process.exit(0);
-
-        if (p.tmuxSession) {
-          console.log(`\nAttaching to tmux session: ${p.tmuxSession}`);
-          try {
-            spawnSync("tmux", ["attach-session", "-t", p.tmuxSession], { stdio: "inherit" });
-          } catch (err) {
-            console.error(`Failed to attach: ${err instanceof Error ? err.message : err}`);
-          }
-        } else if (!p.sessionId.startsWith("unknown")) {
-          console.log(`\nResuming: ${p.sessionId.slice(0, 8)}`);
-          const extraArgs = resolveAgentArgs(p.agentType, options.claudeArgs, config);
-          launchSession(p.sessionId, p.agentType, extraArgs, !extraArgs);
-        } else {
-          console.log(`\nSession PID ${p.pid} on ${p.tty} -- attach manually or use tmux`);
-        }
-      };
-
-      await showPage();
+      await selectAndAttachFromLiveSessions(config, { cliOverrideArgs: options.claudeArgs });
       return;
     }
 

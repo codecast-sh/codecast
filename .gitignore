@@ -56,3 +56,4 @@ packages/web/binaries/
 
 # OTA marker
 .last-mobile-ota
+.dmux/

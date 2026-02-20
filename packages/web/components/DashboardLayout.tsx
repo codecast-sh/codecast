@@ -24,6 +24,7 @@ import { queryCacheKey } from "../hooks/useCachedQuery";
 import { getDraft, setDraft, clearDraft } from "../store/convexCache";
 import { useQueueStore } from "../store/queueStore";
 import { usePendingSessionStore } from "../store/pendingSessionStore";
+import { desktopHeaderClass } from "../lib/desktop";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -74,6 +75,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const replaceSessionId = useQueueStore((s) => s.replaceSessionId);
   const resolveSession = usePendingSessionStore((s) => s.resolve);
   const creatingRef = useRef(false);
+  const desktopClass = desktopHeaderClass();
 
   const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
   const isOnCommitPage = pathname?.includes("/commit/") ?? false;
@@ -213,7 +215,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
       {/* Header spans full width */}
-      <header className="flex-shrink-0 border-b border-sol-border bg-sol-bg/95 backdrop-blur-sm z-[100]">
+      <header className={`flex-shrink-0 border-b border-sol-border bg-sol-bg/95 backdrop-blur-sm z-[100] ${desktopClass}`}>
         <div className="px-2 sm:px-4 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Logo + toggle */}
           <div className="flex items-center gap-1.5 flex-shrink-0">

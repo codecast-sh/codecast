@@ -81,6 +81,7 @@ interface DaemonState {
   authFailureCount?: number;
   lastWatchdogCheck?: number;
   watchdogRestarts?: number;
+  lastHeartbeatTick?: number;
 }
 
 const AUTH_FAILURE_THRESHOLD = 5;
@@ -90,6 +91,9 @@ const WATCHDOG_STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const LOG_FLUSH_INTERVAL_MS = 30 * 1000; // 30 seconds
 const MAX_LOG_QUEUE_SIZE = 200;
+const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
+const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
+const HEARTBEAT_STALE_THRESHOLD_MS = 15 * 60 * 1000; // external watchdog: 15 min = deadlocked
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -1074,6 +1078,9 @@ async function processSessionFile(
           if (parentSessionId && conversationCache[parentSessionId]) {
             parentConversationId = conversationCache[parentSessionId];
             log(`Detected subagent parent for ${sessionId}: ${parentConversationId}`);
+          } else if (parentSessionId) {
+            pendingSubagentParents.set(sessionId, parentSessionId);
+            log(`Subagent ${sessionId} parent ${parentSessionId} not cached yet, queued for linking`);
           }
         }
       }
@@ -1094,18 +1101,47 @@ async function processSessionFile(
       }
 
       let matchedStartedConversation: string | null = null;
-      for (const [convId, entry] of startedSessionTmux.entries()) {
-        if (entry.projectPath === actualProjectPath && Date.now() - entry.startedAt < 300_000) {
-          matchedStartedConversation = convId;
-          break;
+      if (startedSessionTmux.size > 0) {
+        const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
+        if (proc) {
+          let tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0];
+          if (!tmuxSessionName) {
+            const tmuxPane = await findTmuxPaneForTty(proc.tty);
+            if (tmuxPane) {
+              tmuxSessionName = tmuxPane.split(":")[0];
+              cacheSessionProcess(sessionId, proc, tmuxPane);
+            }
+          }
+          if (tmuxSessionName) {
+            for (const [convId, entry] of startedSessionTmux.entries()) {
+              if (entry.tmuxSession === tmuxSessionName) {
+                matchedStartedConversation = convId;
+                log(`Matched session ${sessionId.slice(0, 8)} to conversation ${convId.slice(0, 12)} via tmux ${tmuxSessionName}`);
+                break;
+              }
+            }
+          }
+        }
+        if (!matchedStartedConversation) {
+          for (const [convId, entry] of startedSessionTmux.entries()) {
+            if (entry.projectPath === actualProjectPath && Date.now() - entry.startedAt < 300_000) {
+              matchedStartedConversation = convId;
+              log(`Matched session ${sessionId.slice(0, 8)} to conversation ${convId.slice(0, 12)} via projectPath fallback`);
+              break;
+            }
+          }
         }
       }
 
       if (matchedStartedConversation) {
         conversationId = matchedStartedConversation;
+        const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         syncService.updateSessionId(conversationId, sessionId).catch(() => {});
+        if (tmuxEntry) {
+          syncService.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {});
+        }
         startedSessionTmux.delete(matchedStartedConversation);
         log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
       } else {
@@ -1130,6 +1166,21 @@ async function processSessionFile(
         }
         log(`Created conversation ${conversationId} for session ${sessionId}`);
         syncStats.conversationsCreated++;
+
+        // Resolve any pending subagents waiting for this session as their parent
+        for (const [childSessionId, parentSessionId] of pendingSubagentParents) {
+          if (parentSessionId === sessionId) {
+            const childConvId = conversationCache[childSessionId];
+            if (childConvId) {
+              syncService.linkSessions(conversationId, childConvId).then(() => {
+                log(`Linked pending subagent ${childSessionId.slice(0, 8)} -> parent ${sessionId.slice(0, 8)}`);
+              }).catch((err) => {
+                log(`Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
+              });
+              pendingSubagentParents.delete(childSessionId);
+            }
+          }
+        }
       }
 
       if ((global as any).activeSessions) {
@@ -2585,6 +2636,9 @@ const STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
 
 const planHandoffChildren = new Map<string, string>();
 
+// Track subagent sessions whose parent hasn't been cached yet: childSessionId -> parentSessionId
+const pendingSubagentParents = new Map<string, string>();
+
 interface CachedProcessInfo {
   pid: number;
   tty: string;
@@ -2726,6 +2780,9 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
     await execAsync(`tmux send-keys -t '${tmuxSession}' Enter`);
 
     resumeSessionCache.set(sessionId, tmuxSession);
+    if (syncServiceRef) {
+      syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession).catch(() => {});
+    }
     log(`Injected message to auto-resumed ${agentType} session ${shortId}`);
     return true;
   } catch (err) {
@@ -3455,28 +3512,28 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
 
     const currentVersion = getVersion();
     if (compareVersions(currentVersion, minVersion) < 0) {
-      log(`Force update required: current=${currentVersion} min=${minVersion}`);
-      log("Performing automatic update...");
+      logLifecycle("forced_update_start", `current=${currentVersion} min=${minVersion}`);
+      await flushRemoteLogs();
       const success = await performUpdate();
       if (success) {
-        log("Update successful, restarting daemon...");
-        const spawned = spawnReplacement();
-        if (spawned) {
-          skipRespawn = true;
-        } else {
-          log("spawnReplacement failed, letting exit handler respawn");
-        }
+        const newVersion = getVersion();
+        logLifecycle("forced_update_complete", `${currentVersion} -> ${newVersion}`);
+        await flushRemoteLogs();
+        // Don't set skipRespawn -- let exit handler + launchd serve as safety nets
+        // in case spawnReplacement silently fails
+        spawnReplacement();
         await new Promise(resolve => setTimeout(resolve, 500));
         process.exit(0);
       } else {
-        log("Update failed, will retry later");
+        logLifecycle("forced_update_failed", `current=${currentVersion} target>=${minVersion}`);
+        await flushRemoteLogs();
       }
       return true;
     }
     return false;
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    log(`Version check failed: ${errMsg}`);
+    logError(`Forced update check failed`, err instanceof Error ? err : undefined);
     return false;
   }
 }
@@ -3507,6 +3564,24 @@ function checkDiskVersionMismatch(): void {
       });
     }
   } catch {}
+}
+
+function startEventLoopMonitor(): NodeJS.Timeout {
+  let lastTickTime = Date.now();
+
+  return setInterval(() => {
+    const now = Date.now();
+    const elapsed = now - lastTickTime;
+    lastTickTime = now;
+
+    saveDaemonState({ lastHeartbeatTick: now });
+
+    if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
+      logLifecycle("event_loop_freeze", `Event loop was unresponsive for ${Math.round(elapsed / 1000)}s, exiting for restart`);
+      try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [CRITICAL] Event loop lag ${elapsed}ms exceeded threshold, self-terminating\n`); } catch {}
+      process.exit(78);
+    }
+  }, EVENT_LOOP_CHECK_INTERVAL_MS);
 }
 
 function startVersionChecker(syncService: SyncService): NodeJS.Timeout {
@@ -4083,6 +4158,20 @@ async function main(): Promise<void> {
         );
       }
 
+      // Resolve any remaining pending subagent parents after all files processed
+      for (const [childSessionId, parentSessionId] of pendingSubagentParents) {
+        const parentConvId = conversationCache[parentSessionId];
+        const childConvId = conversationCache[childSessionId];
+        if (parentConvId && childConvId) {
+          syncService.linkSessions(parentConvId, childConvId).then(() => {
+            log(`Startup scan: Linked subagent ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
+          }).catch((err) => {
+            log(`Startup scan: Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
+          });
+          pendingSubagentParents.delete(childSessionId);
+        }
+      }
+
       log(`Startup scan: Completed syncing ${unsyncedFiles.length} files`);
     } else {
       log("Startup scan: All files up to date");
@@ -4106,6 +4195,7 @@ async function main(): Promise<void> {
 
   const versionCheckInterval = startVersionChecker(syncService);
   const reconciliationInterval = startReconciliation(syncService, retryQueue);
+  const eventLoopMonitorInterval = startEventLoopMonitor();
 
   const cursorWatcher = new CursorWatcher();
   const cursorSyncs = new Map<string, InvalidateSync>();
@@ -4567,6 +4657,7 @@ async function main(): Promise<void> {
     clearInterval(watchdogInterval);
     clearInterval(versionCheckInterval);
     clearInterval(reconciliationInterval);
+    clearInterval(eventLoopMonitorInterval);
     log("Watchdog and reconciliation stopped");
 
     watcher.stop();
@@ -4669,13 +4760,14 @@ export async function runWatchdog(): Promise<void> {
     } catch {}
   }
 
-  // 2. Check if daemon is alive
+  // 2. Check if daemon is alive (process exists AND event loop is responsive)
   let daemonAlive = false;
+  let daemonPid = 0;
   if (fs.existsSync(PID_FILE)) {
     try {
-      const pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
-      if (pid > 0) {
-        process.kill(pid, 0);
+      daemonPid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
+      if (daemonPid > 0) {
+        process.kill(daemonPid, 0);
         daemonAlive = true;
       }
     } catch {
@@ -4683,8 +4775,24 @@ export async function runWatchdog(): Promise<void> {
     }
   }
 
+  // 2b. If process is alive, check if event loop is actually responsive
+  if (daemonAlive && daemonPid > 0) {
+    try {
+      const state = readDaemonState();
+      const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
+      const staleness = Date.now() - lastTick;
+      if (lastTick > 0 && staleness > HEARTBEAT_STALE_THRESHOLD_MS) {
+        logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
+        try { process.kill(daemonPid, 9); } catch {}
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        daemonAlive = false;
+      }
+    } catch {}
+  }
+
   // 3. Send heartbeat (keeps server aware even if daemon is dead)
   let commands: Array<{ id: string; command: string }> = [];
+  let minCliVersion: string | undefined;
   try {
     const response = await fetch(`${siteUrl}/cli/heartbeat`, {
       method: "POST",
@@ -4700,8 +4808,46 @@ export async function runWatchdog(): Promise<void> {
     if (response.ok) {
       const data = await response.json();
       commands = data.commands || [];
+      minCliVersion = data.min_cli_version;
     }
   } catch {}
+
+  // 3b. Check min_cli_version -- if daemon binary is outdated, update it
+  // This catches cases where the daemon's own checkForForcedUpdate failed or killed the daemon
+  const sendWatchdogLog = async (level: string, message: string) => {
+    await fetch(`${siteUrl}/cli/log`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        level,
+        message,
+        cli_version: `${version}-watchdog`,
+        platform: process.platform,
+      }),
+    }).catch(() => {});
+  };
+
+  if (minCliVersion && compareVersions(version, minCliVersion) < 0) {
+    logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
+    await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);
+    const success = await performUpdate();
+    if (success) {
+      logLine("Watchdog update successful");
+      await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_complete: ${version} -> ${minCliVersion}`);
+      clearCrashCount();
+      // Kill the running daemon so it restarts with the new binary
+      if (daemonAlive && daemonPid > 0) {
+        logLine(`Killing outdated daemon PID ${daemonPid}`);
+        try { process.kill(daemonPid, 15); } catch {}
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        daemonAlive = false;
+      }
+    } else {
+      logLine("Watchdog update failed");
+      await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion}`);
+    }
+  }
 
   // 4. If daemon is dead, restart it
   if (!daemonAlive) {

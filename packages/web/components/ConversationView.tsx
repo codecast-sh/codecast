@@ -106,7 +106,7 @@ export type ConversationData = {
   messages: Message[];
   user?: { name?: string; email?: string; avatar_url?: string | null } | null;
   parent_conversation_id?: string | null;
-  child_conversations?: Array<{ _id: string; title: string; is_subagent?: boolean }>;
+  child_conversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
   child_conversation_map?: Record<string, string>;
   git_branch?: string | null;
   git_status?: string | null;
@@ -127,6 +127,7 @@ export type ConversationData = {
   draft_message?: string;
   compaction_count?: number;
   loaded_start_index?: number;
+  agent_name_map?: Record<string, string>;
   fork_children?: Array<{
     _id: string;
     title: string;
@@ -657,7 +658,37 @@ function truncateLines(text: string, maxLines: number): { text: string; truncate
 }
 
 
-function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; result?: ToolResult; childConversationId?: string }) {
+function findMatchingChild(
+  prompt: string,
+  childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>,
+): string | undefined {
+  if (!childConversations || !prompt) return undefined;
+  const subagents = childConversations.filter(c => c.is_subagent && c.first_message_preview);
+  if (subagents.length === 0) return undefined;
+
+  const promptStart = prompt.slice(0, 100).toLowerCase().trim();
+
+  for (const child of subagents) {
+    const preview = child.first_message_preview!.slice(0, 100).toLowerCase().trim();
+    if (promptStart === preview || promptStart.startsWith(preview) || preview.startsWith(promptStart)) {
+      return child._id;
+    }
+  }
+  return undefined;
+}
+
+function parseSpawnResult(content: string): { agentName?: string; teamName?: string; agentId?: string } | null {
+  if (!content.startsWith("Spawned successfully")) return null;
+  const lines = content.split("\n");
+  const fields: Record<string, string> = {};
+  for (const line of lines) {
+    const m = line.match(/^(\w+):\s*(.+)$/);
+    if (m) fields[m[1]] = m[2].trim();
+  }
+  return { agentName: fields.name, teamName: fields.team_name, agentId: fields.agent_id };
+}
+
+function TaskToolBlock({ tool, result, childConversationId, childConversations }: { tool: ToolCall; result?: ToolResult; childConversationId?: string; childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }> }) {
   const isCompleted = !!result;
   const [expanded, setExpanded] = useState(false);
 
@@ -673,6 +704,8 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
   const name = parsedInput.name ? String(parsedInput.name) : null;
   const runInBackground = Boolean(parsedInput.run_in_background);
 
+  const resolvedChildId = childConversationId || findMatchingChild(prompt, childConversations);
+
   const subagentColors: Record<string, { bg: string; border: string; text: string }> = {
     Explore: { bg: "bg-sol-green/20", border: "border-sol-green/50", text: "text-sol-green" },
     Plan: { bg: "bg-sol-blue/20", border: "border-sol-blue/50", text: "text-sol-blue" },
@@ -687,9 +720,40 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
 
   const colors = subagentColors[subagentType] || { bg: "bg-sol-bg-alt/60", border: "border-sol-border/50", text: "text-sol-text-muted" };
 
-  const resultSummary = result?.content
+  const spawnInfo = result?.content ? parseSpawnResult(result.content) : null;
+
+  const resultSummary = result?.content && !spawnInfo
     ? result.content.length > 200 ? result.content.slice(0, 200) + "..." : result.content
     : null;
+
+  if (isCompleted && spawnInfo) {
+    return (
+      <div className="my-0.5">
+        <div className="flex items-center gap-1.5 text-xs">
+          <span className="text-emerald-400 text-[10px]">{"\u2713"}</span>
+          <span className={`font-mono text-xs ${colors.text}`}>Task</span>
+          <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
+            {subagentType}
+          </span>
+          {(spawnInfo.agentName || name) && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 font-mono">
+              @{spawnInfo.agentName || name}
+            </span>
+          )}
+          {description && <span className="text-sol-text-dim truncate flex-1">{description}</span>}
+          {resolvedChildId && (
+            <Link
+              href={`/conversation/${resolvedChildId}`}
+              onClick={(e) => e.stopPropagation()}
+              className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
+            >
+              view
+            </Link>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (isCompleted) {
     return (
@@ -712,9 +776,9 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
               {description}
             </span>
           )}
-          {childConversationId && (
+          {resolvedChildId && (
             <Link
-              href={`/conversation/${childConversationId}`}
+              href={`/conversation/${resolvedChildId}`}
               onClick={(e) => e.stopPropagation()}
               className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
             >
@@ -792,9 +856,9 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
         {runInBackground && (
           <span className="text-sol-text-dim text-[10px]">background</span>
         )}
-        {childConversationId && (
+        {resolvedChildId && (
           <Link
-            href={`/conversation/${childConversationId}`}
+            href={`/conversation/${resolvedChildId}`}
             onClick={(e) => e.stopPropagation()}
             className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
           >
@@ -1619,13 +1683,14 @@ function TaskCreateUpdateBlock({ tool, result, taskSubjectMap }: { tool: ToolCal
   );
 }
 
-function SendMessageBlock({ tool }: { tool: ToolCall }) {
+function SendMessageBlock({ tool, agentNameToChildMap }: { tool: ToolCall; agentNameToChildMap?: Record<string, string> }) {
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
   const type = parsedInput.type || "message";
   const recipient = parsedInput.recipient;
   const summary = parsedInput.summary;
+  const childId = recipient && agentNameToChildMap?.[recipient];
 
   return (
     <div className="my-0.5">
@@ -1636,7 +1701,11 @@ function SendMessageBlock({ tool }: { tool: ToolCall }) {
         ) : type === "shutdown_request" ? (
           <span className="px-1 py-0.5 rounded text-[10px] font-mono bg-red-500/15 text-red-400">shutdown</span>
         ) : recipient ? (
-          <span className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono">@{recipient}</span>
+          childId ? (
+            <Link href={`/conversation/${childId}`} className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono hover:bg-amber-500/25 hover:text-amber-300 transition-colors" onClick={e => e.stopPropagation()}>@{recipient}</Link>
+          ) : (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono">@{recipient}</span>
+          )
         ) : null}
         {summary && <span className="text-sol-text-muted">{String(summary).slice(0, 60)}</span>}
       </div>
@@ -2685,6 +2754,19 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   );
 }
 
+function linkifyMentions(text: string, map: Record<string, string>): string {
+  if (!text || Object.keys(map).length === 0) return text;
+  const parts = text.split(/(```[\s\S]*?```|`[^`]+`)/g);
+  return parts.map((part, i) => {
+    if (i % 2 === 1) return part;
+    return part.replace(/@([\w][\w-]*)/g, (match, name) => {
+      const childId = map[name];
+      if (childId) return `[@${name}](/conversation/${childId})`;
+      return match;
+    });
+  }).join('');
+}
+
 function AssistantBlock({
   content,
   timestamp,
@@ -2698,6 +2780,8 @@ function AssistantBlock({
   conversationId,
   collapsed,
   childConversationMap,
+  childConversations,
+  agentNameToChildMap,
   showHeader = true,
   onOpenComments,
   toolCallToChangeIndexMap,
@@ -2730,6 +2814,8 @@ function AssistantBlock({
   conversationId?: Id<"conversations">;
   collapsed?: boolean;
   childConversationMap?: Record<string, string>;
+  childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
+  agentNameToChildMap?: Record<string, string>;
   showHeader?: boolean;
   onOpenComments?: () => void;
   toolCallToChangeIndexMap?: Record<string, number>;
@@ -2758,7 +2844,10 @@ function AssistantBlock({
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const displayContent = content ? stripSystemTags(content) : content;
+  const strippedContent = content ? stripSystemTags(content) : content;
+  const displayContent = strippedContent && agentNameToChildMap
+    ? linkifyMentions(strippedContent, agentNameToChildMap)
+    : strippedContent;
   const hasContent = displayContent && displayContent.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
@@ -2964,6 +3053,7 @@ function AssistantBlock({
               tool={tc}
               result={toolResultMap[tc.id]}
               childConversationId={messageUuid && childConversationMap ? childConversationMap[messageUuid] : undefined}
+              childConversations={childConversations}
             />
           ) : tc.name === "TodoWrite" ? (
             <TodoWriteBlock key={tc.id} tool={tc} />
@@ -2974,7 +3064,7 @@ function AssistantBlock({
           ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
             <TaskCreateUpdateBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} taskSubjectMap={taskSubjectMap} />
           ) : tc.name === "SendMessage" ? (
-            <SendMessageBlock key={tc.id} tool={tc} />
+            <SendMessageBlock key={tc.id} tool={tc} agentNameToChildMap={agentNameToChildMap} />
           ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
             <TeamCreateBlock key={tc.id} tool={tc} />
           ) : tc.name === "Skill" ? (
@@ -4071,6 +4161,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
 
+  const isInbox = backHref.startsWith('/inbox');
+  const convLink = useCallback((id: string) => isInbox ? `/inbox?s=${id}` : `/conversation/${id}`, [isInbox]);
+
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const sendEscape = useMutation(api.conversations.sendEscapeToSession);
@@ -4115,6 +4208,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation, isOwner, sendEscape, forkSelectedIndex]);
 
   const messages = conversation?.messages || [];
+
+  const agentNameToChildMap = conversation?.agent_name_map as Record<string, string> | undefined;
 
   const forkPointMap = useMemo(() => {
     const map: Record<string, Array<{ _id: string; title: string; short_id?: string }>> = {};
@@ -4889,8 +4984,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
       lastScrollTopRef.current = scrollTop;
 
-      if (!isNearBottom || scrolledUp) {
+      if (scrolledUp) {
         setUserScrolled(true);
+      } else if (isNearBottom) {
+        setUserScrolled(false);
       }
 
       if (scrollProgressRef.current) {
@@ -5244,6 +5341,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation?.messages]);
 
   const renderItem = (item: TimelineItem, index: number) => {
+    if (!item || index < 0 || index >= timeline.length) return null;
     if (item.type === 'commit') {
       const commit = item.data;
       return (
@@ -5296,6 +5394,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (msg.role === "user") {
+      if (msg.tool_results && msg.tool_results.length > 0 && (!msg.content || !msg.content.trim())) {
+        return null;
+      }
       if (msg.content && msg.content.trim()) {
         if (isCommandMessage(msg.content)) {
           if (collapsed) return null;
@@ -5380,6 +5481,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const runMessageIds: string[] = [];
       for (let i = index; i >= 0; i--) {
         const checkItem = timeline[i];
+        if (!checkItem) break;
         if (checkItem.type !== 'message') continue;
         const checkMsg = checkItem.data as Message;
         if (checkMsg.role === "user") break;
@@ -5387,6 +5489,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
       for (let i = index + 1; i < timeline.length; i++) {
         const checkItem = timeline[i];
+        if (!checkItem) break;
         if (checkItem.type !== 'message') continue;
         const checkMsg = checkItem.data as Message;
         if (checkMsg.role === "user") break;
@@ -5441,6 +5544,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           conversationId={conversation?._id}
           collapsed={effectiveCollapsed}
           childConversationMap={conversation?.child_conversation_map}
+          childConversations={conversation?.child_conversations}
+          agentNameToChildMap={agentNameToChildMap}
           showHeader={effectiveCollapsed ? true : (isFirstInSequence || (collapsed && msg._id === sequenceStartId))}
           onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
           toolCallToChangeIndexMap={toolCallToChangeIndexMap}
@@ -5527,7 +5632,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Link
-                        href={`/conversation/${conversation.parent_conversation_id}`}
+                        href={convLink(conversation.parent_conversation_id)}
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
                       >
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -5729,14 +5834,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     )}
                     {conversation.parent_conversation_id && (
                       <DropdownMenuItem asChild>
-                        <Link href={`/conversation/${conversation.parent_conversation_id}`}>
+                        <Link href={convLink(conversation.parent_conversation_id)}>
                           View parent conversation
                         </Link>
                       </DropdownMenuItem>
                     )}
                     {conversation.forked_from_details && (
                       <DropdownMenuItem asChild>
-                        <Link href={conversation.forked_from_details.share_token ? `/share/${conversation.forked_from_details.share_token}` : `/conversation/${conversation.forked_from_details.conversation_id}`}>
+                        <Link href={conversation.forked_from_details.share_token ? `/share/${conversation.forked_from_details.share_token}` : convLink(conversation.forked_from_details.conversation_id)}>
                           <svg className="w-3 h-3 mr-1.5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
                           </svg>
@@ -5779,7 +5884,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         </DropdownMenuItem>
                         {conversation.child_conversations.filter(c => c.is_subagent).map((child) => (
                           <DropdownMenuItem key={child._id} asChild>
-                            <Link href={`/conversation/${child._id}`} className="text-xs">
+                            <Link href={convLink(child._id)} className="text-xs">
                               <svg className="w-3 h-3 mr-1.5 text-sol-cyan flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                               </svg>
@@ -5892,7 +5997,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           {conversation?.parent_conversation_id && !hasMoreAbove && (
             <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
               <Link
-                href={`/conversation/${conversation.parent_conversation_id}`}
+                href={convLink(conversation.parent_conversation_id)}
                 className="inline-flex items-center gap-1.5 text-xs text-sol-cyan/70 hover:text-sol-cyan transition-colors"
               >
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -5998,14 +6103,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             const continuationChildren = conversation.child_conversations.filter(c => !renderedInlineIds.has(c._id) && !c.is_subagent);
             if (continuationChildren.length === 0) return null;
             return (
-              <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-3">
+              <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] text-sol-text-dim uppercase tracking-wider">Continued in</span>
+                  <span className="text-[11px] text-sol-text-secondary uppercase tracking-wider font-medium">Continued in</span>
                   {continuationChildren.map((child) => (
                     <Link
                       key={child._id}
-                      href={`/conversation/${child._id}`}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-sol-cyan/10 text-sol-cyan/70 border border-sol-cyan/20 hover:bg-sol-cyan/20 hover:text-sol-cyan transition-colors truncate max-w-[200px]"
+                      href={convLink(child._id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs bg-sol-cyan/15 text-sol-text-secondary border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:text-sol-text transition-colors truncate max-w-[400px]"
                     >
                       <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />

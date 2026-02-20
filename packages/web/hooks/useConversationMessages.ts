@@ -345,6 +345,7 @@ export function useConversationMessages(
             ...prev,
             child_conversations: [...(prev.child_conversations || []), ...newChildren],
             child_conversation_map: { ...(prev.child_conversation_map || {}), ...(newMessagesResult.child_conversation_map || {}) },
+            agent_name_map: { ...(prev.agent_name_map || {}), ...(newMessagesResult.agent_name_map || {}) },
           };
         });
       }

@@ -17,6 +17,7 @@ export default defineSchema({
     daemon_last_seen: v.optional(v.number()),
     last_message_sent_at: v.optional(v.number()),
     prev_message_sent_at: v.optional(v.number()),
+    work_cluster_started_at: v.optional(v.number()),
     theme: v.optional(v.union(v.literal("dark"), v.literal("light"))),
     github_id: v.optional(v.string()),
     github_username: v.optional(v.string()),

@@ -1,0 +1,18 @@
+{
+  "identifier": "remote-codecast",
+  "description": "IPC access for codecast.sh remote origin",
+  "remote": {
+    "urls": ["https://codecast.sh/*"]
+  },
+  "permissions": [
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-is-visible",
+    "notification:default",
+    "deep-link:default",
+    "updater:default"
+  ]
+}

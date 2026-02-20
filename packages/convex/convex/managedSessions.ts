@@ -28,6 +28,7 @@ export const registerManagedSession = mutation({
     session_id: v.string(),
     pid: v.number(),
     tmux_session: v.optional(v.string()),
+    conversation_id: v.optional(v.id("conversations")),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -48,8 +49,20 @@ export const registerManagedSession = mutation({
         pid: args.pid,
         last_heartbeat: now,
         ...(args.tmux_session !== undefined ? { tmux_session: args.tmux_session } : {}),
+        ...(args.conversation_id !== undefined ? { conversation_id: args.conversation_id } : {}),
       });
       return existing._id;
+    }
+
+    // Remove stale sessions for same conversation
+    if (args.conversation_id) {
+      const old = await ctx.db
+        .query("managed_sessions")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+        .collect();
+      for (const o of old) {
+        await ctx.db.delete(o._id);
+      }
     }
 
     const id = await ctx.db.insert("managed_sessions", {
@@ -57,6 +70,7 @@ export const registerManagedSession = mutation({
       user_id: authUserId,
       pid: args.pid,
       tmux_session: args.tmux_session,
+      conversation_id: args.conversation_id,
       started_at: now,
       last_heartbeat: now,
     });

@@ -191,6 +191,25 @@ export class SyncService {
     }
   }
 
+  async linkSessions(parentConversationId: string, childConversationId: string): Promise<void> {
+    await this.throttle();
+    try {
+      await this.client.mutation(
+        "conversations:linkSessions" as any,
+        {
+          parent_conversation_id: parentConversationId,
+          child_conversation_id: childConversationId,
+          api_token: this.apiToken,
+        }
+      );
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
   async addMessage(params: {
     conversationId: string;
     messageUuid?: string;
@@ -438,6 +457,18 @@ export class SyncService {
       await this.client.mutation("conversations:updateSessionId" as any, {
         conversation_id: conversationId,
         session_id: sessionId,
+        api_token: this.apiToken,
+      });
+    } catch {}
+  }
+
+  async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string): Promise<void> {
+    try {
+      await this.client.mutation("managedSessions:registerManagedSession" as any, {
+        session_id: sessionId,
+        pid,
+        tmux_session: tmuxSession,
+        conversation_id: conversationId,
         api_token: this.apiToken,
       });
     } catch {}

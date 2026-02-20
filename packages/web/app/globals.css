@@ -578,3 +578,19 @@ pre[class*="language-"] {
   animation: highlightPulse 1.5s ease-out;
 }
 
+/* WKWebView fix: force resize cursor on panel handles */
+[data-panel-resize-handle-id] {
+  cursor: col-resize !important;
+}
+
+/* Tauri desktop: titlebar drag region for overlay titlebar */
+.tauri-drag-region {
+  -webkit-app-region: drag;
+}
+.tauri-drag-region button,
+.tauri-drag-region a,
+.tauri-drag-region input,
+.tauri-drag-region [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
