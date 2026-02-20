@@ -85,6 +85,19 @@ function formatDuration(ms: number): string {
   return `${days}d`;
 }
 
+function cleanTitle(raw?: string): string {
+  if (!raw) return 'Untitled';
+  let t = raw.trim();
+  const jsonMatch = t.match(/```(?:json)?\s*\{[\s\S]*?"title"\s*:\s*"([^"]+)"[\s\S]*?```/);
+  if (jsonMatch) return jsonMatch[1];
+  t = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  try {
+    const parsed = JSON.parse(t);
+    if (parsed.title) return parsed.title;
+  } catch {}
+  return t || 'Untitled';
+}
+
 function agentLabel(agentType: string): string {
   switch (agentType) {
     case "claude_code": return "Claude";
@@ -142,7 +155,7 @@ function ConversationItem({ conversation, onPress, onLongPress }: {
           <RNView style={styles.titleRow}>
             <RNView style={conversation.is_active ? styles.activeDot : styles.inactiveDot} />
             <RNText style={styles.conversationTitle} numberOfLines={1}>
-              {conversation.title || 'Untitled'}
+              {cleanTitle(conversation.title)}
             </RNText>
           </RNView>
           <RNView style={styles.rightMeta}>
@@ -204,7 +217,7 @@ function FavoriteItem({ item, onPress }: { item: FavoriteConversation; onPress: 
     <TouchableOpacity onPress={onPress} style={styles.favoriteChip} activeOpacity={0.7}>
       <FontAwesome name="star" size={10} color={Theme.accent} style={{ marginRight: 5 }} />
       <RNText style={styles.favoriteChipText} numberOfLines={1}>
-        {item.title || 'Untitled'}
+        {cleanTitle(item.title)}
       </RNText>
     </TouchableOpacity>
   );
