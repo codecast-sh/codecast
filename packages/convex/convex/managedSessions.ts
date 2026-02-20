@@ -27,6 +27,7 @@ export const registerManagedSession = mutation({
   args: {
     session_id: v.string(),
     pid: v.number(),
+    tmux_session: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -46,6 +47,7 @@ export const registerManagedSession = mutation({
       await ctx.db.patch(existing._id, {
         pid: args.pid,
         last_heartbeat: now,
+        ...(args.tmux_session !== undefined ? { tmux_session: args.tmux_session } : {}),
       });
       return existing._id;
     }
@@ -54,6 +56,7 @@ export const registerManagedSession = mutation({
       session_id: args.session_id,
       user_id: authUserId,
       pid: args.pid,
+      tmux_session: args.tmux_session,
       started_at: now,
       last_heartbeat: now,
     });
@@ -227,6 +230,7 @@ export const isSessionManaged = query({
       session_id: session.session_id,
       pid: session.pid,
       last_heartbeat: session.last_heartbeat,
+      tmux_session: session.tmux_session,
     };
   },
 });

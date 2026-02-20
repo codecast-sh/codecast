@@ -111,13 +111,21 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
 
   const client = new ConvexHttpClient(config.convex_url || CONVEX_URL);
 
+  let tmuxSessionName: string | undefined;
+  if (process.env.TMUX) {
+    try {
+      tmuxSessionName = execSync("tmux display-message -p '#{session_name}'", { timeout: 2000 }).toString().trim();
+    } catch {}
+  }
+
   try {
     await client.mutation("managedSessions:registerManagedSession" as any, {
       session_id: sessionId,
       pid: process.pid,
+      tmux_session: tmuxSessionName,
       api_token: config.auth_token,
     });
-    log(`Registered managed session`);
+    log(`Registered managed session${tmuxSessionName ? ` (tmux: ${tmuxSessionName})` : ""}`);
   } catch (err) {
     log(`Warning: Failed to register managed session: ${err}`);
   }
