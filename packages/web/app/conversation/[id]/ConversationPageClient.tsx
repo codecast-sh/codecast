@@ -15,6 +15,7 @@ import { useSharedConversationMessages } from "../../../hooks/useSharedConversat
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { registerMutation } from "../../../store/convexCache";
 import { useCurrentConversationStore } from "../../../store/currentConversationStore";
+import { useForkNavigationStore } from "../../../store/forkNavigationStore";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONVEX_ID_REGEX = /^[a-z0-9]{32}$/;
@@ -373,12 +374,15 @@ export default function ConversationPage() {
   const highlightQuery = searchParams.get("highlight") || undefined;
   const [targetMessageId, setTargetMessageId] = useState<string | undefined>(undefined);
 
+  const resetForkNav = useForkNavigationStore((s) => s.reset);
+
   useEffect(() => {
+    resetForkNav();
     const hash = window.location.hash;
     if (hash && hash.startsWith("#msg-")) {
       setTargetMessageId(hash.slice(5));
     }
-  }, []);
+  }, [id]);
 
   const handleClearHighlight = () => {
     const url = new URL(window.location.href);

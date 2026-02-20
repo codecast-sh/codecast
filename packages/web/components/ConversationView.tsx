@@ -37,6 +37,12 @@ import { setDraft, getDraft, clearDraft } from "../store/convexCache";
 import { usePendingSessionStore } from "../store/pendingSessionStore";
 import { useOptimisticMessagesStore } from "../store/optimisticMessagesStore";
 import { useQueueStore } from "../store/queueStore";
+import { useForkNavigationStore } from "../store/forkNavigationStore";
+import { buildCompositeTimeline } from "../lib/compositeTimeline";
+import { useMessageSelection } from "../hooks/useMessageSelection";
+import { useForkMessages } from "../hooks/useForkMessages";
+import { BranchSelector } from "./BranchSelector";
+import { ForkTreePanel } from "./ForkTreePanel";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -1227,7 +1233,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
   };
 
   if (isPlanWrite && content) {
-    return <PlanBlock content={content} timestamp={timestamp || Date.now()} collapsed={collapsed} messageId={messageId} onStartShareSelection={onStartShareSelection} shareSelectionMode={shareSelectionMode} />;
+    return <PlanBlock content={content} timestamp={timestamp || Date.now()} collapsed={collapsed} />;
   }
 
   return (
@@ -1691,13 +1697,13 @@ function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result
       {isWaitingForApproval && !sent && (
         <div className="flex items-center gap-1.5 mt-1.5 ml-0.5">
           <button
-            onClick={() => { setSent(true); onSendMessage("continue"); }}
+            onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Start implementing" })); }}
             className="text-[11px] px-2.5 py-1 rounded border border-sol-green/40 bg-sol-green/10 text-sol-green hover:bg-sol-green/20 transition-colors cursor-pointer"
           >
             Start implementing
           </button>
           <button
-            onClick={() => { setSent(true); onSendMessage("adjust the plan"); }}
+            onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["4"], text: "adjust the plan", display: "Adjust plan" })); }}
             className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text-muted hover:bg-sol-bg-alt/80 transition-colors cursor-pointer"
           >
             Adjust plan
@@ -1757,7 +1763,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 return isInteractive ? (
                   <button
                     key={j}
-                    onClick={() => { setSentOption(cleanLabel); onSendMessage(cleanLabel); }}
+                    onClick={() => { setSentOption(cleanLabel); onSendMessage(JSON.stringify({ __cc_poll: true, keys: [String(j + 1)], display: cleanLabel })); }}
                     className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-sol-violet/30 text-sol-violet/80 hover:bg-sol-violet/15 hover:border-sol-violet/50 hover:text-sol-violet transition-colors cursor-pointer"
                   >
                     {opt.label}
@@ -2215,7 +2221,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string }>; messageUuid?: string; images?: ImageData[] }) {
+function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -2503,22 +2509,13 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         </div>
       )}
 
-      {forkChildren && forkChildren.length > 0 && (
-        <div className="flex items-center gap-1.5 mt-2 ml-8 flex-wrap">
-          <svg className="w-3 h-3 text-purple-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-          </svg>
-          {forkChildren.map((fork) => (
-            <Link
-              key={fork._id}
-              href={`/conversation/${fork._id}`}
-              className="text-[10px] text-purple-400 hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 rounded px-1.5 py-0.5 transition-colors max-w-[200px] truncate"
-              title={fork.title}
-            >
-              {fork.short_id ? `${fork.short_id} ${fork.title}` : fork.title}
-            </Link>
-          ))}
-        </div>
+      {forkChildren && forkChildren.length > 0 && onBranchSwitch && (
+        <BranchSelector
+          forkChildren={forkChildren}
+          activeBranchId={activeBranchId ?? null}
+          onSwitchBranch={(convId) => onBranchSwitch(convId)}
+          loadingBranchId={loadingBranchId}
+        />
       )}
 
       {fullscreen && createPortal(
@@ -3144,7 +3141,7 @@ function CompactionSummaryBlock({ content }: { content: string }) {
 
 const PLAN_MAX_HEIGHT = 1800;
 
-function PlanBlock({ content, timestamp, collapsed, messageId, onStartShareSelection, shareSelectionMode }: { content: string; timestamp: number; collapsed?: boolean; messageId?: string; onStartShareSelection?: (messageId: string) => void; shareSelectionMode?: boolean }) {
+function PlanBlock({ content, timestamp, collapsed }: { content: string; timestamp: number; collapsed?: boolean }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -3181,20 +3178,6 @@ function PlanBlock({ content, timestamp, collapsed, messageId, onStartShareSelec
 
   return (
     <div className="group/plan relative mb-6 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 overflow-hidden">
-      {onStartShareSelection && messageId && !shareSelectionMode && (
-        <div className="absolute -top-2 right-0 transition-opacity opacity-0 group-hover/plan:opacity-100 z-10 bg-sol-bg rounded shadow-md px-0.5 flex gap-0.5">
-          <button
-            onClick={() => onStartShareSelection(messageId)}
-            className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary"
-            title="Share message"
-            aria-label="Share message"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-            </svg>
-          </button>
-        </div>
-      )}
       <div className="flex items-center justify-between px-4 py-2 border-b border-sol-border/40">
         <div className="flex items-center gap-2">
           <svg className="w-3.5 h-3.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3439,7 +3422,7 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isUnresponsive, sessionId, agentType }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isUnresponsive?: boolean; sessionId?: string; agentType?: string }) {
+function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string, opts?: { inline?: boolean; focusInput?: boolean }) => void }) {
   const cached = getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -3453,9 +3436,6 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
   const resumeSessionMutation = useMutation(api.users.resumeSession);
   const getRealId = usePendingSessionStore((s) => s.getRealId);
   const addOptimistic = useOptimisticMessagesStore((s) => s.add);
-  const queueSession = useQueueStore((s) => s.sessions.find((sess) => sess._id === conversationId));
-  const serverUnresponsive = queueSession?.is_unresponsive ?? false;
-  const effectiveUnresponsive = isUnresponsive || serverUnresponsive;
 
   const messageStatus = useQuery(
     api.pendingMessages.getMessageStatus,
@@ -3500,13 +3480,8 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     return () => clearTimeout(timer);
   }, [sentAt, pendingMessageId, messageStatus?.status]);
 
-  useEffect(() => {
-    if (!isWaitingForResponse || isConversationLive || isThinking || showStuckBanner) return;
-    const timer = setTimeout(() => {
-      if (!showStuckBanner) setShowStuckBanner(true);
-    }, 60_000);
-    return () => clearTimeout(timer);
-  }, [isWaitingForResponse, isConversationLive, isThinking, showStuckBanner]);
+  // Removed: generic 60s timeout was showing "not responding" even when no message was sent.
+  // The banner should only show when we sent a message and it wasn't delivered (handled by the effects above).
 
   const sendRef = useRef<HTMLDivElement>(null);
   const [pastedImages, setPastedImages] = useState<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>(() => {
@@ -3533,14 +3508,25 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     try {
       const realId = getRealId(conversationId);
       await resumeSessionMutation({ conversation_id: realId as Id<"conversations"> });
-      toast.success("Resuming session...");
-      setShowStuckBanner(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to resume session");
-    } finally {
       setIsResuming(false);
     }
   }, [conversationId, getRealId, resumeSessionMutation, isResuming]);
+
+  useEffect(() => {
+    if (isResuming && (isConversationLive || isThinking)) {
+      setIsResuming(false);
+      setShowStuckBanner(false);
+      return;
+    }
+    if (!isResuming) return;
+    const timeout = setTimeout(() => {
+      setIsResuming(false);
+      toast.error("Resume timed out — session may need manual restart");
+    }, 30_000);
+    return () => clearTimeout(timeout);
+  }, [isResuming, isConversationLive, isThinking]);
 
   const updateDraft = useCallback((text: string, images?: Array<{ storageId?: string; previewUrl?: string; name?: string }> | null) => {
     if (!text && (!images || images.length === 0)) {
@@ -3555,6 +3541,9 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
 
   const handleMessageChange = useCallback((val: string) => {
     setMessage(val);
+    if (savedDraftRef.current !== null) {
+      isSelectionEditedRef.current = true;
+    }
     const existing = getDraft(conversationId);
     if (!val && !existing?.draft_image_storage_ids?.length) {
       clearDraft(conversationId);
@@ -3562,6 +3551,30 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
       setDraft(conversationId, { ...existing, draft_message: val || null });
     }
   }, [conversationId]);
+
+  const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
+  const savedDraftRef = useRef<string | null>(null);
+  const isSelectionEditedRef = useRef(false);
+  const prevSelectionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const wasActive = prevSelectionRef.current !== null;
+    const isActive = !!(selectedMessageContent && selectedMessageUuid);
+    prevSelectionRef.current = selectedMessageUuid || null;
+
+    if (isActive && !wasActive) {
+      savedDraftRef.current = message;
+      isSelectionEditedRef.current = false;
+      setMessage(selectedMessageContent);
+    } else if (isActive && wasActive) {
+      setMessage(selectedMessageContent);
+    } else if (!isActive && wasActive) {
+      const restored = savedDraftRef.current ?? "";
+      savedDraftRef.current = null;
+      isSelectionEditedRef.current = false;
+      setMessage(restored);
+    }
+  }, [selectedMessageContent, selectedMessageUuid]);
 
   const isInactive = status && status !== "active";
   const hasContent = message.trim().length > 0 || pastedImages.length > 0;
@@ -3649,6 +3662,39 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     const canSend = message.trim() || readyImages.length > 0;
     if (!canSend || isSubmitting) return;
 
+    // If a message is selected, fork from it then send the new content
+    if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
+      setIsSubmitting(true);
+      isSelectionEditedRef.current = true;
+      savedDraftRef.current = null;
+      const content = message.trim();
+      setMessage("");
+      onClearSelection?.();
+      await onForkFromMessage(selectedMessageUuid, { inline: true, focusInput: true });
+      // After fork, send the edited message to the new fork
+      requestAnimationFrame(async () => {
+        try {
+          const realId = getRealId(conversationId);
+          if (!realId.startsWith("temp_")) {
+            const msgId = await sendMessage({
+              conversation_id: realId as Id<"conversations">,
+              content,
+            });
+            setPendingMessageId(msgId);
+            setSentAt(Date.now());
+            addOptimistic(realId, content);
+            setLastStatus("delivered");
+            setTimeout(() => setLastStatus(null), 2000);
+          }
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Failed to send rewrite");
+        } finally {
+          setIsSubmitting(false);
+        }
+      });
+      return;
+    }
+
     setIsSubmitting(true);
     setLastStatus(null);
 
@@ -3703,22 +3749,28 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         <div className="relative">
-          {(isFocused || shortcutTooltip || isWaitingForResponse || isThinking || isConversationLive || showStuckBanner || effectiveUnresponsive) && (
+          {(isFocused || shortcutTooltip || isWaitingForResponse || isThinking || isConversationLive || showStuckBanner) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
               <p className="text-[11px] text-sol-text-dim/70">
-                {(showStuckBanner || effectiveUnresponsive) && sessionId ? (
-                  <span className="flex items-center gap-1.5 text-sol-orange">
-                    <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" />
-                    {existingPending || pendingMessageId ? "Message not reaching session" : "Session not responding"}
-                    <button
-                      type="button"
-                      onClick={handleForceResume}
-                      disabled={isResuming}
-                      className="ml-1 px-1.5 py-0.5 rounded bg-sol-orange/10 hover:bg-sol-orange/20 border border-sol-orange/30 text-sol-orange transition-colors text-[10px] disabled:opacity-50"
-                    >
-                      {isResuming ? "Resuming..." : "Force resume"}
-                    </button>
-                  </span>
+                {showStuckBanner && sessionId ? (
+                  isResuming ? (
+                    <span className="flex items-center gap-1.5 text-sol-orange">
+                      <span className="w-1.5 h-1.5 rounded-full bg-sol-orange animate-pulse" />
+                      Resuming session — waiting for daemon to reconnect...
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1.5 text-sol-orange">
+                      <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" />
+                      {existingPending || pendingMessageId ? "Message not reaching session" : "Session not responding"}
+                      <button
+                        type="button"
+                        onClick={handleForceResume}
+                        className="ml-1 px-1.5 py-0.5 rounded bg-sol-orange/10 hover:bg-sol-orange/20 border border-sol-orange/30 text-sol-orange transition-colors text-[10px]"
+                      >
+                        Force resume
+                      </button>
+                    </span>
+                  )
                 ) : isThinking ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-sol-violet/50 animate-pulse" />
@@ -3765,7 +3817,14 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
             </div>
           )}
           <form onSubmit={handleSubmit} className={`mx-auto px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
-            <div className={`flex flex-col bg-sol-bg-alt border border-sol-border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"}`}>
+            <div className={`flex flex-col bg-sol-bg-alt border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : "border-sol-border"}`}>
+              {isSelectionActive && (
+                <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
+                  <span className="font-medium">Rewriting message</span>
+                  <span className="text-sol-text-dim">Enter to fork &amp; send</span>
+                  <span className="text-sol-text-dim">Esc to cancel</span>
+                </div>
+              )}
               {pastedImages.length > 0 && (
                 <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50 flex-wrap">
                   {pastedImages.map((img, idx) => (
@@ -3802,7 +3861,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
                   disabled={isSubmitting}
                   placeholder="Send a message to this session..."
                   rows={1}
-                  className="flex-1 bg-transparent text-sol-text text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1"
+                  className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                 />
                 <div ref={sendRef} className="shrink-0">
                   <button
@@ -3862,7 +3921,9 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
   function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [userScrolled, setUserScrolled] = useState(false);
+  const [userScrolled, _setUserScrolled] = useState(false);
+  const userScrolledRef = useRef(false);
+  const setUserScrolled = useCallback((v: boolean) => { userScrolledRef.current = v; _setUserScrolled(v); }, []);
   const [isNearTop, setIsNearTop] = useState(true);
   const [isScrollable, setIsScrollable] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -3876,6 +3937,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const scrollAnchorRef = useRef<{ messageId: string; pixelOffset: number } | null>(null);
   const prevTimelineLengthRef = useRef<number>(0);
   const isNearBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
   const scrollProgressRef = useRef<HTMLDivElement>(null);
   const hasScrolledToTarget = useRef(false);
   const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
@@ -3909,8 +3971,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation) return;
     try {
+      let displayContent = content;
+      try {
+        const parsed = JSON.parse(content);
+        if (parsed.__cc_poll && parsed.display) displayContent = parsed.display;
+      } catch {}
       await sendInlineMessage({ conversation_id: conversation._id, content });
-      addOptimisticMsg(conversation._id, content);
+      addOptimisticMsg(conversation._id, displayContent);
     } catch {
       toast.error("Failed to send message");
     }
@@ -3923,17 +3990,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
   const isSessionLive = managedSession?.managed === true;
 
+  const forkSelectedIndex = useForkNavigationStore((s) => s.selectedIndex);
+
   useEffect(() => {
     if (!conversation || !isOwner || conversation.status !== "active") return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (forkSelectedIndex !== null) return;
       e.preventDefault();
       sendEscape({ conversation_id: conversation._id });
       toast.info("Escape sent to session");
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [conversation, isOwner, sendEscape]);
+  }, [conversation, isOwner, sendEscape, forkSelectedIndex]);
 
   const messages = conversation?.messages || [];
 
@@ -4002,20 +4072,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [selectedMessageIds, messages, generateShareLink]);
 
-  const handleForkFromMessage = useCallback(async (messageUuid: string) => {
-    if (!conversation?._id) return;
-    try {
-      const result = await forkFromMessage({
-        conversation_id: conversation._id.toString(),
-        message_uuid: messageUuid,
-      });
-      toast.success("Conversation forked");
-      window.location.href = `/conversation/${result.conversation_id}`;
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to fork");
-    }
-  }, [conversation?._id, forkFromMessage]);
-
   const toolCallToChangeIndexMap = useMemo(() => {
     const fileChanges = extractFileChanges(messages as any);
     const map: Record<string, number> = {};
@@ -4030,27 +4086,80 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     conversation?._id && !conversation._id.startsWith("temp_") ? { conversation_id: conversation._id } : "skip"
   );
 
-  // Merge messages, commits, and PRs into a single timeline
+  // Fork navigation state
+  const activeBranches = useForkNavigationStore((s) => s.activeBranches);
+  const loadedForkMessages = useForkNavigationStore((s) => s.loadedForkMessages);
+  const forkTreePanelOpen = useForkNavigationStore((s) => s.treePanelOpen);
+  const toggleTreePanel = useForkNavigationStore((s) => s.toggleTreePanel);
+  const forkSwitchBranch = useForkNavigationStore((s) => s.switchBranch);
+  const forkClearBranch = useForkNavigationStore((s) => s.clearBranch);
+  const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
+
+  const handleForkFromMessage = useCallback(async (messageUuid: string, opts?: { inline?: boolean; focusInput?: boolean }) => {
+    if (!conversation?._id) return;
+    try {
+      const result = await forkFromMessage({
+        conversation_id: conversation._id.toString(),
+        message_uuid: messageUuid,
+      });
+      if (opts?.inline) {
+        toast.success("Forked -- switched to branch");
+        forkSwitchBranch(messageUuid, result.conversation_id);
+        const url = new URL(window.location.href);
+        url.searchParams.set('branch', result.conversation_id);
+        window.history.replaceState({}, '', url.toString());
+        if (opts.focusInput) {
+          requestAnimationFrame(() => {
+            const textarea = document.querySelector('textarea');
+            textarea?.focus();
+          });
+        }
+      } else {
+        toast.success("Conversation forked");
+        window.location.href = `/conversation/${result.conversation_id}`;
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to fork");
+    }
+  }, [conversation?._id, forkFromMessage, forkSwitchBranch]);
+
+  // Preload branch from URL param
+  const urlBranchPreloaded = useRef(false);
+  useEffect(() => {
+    if (urlBranchPreloaded.current || !conversation?.fork_children) return;
+    const url = new URL(window.location.href);
+    const branchId = url.searchParams.get('branch');
+    if (!branchId) return;
+    const fork = conversation.fork_children.find(f => f._id === branchId);
+    if (fork?.parent_message_uuid) {
+      forkSwitchBranch(fork.parent_message_uuid, branchId);
+      urlBranchPreloaded.current = true;
+    }
+  }, [conversation?.fork_children, forkSwitchBranch]);
+
+  // Load fork messages for the first active branch
+  const firstActiveForkId = useMemo(() => {
+    const uuids = Object.keys(activeBranches);
+    return uuids.length > 0 ? activeBranches[uuids[0]] : null;
+  }, [activeBranches]);
+  const { isLoading: isForkLoading } = useForkMessages(firstActiveForkId);
+  const [loadingBranchId, setLoadingBranchId] = useState<string | null>(null);
+
+  // Merge messages, commits, and PRs into a single timeline (with fork branch support)
   type TimelineItem =
     | { type: 'message'; data: Message; timestamp: number }
     | { type: 'commit'; data: Commit; timestamp: number }
     | { type: 'pull_request'; data: PullRequest; timestamp: number };
 
   const timeline: TimelineItem[] = useMemo(() => {
-    const items: TimelineItem[] = [
-      ...messages.map(msg => ({ type: 'message' as const, data: msg, timestamp: msg.timestamp })),
-      ...commits.map(commit => ({ type: 'commit' as const, data: commit, timestamp: commit.timestamp })),
-      ...pullRequests.map(pr => ({ type: 'pull_request' as const, data: pr, timestamp: pr.created_at })),
-    ];
-    items.sort((a, b) => a.timestamp - b.timestamp);
-    return items.filter(item => {
-      if (item.type !== 'message') return true;
-      const msg = item.data as Message;
-      if (msg.role === "user" && msg.tool_results && msg.tool_results.length > 0) return false;
-      if (msg.role === "user" && (!msg.content || !msg.content.trim()) && !(msg.images && msg.images.length > 0)) return false;
-      return true;
-    });
-  }, [messages, commits, pullRequests]);
+    return buildCompositeTimeline(
+      messages,
+      commits,
+      pullRequests,
+      activeBranches,
+      loadedForkMessages,
+    ) as TimelineItem[];
+  }, [messages, commits, pullRequests, activeBranches, loadedForkMessages]);
 
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
@@ -4416,6 +4525,86 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     initialOffset: !(window.location.hash || highlightQuery) ? Infinity : 0,
   });
 
+  // Fork navigation: message selection (Option+j/k to navigate, Option+f to fork)
+  const [selectedMessageContent, setSelectedMessageContent] = useState<string | null>(null);
+  const [selectedMessageUuid, setSelectedMessageUuid] = useState<string | null>(null);
+  const handleSelectMessage = useCallback((uuid: string | null, content: string | null) => {
+    setSelectedMessageUuid(uuid);
+    setSelectedMessageContent(content);
+  }, []);
+  const forkSelectionIdx = useForkNavigationStore((s) => s.selectedIndex);
+  const { selectedIndex: _forkSelIdx } = useMessageSelection({
+    timeline: timeline as any,
+    virtualizer,
+    onForkFromMessage: handleForkFromMessage,
+    onSelectMessage: handleSelectMessage,
+    enabled: isOwner,
+  });
+
+  // Fork navigation: handle branch switching
+  const handleBranchSwitch = useCallback((messageUuid: string, convId: string | null) => {
+    if (convId === null) {
+      forkClearBranch(messageUuid);
+      setLoadingBranchId(null);
+    } else {
+      forkSwitchBranch(messageUuid, convId);
+      if (!loadedForkMessages[convId]) {
+        setLoadingBranchId(convId);
+      }
+    }
+    // Update URL
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      if (convId) {
+        url.searchParams.set('branch', convId);
+      } else {
+        url.searchParams.delete('branch');
+      }
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, [forkSwitchBranch, forkClearBranch, loadedForkMessages]);
+
+  // Clear loading state when fork messages arrive
+  useEffect(() => {
+    if (loadingBranchId && loadedForkMessages[loadingBranchId]) {
+      setLoadingBranchId(null);
+    }
+  }, [loadingBranchId, loadedForkMessages]);
+
+  // Fork tree panel: handle switching to a different conversation
+  const handleTreeSwitchConversation = useCallback((convId: string) => {
+    if (convId === conversation?._id?.toString()) {
+      // Already on this conversation, clear all branches
+      Object.keys(activeBranches).forEach(uuid => forkClearBranch(uuid));
+    } else {
+      // Navigate to the other conversation
+      window.location.href = `/conversation/${convId}`;
+    }
+  }, [conversation?._id, activeBranches, forkClearBranch]);
+
+  // Active branch IDs for tree panel highlighting
+  const activeBranchIdSet = useMemo(
+    () => new Set(Object.values(activeBranches)),
+    [activeBranches]
+  );
+
+  // t key for tree panel (when not in selection mode)
+  useEffect(() => {
+    if (!isOwner) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 't') return;
+      if (forkSelectionIdx !== null) return;
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+      const hasForks = (conversation?.fork_children && conversation.fork_children.length > 0) || conversation?.forked_from;
+      if (!hasForks) return;
+      e.preventDefault();
+      toggleTreePanel();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isOwner, forkSelectionIdx, toggleTreePanel, conversation?.fork_children, conversation?.forked_from]);
+
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -4588,7 +4777,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       setIsScrollable(scrollHeight > clientHeight + 10);
       setIsNearTop(scrollTop < 300);
 
-      if (!isNearBottom) {
+      const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
+      lastScrollTopRef.current = scrollTop;
+
+      if (!isNearBottom || scrolledUp) {
         setUserScrolled(true);
       }
 
@@ -4702,17 +4894,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return;
     }
 
-    if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && isNearBottomRef.current && !hasMoreBelow) {
+    if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && isNearBottomRef.current && !hasMoreBelow && !userScrolledRef.current) {
       virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
       setUserScrolled(false);
     }
   }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow, initialScrollDone]);
 
   useEffect(() => {
-    if (isWaitingForResponse && containerRef.current && isNearBottomRef.current) {
+    if (isWaitingForResponse && containerRef.current && isNearBottomRef.current && !userScrolledRef.current) {
       requestAnimationFrame(() => {
         if (containerRef.current) {
           containerRef.current.scrollTop = containerRef.current.scrollHeight;
+          lastScrollTopRef.current = containerRef.current.scrollTop;
         }
       });
     }
@@ -4726,21 +4919,37 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return;
     }
     const sc = containerRef.current;
-    if (sc) sc.scrollTop = sc.scrollHeight;
+    if (sc) {
+      sc.scrollTop = sc.scrollHeight;
+      lastScrollTopRef.current = sc.scrollTop;
+    }
     setInitialScrollDone(true);
   }, [timeline.length, highlightQuery, initialScrollDone]);
 
-  // Auto-correct on every render: like chatdoc's componentDidUpdate
-  // If user hasn't scrolled away, keep pinned to bottom as virtualizer measures items
+  // Detect user scroll-up via wheel events (fires synchronously, no race condition
+  // with the async scroll event). This ensures userScrolledRef is set before any
+  // re-render or auto-correct effect can run.
+  useEffect(() => {
+    const sc = containerRef.current;
+    if (!sc) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) setUserScrolled(true);
+    };
+    sc.addEventListener('wheel', onWheel, { passive: true });
+    return () => sc.removeEventListener('wheel', onWheel);
+  }, [setUserScrolled]);
+
+  // Auto-correct: keep pinned to bottom as virtualizer measures items
   const totalSize = virtualizer.getTotalSize();
   useEffect(() => {
-    if (!initialScrollDone || userScrolled) return;
+    if (!initialScrollDone || userScrolledRef.current) return;
     if (window.location.hash || highlightQuery) return;
     const sc = containerRef.current;
     if (!sc) return;
     const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
     if (dist > 5) {
       sc.scrollTop = sc.scrollHeight;
+      lastScrollTopRef.current = sc.scrollTop;
     }
   });
 
@@ -4859,7 +5068,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
-  const isUnresponsive = !!conversation && conversation.status === "active" && lastMessageRole === "user" && (now - lastActivityAt) > 2 * 60 * 1000;
 
   useEffect(() => {
     if (conversation) {
@@ -5012,14 +5220,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         }
         const planContent = extractPlanContent(msg.content);
         if (planContent) {
-          return <PlanBlock key={msg._id} content={planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} onStartShareSelection={handleStartShareSelection} shareSelectionMode={shareSelectionMode} />;
+          return <PlanBlock key={msg._id} content={planContent} timestamp={msg.timestamp} collapsed={collapsed} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} />;
+        return <UserPrompt key={msg._id} content={msg.content} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} />;
       }
       if (msg.images && msg.images.length > 0) {
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} />;
+        return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} />;
       }
       return null;
     }
@@ -5419,13 +5627,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     {((conversation.fork_children && conversation.fork_children.length > 0) || conversation.forked_from) && (
                       <>
                         <DropdownMenuSeparator />
-                        <ConversationTree conversationId={conversation._id.toString()} />
+                        <DropdownMenuItem onClick={() => toggleTreePanel()}>
+                          <svg className="w-3 h-3 mr-1.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                          </svg>
+                          Fork tree
+                          <kbd className="ml-auto text-[9px] text-sol-text-dim bg-sol-bg-alt border border-sol-border rounded px-1 py-0.5">t</kbd>
+                        </DropdownMenuItem>
                       </>
                     )}
                     {((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0) && (
                       <DropdownMenuItem disabled>
-                        <svg className="w-3 h-3 mr-1.5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                        <svg className="w-3 h-3 mr-1.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                         </svg>
                         {conversation.fork_count || conversation.fork_children?.length || 0} fork{(conversation.fork_count || conversation.fork_children?.length || 0) === 1 ? '' : 's'}
                       </DropdownMenuItem>
@@ -5527,7 +5741,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         />
       )}
 
-      <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "auto" }}>
+      <div className="flex-1 min-h-0 relative flex">
+      <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col">
         {!conversation ? (
           <ConversationSkeleton />
@@ -5544,24 +5759,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </div>
               </>
             ) : conversation.status === "active" && (conversation.message_count ?? 0) === 0 ? (
-              isSessionLive ? (
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                  <span>Session ready</span>
-                </div>
-              ) : (now - (conversation.started_at ?? now)) < 2 * 60 * 1000 ? (
-                <>
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 animate-spin text-sol-cyan/60" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    <span>Starting session...</span>
-                  </div>
-                </>
-              ) : (
-                <span className="text-sol-text-dim/60">Waiting for agent to connect</span>
-              )
+              null
             ) : conversation.status !== "active" ? (
               "No messages in this conversation"
             ) : null}
@@ -5622,6 +5820,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               const isSearchDimmed = highlightQuery && allMatchingMessageIds.length > 0 && item.type === 'message' && !allMatchingMessageIds.includes((item.data as Message)._id);
               const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
+              const isForkSelected = forkSelectionIdx !== null && forkSelectionIdx === virtualItem.index;
+              const isBelowForkSelection = forkSelectionIdx !== null && virtualItem.index > forkSelectionIdx;
               return (
                 <div
                   key={virtualItem.key}
@@ -5636,7 +5836,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isSearchDimmed ? "opacity-25" : ""} ${isNew ? "animate-message-in" : ""} transition-opacity`}>
+                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isSearchDimmed ? "opacity-25" : ""} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {content}
                     </div>
                   )}
@@ -5703,9 +5903,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       </div>
 
+      {conversation && (
+        <ForkTreePanel
+          conversationId={conversation._id.toString()}
+          open={forkTreePanelOpen}
+          onClose={toggleTreePanel}
+          activeBranchIds={activeBranchIdSet}
+          onSwitchToConversation={handleTreeSwitchConversation}
+        />
+      )}
+      </div>
+
       {showMessageInput && conversation && (
         <div ref={messageInputRef}>
-          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isUnresponsive={isUnresponsive} sessionId={conversation.session_id} agentType={conversation.agent_type} />
+          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={() => { forkSetSelectedIndex(null); setSelectedMessageContent(null); setSelectedMessageUuid(null); }} onForkFromMessage={handleForkFromMessage} />
         </div>
       )}
 
