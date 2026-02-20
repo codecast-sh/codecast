@@ -220,7 +220,7 @@ export interface ConversationViewHandle {
 }
 
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
-  const patchConversation = useMutation(api.conversations.patchConversation);
+  const switchProject = useMutation(api.conversations.switchSessionProject);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
   const [switching, setSwitching] = useState<string | null>(null);
   const [optimisticPath, setOptimisticPath] = useState<string | null>(null);
@@ -239,16 +239,16 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     setSwitching(trimmed);
     setOptimisticPath(trimmed);
     try {
-      await patchConversation({
-        id: conversation._id,
-        fields: { project_path: trimmed, git_root: trimmed },
+      await switchProject({
+        conversation_id: conversation._id,
+        project_path: trimmed,
       });
     } catch {
       setOptimisticPath(null);
     } finally {
       setSwitching(null);
     }
-  }, [switching, patchConversation, conversation._id]);
+  }, [switching, switchProject, conversation._id]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -628,7 +628,7 @@ function ConversationMetadata({
         <button
           className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0 hover:text-sol-text-muted transition-colors cursor-pointer"
           title="Copy conversation ID"
-          onClick={() => { if (conversationId) copyToClipboard(conversationId).then(() => toast.success("ID copied")); }}
+          onClick={() => { if (conversationId) setTimeout(() => { copyToClipboard(conversationId).then(() => toast.success("ID copied")); }); }}
         >
           <span className="text-sol-text-dim hidden sm:inline">&middot;</span>
           <span>{messageCount} {messageCount === 1 ? "msg" : "msgs"}</span>
@@ -1720,10 +1720,15 @@ function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result
 function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
   let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
-  const [sentOption, setSentOption] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+  const [selections, setSelections] = useState<Record<number, { key: string; label: string; text?: string }>>({});
+  const [otherOpen, setOtherOpen] = useState<Record<number, boolean>>({});
+  const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
 
   const questions = parsedInput.questions || [];
   if (questions.length === 0) return null;
+
+  const isMultiQuestion = questions.length > 1;
 
   let answers: Record<string, string> = {};
   if (parsedInput.answers && typeof parsedInput.answers === "object") {
@@ -1736,7 +1741,39 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
     }
   }
 
-  const isInteractive = !result && !!onSendMessage && !sentOption;
+  const isInteractive = !result && !!onSendMessage && !sent;
+  const allAnswered = isMultiQuestion && questions.every((_, i) => selections[i] !== undefined);
+
+  const buildPayload = (sels: typeof selections) => {
+    const sorted = Object.keys(sels).sort((a, b) => Number(a) - Number(b));
+    const hasText = sorted.some(k => sels[Number(k)].text);
+    const display = sorted.map(k => sels[Number(k)].label).join(", ");
+    if (hasText) {
+      const steps = sorted.map(k => {
+        const s = sels[Number(k)];
+        return s.text ? { key: s.key, text: s.text } : { key: s.key };
+      });
+      return JSON.stringify({ __cc_poll: true, steps, display });
+    }
+    return JSON.stringify({ __cc_poll: true, keys: sorted.map(k => sels[Number(k)].key), display });
+  };
+
+  const handleSubmitAll = () => {
+    if (!onSendMessage || !allAnswered) return;
+    setSent(true);
+    onSendMessage(buildPayload(selections));
+  };
+
+  const commitOther = (qIdx: number, text: string, optionsCount: number) => {
+    const otherKey = String(optionsCount + 1);
+    const sel = { key: otherKey, label: text, text };
+    if (isMultiQuestion) {
+      setSelections(prev => ({ ...prev, [qIdx]: sel }));
+    } else {
+      setSent(true);
+      onSendMessage!(buildPayload({ 0: sel }));
+    }
+  };
 
   return (
     <div className="my-1.5 ml-1 border-l-2 border-sol-violet/30 pl-3 space-y-2.5">
@@ -1745,6 +1782,8 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
         const isCustom = answer !== undefined && !q.options.some(
           o => o.label === answer || o.label.replace(" (Recommended)", "") === answer
         );
+        const sel = selections[i];
+        const isOtherSelected = sel?.text !== undefined;
         return (
           <div key={i} className="space-y-1.5">
             <div className="flex items-center gap-1.5">
@@ -1759,25 +1798,42 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
               {q.options.map((opt, j) => {
                 const cleanLabel = opt.label.replace(" (Recommended)", "");
                 const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
-                const isSentChoice = sentOption === cleanLabel;
+                const isLocalSelected = !isOtherSelected && sel?.label === cleanLabel;
                 return isInteractive ? (
                   <button
                     key={j}
-                    onClick={() => { setSentOption(cleanLabel); onSendMessage(JSON.stringify({ __cc_poll: true, keys: [String(j + 1)], display: cleanLabel })); }}
-                    className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-sol-violet/30 text-sol-violet/80 hover:bg-sol-violet/15 hover:border-sol-violet/50 hover:text-sol-violet transition-colors cursor-pointer"
+                    onClick={() => {
+                      setOtherOpen(prev => ({ ...prev, [i]: false }));
+                      if (isMultiQuestion) {
+                        setSelections(prev => ({ ...prev, [i]: { key: String(j + 1), label: cleanLabel } }));
+                      } else {
+                        setSent(true);
+                        onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [String(j + 1)], display: cleanLabel }));
+                      }
+                    }}
+                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer ${
+                      isLocalSelected
+                        ? "bg-sol-violet/20 border-sol-violet/50 text-sol-violet"
+                        : "border-sol-violet/30 text-sol-violet/80 hover:bg-sol-violet/15 hover:border-sol-violet/50 hover:text-sol-violet"
+                    }`}
                   >
+                    {isLocalSelected && (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
                     {opt.label}
                   </button>
                 ) : (
                   <span
                     key={j}
                     className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${
-                      isSelected || isSentChoice
+                      isSelected || isLocalSelected
                         ? "bg-sol-green/15 border-sol-green/40 text-sol-green"
                         : "border-sol-border/30 text-sol-text-dim"
                     }`}
                   >
-                    {(isSelected || isSentChoice) && (
+                    {(isSelected || isLocalSelected) && (
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
@@ -1786,18 +1842,91 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                   </span>
                 );
               })}
-              {isCustom && (
+              {isInteractive && !otherOpen[i] && (
+                <button
+                  onClick={() => {
+                    setOtherOpen(prev => ({ ...prev, [i]: true }));
+                    setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
+                  }}
+                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors cursor-pointer ${
+                    isOtherSelected
+                      ? "bg-sol-blue/20 border-sol-blue/50 text-sol-blue"
+                      : "border-sol-border/30 text-sol-text-dim hover:border-sol-blue/40 hover:text-sol-blue/80"
+                  }`}
+                >
+                  {isOtherSelected && (
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                  {isOtherSelected ? sel.label : "Other"}
+                </button>
+              )}
+              {!isInteractive && (isCustom || isOtherSelected) && (
                 <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border bg-sol-blue/15 border-sol-blue/40 text-sol-blue">
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
-                  {answer}
+                  {isOtherSelected ? sel.label : answer}
                 </span>
               )}
             </div>
+            {isInteractive && otherOpen[i] && (
+              <div className="flex items-center gap-1.5 mt-1">
+                <input
+                  autoFocus
+                  type="text"
+                  value={otherTexts[i] || ""}
+                  onChange={e => setOtherTexts(prev => ({ ...prev, [i]: e.target.value }))}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && otherTexts[i]?.trim()) {
+                      commitOther(i, otherTexts[i].trim(), q.options.length);
+                      setOtherOpen(prev => ({ ...prev, [i]: false }));
+                    } else if (e.key === "Escape") {
+                      setOtherOpen(prev => ({ ...prev, [i]: false }));
+                    }
+                  }}
+                  placeholder="Type your answer..."
+                  className="flex-1 text-xs px-2 py-1 rounded border border-sol-blue/30 bg-sol-bg-alt text-sol-text placeholder:text-sol-text-dim/50 focus:outline-none focus:border-sol-blue/60"
+                />
+                <button
+                  onClick={() => {
+                    if (otherTexts[i]?.trim()) {
+                      commitOther(i, otherTexts[i].trim(), q.options.length);
+                      setOtherOpen(prev => ({ ...prev, [i]: false }));
+                    }
+                  }}
+                  disabled={!otherTexts[i]?.trim()}
+                  className="text-[10px] px-2 py-1 rounded border border-sol-blue/40 text-sol-blue hover:bg-sol-blue/15 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  OK
+                </button>
+                <button
+                  onClick={() => setOtherOpen(prev => ({ ...prev, [i]: false }))}
+                  className="text-[10px] px-1.5 py-1 text-sol-text-dim hover:text-sol-text transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         );
       })}
+      {isInteractive && isMultiQuestion && (
+        <div className="pt-1">
+          <button
+            onClick={handleSubmitAll}
+            disabled={!allAnswered}
+            className={`text-[11px] px-3 py-1 rounded border transition-colors ${
+              allAnswered
+                ? "border-sol-green/40 bg-sol-green/10 text-sol-green hover:bg-sol-green/20 cursor-pointer"
+                : "border-sol-border/30 bg-sol-bg-alt text-sol-text-dim cursor-not-allowed opacity-50"
+            }`}
+          >
+            Submit answers ({Object.keys(selections).length}/{questions.length})
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2270,23 +2399,13 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   );
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
-  const handleCopy = async () => {
-    try {
-      await copyToClipboard(content);
-      toast.success("Copied!");
-    } catch (err) {
-      toast.error("Failed to copy");
-    }
+  const handleCopy = () => {
+    setTimeout(() => { copyToClipboard(content).then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
   };
 
-  const handleCopyLink = async () => {
-    try {
-      const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
-      await copyToClipboard(url);
-      toast.success("Link copied!");
-    } catch (err) {
-      toast.error("Failed to copy link");
-    }
+  const handleCopyLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
+    setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
   };
 
   const handleToggleBookmark = async () => {
@@ -2384,7 +2503,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
           href={`#msg-${messageId}`}
           className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
           title={`${formatFullTimestamp(timestamp)} (click to copy)`}
-          onClick={(e) => { e.preventDefault(); copyToClipboard(formatFullTimestamp(timestamp)).then(() => toast.success("Timestamp copied")); }}
+          onClick={(e) => { e.preventDefault(); setTimeout(() => { copyToClipboard(formatFullTimestamp(timestamp)).then(() => toast.success("Timestamp copied")); }); }}
         >
           {formatRelativeTime(timestamp)}
         </a>
@@ -2696,23 +2815,13 @@ function AssistantBlock({
   };
   const { text: truncatedContent } = getCollapsedContent();
 
-  const handleCopy = async () => {
-    try {
-      await copyToClipboard(displayContent || "");
-      toast.success("Copied!");
-    } catch (err) {
-      toast.error("Failed to copy");
-    }
+  const handleCopy = () => {
+    setTimeout(() => { copyToClipboard(displayContent || "").then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
   };
 
-  const handleCopyLink = async () => {
-    try {
-      const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
-      await copyToClipboard(url);
-      toast.success("Link copied!");
-    } catch (err) {
-      toast.error("Failed to copy link");
-    }
+  const handleCopyLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
+    setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
   };
 
   const handleToggleBookmark = async () => {
@@ -2830,7 +2939,7 @@ function AssistantBlock({
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
             title={`${formatFullTimestamp(timestamp)} (click to copy)`}
-            onClick={(e) => { e.preventDefault(); copyToClipboard(formatFullTimestamp(timestamp)).then(() => toast.success("Timestamp copied")); }}
+            onClick={(e) => { e.preventDefault(); setTimeout(() => { copyToClipboard(formatFullTimestamp(timestamp)).then(() => toast.success("Timestamp copied")); }); }}
           >
             {formatRelativeTime(timestamp)}
           </a>
@@ -5560,6 +5669,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <TooltipContent>More options</TooltipContent>
                   </Tooltip>
                   <DropdownMenuContent align="end">
+                    {managedSession?.tmux_session && (
+                      <>
+                        <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(`tmux attach -t '${managedSession.tmux_session}'`).then(() => toast.success("tmux attach copied")).catch(() => toast.error("Failed to copy")); }); }}>
+                          <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          <span className="font-bold">tmux attach</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
                     {conversation?.short_id && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

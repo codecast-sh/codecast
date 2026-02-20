@@ -21,6 +21,7 @@ import { useCurrentConversationStore } from "../store/currentConversationStore";
 import { NewSessionModal } from "./ConversationList";
 import { getCached, setCached } from "../store/queryCache";
 import { queryCacheKey } from "../hooks/useCachedQuery";
+import { getDraft, setDraft, clearDraft } from "../store/convexCache";
 import { useQueueStore } from "../store/queueStore";
 import { usePendingSessionStore } from "../store/pendingSessionStore";
 
@@ -167,6 +168,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       if (cached) {
         const newKey = queryCacheKey(api.conversations.getAllMessages, { conversation_id: realId, limit: 100 });
         setCached(newKey, { ...cached, _id: realId, last_timestamp: 0 });
+      }
+      const oldDraft = getDraft(tempId);
+      if (oldDraft) {
+        setDraft(realId, oldDraft);
+        clearDraft(tempId);
       }
       if (isOnInboxPage) {
         replaceSessionId(tempId, realId);
