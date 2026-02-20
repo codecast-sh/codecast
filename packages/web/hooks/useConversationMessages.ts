@@ -77,7 +77,12 @@ export function useConversationMessages(
   );
 
   const effectiveTargetTimestamp = targetMessageTimestamp?.timestamp ?? highlightMessageResult?.timestamp;
-  const hasTarget = !!(targetMessageId || cleanedHighlightQuery);
+  const highlightNotFound = !!(cleanedHighlightQuery && highlightMessageResult === null);
+  const targetNotFound = !!(targetMessageId && targetMessageTimestamp === null);
+  const hasTarget = !!(
+    (targetMessageId && !targetNotFound) ||
+    (cleanedHighlightQuery && !highlightNotFound)
+  );
   const targetTimestampReady = hasTarget && effectiveTargetTimestamp !== undefined;
 
   // When we have a target with timestamp, use aroundData to load messages centered on it
