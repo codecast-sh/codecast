@@ -84,7 +84,7 @@ ${messageText}`;
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-3-5-haiku-latest",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 400,
           messages: [{ role: "user", content: prompt }],
         }),
@@ -100,8 +100,10 @@ ${messageText}`;
 
       if (!text) return;
 
+      const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
       try {
-        const parsed = JSON.parse(text);
+        const parsed = JSON.parse(cleaned);
         const title = parsed.title?.trim();
         const subtitle = parsed.subtitle?.trim();
 
@@ -113,10 +115,10 @@ ${messageText}`;
           });
         }
       } catch {
-        if (text.length > 0 && text.length < 200) {
+        if (cleaned.length > 0 && cleaned.length < 200) {
           await ctx.runMutation(internal.titleGeneration.setTitleAndSubtitle, {
             conversation_id: args.conversation_id,
-            title: text,
+            title: cleaned,
             subtitle: "",
           });
         }
