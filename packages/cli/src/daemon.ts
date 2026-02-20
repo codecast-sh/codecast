@@ -493,6 +493,64 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "kill_session": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId = parsed.conversation_id;
+        if (!conversationId) {
+          error = "Missing conversation_id";
+          break;
+        }
+
+        const started = startedSessionTmux.get(conversationId);
+        if (started) {
+          try {
+            await execAsync(`tmux kill-session -t '${started.tmuxSession}' 2>/dev/null`);
+            log(`[REMOTE] Killed started tmux session ${started.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+          } catch {}
+          startedSessionTmux.delete(conversationId);
+          result = "killed_tmux";
+          break;
+        }
+
+        const cache = readConversationCache();
+        const reverse = buildReverseConversationCache(cache);
+        const sessionId = reverse[conversationId];
+        if (sessionId) {
+          const proc = await findSessionProcess(sessionId);
+          if (proc) {
+            const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+            if (tmuxTarget) {
+              const tmuxSessionName = tmuxTarget.split(":")[0];
+              try {
+                await execAsync(`tmux kill-session -t '${tmuxSessionName}' 2>/dev/null`);
+                log(`[REMOTE] Killed tmux session ${tmuxSessionName} for conversation ${conversationId.slice(0, 12)}`);
+                result = "killed_tmux";
+              } catch {
+                try {
+                  process.kill(proc.pid, "SIGKILL");
+                  result = "killed_sigkill";
+                  log(`[REMOTE] Sent SIGKILL to pid ${proc.pid} for conversation ${conversationId.slice(0, 12)}`);
+                } catch (killErr) {
+                  error = `Failed to kill pid ${proc.pid}: ${killErr}`;
+                }
+              }
+            } else {
+              try {
+                process.kill(proc.pid, "SIGKILL");
+                result = "killed_sigkill";
+                log(`[REMOTE] Sent SIGKILL to pid ${proc.pid} for conversation ${conversationId.slice(0, 12)}`);
+              } catch (killErr) {
+                error = `Failed to kill pid ${proc.pid}: ${killErr}`;
+              }
+            }
+          } else {
+            result = "no_process";
+          }
+        } else {
+          result = "no_session";
+        }
+        break;
+      }
       case "resume_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const sessionId = parsed.session_id;
@@ -2338,10 +2396,12 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   }
 }
 
-function parsePollMessage(content: string): { keys: string[]; text?: string; display?: string } | null {
+type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string };
+
+function parsePollMessage(content: string): PollMessage | null {
   try {
     const parsed = JSON.parse(content);
-    if (parsed.__cc_poll && Array.isArray(parsed.keys)) return parsed;
+    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps))) return parsed;
   } catch {}
   return null;
 }
@@ -2349,9 +2409,18 @@ function parsePollMessage(content: string): { keys: string[]; text?: string; dis
 async function injectViaTmux(target: string, content: string): Promise<void> {
   const poll = parsePollMessage(content);
   if (poll) {
-    for (const key of poll.keys) {
-      await execAsync(`tmux send-keys -t '${target}' '${key}'`);
+    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+    for (const step of steps) {
+      await execAsync(`tmux send-keys -t '${target}' '${step.key}'`);
       await new Promise(resolve => setTimeout(resolve, 500));
+      if (step.text) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const escaped = step.text.replace(/'/g, "'\\''");
+        await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
+        await new Promise(resolve => setTimeout(resolve, 150));
+        await execAsync(`tmux send-keys -t '${target}' Enter`);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
     if (poll.text) {
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -2378,11 +2447,20 @@ async function injectViaIterm(tty: string, content: string): Promise<void> {
   let scriptArgs: string;
 
   if (poll) {
-    const keyActions = poll.keys.map((key, i) => {
-      const lines = [`            tell s to write text "${key}" without newline`];
-      if (i < poll.keys.length - 1) lines.push("            delay 0.5");
+    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+    const stepActions = steps.map((step, i) => {
+      const lines = [`            tell s to write text "${step.key}" without newline`];
+      if (step.text) {
+        const escapedText = step.text.replace(/"/g, '\\"');
+        lines.push("            delay 0.5");
+        lines.push(`            tell s to write text "${escapedText}" without newline`);
+        lines.push("            delay 0.15");
+        lines.push(`            tell s to write text ""`);
+      }
+      if (i < steps.length - 1) lines.push("            delay 0.5");
       return lines.join("\n");
     }).join("\n");
+    const keyActions = stepActions;
     const textAction = poll.text
       ? `\n            delay 0.3\n            tell s to write text "${poll.text.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
       : "";
