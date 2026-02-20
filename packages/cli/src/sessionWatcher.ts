@@ -147,7 +147,39 @@ export class SessionWatcher extends EventEmitter {
   }
 
   private extractProjectPath(filePath: string): string {
-    const parentDir = path.basename(path.dirname(filePath));
-    return parentDir.replace(/-/g, "/");
+    const dirName = path.basename(path.dirname(filePath));
+    const decoded = this.decodeProjectDirName(dirName);
+    return decoded && fs.existsSync(decoded) ? decoded : dirName.replace(/-/g, "/");
+  }
+
+  private decodeProjectDirName(dirName: string): string {
+    const stripped = dirName.startsWith("-") ? dirName.slice(1) : dirName;
+    const tokens = stripped.split("-");
+    let resolved = "/";
+    let i = 0;
+    while (i < tokens.length) {
+      if (tokens[i] === "") { i++; continue; }
+      let matched = false;
+      for (let len = tokens.length - i; len >= 1; len--) {
+        const candidate = tokens.slice(i, i + len).join("-");
+        if (fs.existsSync(path.join(resolved, candidate))) {
+          resolved = path.join(resolved, candidate);
+          i += len;
+          matched = true;
+          break;
+        }
+        if (fs.existsSync(path.join(resolved, "." + candidate))) {
+          resolved = path.join(resolved, "." + candidate);
+          i += len;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        resolved = path.join(resolved, tokens[i]);
+        i++;
+      }
+    }
+    return resolved;
   }
 }

@@ -154,7 +154,6 @@ const syncStats = {
 
 let lastWatcherEventTime = Date.now();
 let lastWatcherIdleLogTime = 0;
-const projectPathUpdated = new Set<string>();
 
 const HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -766,22 +765,38 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
   };
 }
 
-function detectProjectFromMessages(messages: ParsedMessage[]): string | undefined {
-  for (const msg of messages) {
-    if (!msg.toolCalls) continue;
-    for (const tc of msg.toolCalls) {
-      const input = tc.input;
-      if (!input) continue;
-      const fp =
-        (typeof input.file_path === "string" && input.file_path.startsWith("/") ? input.file_path : undefined) ||
-        (typeof input.path === "string" && input.path.startsWith("/") ? input.path : undefined);
-      if (!fp) continue;
-      const dir = path.dirname(fp);
-      const gitInfo = getGitInfo(dir);
-      if (gitInfo?.root) return gitInfo.root;
+function decodeProjectDirName(dirName: string): string {
+  const stripped = dirName.startsWith("-") ? dirName.slice(1) : dirName;
+  const tokens = stripped.split("-");
+
+  let resolved = "/";
+  let i = 0;
+
+  while (i < tokens.length) {
+    if (tokens[i] === "") { i++; continue; }
+    let matched = false;
+    for (let len = tokens.length - i; len >= 1; len--) {
+      const candidate = tokens.slice(i, i + len).join("-");
+      if (fs.existsSync(path.join(resolved, candidate))) {
+        resolved = path.join(resolved, candidate);
+        i += len;
+        matched = true;
+        break;
+      }
+      if (fs.existsSync(path.join(resolved, "." + candidate))) {
+        resolved = path.join(resolved, "." + candidate);
+        i += len;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      resolved = path.join(resolved, tokens[i]);
+      i++;
     }
   }
-  return undefined;
+
+  return resolved;
 }
 
 async function flushPendingMessagesBatch(
@@ -982,7 +997,9 @@ async function processSessionFile(
       const slug = extractSlug(fullContent);
       const parentMessageUuid = extractParentUuid(fullContent);
       const firstMessageTimestamp = messages[0]?.timestamp;
-      const actualProjectPath = extractCwd(fullContent) || projectPath;
+      const dirName = path.basename(path.dirname(filePath));
+      const decodedPath = dirName ? decodeProjectDirName(dirName) : undefined;
+      const actualProjectPath = (decodedPath && fs.existsSync(decodedPath) ? decodedPath : null) || extractCwd(fullContent) || projectPath;
       const gitInfo = actualProjectPath ? getGitInfo(actualProjectPath) : undefined;
 
       const firstUserMessage = messages.find(msg => msg.role === "user");
@@ -1043,12 +1060,16 @@ async function processSessionFile(
           slug,
           title,
           startedAt: firstMessageTimestamp,
-          parentMessageUuid: isPlanHandoff ? "plan-handoff" : parentMessageUuid,
+          parentMessageUuid: isPlanHandoff ? "plan-handoff" : (parentConversationId ? undefined : parentMessageUuid),
           parentConversationId,
           gitInfo,
         });
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
+        if (isPlanHandoff && parentConversationId) {
+          planHandoffChildren.set(parentConversationId, conversationId);
+          log(`Registered plan handoff: parent ${parentConversationId.slice(0, 12)} -> child ${conversationId.slice(0, 12)}`);
+        }
         log(`Created conversation ${conversationId} for session ${sessionId}`);
         syncStats.conversationsCreated++;
       }
@@ -1111,7 +1132,9 @@ async function processSessionFile(
 
       const slug = extractSlug(retryFullContent);
       const firstMsgTimestamp = messages[0]?.timestamp;
-      const retryProjectPath = extractCwd(retryFullContent) || projectPath;
+      const retryDirName = path.basename(path.dirname(filePath));
+      const retryDecoded = retryDirName ? decodeProjectDirName(retryDirName) : undefined;
+      const retryProjectPath = (retryDecoded && fs.existsSync(retryDecoded) ? retryDecoded : null) || extractCwd(retryFullContent) || projectPath;
       const gitInfo = retryProjectPath ? getGitInfo(retryProjectPath) : undefined;
 
       retryQueue.add("createConversation", {
@@ -1154,7 +1177,9 @@ async function processSessionFile(
 
     const slug = extractSlug(recreateFullContent);
     const firstMessageTimestamp = messages[0]?.timestamp;
-    const recreateProjectPath = extractCwd(recreateFullContent) || projectPath;
+    const recreateDirName = path.basename(path.dirname(filePath));
+    const recreateDecoded = recreateDirName ? decodeProjectDirName(recreateDirName) : undefined;
+    const recreateProjectPath = (recreateDecoded && fs.existsSync(recreateDecoded) ? recreateDecoded : null) || extractCwd(recreateFullContent) || projectPath;
     const gitInfo = recreateProjectPath ? getGitInfo(recreateProjectPath) : undefined;
 
     try {
@@ -1192,17 +1217,6 @@ async function processSessionFile(
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
     tryRegisterSessionProcess(sessionId, "claude");
-
-    if (conversationId && !projectPathUpdated.has(sessionId)) {
-      const detected = detectProjectFromMessages(messages);
-      if (detected) {
-        projectPathUpdated.add(sessionId);
-        const gitInfo = getGitInfo(detected);
-        syncService.updateProjectPath(sessionId, detected, gitInfo?.root).then((r) => {
-          if (r?.updated) log(`Updated project path for ${sessionId.slice(0, 8)}: ${detected}`);
-        }).catch(() => {});
-      }
-    }
 
     const lastMessage = messages[messages.length - 1];
     const wasInterrupted = lastMessage?.role === "user" &&
@@ -2324,7 +2338,31 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   }
 }
 
+function parsePollMessage(content: string): { keys: string[]; text?: string; display?: string } | null {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed.__cc_poll && Array.isArray(parsed.keys)) return parsed;
+  } catch {}
+  return null;
+}
+
 async function injectViaTmux(target: string, content: string): Promise<void> {
+  const poll = parsePollMessage(content);
+  if (poll) {
+    for (const key of poll.keys) {
+      await execAsync(`tmux send-keys -t '${target}' '${key}'`);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    if (poll.text) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const escaped = poll.text.replace(/'/g, "'\\''");
+      await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      await execAsync(`tmux send-keys -t '${target}' Enter`);
+    }
+    log(`Injected poll response via tmux to ${target}`);
+    return;
+  }
   const escaped = content.replace(/'/g, "'\\''");
   await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
   await new Promise(resolve => setTimeout(resolve, 150));
@@ -2334,7 +2372,40 @@ async function injectViaTmux(target: string, content: string): Promise<void> {
 
 async function injectViaIterm(tty: string, content: string): Promise<void> {
   const normalizedTty = normalizeTty(tty);
-  const scriptContent = `on run argv
+  const poll = parsePollMessage(content);
+
+  let scriptContent: string;
+  let scriptArgs: string;
+
+  if (poll) {
+    const keyActions = poll.keys.map((key, i) => {
+      const lines = [`            tell s to write text "${key}" without newline`];
+      if (i < poll.keys.length - 1) lines.push("            delay 0.5");
+      return lines.join("\n");
+    }).join("\n");
+    const textAction = poll.text
+      ? `\n            delay 0.3\n            tell s to write text "${poll.text.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
+      : "";
+    scriptContent = `on run argv
+  set targetTty to item 1 of argv
+  tell application "iTerm2"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          set sTty to tty of s
+          if sTty is targetTty then
+${keyActions}${textAction}
+            return "ok"
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  return "not_found"
+end run`;
+    scriptArgs = `'${normalizedTty}'`;
+  } else {
+    scriptContent = `on run argv
   set msgText to item 1 of argv
   set targetTty to item 2 of argv
   tell application "iTerm2"
@@ -2354,15 +2425,18 @@ async function injectViaIterm(tty: string, content: string): Promise<void> {
   end tell
   return "not_found"
 end run`;
+    const escapedContent = content.replace(/'/g, "'\\''");
+    scriptArgs = `'${escapedContent}' '${normalizedTty}'`;
+  }
+
   const tmpFile = path.join(CONFIG_DIR, "iterm-inject.scpt");
   fs.writeFileSync(tmpFile, scriptContent);
   try {
-    const escapedContent = content.replace(/'/g, "'\\''");
-    const { stdout } = await execAsync(`osascript "${tmpFile}" '${escapedContent}' '${normalizedTty}'`);
+    const { stdout } = await execAsync(`osascript "${tmpFile}" ${scriptArgs}`);
     if (stdout.trim() === "not_found") {
       throw new Error(`iTerm2 session not found for TTY ${normalizedTty}`);
     }
-    log(`Injected via iTerm2 for TTY ${normalizedTty}`);
+    log(`Injected ${poll ? "poll response" : "message"} via iTerm2 for TTY ${normalizedTty}`);
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
@@ -2430,6 +2504,8 @@ const resumeSessionCache = new Map<string, string>();
 
 const startedSessionTmux = new Map<string, { tmuxSession: string; projectPath: string; startedAt: number }>();
 const STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
+
+const planHandoffChildren = new Map<string, string>();
 
 interface CachedProcessInfo {
   pid: number;
@@ -2669,6 +2745,12 @@ async function deliverMessage(
   messageId: string,
   titleCache: TitleCache
 ): Promise<boolean> {
+  const childConvId = planHandoffChildren.get(conversationId);
+  if (childConvId) {
+    log(`Redirecting message from plan parent ${conversationId.slice(0, 12)} to child ${childConvId.slice(0, 12)}`);
+    return deliverMessage(childConvId, content, conversationCache, syncService, messageId, titleCache);
+  }
+
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
 
@@ -2810,19 +2892,23 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
     const sessionFiles = fs.readdirSync(dirPath)
       .filter(f => f.endsWith(".jsonl") && f !== "sessions-index.json");
 
+    const decodedPath = decodeProjectDirName(dir);
+    const resolvedDir = decodedPath && fs.existsSync(decodedPath) ? decodedPath : null;
+
     for (const file of sessionFiles) {
       const sessionId = file.replace(".jsonl", "");
       const filePath = path.join(dirPath, file);
 
       try {
-        const content = fs.readFileSync(filePath, "utf-8");
-        const actualCwd = extractCwd(content);
-        if (!actualCwd) continue;
-
         checked++;
 
-        const detected = detectProjectFromMessages(parseSessionFile(content));
-        const projectPath = detected || actualCwd;
+        let projectPath: string | null = resolvedDir;
+        if (!projectPath) {
+          const content = fs.readFileSync(filePath, "utf-8").slice(0, 5000);
+          projectPath = extractCwd(content) || null;
+        }
+        if (!projectPath) continue;
+
         const gitInfo = getGitInfo(projectPath);
         const result = await syncService.updateProjectPath(sessionId, projectPath, gitInfo?.root);
         if (result?.updated) {
@@ -3477,7 +3563,8 @@ function startWatchdog(
       const parts = filePath.split(path.sep);
       const sessionId = parts[parts.length - 1].replace(".jsonl", "");
       const projectDirName = parts[parts.length - 2];
-      const projectPath = projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
+      const decoded = decodeProjectDirName(projectDirName);
+      const projectPath = decoded && fs.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
 
       if (deps.config.excluded_paths && isPathExcluded(projectPath, deps.config.excluded_paths)) {
         continue;
@@ -3880,7 +3967,8 @@ async function main(): Promise<void> {
         } else {
           projectDirName = parts[parts.length - 2];
         }
-        const projectPath = projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
+        const decoded = decodeProjectDirName(projectDirName);
+        const projectPath = decoded && fs.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path.sep).replace(/^-/, "");
 
         if (config.excluded_paths && isPathExcluded(projectPath, config.excluded_paths)) {
           continue;
