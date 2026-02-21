@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { patch as cachePatch, confirm as cacheConfirm } from "./convexCache";
+import { patch as cachePatch, confirm as cacheConfirm, apply as cacheApply, useConvexCacheStore } from "./convexCache";
 
 export type InboxSession = {
   _id: string;
@@ -7,6 +7,7 @@ export type InboxSession = {
   title?: string;
   subtitle?: string;
   updated_at: number;
+  started_at?: number;
   project_path?: string;
   git_root?: string;
   git_branch?: string;
@@ -15,6 +16,7 @@ export type InboxSession = {
   idle_summary?: string;
   is_idle: boolean;
   is_unresponsive?: boolean;
+  is_connected?: boolean;
   has_pending: boolean;
   is_deferred?: boolean;
   last_user_message?: string | null;
@@ -30,6 +32,7 @@ interface InboxState {
   injectedIds: Set<string>;
   showDismissed: boolean;
   viewingDismissedId: string | null;
+  pendingNavigateId: string | null;
 
   syncFromConvex: (sessions: InboxSession[]) => void;
   syncDismissedFromConvex: (sessions: InboxSession[]) => void;
@@ -44,7 +47,10 @@ interface InboxState {
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
+  pinSession: (id: string) => void;
+  updateSessionProject: (id: string, projectPath: string) => void;
   replaceSessionId: (tempId: string, realId: string) => void;
+  navigateToSession: (id: string) => void;
 }
 
 export const useQueueStore = create<InboxState>((set, get) => ({
@@ -55,13 +61,17 @@ export const useQueueStore = create<InboxState>((set, get) => ({
   injectedIds: new Set(),
   showDismissed: false,
   viewingDismissedId: null,
+  pendingNavigateId: null,
 
   syncFromConvex: (incoming) => {
     const { dismissedIds, currentIndex, sessions: prev } = get();
     const incomingById = new Map(incoming.map((s) => [s._id, s]));
 
     for (const s of incoming) {
-      cacheConfirm(s._id);
+      const pending = useConvexCacheStore.getState()._pending[s._id];
+      if (!pending || Object.entries(pending).every(([k, v]) => (s as any)[k] === v)) {
+        cacheConfirm(s._id);
+      }
     }
 
     const visibleIncoming = incoming.filter((s) => !dismissedIds.has(s._id));
@@ -84,14 +94,16 @@ export const useQueueStore = create<InboxState>((set, get) => ({
       }
       if (injectedIds.has(old._id) && !dismissedIds.has(old._id)) {
         const fresh = incomingById.get(old._id);
-        const resolved = fresh || old;
+        let resolved = fresh || old;
+        resolved = cacheApply(resolved as any) as InboxSession;
         merged.push(old.stableKey ? { ...resolved, stableKey: old.stableKey } : resolved);
         seen.add(old._id);
         continue;
       }
       const fresh = incomingById.get(old._id);
       if (fresh && !dismissedIds.has(old._id)) {
-        merged.push(old.stableKey ? { ...fresh, stableKey: old.stableKey } : fresh);
+        const applied = cacheApply(fresh as any) as InboxSession;
+        merged.push(old.stableKey ? { ...applied, stableKey: old.stableKey } : applied);
         seen.add(old._id);
       }
     }
@@ -212,10 +224,47 @@ export const useQueueStore = create<InboxState>((set, get) => ({
   },
 
   injectSession: (session) => {
-    const { sessions, injectedIds } = get();
+    const { sessions, injectedIds, dismissedIds } = get();
     const next = new Set(injectedIds);
     next.add(session._id);
-    set({ sessions: [session, ...sessions], currentIndex: 0, injectedIds: next });
+    const newDismissed = new Set(dismissedIds);
+    if (newDismissed.delete(session._id)) {
+      cachePatch("conversations", session._id, { inbox_dismissed_at: null });
+    }
+    set({ sessions: [session, ...sessions], currentIndex: 0, injectedIds: next, dismissedIds: newDismissed, viewingDismissedId: null });
+  },
+
+  pinSession: (id) => {
+    const { injectedIds } = get();
+    if (injectedIds.has(id)) return;
+    const next = new Set(injectedIds);
+    next.add(id);
+    set({ injectedIds: next });
+  },
+
+  updateSessionProject: (id, projectPath) => {
+    const { sessions, injectedIds } = get();
+    const updated = sessions.map((s) =>
+      s._id === id ? { ...s, project_path: projectPath, git_root: projectPath } : s
+    );
+    const next = new Set(injectedIds);
+    next.add(id);
+    set({ sessions: updated, injectedIds: next });
+  },
+
+  navigateToSession: (id) => {
+    const { sessions, dismissedIds } = get();
+    const newDismissed = new Set(dismissedIds);
+    if (newDismissed.delete(id)) {
+      cachePatch("conversations", id, { inbox_dismissed_at: null });
+      set({ dismissedIds: newDismissed });
+    }
+    const idx = sessions.findIndex((s) => s._id === id);
+    if (idx >= 0) {
+      set({ currentIndex: idx, viewingDismissedId: null });
+    } else {
+      set({ pendingNavigateId: id, viewingDismissedId: null });
+    }
   },
 
   replaceSessionId: (tempId, realId) => {

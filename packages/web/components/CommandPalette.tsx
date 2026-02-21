@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { useQueueStore } from "../store/queueStore";
 
 const NAV_PAGES = [
   { label: "Dashboard", path: "/dashboard", icon: "grid", keywords: "home sessions main" },
@@ -73,6 +74,7 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const router = useRouter();
+  const pathname = usePathname();
 
   const favorites = useQuery(api.conversations.listFavorites);
   const bookmarks = useQuery(api.bookmarks.listBookmarks);
@@ -121,10 +123,17 @@ export function CommandPalette() {
 
   const navigate = useCallback(
     (path: string) => {
-      router.push(path);
+      const inboxMatch = path.match(/^\/inbox\?s=(.+)$/);
+      if (inboxMatch && pathname === "/inbox") {
+        const sessionId = inboxMatch[1];
+        useQueueStore.getState().navigateToSession(sessionId);
+        window.history.replaceState({ inboxId: sessionId }, "", path);
+      } else {
+        router.push(path);
+      }
       setOpen(false);
     },
-    [router]
+    [router, pathname]
   );
 
   const showFavorites = favorites && favorites.length > 0;

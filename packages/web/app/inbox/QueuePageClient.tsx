@@ -33,7 +33,7 @@ function getProjectName(gitRoot?: string, projectPath?: string): string {
   return path.split("/").filter(Boolean).pop() || "unknown";
 }
 
-const InboxConversation = memo(function InboxConversation({ sessionId, onSendAndAdvance, lastUserMessage }: { sessionId: string; onSendAndAdvance: () => void; lastUserMessage?: string | null }) {
+const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null }) {
   const {
     conversation,
     hasMoreAbove,
@@ -45,6 +45,35 @@ const InboxConversation = memo(function InboxConversation({ sessionId, onSendAnd
     jumpToStart,
     jumpToEnd,
   } = useConversationMessages(sessionId);
+
+  const resumeSession = useMutation(api.users.resumeSession);
+  const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
+
+  const lastMsg = conversation?.messages?.[conversation.messages.length - 1];
+  const lastRoleIsUser = lastMsg?.role === "user";
+  const isStale = (Date.now() - (conversation?.updated_at || 0)) > 5 * 60 * 1000;
+  const looksAbandoned = isIdle && lastRoleIsUser && isStale;
+
+  useEffect(() => {
+    if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {
+      setResumeState("idle");
+    }
+  }, [isIdle, resumeState]);
+
+  useEffect(() => {
+    if (resumeState !== "sent") return;
+    const timeout = setTimeout(() => {
+      setResumeState("failed");
+    }, 45_000);
+    return () => clearTimeout(timeout);
+  }, [resumeState]);
+
+  const handleManualResume = useCallback(() => {
+    setResumeState("resuming");
+    resumeSession({ conversation_id: sessionId as Id<"conversations"> })
+      .then(() => setResumeState("sent"))
+      .catch(() => setResumeState("failed"));
+  }, [sessionId, resumeSession]);
 
   if (!conversation) {
     return (
@@ -61,23 +90,49 @@ const InboxConversation = memo(function InboxConversation({ sessionId, onSendAnd
   }
 
   return (
-    <ConversationDiffLayout
-      conversation={conversation as ConversationData}
-      embedded
-      hasMoreAbove={hasMoreAbove}
-      hasMoreBelow={hasMoreBelow}
-      isLoadingOlder={isLoadingOlder}
-      isLoadingNewer={isLoadingNewer}
-      onLoadOlder={loadOlder}
-      onLoadNewer={loadNewer}
-      onJumpToStart={jumpToStart}
-      onJumpToEnd={jumpToEnd}
-      isOwner={true}
-      onSendAndAdvance={onSendAndAdvance}
-      autoFocusInput
-      backHref="/inbox"
-      fallbackStickyContent={lastUserMessage?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim() || null}
-    />
+    <div className="relative h-full">
+      {(resumeState === "resuming" || resumeState === "sent") && (
+        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-orange/90 text-sol-bg text-xs backdrop-blur-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg animate-pulse" />
+          Resuming session...
+        </div>
+      )}
+      {resumeState === "failed" && (
+        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />
+          Resume timed out
+          <button onClick={handleManualResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors">
+            Retry
+          </button>
+        </div>
+      )}
+      {looksAbandoned && resumeState === "idle" && (
+        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-bg-alt/90 border-b border-sol-border/50 text-sol-text-dim text-xs backdrop-blur-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/50" />
+          Session unresponsive — send a message or
+          <button onClick={handleManualResume} className="px-1.5 py-0.5 rounded bg-sol-cyan/10 hover:bg-sol-cyan/20 border border-sol-cyan/30 text-sol-cyan transition-colors">
+            Resume
+          </button>
+        </div>
+      )}
+      <ConversationDiffLayout
+        conversation={conversation as ConversationData}
+        embedded
+        hasMoreAbove={hasMoreAbove}
+        hasMoreBelow={hasMoreBelow}
+        isLoadingOlder={isLoadingOlder}
+        isLoadingNewer={isLoadingNewer}
+        onLoadOlder={loadOlder}
+        onLoadNewer={loadNewer}
+        onJumpToStart={jumpToStart}
+        onJumpToEnd={jumpToEnd}
+        isOwner={true}
+        onSendAndAdvance={onSendAndAdvance}
+        autoFocusInput
+        backHref="/inbox"
+        fallbackStickyContent={lastUserMessage?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim() || null}
+      />
+    </div>
   );
 });
 
@@ -157,7 +212,12 @@ function SessionCard({
           isWorking ? "font-semibold text-sol-green" : "font-medium text-sol-cyan"
         }`}>{project}</span>
         {session.message_count === 0 && !session.last_user_message && (
-          (Date.now() - session.updated_at) < 2 * 60 * 1000 ? (
+          session.is_connected ? (
+            <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-green/70">
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-green/70" />
+              <span>Ready</span>
+            </div>
+          ) : (Date.now() - (session.started_at || session.updated_at)) < 2 * 60 * 1000 ? (
             <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-cyan/60">
               <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
@@ -322,9 +382,9 @@ function InboxSessionPanel({
               <SessionCard
                 key={session._id}
                 session={session}
-                isActive={getGlobalIndex(session) === currentIndex}
+                isActive={!viewingDismissedId && getGlobalIndex(session) === currentIndex}
                 globalIndex={getGlobalIndex(session)}
-                onSelect={setCurrentIndex}
+                onSelect={(idx) => { setViewingDismissedId(null); setCurrentIndex(idx); }}
                 onDismiss={stashSession}
                 onDefer={deferSession}
               />
@@ -343,9 +403,9 @@ function InboxSessionPanel({
               <SessionCard
                 key={session._id}
                 session={session}
-                isActive={getGlobalIndex(session) === currentIndex}
+                isActive={!viewingDismissedId && getGlobalIndex(session) === currentIndex}
                 globalIndex={getGlobalIndex(session)}
-                onSelect={setCurrentIndex}
+                onSelect={(idx) => { setViewingDismissedId(null); setCurrentIndex(idx); }}
                 onDismiss={stashSession}
                 onDefer={deferSession}
               />
@@ -364,9 +424,9 @@ function InboxSessionPanel({
               <SessionCard
                 key={session._id}
                 session={session}
-                isActive={getGlobalIndex(session) === currentIndex}
+                isActive={!viewingDismissedId && getGlobalIndex(session) === currentIndex}
                 globalIndex={getGlobalIndex(session)}
-                onSelect={setCurrentIndex}
+                onSelect={(idx) => { setViewingDismissedId(null); setCurrentIndex(idx); }}
                 onDismiss={stashSession}
                 onDefer={deferSession}
                 variant="working"
@@ -437,6 +497,7 @@ export function QueuePageClient() {
   const stashSession = useQueueStore((s) => s.stashSession);
   const deferSession = useQueueStore((s) => s.deferSession);
   const rawSetCurrentIndex = useQueueStore((s) => s.setCurrentIndex);
+  const pinSession = useQueueStore((s) => s.pinSession);
   const viewingDismissedId = useQueueStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useQueueStore((s) => s.setViewingDismissedId);
 
@@ -491,10 +552,14 @@ export function QueuePageClient() {
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
 
-  // Query conversation for sessions not in the queue (skip temp IDs)
+  // Convex IDs are 32 lowercase alphanumeric chars -- skip query for anything else
+  const isValidConvexId = (id: string) => /^[a-z0-9]{32}$/.test(id);
+  const shouldQueryDirect = pendingInjectId && !pendingInjectId.startsWith("temp_") && isValidConvexId(pendingInjectId);
+
+  // Query conversation for sessions not in the queue (skip temp IDs and invalid IDs)
   const directConv = useQuery(
     api.conversations.getConversation,
-    pendingInjectId && !pendingInjectId.startsWith("temp_") ? { conversation_id: pendingInjectId as Id<"conversations">, limit: 1 } : "skip"
+    shouldQueryDirect ? { conversation_id: pendingInjectId as Id<"conversations">, limit: 1 } : "skip"
   );
 
   // Select session from URL param -- only when the param actually changes
@@ -506,12 +571,13 @@ export function QueuePageClient() {
     const idx = sessions.findIndex((s) => s._id === paramSessionId);
     if (idx >= 0) {
       rawSetCurrentIndex(idx);
+      pinSession(paramSessionId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
     } else {
       setPendingInjectId(paramSessionId);
     }
-  }, [paramSessionId, sessions, rawSetCurrentIndex, activeSessions]);
+  }, [paramSessionId, sessions, rawSetCurrentIndex, activeSessions, pinSession]);
 
   // Once we have the conversation data, inject it into the queue
   useEffect(() => {
@@ -519,11 +585,26 @@ export function QueuePageClient() {
     const already = sessions.findIndex((s) => s._id === pendingInjectId);
     if (already >= 0) {
       rawSetCurrentIndex(already);
+      pinSession(pendingInjectId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       return;
     }
-    if (!directConv) return;
+    // Invalid ID format -- query was skipped, redirect immediately
+    if (!isValidConvexId(pendingInjectId)) {
+      setPendingInjectId(null);
+      paramProcessedRef.current = true;
+      window.location.replace(`/conversation/${pendingInjectId}`);
+      return;
+    }
+    // directConv: undefined = still loading, null = not found/no access
+    if (directConv === undefined) return;
+    if (directConv === null) {
+      setPendingInjectId(null);
+      paramProcessedRef.current = true;
+      window.location.replace(`/conversation/${pendingInjectId}`);
+      return;
+    }
     injectSession({
       _id: pendingInjectId,
       session_id: directConv.session_id || pendingInjectId,
@@ -538,7 +619,22 @@ export function QueuePageClient() {
     });
     setPendingInjectId(null);
     paramProcessedRef.current = true;
-  }, [pendingInjectId, directConv, sessions, rawSetCurrentIndex, injectSession]);
+  }, [pendingInjectId, directConv, sessions, rawSetCurrentIndex, injectSession, pinSession]);
+
+  // Handle store-based navigation (from CommandPalette when already on /inbox)
+  const pendingNavigateId = useQueueStore((s) => s.pendingNavigateId);
+  useEffect(() => {
+    if (!pendingNavigateId) return;
+    useQueueStore.setState({ pendingNavigateId: null });
+    const idx = sessions.findIndex((s) => s._id === pendingNavigateId);
+    if (idx >= 0) {
+      setPendingInjectId(null);
+      rawSetCurrentIndex(idx);
+      pinSession(pendingNavigateId);
+    } else {
+      setPendingInjectId(pendingNavigateId);
+    }
+  }, [pendingNavigateId, sessions, rawSetCurrentIndex, pinSession]);
 
   const handleDismiss = useCallback((id: string) => {
     stashSession(id);
@@ -587,24 +683,22 @@ export function QueuePageClient() {
 
   // Sync URL when current session changes (but not before initial param is resolved)
   useEffect(() => {
-    if (!currentSession) return;
     if (!paramProcessedRef.current) return;
     if (isPopstateRef.current) {
       isPopstateRef.current = false;
       return;
     }
-    // Read latest session from store to avoid stale closure when param effect
-    // updated currentIndex in the same render cycle
-    const latest = useQueueStore.getState().getCurrentSession();
-    if (!latest) return;
+    const targetId = viewingDismissedId
+      ? undefined
+      : useQueueStore.getState().getCurrentSession()?._id;
+    if (!targetId) return;
     const url = new URL(window.location.href);
     if (!url.pathname.startsWith("/inbox")) return;
-    if (url.searchParams.get("s") !== latest._id) {
-      url.searchParams.set("s", latest._id);
-      // Use replaceState to avoid Next.js intercepting pushState and causing component remounts
-      window.history.replaceState({ inboxId: latest._id }, "", url.toString());
+    if (url.searchParams.get("s") !== targetId) {
+      url.searchParams.set("s", targetId);
+      window.history.replaceState({ inboxId: targetId }, "", url.toString());
     }
-  }, [currentSession?._id]);
+  }, [currentSession?._id, viewingDismissedId]);
 
   // Handle browser back/forward
   useEffect(() => {
@@ -687,6 +781,7 @@ export function QueuePageClient() {
             <InboxConversation
               key={viewingDismissedSession._id}
               sessionId={viewingDismissedSession._id}
+              isIdle={viewingDismissedSession.is_idle}
               onSendAndAdvance={() => setViewingDismissedId(null)}
               lastUserMessage={viewingDismissedSession.last_user_message}
             />
@@ -694,15 +789,33 @@ export function QueuePageClient() {
             <InboxConversation
               key={currentSession.stableKey || currentSession._id}
               sessionId={currentSession._id}
+              isIdle={currentSession.is_idle}
               onSendAndAdvance={handleSendAndAdvance}
               lastUserMessage={currentSession.last_user_message}
             />
+          ) : pendingInjectId ? (
+            <div className="h-full flex items-center justify-center text-sol-text-dim">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                <span className="text-sm">Loading session...</span>
+              </div>
+            </div>
           ) : (
             <div className="h-full flex items-center justify-center">
               <div className="text-center">
-                <svg className="w-12 h-12 mx-auto mb-3 text-sol-text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+                {activeSessions === undefined ? (
+                  <svg className="w-12 h-12 mx-auto mb-3 text-sol-text-dim animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                ) : (
+                  <svg className="w-12 h-12 mx-auto mb-3 text-sol-text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                )}
                 <p className="text-sol-text-muted text-sm">
                   {activeSessions === undefined ? "Loading..." : "No active sessions"}
                 </p>
@@ -739,6 +852,11 @@ export function QueuePageClient() {
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">←</kbd>
             dismiss
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">.</kbd>
+            zen
           </span>
           <button onClick={toggleShortcuts} className="ml-auto flex items-center gap-1 hover:text-sol-text-muted transition-colors">
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">?</kbd>
