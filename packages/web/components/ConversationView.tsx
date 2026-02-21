@@ -975,7 +975,7 @@ function isPlanWriteToolCall(tc: ToolCall): boolean {
   }
 }
 
-function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, onStartShareSelection, collapsed, timestamp, images }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean; messageId?: string; onStartShareSelection?: (messageId: string) => void; collapsed?: boolean; timestamp?: number; images?: ImageData[] }) {
+function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, onStartShareSelection, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean; messageId?: string; onStartShareSelection?: (messageId: string) => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
   const isEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write" || tool.name === "apply_patch";
   const [expanded, setExpanded] = useState(isEdit);
   const isRead = tool.name === "Read" || tool.name === "file_read";
@@ -1326,7 +1326,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
       </div>
 
       {(() => {
-        const toolImage = images?.find(img => img.tool_use_id === tool.id);
+        const toolImage = images?.find(img => img.tool_use_id === tool.id) || globalImageMap?.[tool.id];
         return toolImage ? <ImageBlock image={toolImage} /> : null;
       })()}
 
@@ -2806,6 +2806,7 @@ function AssistantBlock({
   model,
   onSendInlineMessage,
   isConversationActive,
+  globalImageMap,
 }: {
   content?: string;
   timestamp: number;
@@ -2840,6 +2841,7 @@ function AssistantBlock({
   model?: string;
   onSendInlineMessage?: (content: string) => void;
   isConversationActive?: boolean;
+  globalImageMap?: Record<string, ImageData>;
 }) {
   const COLLAPSED_LINES = 2;
   const CONTENT_MAX_HEIGHT = 800;
@@ -3088,6 +3090,7 @@ function AssistantBlock({
               collapsed={collapsed}
               timestamp={timestamp}
               images={images}
+              globalImageMap={globalImageMap}
             />
           );
         })}
@@ -5363,6 +5366,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [conversation?.messages]);
 
+  const globalImageMap = useMemo(() => {
+    const map: Record<string, ImageData> = {};
+    if (conversation?.messages) {
+      for (const msg of conversation.messages) {
+        if (msg.images) {
+          for (const img of msg.images) {
+            if (img.tool_use_id) {
+              map[img.tool_use_id] = img;
+            }
+          }
+        }
+      }
+    }
+    return map;
+  }, [conversation?.messages]);
+
   const taskSubjectMap = useMemo(() => {
     const createInputs: Record<string, string> = {};
     const idMap: Record<string, string> = {};
@@ -5626,6 +5645,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           model={conversation?.model}
           onSendInlineMessage={handleSendInlineMessage}
           isConversationActive={conversation?.status === "active"}
+          globalImageMap={globalImageMap}
         />
       );
     }
