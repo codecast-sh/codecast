@@ -308,6 +308,33 @@ export const markMessageDelivered = mutation({
   },
 });
 
+export const updateAgentStatus = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    agent_status: v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked")),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication required");
+    }
+
+    const session = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .first();
+
+    if (!session) return;
+    if (session.user_id.toString() !== authUserId.toString()) return;
+
+    await ctx.db.patch(session._id, {
+      agent_status: args.agent_status,
+      agent_status_updated_at: Date.now(),
+    });
+  },
+});
+
 export const getConversationBySessionId = query({
   args: {
     claude_session_id: v.string(),

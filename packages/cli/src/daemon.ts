@@ -1434,10 +1434,17 @@ async function processSessionFile(
       if (!permissionPrompt) {
         const existingTimer = idleTimers.get(sessionId);
         if (existingTimer) clearTimeout(existingTimer);
+        sendAgentStatus(syncService, conversationId, sessionId, "working");
+
+        const hasPendingToolCalls = lastAssistantMessage.toolCalls?.length > 0 &&
+          !messages.some(m => m.role === "assistant" && m.toolResults?.length > 0 &&
+            m.timestamp >= lastAssistantMessage.timestamp);
 
         if (wasInterrupted) {
           idleTimers.delete(sessionId);
           lastIdleNotifiedSize.set(sessionId, stats.size);
+        } else if (hasPendingToolCalls) {
+          idleTimers.delete(sessionId);
         } else {
           const capturedFilePath = filePath;
           const capturedSize = stats.size;
@@ -1453,6 +1460,7 @@ async function processSessionFile(
               } catch { return; }
 
               lastIdleNotifiedSize.set(sessionId, capturedSize);
+              sendAgentStatus(syncService, conversationId, sessionId, "idle");
               const preview = truncateForNotification(lastAssistantMessage.content);
               syncService.createSessionNotification({
                 conversation_id: conversationId,

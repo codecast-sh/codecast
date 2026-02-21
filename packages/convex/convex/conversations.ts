@@ -4968,6 +4968,15 @@ export const listIdleSessions = query({
         .map((s) => s.conversation_id!.toString())
     );
 
+    const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000;
+    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked">();
+    for (const s of managedSessions) {
+      if (s.conversation_id && s.agent_status && s.agent_status_updated_at &&
+          (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS) {
+        agentStatusMap.set(s.conversation_id.toString(), s.agent_status);
+      }
+    }
+
     const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 
     const user = await ctx.db.get(userId);
@@ -5031,9 +5040,12 @@ export const listIdleSessions = query({
         (!!hasPending && (now - hasPending.created_at) > 15_000)
       );
 
-      const isIdle = daemonAlive
-        ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
-        : !recentlyUpdated;
+      const agentStatus = agentStatusMap.get(conv._id.toString());
+      const isIdle = agentStatus
+        ? agentStatus !== "working"
+        : daemonAlive
+          ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
+          : !recentlyUpdated;
 
       let lastUserMsg = null;
       if (lastMsg?.role === "user" && lastMsg.content?.trim() && !isNoiseMsg(lastMsg.content)) {
@@ -5079,6 +5091,7 @@ export const listIdleSessions = query({
         is_connected: !!daemonAlive,
         has_pending: !!hasPending,
         is_deferred: !!deferred,
+        agent_status: agentStatus,
         last_user_message: lastUserMsg?.content?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200) || null,
       });
     }
