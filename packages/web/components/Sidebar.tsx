@@ -250,7 +250,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
             {!isNarrow && <span>My Sessions</span>}
           </button>
           <Link
-            href="/conversation"
+            href="/inbox"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
               isInbox
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
