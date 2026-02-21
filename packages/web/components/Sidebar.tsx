@@ -81,7 +81,7 @@ function RecentSessions({
                 {visible.map((conv: any) => (
                   <Link
                     key={conv._id}
-                    href={`/conversation?s=${conv._id}`}
+                    href={`/conversation/${conv._id}`}
                     onClick={onMobileClose}
                     className="flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
                   >
@@ -329,7 +329,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
               {favorites.slice(0, 5).map((fav) => (
                 <Link
                   key={fav._id}
-                  href={`/conversation?s=${fav._id}`}
+                  href={`/conversation/${fav._id}`}
                   onClick={onMobileClose}
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors group"
                 >
