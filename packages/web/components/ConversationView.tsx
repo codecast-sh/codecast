@@ -1187,8 +1187,18 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
   const summary = getToolSummary();
   const resultSummary = getResultSummary();
 
-  // Process result content - strip line numbers for Read tool
-  const processedContent = result ? (isRead ? stripLineNumbers(result.content) : result.content) : "";
+  const executedTabUrl = useMemo(() => {
+    if (!result?.content || !tool.name.startsWith("mcp__claude-in-chrome__")) return null;
+    const tabIdMatch = result.content.match(/Executed on tabId:\s*(\d+)/);
+    if (!tabIdMatch) return null;
+    const tabId = tabIdMatch[1];
+    const tabEntryRegex = new RegExp(`tabId ${tabId}:\\s*"[^"]*"\\s*\\(([^)]+)\\)`);
+    const urlMatch = result.content.match(tabEntryRegex);
+    return urlMatch ? urlMatch[1] : null;
+  }, [result?.content, tool.name]);
+
+  // Process result content - strip line numbers for Read tool, strip Tab Context from MCP chrome results
+  const processedContent = result ? (isRead ? stripLineNumbers(result.content) : tool.name.startsWith("mcp__claude-in-chrome__") ? result.content.replace(/\n?\n?Tab Context:[\s\S]*$/, "").trim() : result.content) : "";
 
   const isCodeTool = isBash || isEdit || isRead || isGlob || isGrep || isCodeSearch;
   const isMarkdownResult = result && !isCodeTool && typeof processedContent === 'string' && (
@@ -1322,6 +1332,20 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
           <span className={`font-mono ${result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"}`}>
             {resultSummary}
           </span>
+        )}
+        {executedTabUrl && (
+          <a
+            href={executedTabUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sol-cyan/60 hover:text-sol-cyan transition-colors ml-auto flex-shrink-0"
+            onClick={(e) => e.stopPropagation()}
+            title={executedTabUrl}
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </a>
         )}
       </div>
 
