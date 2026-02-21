@@ -233,7 +233,7 @@ export const resumeSession = mutation({
         session_id: conversation.session_id,
         agent_type: agentType,
         conversation_id: args.conversation_id,
-        project_path: conversation.git_root || conversation.project_path,
+        project_path: conversation.project_path || conversation.git_root,
       }),
       created_at: Date.now(),
     });

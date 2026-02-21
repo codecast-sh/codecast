@@ -57,6 +57,13 @@ export const sendMessageToSession = mutation({
       retry_count: 0,
     });
 
+    const now = Date.now();
+    await ctx.db.patch(args.conversation_id, {
+      updated_at: now,
+      ...(conversation.status === "completed" ? { status: "active" } : {}),
+      ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
+    });
+
     return messageId;
   },
 });

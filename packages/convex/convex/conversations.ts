@@ -98,12 +98,15 @@ async function findChildConversations(
     }
   }
 
-  const children = allChildren.map((conv: any) => ({
-    _id: conv._id,
-    title: conv.title || "New Session",
-    is_subagent: conv.is_subagent || !conv.parent_message_uuid,
-    first_message_preview: firstMessagePreviews.get(conv._id as string),
-  }));
+  const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
+  const children = allChildren
+    .filter((conv: any) => !NOISE_TITLE_PREFIXES.some((p) => (conv.title || "").startsWith(p)))
+    .map((conv: any) => ({
+      _id: conv._id,
+      title: conv.title || "New Session",
+      is_subagent: conv.is_subagent || !conv.parent_message_uuid,
+      first_message_preview: firstMessagePreviews.get(conv._id as string),
+    }));
 
   const childByParentUuid = new Map<string, string>(
     allChildren
@@ -1254,18 +1257,34 @@ export const listConversations = query({
       );
     };
 
-    const deriveGitRoot = (c: { git_root?: string; project_path?: string }): string | null => {
-      if (c.git_root) return c.git_root;
-      if (!c.project_path) return null;
-      const parts = c.project_path.split('/');
+    const normalizeToRoot = (path: string): string => {
+      const parts = path.split('/');
       const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
       if (srcIndex >= 0 && srcIndex < parts.length - 1) {
         return parts.slice(0, srcIndex + 2).join('/');
       }
-      return c.project_path;
+      return path;
+    };
+    const deriveGitRoot = (c: { git_root?: string; project_path?: string }): string | null => {
+      const rawPath = c.git_root || c.project_path;
+      if (!rawPath) return null;
+      return normalizeToRoot(rawPath);
     };
 
-    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+    const now = Date.now();
+    const fiveMinutesAgo = now - 5 * 60 * 1000;
+    const HEARTBEAT_ALIVE_MS = 90 * 1000;
+
+    const managedSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const liveConvIds = new Set(
+      managedSessions
+        .filter((s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
+        .map((s) => s.conversation_id!.toString())
+    );
+
     const needsBatchScan = !!(args.subagentFilter || args.directoryFilter || args.timeFilter);
 
     const matchesFilters = (c: any): boolean => {
@@ -1275,10 +1294,12 @@ export const listConversations = query({
         if (args.subagentFilter === "main" && isSub) return false;
       }
       if (args.directoryFilter) {
-        if (deriveGitRoot(c) !== args.directoryFilter) return false;
+        const root = deriveGitRoot(c);
+        if (!root) return false;
+        if (root !== args.directoryFilter && !root.startsWith(args.directoryFilter + '/')) return false;
       }
       if (args.timeFilter === "active") {
-        const isActive = c.status === "active" && c.updated_at > fiveMinutesAgo;
+        const isActive = c.status === "active" && (c.updated_at > fiveMinutesAgo || liveConvIds.has(c._id.toString()));
         if (!isActive) return false;
       }
       if (args.timeFilter === "long") {
@@ -1292,8 +1313,8 @@ export const listConversations = query({
       if (needsBatchScan) {
         const results: any[] = [];
         let scanCursor = cursorTimestamp;
-        const batchSize = limit * 4;
-        const maxBatches = 10;
+        const batchSize = Math.min(limit * 3, 50);
+        const maxBatches = 5;
 
         for (let i = 0; i < maxBatches && results.length < limit + 1; i++) {
           const batch = await ctx.db
@@ -1355,8 +1376,8 @@ export const listConversations = query({
       if (needsBatchScan) {
         const results: any[] = [];
         let memberScanCursor = cursorTimestamp;
-        const memberBatchSize = limit * 4;
-        for (let i = 0; i < 10 && results.length < limit + 1; i++) {
+        const memberBatchSize = Math.min(limit * 3, 50);
+        for (let i = 0; i < 5 && results.length < limit + 1; i++) {
           const batch = await ctx.db
             .query("conversations")
             .withIndex("by_team_user_updated", (q) =>
@@ -1395,7 +1416,12 @@ export const listConversations = query({
         return visibility !== "hidden";
       });
 
-      const perMemberLimit = Math.max(5, Math.ceil((limit + 1) * 2 / Math.max(visibleMembers.length, 1)));
+      const maxTotalReads = 100;
+      const perMemberFetch = Math.max(3, Math.min(
+        Math.ceil((limit + 1) * 2 / Math.max(visibleMembers.length, 1)),
+        Math.floor(maxTotalReads / Math.max(visibleMembers.length, 1))
+      ));
+      const perMemberLimit = Math.max(3, Math.ceil((limit + 1) / Math.max(visibleMembers.length, 1)));
 
       const memberConversations = await Promise.all(
         visibleMembers.map(async (member) => {
@@ -1408,7 +1434,7 @@ export const listConversations = query({
             )
             .order("desc");
 
-          const convs = await query.take(perMemberLimit * (needsBatchScan ? 4 : 2));
+          const convs = await query.take(perMemberFetch);
           const memberHasMappings = userHasMappings.get(member.user_id.toString());
           return convs.filter((c) => {
             if (!isConversationVisibleInFeed(c, !!memberHasMappings)) return false;
@@ -1446,7 +1472,7 @@ export const listConversations = query({
         const authorAvatar = (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null;
         const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
         const durationMs = c.updated_at - c.started_at;
-        const isActive = c.status === "active" && c.updated_at > fiveMinutesAgo;
+        const isActive = c.status === "active" && (c.updated_at > fiveMinutesAgo || liveConvIds.has(c._id.toString()));
         const title = c.title || "New Session";
 
         if (visibilityMode === "minimal") {
@@ -4945,29 +4971,30 @@ export const listIdleSessions = query({
     const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 
     const user = await ctx.db.get(userId);
+    const userDaemonAlive = !!user?.daemon_last_seen && (now - (user.daemon_last_seen as number)) < 6 * 60 * 1000;
     const clusterStart = user?.work_cluster_started_at ?? user?.last_message_sent_at ?? 0;
     const clusterCutoff = clusterStart > 0 ? clusterStart - CLUSTER_WINDOW_MS : 0;
 
     const candidates = [];
     for (const conv of conversations) {
       if (conv.is_subagent || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
-      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff) continue;
 
       const title = conv.title?.trim() || "";
       if (title.toLowerCase() === "warmup") continue;
       if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
 
-      const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
-      if (dismissed) {
-        const hasPendingDismissed = await ctx.db
-          .query("pending_messages")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-          .filter((q) => q.eq(q.field("status"), "pending"))
-          .first();
-        if (!hasPendingDismissed) continue;
-      }
+      const hasPendingForConv = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .filter((q) => q.eq(q.field("status"), "pending"))
+        .first();
 
-      candidates.push(conv);
+      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPendingForConv) continue;
+
+      const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
+      if (dismissed && !hasPendingForConv) continue;
+
+      candidates.push({ conv, hasPendingForConv });
     }
 
     const NOISE_MSG_PREFIXES = [
@@ -4981,14 +5008,11 @@ export const listIdleSessions = query({
     };
 
     const results = [];
-    for (const conv of candidates) {
-      const daemonAlive = liveConvIds.has(conv._id.toString());
+    for (const { conv, hasPendingForConv } of candidates) {
+      const daemonAlive = liveConvIds.has(conv._id.toString()) ||
+        (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
 
-      const hasPending = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .filter((q) => q.eq(q.field("status"), "pending"))
-        .first();
+      const hasPending = hasPendingForConv;
 
       const lastMsg = await ctx.db
         .query("messages")
@@ -5052,6 +5076,7 @@ export const listIdleSessions = query({
         idle_summary: conv.idle_summary,
         is_idle: isIdle,
         is_unresponsive: isUnresponsive,
+        is_connected: !!daemonAlive,
         has_pending: !!hasPending,
         is_deferred: !!deferred,
         last_user_message: lastUserMsg?.content?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200) || null,
