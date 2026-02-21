@@ -286,7 +286,7 @@ export default function SharedMessageClient() {
 
   return (
     <main className="min-h-screen bg-sol-bg">
-      <div className="max-w-3xl mx-auto px-4 py-8">
+      <div className="max-w-4xl mx-auto px-4 py-8">
         <div className="mb-6">
           <div className="flex items-center gap-3 mb-2">
             {user?.image ? (
