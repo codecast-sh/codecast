@@ -48,6 +48,12 @@ function stripAnsi(input: string): string {
     .replace(/\u001B\][^\u0007]*(\u0007|\u001B\\)/g, "");
 }
 
+function sanitizeAnsi(input: string): string {
+  return input
+    .replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, (match) => match.endsWith("m") ? match : "")
+    .replace(/\u001B\][^\u0007]*(\u0007|\u001B\\)/g, "");
+}
+
 function truncate(input: string, maxLen: number): string {
   if (maxLen <= 0) return "";
   if (input.length <= maxLen) return input;
@@ -322,7 +328,7 @@ function captureTmuxPane(sessionName: string, maxLines = 220, preserveAnsi = fal
   const eFlag = preserveAnsi ? "-e " : "";
   const raw = shellOut(`tmux capture-pane ${eFlag}-p -J -t '${target.replace(/'/g, "'\\''")}' -S -${maxLines} 2>/dev/null`);
   if (!raw.trim()) return ["Pane is empty."];
-  return preserveAnsi ? raw.split("\n") : raw.split("\n").map((line) => stripAnsi(line));
+  return raw.split("\n").map((line) => preserveAnsi ? sanitizeAnsi(line) : stripAnsi(line));
 }
 
 function resolveActivePaneTarget(sessionName: string): string | null {
@@ -449,7 +455,10 @@ function AttachTuiApp({
         if (aTime !== bTime) return bTime - aTime;
         return a.tmuxSession.localeCompare(b.tmuxSession);
       });
-      setSessions(stable);
+      setSessions((prev) => {
+        if (prev.length === stable.length && prev.every((s, i) => s.tmuxSession === stable[i].tmuxSession && s.updatedAt === stable[i].updatedAt && s.title === stable[i].title && s.messageCount === stable[i].messageCount)) return prev;
+        return stable;
+      });
       setSelectedTmux((prev) => {
         if (stable.length === 0) return null;
         if (prev && stable.some((s) => s.tmuxSession === prev)) return prev;
@@ -504,11 +513,14 @@ function AttachTuiApp({
     let canceled = false;
     const updatePreview = () => {
       const lines = captureTmuxPane(selected.tmuxSession, 220, true);
-      if (!canceled) setPreviewLines(lines);
+      if (!canceled) setPreviewLines((prev) => {
+        if (prev.length === lines.length && prev.every((l, i) => l === lines[i])) return prev;
+        return lines;
+      });
     };
     updatePreview();
-    if (mode === "insert") return () => { canceled = true; };
-    const timer = setInterval(updatePreview, 1200);
+    const interval = mode === "insert" ? 150 : 1200;
+    const timer = setInterval(updatePreview, interval);
     return () => {
       canceled = true;
       clearInterval(timer);
@@ -546,7 +558,6 @@ function AttachTuiApp({
       else if (key.ctrl && input === "c") sent = sendTmuxInput(selected.tmuxSession, "C-c");
       else if (key.ctrl && input) sent = sendTmuxInput(selected.tmuxSession, `C-${input.toLowerCase()}`);
       else if (!key.ctrl && !key.meta && input) sent = sendTmuxInput(selected.tmuxSession, input, { literal: true });
-      if (sent) setPreviewLines(captureTmuxPane(selected.tmuxSession, 220, true));
       return;
     }
 
@@ -615,7 +626,8 @@ function AttachTuiApp({
     listWidth = Math.max(20, columns - previewWidth - 1);
   }
   const bodyHeight = rows;
-  const maxVisible = Math.max(4, Math.floor((bodyHeight - 2) / 2));
+  const helpLines = 6;
+  const maxVisible = Math.max(4, Math.floor((bodyHeight - 2 - (showHelp ? helpLines : 0)) / 2));
 
   let listStart = Math.max(0, selectedIndex - Math.floor(maxVisible / 2));
   if (listStart + maxVisible > filteredSessions.length) {
@@ -623,15 +635,19 @@ function AttachTuiApp({
   }
   const listSlice = filteredSessions.slice(listStart, listStart + maxVisible);
   const previewBodyLines = Math.max(6, bodyHeight - 3);
-  const previewMaxLines = previewBodyLines + 40;
-  const previewSlice = previewLines.slice(-previewBodyLines);
-
-  const sidebarFooter = (() => {
-    if (mode === "search") return `/ ${query}█`;
-    if (mode === "insert") return "-- INSERT --  esc to return";
-    if (showHelp) return "j/k nav · enter attach · i interact\n/ search · x kill · r refresh\n=/- resize · \\ collapse · u unknown\nt auto-refresh · g/G top/btm · q quit";
-    return "j/k nav  i insert  ? help";
+  const trimmed = (() => {
+    let end = previewLines.length;
+    while (end > 0 && !previewLines[end - 1]?.trim()) end--;
+    return previewLines.slice(0, end);
   })();
+  const previewSlice = trimmed.slice(-previewBodyLines);
+
+  const helpEntries: Array<[string, string]> = [
+    ["j/k", "navigate"], ["enter", "attach"], ["i", "interact"],
+    ["/ ", "search"], ["x", "kill"], ["r", "refresh"],
+    ["=-", "resize"], ["\\", "collapse"], ["u", "unknown"],
+    ["t", "auto-refresh"], ["g/G", "top/btm"], ["q", "quit"],
+  ];
 
   return (
     <Box flexDirection="column" height={rows} width={columns}>
@@ -698,13 +714,24 @@ function AttachTuiApp({
             <Text dimColor>{query ? "No sessions match filter." : "No live sessions found."}</Text>
           )}
             <Box flexGrow={1} />
-            <Text
-              color={mode === "search" ? "yellowBright" : mode === "insert" ? "greenBright" : undefined}
-              dimColor={mode === "normal"}
-              wrap="truncate"
-            >
-              {sidebarFooter}
-            </Text>
+            {mode === "search" ? (
+              <Text color="yellowBright" bold>/ {query}█</Text>
+            ) : mode === "insert" ? (
+              <Text color="greenBright" bold>-- INSERT --  esc to return</Text>
+            ) : showHelp ? (
+              <Box flexDirection="column" borderStyle="single" borderLeft={false} borderBottom={false} borderRight={false} borderColor="magenta">
+                {[0, 1, 2, 3].map((row) => (
+                  <Text key={row} wrap="truncate" dimColor>
+                    {helpEntries.slice(row * 3, row * 3 + 3).map(([k, v]) => (
+                      `  ${k} ${v}`
+                    )).join("")}
+                  </Text>
+                ))}
+                <Text dimColor wrap="truncate">  ? close help</Text>
+              </Box>
+            ) : (
+              <Text dimColor wrap="truncate">j/k nav  i insert  ? help</Text>
+            )}
           </Box>
         )}
       </Box>
