@@ -340,6 +340,14 @@ function resolveActivePaneTarget(sessionName: string): string | null {
   return target || null;
 }
 
+function resizeTmuxWindow(sessionName: string, cols: number, rows: number): void {
+  const escaped = sessionName.replace(/'/g, "'\\''");
+  spawnSync("tmux", ["resize-window", "-t", escaped, "-x", String(cols), "-y", String(rows)], {
+    stdio: "ignore",
+    env: { ...process.env, PATH: ENRICHED_PATH },
+  });
+}
+
 function sendTmuxInput(sessionName: string, input: string, options: { literal?: boolean } = {}): boolean {
   const target = resolveActivePaneTarget(sessionName);
   if (!target) return false;
@@ -455,6 +463,14 @@ function AttachTuiApp({
         if (aTime !== bTime) return bTime - aTime;
         return a.tmuxSession.localeCompare(b.tmuxSession);
       });
+      const cols = stdout.columns || 120;
+      const rws = stdout.rows || 36;
+      const lw = listCollapsed ? 0 : Math.max(24, Math.floor(cols * (listPercent / 100)));
+      const pw = listCollapsed ? cols : Math.max(40, cols - lw - 1);
+      const tc = Math.max(40, pw - 2);
+      for (const s of stable) {
+        resizeTmuxWindow(s.tmuxSession, tc, rws);
+      }
       setSessions((prev) => {
         if (prev.length === stable.length && prev.every((s, i) => s.tmuxSession === stable[i].tmuxSession && s.updatedAt === stable[i].updatedAt && s.title === stable[i].title && s.messageCount === stable[i].messageCount)) return prev;
         return stable;
@@ -505,11 +521,18 @@ function AttachTuiApp({
   const selectedIndex = Math.max(0, filteredSessions.findIndex((session) => session.tmuxSession === selectedTmux));
   const selected = filteredSessions[selectedIndex] || null;
 
+  const columns = stdout.columns || 120;
+  const rows = stdout.rows || 36;
+  const computedListWidth = listCollapsed ? 0 : Math.max(24, Math.floor(columns * (listPercent / 100)));
+  const computedPreviewWidth = listCollapsed ? columns : Math.max(40, columns - computedListWidth - 1);
+  const tmuxCols = Math.max(40, computedPreviewWidth - 2);
+
   useEffect(() => {
     if (!selected?.tmuxSession) {
       setPreviewLines([]);
       return;
     }
+    resizeTmuxWindow(selected.tmuxSession, tmuxCols, rows);
     let canceled = false;
     const updatePreview = () => {
       const lines = captureTmuxPane(selected.tmuxSession, 220, true);
@@ -518,14 +541,15 @@ function AttachTuiApp({
         return lines;
       });
     };
-    updatePreview();
+    const firstCapture = setTimeout(updatePreview, 80);
     const interval = mode === "insert" ? 150 : 1200;
     const timer = setInterval(updatePreview, interval);
     return () => {
       canceled = true;
+      clearTimeout(firstCapture);
       clearInterval(timer);
     };
-  }, [selected?.tmuxSession, mode]);
+  }, [selected?.tmuxSession, mode, tmuxCols, rows]);
 
   const moveSelection = useCallback((delta: number) => {
     if (filteredSessions.length === 0) return;
@@ -613,18 +637,8 @@ function AttachTuiApp({
     if (pendingKill && input) setPendingKill(null);
   });
 
-  const columns = stdout.columns || 120;
-  const rows = stdout.rows || 36;
-  let listWidth = listCollapsed ? 0 : Math.floor(columns * (listPercent / 100));
-  let previewWidth = listCollapsed ? columns : columns - listWidth - 1;
-  if (!listCollapsed && listWidth < 24) {
-    listWidth = 24;
-    previewWidth = Math.max(40, columns - listWidth - 1);
-  }
-  if (!listCollapsed && previewWidth < 40) {
-    previewWidth = 40;
-    listWidth = Math.max(20, columns - previewWidth - 1);
-  }
+  const listWidth = computedListWidth;
+  const previewWidth = computedPreviewWidth;
   const bodyHeight = rows;
   const helpLines = 6;
   const maxVisible = Math.max(4, Math.floor((bodyHeight - 2 - (showHelp ? helpLines : 0)) / 2));
