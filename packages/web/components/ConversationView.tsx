@@ -1191,17 +1191,8 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     if (!result?.content || !tool.name.startsWith("mcp__claude-in-chrome__")) return null;
     const tabIdMatch = result.content.match(/Executed on tabId:\s*(\d+)/);
     if (!tabIdMatch) return null;
-    const tabId = tabIdMatch[1];
-    const tabEntryRegex = new RegExp(`tabId ${tabId}:\\s*"[^"]*"\\s*\\(([^)]+)\\)`);
-    const urlMatch = result.content.match(tabEntryRegex);
-    const tabUrl = urlMatch ? urlMatch[1] : null;
-    if (tool.name === "mcp__claude-in-chrome__navigate" && parsedInput.url) {
-      const navUrl = String(parsedInput.url);
-      if (navUrl && navUrl !== "back" && navUrl !== "forward") return navUrl.startsWith("http") ? navUrl : `https://${navUrl}`;
-    }
-    if (tabUrl && !tabUrl.startsWith("chrome://")) return tabUrl;
-    return null;
-  }, [result?.content, tool.name, parsedInput.url]);
+    return `https://clau.de/chrome/tab/${tabIdMatch[1]}`;
+  }, [result?.content, tool.name]);
 
   // Process result content - strip line numbers for Read tool, strip Tab Context from MCP chrome results
   const processedContent = result ? (isRead ? stripLineNumbers(result.content) : tool.name.startsWith("mcp__claude-in-chrome__") ? result.content.replace(/\n?\n?Tab Context:[\s\S]*$/, "").trim() : result.content) : "";
