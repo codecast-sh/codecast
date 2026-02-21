@@ -810,8 +810,8 @@ export const getAllMessages = query({
 
     const compactionCount = messages.filter(m => m.subtype === "compact_boundary").length;
 
-    let parentConversationId: string | null = null;
-    if (conversation.parent_message_uuid) {
+    let parentConversationId: string | null = conversation.parent_conversation_id || null;
+    if (!parentConversationId && conversation.parent_message_uuid) {
       const parentMsg = await ctx.db
         .query("messages")
         .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
@@ -946,8 +946,8 @@ export const getMessagesAroundTimestamp = query({
     const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
     const newestTimestamp = messages.length > 0 ? messages[messages.length - 1].timestamp : null;
 
-    let parentConversationId: string | null = null;
-    if (conversation.parent_message_uuid) {
+    let parentConversationId: string | null = conversation.parent_conversation_id || null;
+    if (!parentConversationId && conversation.parent_message_uuid) {
       const parentMsg = await ctx.db
         .query("messages")
         .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
@@ -1927,8 +1927,8 @@ export const getConversationPublic = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
-    let parentConversationId: string | null = null;
-    if (conversation.parent_message_uuid) {
+    let parentConversationId: string | null = conversation.parent_conversation_id || null;
+    if (!parentConversationId && conversation.parent_message_uuid) {
       const parentMsg = await ctx.db
         .query("messages")
         .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
