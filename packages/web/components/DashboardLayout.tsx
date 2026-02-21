@@ -56,9 +56,15 @@ const getInitialCollapsed = () => {
   return localStorage.getItem("sidebarCollapsed") === "true";
 };
 
+const getInitialZenMode = () => {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem("zenMode") === "true";
+};
+
 export function DashboardLayout({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
+  const [isZenMode, setIsZenMode] = useState(getInitialZenMode);
   const [layout, setLayout] = useState(getInitialLayout);
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -197,6 +203,14 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         e.preventDefault();
         toggleSidebar();
       }
+      if (e.key === "." && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        setIsZenMode((prev) => {
+          const next = !prev;
+          localStorage.setItem("zenMode", String(next));
+          return next;
+        });
+      }
       if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         if (currentConvContext.projectPath || currentConvContext.gitRoot) {
@@ -215,7 +229,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
       {/* Header spans full width */}
-      <header className={`flex-shrink-0 border-b border-sol-border bg-sol-bg/95 backdrop-blur-sm z-[100] ${desktopClass}`}>
+      <header className={`flex-shrink-0 border-b border-sol-border bg-sol-bg/95 backdrop-blur-sm z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""}`}>
         <div className="px-2 sm:px-4 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Logo + toggle */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -301,7 +315,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
-        {hideSidebar || isSidebarCollapsed || isMobile ? (
+        {hideSidebar || isSidebarCollapsed || isZenMode || isMobile ? (
           isFullWidthPage ? (
             <div className="h-full">
               {children}

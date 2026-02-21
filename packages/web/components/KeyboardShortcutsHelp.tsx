@@ -30,6 +30,7 @@ export function KeyboardShortcutsHelp({ isOpen, onClose }: KeyboardShortcutsHelp
         </div>
 
         <div className="space-y-3">
+          <ShortcutRow keys={["Ctrl+."]} description="Toggle zen mode (hide header & sidebar)" />
           <ShortcutRow keys={["\u2318N"]} description="New session" />
           <ShortcutRow keys={["j", "]"]} description="Next file/change" />
           <ShortcutRow keys={["k", "["]} description="Previous file/change" />
