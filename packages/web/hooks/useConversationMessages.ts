@@ -209,16 +209,25 @@ export function useConversationMessages(
   // Keep conversation metadata updated
   useEffect(() => {
     const latestData = aroundData || initialData;
-    if (latestData && initializedRef.current && cachedConversation) {
-      setCachedConversation((prev: any) => ({
-        ...prev,
-        is_private: latestData.is_private,
-        share_token: latestData.share_token,
-        title: latestData.title,
-        message_count: latestData.message_count,
-      }));
+    if (latestData && initializedRef.current) {
+      setCachedConversation((prev: any) => {
+        if (!prev) return prev;
+        if (
+          prev.is_private === latestData.is_private &&
+          prev.share_token === latestData.share_token &&
+          prev.title === latestData.title &&
+          prev.message_count === latestData.message_count
+        ) return prev;
+        return {
+          ...prev,
+          is_private: latestData.is_private,
+          share_token: latestData.share_token,
+          title: latestData.title,
+          message_count: latestData.message_count,
+        };
+      });
     }
-  }, [initialData, aroundData, cachedConversation]);
+  }, [initialData, aroundData]);
 
   // Handle older messages loading
   useEffect(() => {

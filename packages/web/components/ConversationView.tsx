@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -33,10 +33,11 @@ import { copyToClipboard } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "./tools/MarkdownRenderer";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
-import { setDraft, getDraft, clearDraft } from "../store/convexCache";
+import { setDraft, getDraft, clearDraft, patch as cachePatch } from "../store/convexCache";
 import { usePendingSessionStore } from "../store/pendingSessionStore";
 import { useOptimisticMessagesStore } from "../store/optimisticMessagesStore";
 import { useQueueStore } from "../store/queueStore";
+import { useNewSessionStore } from "../store/newSessionStore";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
@@ -71,6 +72,7 @@ type ImageData = {
   media_type: string;
   data?: string;
   storage_id?: string;
+  tool_use_id?: string;
 };
 
 type Message = {
@@ -223,10 +225,15 @@ export interface ConversationViewHandle {
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const switchProject = useMutation(api.conversations.switchSessionProject);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
-  const [switching, setSwitching] = useState<string | null>(null);
-  const [optimisticPath, setOptimisticPath] = useState<string | null>(null);
+  const updateSessionProject = useQueueStore((s) => s.updateSessionProject);
+  const storeSession = useQueueStore((s) =>
+    s.sessions.find((sess) => sess._id === conversation._id || sess.stableKey === conversation._id)
+  );
+  const openNewSession = useNewSessionStore((s) => s.open);
 
-  const currentPath = optimisticPath || conversation.git_root || conversation.project_path;
+  const resolvedId = storeSession?._id || conversation._id;
+
+  const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
 
   const otherProjects = useMemo(() => {
@@ -235,21 +242,14 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   }, [recentProjects, currentPath]);
 
   const handleSwitch = useCallback(async (projectPath: string) => {
-    if (switching || !projectPath.trim()) return;
     const trimmed = projectPath.trim();
-    setSwitching(trimmed);
-    setOptimisticPath(trimmed);
-    try {
-      await switchProject({
-        conversation_id: conversation._id,
-        project_path: trimmed,
-      });
-    } catch {
-      setOptimisticPath(null);
-    } finally {
-      setSwitching(null);
+    if (!trimmed) return;
+    updateSessionProject(resolvedId, trimmed);
+    if (!resolvedId.startsWith("temp_")) {
+      cachePatch("conversations", resolvedId, { project_path: trimmed, git_root: trimmed });
+      switchProject({ conversation_id: resolvedId as Id<"conversations">, project_path: trimmed }).catch(() => {});
     }
-  }, [switching, switchProject, conversation._id]);
+  }, [switchProject, resolvedId, updateSessionProject]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -268,40 +268,38 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
           </TooltipContent>
         </Tooltip>
 
-      {otherProjects.length > 0 && (
-        <div className="flex flex-wrap justify-center gap-1.5">
-          {otherProjects.slice(0, 6).map((p) => {
-            const name = p.path.split("/").filter(Boolean).pop();
-            const isLoading = switching === p.path;
-            return (
-              <Tooltip key={p.path}>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={() => handleSwitch(p.path)}
-                    disabled={!!switching}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all disabled:opacity-50"
-                  >
-                    {isLoading ? (
-                      <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                    ) : (
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                      </svg>
-                    )}
-                    <span>{name}</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="text-xs font-mono">
-                  {p.path}
-                </TooltipContent>
-              </Tooltip>
-            );
-          })}
-        </div>
-      )}
+      <div className="flex flex-wrap justify-center gap-1.5">
+        {otherProjects.slice(0, 6).map((p) => {
+          const name = p.path.split("/").filter(Boolean).pop();
+          return (
+            <Tooltip key={p.path}>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => handleSwitch(p.path)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                  </svg>
+                  <span>{name}</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs font-mono">
+                {p.path}
+              </TooltipContent>
+            </Tooltip>
+          );
+        })}
+        <button
+          onClick={() => openNewSession({ projectPath: currentPath || undefined })}
+          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
+        >
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
+          </svg>
+          <span>other</span>
+        </button>
+      </div>
     </div>
     </TooltipProvider>
   );
@@ -387,6 +385,7 @@ function stripSystemTags(content: string): string {
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
     .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, '')
+    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '')
     .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, '')
     .replace(/^\s*Caveat:.*$/gm, '')
     .replace(/\n{3,}/g, '\n\n');
@@ -757,7 +756,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
 
   if (isCompleted) {
     return (
-      <div className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : "bg-sol-bg-alt/40 border-sol-border/30"} border overflow-hidden`}>
+      <div className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : `${colors.bg} ${colors.border}`} border overflow-hidden`}>
         <div
           className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
           onClick={() => setExpanded(!expanded)}
@@ -765,14 +764,14 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
           <span className={`text-[10px] ${result?.is_error ? "text-sol-red" : "text-emerald-400"}`}>
             {result?.is_error ? "\u2717" : "\u2713"}
           </span>
-          <span className={`font-mono text-xs font-medium ${result?.is_error ? "text-sol-red" : "text-sol-text-muted"}`}>
+          <span className={`font-mono text-xs font-medium ${result?.is_error ? "text-sol-red" : colors.text}`}>
             Task
           </span>
           <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
             {subagentType}
           </span>
           {description && (
-            <span className="text-sol-text-dim text-xs truncate flex-1">
+            <span className="text-sol-text-muted text-xs truncate flex-1">
               {description}
             </span>
           )}
@@ -793,7 +792,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
         {resultSummary && !expanded && (
           <div className="px-3 pb-2">
             <pre className={`text-xs font-mono whitespace-pre-wrap break-words leading-relaxed ${
-              result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"
+              result?.is_error ? "text-sol-red/80" : "text-sol-text-secondary"
             }`}>
               {resultSummary}
             </pre>
@@ -812,7 +811,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
               <div className="border-t border-sol-border/30 px-3 py-2">
                 <div className="text-[10px] text-sol-text-dim mb-1">Result</div>
                 <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-60 overflow-y-auto ${
-                  result.is_error ? "text-sol-red" : "text-sol-text-muted"
+                  result.is_error ? "text-sol-red" : "text-sol-text-secondary"
                 }`}>
                   {result.content}
                 </pre>
@@ -832,6 +831,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
         className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
+        <span className={`w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin ${colors.text} opacity-60`} />
         <span className={`font-mono text-xs font-semibold ${colors.text}`}>
           Task
         </span>
@@ -975,7 +975,7 @@ function isPlanWriteToolCall(tc: ToolCall): boolean {
   }
 }
 
-function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, onStartShareSelection, collapsed, timestamp }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean; messageId?: string; onStartShareSelection?: (messageId: string) => void; collapsed?: boolean; timestamp?: number }) {
+function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, onStartShareSelection, collapsed, timestamp, images }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean; messageId?: string; onStartShareSelection?: (messageId: string) => void; collapsed?: boolean; timestamp?: number; images?: ImageData[] }) {
   const isEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write" || tool.name === "apply_patch";
   const [expanded, setExpanded] = useState(isEdit);
   const isRead = tool.name === "Read" || tool.name === "file_read";
@@ -1324,6 +1324,11 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
           </span>
         )}
       </div>
+
+      {(() => {
+        const toolImage = images?.find(img => img.tool_use_id === tool.id);
+        return toolImage ? <ImageBlock image={toolImage} /> : null;
+      })()}
 
       {expanded && (
         <div className="mt-1 rounded overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
@@ -1767,7 +1772,7 @@ function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result
         <div className="flex items-center gap-1.5 mt-1.5 ml-0.5">
           <button
             onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Start implementing" })); }}
-            className="text-[11px] px-2.5 py-1 rounded border border-sol-green/40 bg-sol-green/10 text-sol-green hover:bg-sol-green/20 transition-colors cursor-pointer"
+            className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
           >
             Start implementing
           </button>
@@ -3041,7 +3046,7 @@ function AssistantBlock({
       )}
 
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
-        {!collapsed && hasImages && images?.map((img, i) => <ImageBlock key={i} image={img} />)}
+        {!collapsed && hasImages && images?.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
 
         {!collapsed && hasThinking && showThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
 
@@ -3082,6 +3087,7 @@ function AssistantBlock({
               onStartShareSelection={onStartShareSelection}
               collapsed={collapsed}
               timestamp={timestamp}
+              images={images}
             />
           );
         })}
@@ -3090,10 +3096,9 @@ function AssistantBlock({
           <>
             <div className={`text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap break-words" : "prose prose-invert prose-sm max-w-none"}`}>
               {collapsed ? (
-                <>
+                <div className="relative overflow-hidden" style={lines.length > COLLAPSED_LINES ? { maskImage: 'linear-gradient(to bottom, black 50%, transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black 50%, transparent)' } : undefined}>
                   <span>{truncatedContent}</span>
-                  {lines.length > COLLAPSED_LINES && <span className="text-sol-text-dim">...</span>}
-                </>
+                </div>
               ) : (
                 <div
                   ref={contentRef}
@@ -3621,7 +3626,7 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string, opts?: { inline?: boolean; focusInput?: boolean }) => void }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string, opts?: { inline?: boolean; focusInput?: boolean }) => void }) {
   const cached = getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -3738,18 +3743,23 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
     }
   }, [conversationId]);
 
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleMessageChange = useCallback((val: string) => {
     setMessage(val);
     if (savedDraftRef.current !== null) {
       isSelectionEditedRef.current = true;
     }
-    const existing = getDraft(conversationId);
-    if (!val && !existing?.draft_image_storage_ids?.length) {
-      clearDraft(conversationId);
-    } else {
-      setDraft(conversationId, { ...existing, draft_message: val || null });
-    }
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      const existing = getDraft(conversationId);
+      if (!val && !existing?.draft_image_storage_ids?.length) {
+        clearDraft(conversationId);
+      } else {
+        setDraft(conversationId, { ...existing, draft_message: val || null });
+      }
+    }, 300);
   }, [conversationId]);
+  useEffect(() => () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); }, []);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -3978,7 +3988,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
                 ) : isWaitingForResponse ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/50 animate-pulse" />
-                    Waiting for response...
+                    Connecting...
                   </span>
                 ) : isConversationLive ? (
                   <span className="flex items-center gap-1.5">
@@ -4106,6 +4116,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
             <ShortcutHint keys={["Ctrl", "←"]} label="Dismiss session" />
             <ShortcutHint keys={["Esc"]} label="Escape to session" />
             <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Collapse tool blocks" />
+            <ShortcutHint keys={["Ctrl", "."]} label="Zen mode" />
             <div className="border-t border-sol-border/20 my-1.5" />
             <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
             <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
@@ -4115,7 +4126,7 @@ function MessageInput({ conversationId, status, embedded, onSendAndAdvance, auto
       )}
     </div>
   );
-}
+});
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
   function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent }, ref) {
@@ -4141,6 +4152,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const hasScrolledToTarget = useRef(false);
   const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
   const isPaginatingRef = useRef(false);
+  const paginationCooldownRef = useRef(false);
   const knownItemIdsRef = useRef<Set<string>>(new Set());
   const newItemIdsRef = useRef<Set<string>>(new Set());
   const [shareSelectionMode, setShareSelectionMode] = useState(false);
@@ -4736,6 +4748,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setSelectedMessageUuid(uuid);
     setSelectedMessageContent(content);
   }, []);
+  const handleClearSelection = useCallback(() => {
+    forkSetSelectedIndex(null);
+    setSelectedMessageContent(null);
+    setSelectedMessageUuid(null);
+  }, [forkSetSelectedIndex]);
   const forkSelectionIdx = useForkNavigationStore((s) => s.selectedIndex);
   const { selectedIndex: _forkSelIdx } = useMessageSelection({
     timeline: timeline as any,
@@ -4981,12 +4998,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       setIsScrollable(scrollHeight > clientHeight + 10);
       setIsNearTop(scrollTop < 300);
 
-      const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
+      const scrolledDown = scrollTop > lastScrollTopRef.current + 2;
       lastScrollTopRef.current = scrollTop;
 
-      if (scrolledUp) {
-        setUserScrolled(true);
-      } else if (isNearBottom) {
+      // Only clear userScrolled when the user actively scrolls DOWN to
+      // the bottom. This prevents small wheel-up events (still near bottom)
+      // from being immediately overridden by the isNearBottom check.
+      if (isNearBottom && scrolledDown) {
         setUserScrolled(false);
       }
 
@@ -5013,7 +5031,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
 
       // Load older messages when near top (within 300px)
-      if (scrollTop < 300 && hasMoreAbove && !isLoadingOlder && onLoadOlder) {
+      if (scrollTop < 300 && hasMoreAbove && !isLoadingOlder && !isLoadingNewer && !paginationCooldownRef.current && onLoadOlder) {
         // Save anchor: find first visible message to restore position after load
         const items = virtualizer.getVirtualItems();
         for (const item of items) {
@@ -5034,7 +5052,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       // Load newer messages when near bottom (within 300px)
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-      if (distanceFromBottom < 300 && hasMoreBelow && !isLoadingNewer && onLoadNewer) {
+      if (distanceFromBottom < 300 && hasMoreBelow && !isLoadingNewer && !isLoadingOlder && !paginationCooldownRef.current && onLoadNewer) {
         isPaginatingRef.current = true;
         onLoadNewer();
       }
@@ -5075,14 +5093,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     );
     if (newIndex < 0) return;
 
-    // Scroll to the anchor item, then fine-tune pixel offset
+    paginationCooldownRef.current = true;
     virtualizer.scrollToIndex(newIndex, { align: 'start' });
     scrollAnchorRef.current = null;
     requestAnimationFrame(() => {
       const scrollContainer = containerRef.current;
       if (!scrollContainer) return;
-      // scrollToIndex put the item at viewport top; adjust so it's at original offset
       scrollContainer.scrollTop -= pixelOffset;
+      requestAnimationFrame(() => {
+        paginationCooldownRef.current = false;
+      });
     });
   }, [timeline, virtualizer]);
 
@@ -5100,8 +5120,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return;
     }
 
-    if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && isNearBottomRef.current && !hasMoreBelow && !userScrolledRef.current) {
-      virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
+    if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && !hasMoreBelow && !userScrolledRef.current) {
+      virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+      requestAnimationFrame(() => {
+        if (containerRef.current) {
+          containerRef.current.scrollTop = containerRef.current.scrollHeight;
+          lastScrollTopRef.current = containerRef.current.scrollTop;
+        }
+      });
       setUserScrolled(false);
     }
   }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow, initialScrollDone]);
@@ -5126,8 +5152,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     const sc = containerRef.current;
     if (sc) {
+      paginationCooldownRef.current = true;
       sc.scrollTop = sc.scrollHeight;
       lastScrollTopRef.current = sc.scrollTop;
+      // Fallback: clear cooldown after virtualizer has had time to measure
+      setTimeout(() => { paginationCooldownRef.current = false; }, 1000);
     }
     setInitialScrollDone(true);
   }, [timeline.length, highlightQuery, initialScrollDone]);
@@ -5145,25 +5174,44 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => sc.removeEventListener('wheel', onWheel);
   }, [setUserScrolled]);
 
-  // Auto-correct: keep pinned to bottom as virtualizer measures items
+  // Auto-pin: observe scroll container size changes and pin to bottom.
+  // Uses ResizeObserver instead of rAF loop to avoid fighting with the
+  // virtualizer's item measurement or triggering spurious pagination.
   const totalSize = virtualizer.getTotalSize();
   useEffect(() => {
-    if (!initialScrollDone || userScrolledRef.current) return;
+    if (!initialScrollDone) return;
     if (window.location.hash || highlightQuery) return;
     const sc = containerRef.current;
     if (!sc) return;
-    const dist = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
-    if (dist > 5) {
-      sc.scrollTop = sc.scrollHeight;
-      lastScrollTopRef.current = sc.scrollTop;
+    let lastHeight = sc.scrollHeight;
+    let cooldownTimer: ReturnType<typeof setTimeout> | null = null;
+    const observer = new ResizeObserver(() => {
+      if (userScrolledRef.current) return;
+      const newHeight = sc.scrollHeight;
+      if (newHeight !== lastHeight) {
+        lastHeight = newHeight;
+        sc.scrollTop = newHeight;
+        lastScrollTopRef.current = sc.scrollTop;
+      }
+      if (paginationCooldownRef.current) {
+        if (cooldownTimer) clearTimeout(cooldownTimer);
+        cooldownTimer = setTimeout(() => { paginationCooldownRef.current = false; }, 300);
+      }
+    });
+    // Observe the virtualizer's inner container (first child) for size changes
+    if (sc.firstElementChild) {
+      observer.observe(sc.firstElementChild);
     }
-  });
+    observer.observe(sc);
+    return () => { observer.disconnect(); if (cooldownTimer) clearTimeout(cooldownTimer); };
+  }, [initialScrollDone, highlightQuery]);
 
   // Scroll after jump to start/end
   useEffect(() => {
     if (jumpDirectionRef.current && timeline.length > 0) {
       const dir = jumpDirectionRef.current;
       jumpDirectionRef.current = null;
+      paginationCooldownRef.current = true;
       setTimeout(() => {
         if (dir === 'start') {
           virtualizer.scrollToIndex(0, { align: "start" });
@@ -5172,6 +5220,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
           setUserScrolled(false);
         }
+        requestAnimationFrame(() => {
+          paginationCooldownRef.current = false;
+        });
       }, 50);
     }
   }, [timeline, virtualizer]);
@@ -5746,7 +5797,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
-                      onClick={() => setCollapsed((c) => !c)}
+                      onClick={() => { setCollapsed((c) => !c); setExpandedSequences(new Set()); }}
                       className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${collapsed ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -6058,10 +6109,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     left: 0,
                     width: "100%",
                     transform: `translateY(${virtualItem.start}px)`,
+                    ...(content ? {} : { height: 0, overflow: "hidden" }),
                   }}
                 >
                   {content && (
-                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isSearchDimmed ? "opacity-25" : ""} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {content}
                     </div>
                   )}
@@ -6100,7 +6152,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 .filter(([uuid]) => messageUuids.has(uuid))
                 .map(([, childId]) => childId)
             );
-            const continuationChildren = conversation.child_conversations.filter(c => !renderedInlineIds.has(c._id) && !c.is_subagent);
+            const continuationChildren = conversation.child_conversations.filter(c => !renderedInlineIds.has(c._id) && !c.is_subagent && c._id !== conversation._id);
             if (continuationChildren.length === 0) return null;
             return (
               <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
@@ -6141,7 +6193,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {showMessageInput && conversation && (
         <div ref={messageInputRef}>
-          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={() => { forkSetSelectedIndex(null); setSelectedMessageContent(null); setSelectedMessageUuid(null); }} onForkFromMessage={handleForkFromMessage} />
+          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} />
         </div>
       )}
 
