@@ -81,7 +81,7 @@ function RecentSessions({
                 {visible.map((conv: any) => (
                   <Link
                     key={conv._id}
-                    href={`/inbox?s=${conv._id}`}
+                    href={`/conversation?s=${conv._id}`}
                     onClick={onMobileClose}
                     className="flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
                   >
@@ -121,7 +121,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
   const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
   const isFeed = pathname === "/feed" || pathname?.startsWith("/feed/");
-  const isInbox = pathname === "/inbox" || pathname?.startsWith("/inbox/");
+  const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.email === "ashot@almostcandid.com";
@@ -250,7 +250,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
             {!isNarrow && <span>My Sessions</span>}
           </button>
           <Link
-            href="/inbox"
+            href="/conversation"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
               isInbox
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
@@ -329,7 +329,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
               {favorites.slice(0, 5).map((fav) => (
                 <Link
                   key={fav._id}
-                  href={`/inbox?s=${fav._id}`}
+                  href={`/conversation?s=${fav._id}`}
                   onClick={onMobileClose}
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors group"
                 >
