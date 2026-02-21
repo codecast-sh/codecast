@@ -18,6 +18,7 @@ export type InboxSession = {
   is_unresponsive?: boolean;
   is_connected?: boolean;
   has_pending: boolean;
+  agent_status?: "working" | "idle" | "permission_blocked";
   is_deferred?: boolean;
   last_user_message?: string | null;
   stableKey?: string;
