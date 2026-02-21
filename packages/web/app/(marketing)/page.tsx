@@ -215,7 +215,7 @@ export default function LandingPage() {
   }
 
   return (
-    <main className="min-h-screen bg-stone-50 w-full">
+    <main className="min-h-screen bg-stone-50 w-full overflow-x-hidden">
       {/* Nav */}
       <nav className="border-b border-stone-200 bg-stone-50/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -263,7 +263,7 @@ export default function LandingPage() {
             <span className="text-stone-400">accessible everywhere</span>
           </h1>
 
-          <p className="text-lg text-stone-600 leading-relaxed mb-1 md:whitespace-nowrap">
+          <p className="text-lg text-stone-600 leading-relaxed mb-1">
             Real-time sync for <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="rose">Gemini</Highlight>, and <Highlight color="blue">Cursor</Highlight>.
           </p>
           <p className="text-xl text-stone-600 leading-relaxed mb-4 max-w-2xl mx-auto">
