@@ -263,7 +263,7 @@ export default function LandingPage() {
             <span className="text-stone-400">accessible everywhere</span>
           </h1>
 
-          <p className="text-lg text-stone-600 leading-relaxed mb-1 whitespace-nowrap">
+          <p className="text-lg text-stone-600 leading-relaxed mb-1 md:whitespace-nowrap">
             Real-time sync for <Highlight color="amber">Claude Code</Highlight>, <Highlight color="green">Codex</Highlight>, <Highlight color="rose">Gemini</Highlight>, and <Highlight color="blue">Cursor</Highlight>.
           </p>
           <p className="text-xl text-stone-600 leading-relaxed mb-4 max-w-2xl mx-auto">
