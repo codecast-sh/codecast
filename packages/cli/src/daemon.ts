@@ -1436,8 +1436,8 @@ async function processSessionFile(
         if (existingTimer) clearTimeout(existingTimer);
         sendAgentStatus(syncService, conversationId, sessionId, "working");
 
-        const hasPendingToolCalls = lastAssistantMessage.toolCalls?.length > 0 &&
-          !messages.some(m => m.role === "assistant" && m.toolResults?.length > 0 &&
+        const hasPendingToolCalls = (lastAssistantMessage.toolCalls?.length ?? 0) > 0 &&
+          !messages.some(m => m.role === "assistant" && (m.toolResults?.length ?? 0) > 0 &&
             m.timestamp >= lastAssistantMessage.timestamp);
 
         if (wasInterrupted) {
