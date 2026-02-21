@@ -1194,8 +1194,14 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
     const tabId = tabIdMatch[1];
     const tabEntryRegex = new RegExp(`tabId ${tabId}:\\s*"[^"]*"\\s*\\(([^)]+)\\)`);
     const urlMatch = result.content.match(tabEntryRegex);
-    return urlMatch ? urlMatch[1] : null;
-  }, [result?.content, tool.name]);
+    const tabUrl = urlMatch ? urlMatch[1] : null;
+    if (tool.name === "mcp__claude-in-chrome__navigate" && parsedInput.url) {
+      const navUrl = String(parsedInput.url);
+      if (navUrl && navUrl !== "back" && navUrl !== "forward") return navUrl.startsWith("http") ? navUrl : `https://${navUrl}`;
+    }
+    if (tabUrl && !tabUrl.startsWith("chrome://")) return tabUrl;
+    return null;
+  }, [result?.content, tool.name, parsedInput.url]);
 
   // Process result content - strip line numbers for Read tool, strip Tab Context from MCP chrome results
   const processedContent = result ? (isRead ? stripLineNumbers(result.content) : tool.name.startsWith("mcp__claude-in-chrome__") ? result.content.replace(/\n?\n?Tab Context:[\s\S]*$/, "").trim() : result.content) : "";
@@ -1328,17 +1334,12 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
         {summary && (
           <span className="text-sol-text-muted font-mono truncate">{summary}</span>
         )}
-        {resultSummary && (
-          <span className={`font-mono ${result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"}`}>
-            {resultSummary}
-          </span>
-        )}
         {executedTabUrl && (
           <a
             href={executedTabUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sol-cyan/60 hover:text-sol-cyan transition-colors ml-auto flex-shrink-0"
+            className="text-sol-cyan/60 hover:text-sol-cyan transition-colors flex-shrink-0"
             onClick={(e) => e.stopPropagation()}
             title={executedTabUrl}
           >
@@ -1346,6 +1347,11 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
           </a>
+        )}
+        {resultSummary && (
+          <span className={`font-mono ${result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"}`}>
+            {resultSummary}
+          </span>
         )}
       </div>
 
@@ -3586,7 +3592,7 @@ function GitDiffPanel({
 }) {
   return (
     <div className="border-t border-sol-border bg-sol-bg-alt/30">
-      <div className="max-w-4xl mx-auto px-4 py-2 max-h-96 overflow-y-auto">
+      <div className="mx-auto px-4 py-2 max-h-96 overflow-y-auto">
         {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
           <div className="mb-2">
             <div className="text-sol-green text-[10px] font-semibold mb-1">Staged</div>
@@ -3986,7 +3992,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         <div className="relative">
           {(isFocused || shortcutTooltip || isWaitingForResponse || isThinking || isConversationLive || showStuckBanner) && (
-            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "" : "max-w-md"}`}>
               <p className="text-[11px] text-sol-text-dim/70">
                 {showStuckBanner && sessionId ? (
                   isResuming ? (
@@ -4052,7 +4058,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               </div>
             </div>
           )}
-          <form onSubmit={handleSubmit} className={`mx-auto px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+          <form onSubmit={handleSubmit} className={`mx-auto px-4 transition-all duration-200 ease-out ${isExpanded ? "" : "max-w-md"}`}>
             <div className={`flex flex-col bg-sol-bg-alt border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
@@ -5680,7 +5686,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   return (
     <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
       <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""}`}>
-        <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1">
+        <div className="mx-auto px-2 sm:px-3 md:px-4 py-1">
           <div className="flex items-center gap-2 min-w-0">
             <Link
               href={backHref}
@@ -6029,7 +6035,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             }
           }}
         >
-          <div className="max-w-4xl mx-auto">
+          <div className="mx-auto">
             <div className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg relative group">
               <button
                 className="absolute top-1.5 right-1.5 p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
@@ -6090,7 +6096,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         ) : (
           <>
           {conversation?.parent_conversation_id && !hasMoreAbove && (
-            <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
+            <div className="mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
               <Link
                 href={convLink(conversation.parent_conversation_id)}
                 className="inline-flex items-center gap-1.5 text-xs text-sol-cyan/70 hover:text-sol-cyan transition-colors"
@@ -6157,7 +6163,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {content}
                     </div>
                   )}
@@ -6199,7 +6205,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             const continuationChildren = conversation.child_conversations.filter(c => !renderedInlineIds.has(c._id) && !c.is_subagent && c._id !== conversation._id);
             if (continuationChildren.length === 0) return null;
             return (
-              <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
+              <div className="mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[11px] text-sol-text-secondary uppercase tracking-wider font-medium">Continued in</span>
                   {continuationChildren.map((child) => (
@@ -6312,7 +6318,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {pendingPermissions && pendingPermissions.length > 0 && (
         <div className={`border-t border-sol-border bg-sol-bg-alt shrink-0 ${embedded ? "-mx-[9999px] px-[9999px]" : ""}`}>
-          <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-2 space-y-2">
+          <div className="mx-auto px-2 sm:px-3 md:px-4 py-2 space-y-2">
             {pendingPermissions.map((permission) => (
               <PermissionCard key={permission._id} permission={permission} />
             ))}
