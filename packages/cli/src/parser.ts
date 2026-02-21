@@ -38,6 +38,7 @@ export interface ToolResult {
 export interface ImageBlock {
   mediaType: string;
   data: string;
+  toolUseId?: string;
 }
 
 export interface ParsedMessage {
@@ -127,6 +128,7 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
                   images.push({
                     mediaType: item.source.media_type,
                     data: item.source.data,
+                    toolUseId: block.tool_use_id,
                   });
                 }
               }

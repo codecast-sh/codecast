@@ -219,7 +219,7 @@ export class SyncService {
     thinking?: string;
     toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
     toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
-    images?: Array<{ mediaType: string; data: string }>;
+    images?: Array<{ mediaType: string; data: string; toolUseId?: string }>;
     subtype?: string;
   }): Promise<string> {
     await this.throttle();
@@ -245,13 +245,13 @@ export class SyncService {
       is_error: tr.isError,
     }));
 
-    const images: Array<{ media_type: string; storage_id?: string; data?: string }> = [];
+    const images: Array<{ media_type: string; storage_id?: string; data?: string; tool_use_id?: string }> = [];
     if (params.images && params.images.length > 0) {
       const imagesToProcess = params.images.slice(0, MAX_IMAGES_PER_MESSAGE);
       for (const img of imagesToProcess) {
         const storageId = await this.uploadImage(img.data, img.mediaType);
         if (storageId) {
-          images.push({ media_type: img.mediaType, storage_id: storageId });
+          images.push({ media_type: img.mediaType, storage_id: storageId, tool_use_id: img.toolUseId });
         }
       }
     }
@@ -292,7 +292,7 @@ export class SyncService {
       thinking?: string;
       toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
       toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
-      images?: Array<{ mediaType: string; data: string }>;
+      images?: Array<{ mediaType: string; data: string; toolUseId?: string }>;
       subtype?: string;
     }>;
   }): Promise<{ inserted: number; ids: string[] }> {
@@ -323,13 +323,13 @@ export class SyncService {
         is_error: tr.isError,
       }));
 
-      const images: Array<{ media_type: string; storage_id?: string; data?: string }> = [];
+      const images: Array<{ media_type: string; storage_id?: string; data?: string; tool_use_id?: string }> = [];
       if (msg.images && msg.images.length > 0) {
         const imagesToProcess = msg.images.slice(0, MAX_IMAGES_PER_MESSAGE);
         for (const img of imagesToProcess) {
           const storageId = await this.uploadImage(img.data, img.mediaType);
           if (storageId) {
-            images.push({ media_type: img.mediaType, storage_id: storageId });
+            images.push({ media_type: img.mediaType, storage_id: storageId, tool_use_id: img.toolUseId });
           }
         }
       }
@@ -492,6 +492,20 @@ export class SyncService {
       }
       throw error;
     }
+  }
+
+  async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked"): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.client.mutation(
+        "managedSessions:updateAgentStatus" as any,
+        {
+          conversation_id: conversationId,
+          agent_status: status,
+          api_token: this.apiToken,
+        }
+      );
+    } catch {}
   }
 
   async checkManagedSession(conversationId: string): Promise<{ managed: boolean; session_id?: string; pid?: number } | null> {

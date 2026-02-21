@@ -226,6 +226,7 @@ export default defineSchema({
       media_type: v.string(),
       data: v.optional(v.string()),
       storage_id: v.optional(v.id("_storage")),
+      tool_use_id: v.optional(v.string()),
     }))),
     subtype: v.optional(v.string()),
     timestamp: v.number(),
@@ -414,6 +415,8 @@ export default defineSchema({
     tmux_session: v.optional(v.string()),
     started_at: v.number(),
     last_heartbeat: v.number(),
+    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"))),
+    agent_status_updated_at: v.optional(v.number()),
   })
     .index("by_session_id", ["session_id"])
     .index("by_conversation_id", ["conversation_id"])
