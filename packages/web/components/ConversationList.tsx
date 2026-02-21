@@ -490,11 +490,22 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const [agentType, setAgentType] = useState<"claude" | "codex" | "gemini">("claude");
   const [projectPath, setProjectPath] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [dropdownIndex, setDropdownIndex] = useState(-1);
   const createQuickSession = useMutation(api.conversations.createQuickSession);
-  const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
+  const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
   const modalRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const context = useNewSessionStore((s) => s.context);
+
+  const filteredProjects = useMemo(() => {
+    if (!recentProjects || recentProjects.length === 0) return [];
+    if (!projectPath) return recentProjects;
+    const lower = projectPath.toLowerCase();
+    return recentProjects.filter((p) => p.path.toLowerCase().includes(lower));
+  }, [recentProjects, projectPath]);
 
   useEffect(() => {
     if (isOpen && context.projectPath) {
@@ -546,7 +557,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   return (
     <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm">
-      <div ref={modalRef} className="bg-white dark:bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+      <div ref={modalRef} className="bg-white dark:bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-md mx-4">
         <div className="px-5 pt-5 pb-3">
           <h3 className="text-base font-semibold text-sol-text">New Session</h3>
           <p className="text-xs text-sol-text-muted mt-0.5">Start a coding session on your machine</p>
@@ -578,28 +589,82 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
           </div>
 
           {/* Project path */}
-          <div>
+          <div className="relative">
             <label className="block text-xs font-medium text-sol-text-muted mb-1">Project directory</label>
             <input
+              ref={inputRef}
               type="text"
               value={projectPath}
-              onChange={(e) => setProjectPath(e.target.value)}
+              onChange={(e) => {
+                setProjectPath(e.target.value);
+                setShowDropdown(true);
+                setDropdownIndex(-1);
+              }}
+              onFocus={() => setShowDropdown(true)}
+              onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
               placeholder="~/src/my-project"
               className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-yellow/50"
-              onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
+              onKeyDown={(e) => {
+                if (showDropdown && filteredProjects.length > 0) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setDropdownIndex((i) => Math.min(i + 1, filteredProjects.length - 1));
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setDropdownIndex((i) => Math.max(i - 1, -1));
+                    return;
+                  }
+                  if (e.key === "Enter" && dropdownIndex >= 0) {
+                    e.preventDefault();
+                    setProjectPath(filteredProjects[dropdownIndex].path);
+                    setShowDropdown(false);
+                    return;
+                  }
+                  if (e.key === "Tab" && dropdownIndex >= 0) {
+                    e.preventDefault();
+                    setProjectPath(filteredProjects[dropdownIndex].path);
+                    setShowDropdown(false);
+                    return;
+                  }
+                }
+                if (e.key === "Escape") {
+                  setShowDropdown(false);
+                  return;
+                }
+                if (e.key === "Enter") handleSubmit();
+              }}
             />
-            {recentProjects && recentProjects.length > 0 && !projectPath && (
-              <div className="flex flex-wrap gap-1.5 mt-1.5">
-                {recentProjects.slice(0, 5).map((p) => (
-                  <button
-                    key={p.path}
-                    onClick={() => setProjectPath(p.path)}
-                    className="px-2 py-0.5 text-[11px] rounded bg-sol-bg-alt/80 text-sol-text-muted border border-sol-border/30 hover:border-sol-border/60 transition-colors truncate max-w-[140px]"
-                    title={p.path}
-                  >
-                    {p.path.split("/").pop()}
-                  </button>
-                ))}
+            {showDropdown && filteredProjects.length > 0 && (
+              <div ref={dropdownRef} className="absolute z-10 left-0 right-0 mt-1 bg-white dark:bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden max-h-[200px] overflow-y-auto">
+                {filteredProjects.map((p, i) => {
+                  const parts = p.path.split("/");
+                  const dirName = parts.pop() || "";
+                  const parentPath = parts.join("/");
+                  return (
+                    <button
+                      key={p.path}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setProjectPath(p.path);
+                        setShowDropdown(false);
+                      }}
+                      onMouseEnter={() => setDropdownIndex(i)}
+                      className={`w-full px-3 py-2 text-left text-sm flex items-center justify-between gap-2 transition-colors ${
+                        i === dropdownIndex
+                          ? "bg-sol-yellow/15 text-sol-text"
+                          : "text-sol-text-muted hover:bg-sol-bg-alt"
+                      }`}
+                    >
+                      <span className="truncate">
+                        <span className="text-sol-text-dim">{parentPath}/</span>
+                        <span className="font-medium text-sol-text">{dirName}</span>
+                      </span>
+                      <span className="text-[10px] text-sol-text-dim shrink-0">{p.count} session{p.count !== 1 ? "s" : ""}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

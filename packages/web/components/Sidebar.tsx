@@ -8,6 +8,7 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useActiveTeamStore } from "../store/activeTeamStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useNewSessionStore } from "../store/newSessionStore";
 import { TeamIcon } from "./TeamIcon";
 
 interface SidebarProps {
@@ -135,6 +136,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const markTeamSeen = useMutation(api.conversations.markTeamConversationsSeen);
   const activeSessions = useQuery(api.conversations.listIdleSessions, {});
   const idleCount = activeSessions?.filter((s: any) => s.is_idle).length ?? 0;
+  const openNewSession = useNewSessionStore((s) => s.open);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -186,15 +188,19 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   );
 
   const computedDirectories = useMemo(() => {
-    const deriveGitRoot = (c: ConversationItem): string | null => {
-      if (c.git_root) return c.git_root;
-      if (!c.project_path) return null;
-      const parts = c.project_path.split('/');
+    const normalizeToRoot = (path: string): string => {
+      const parts = path.split('/');
       const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
       if (srcIndex >= 0 && srcIndex < parts.length - 1) {
         return parts.slice(0, srcIndex + 2).join('/');
       }
-      return c.project_path;
+      return path;
+    };
+
+    const deriveGitRoot = (c: ConversationItem): string | null => {
+      const rawPath = c.git_root || c.project_path;
+      if (!rawPath) return null;
+      return normalizeToRoot(rawPath);
     };
 
     const dirLastUpdated = new Map<string, number>();
@@ -366,8 +372,17 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
 
         {!isNarrow && computedDirectories.length > 0 && (
           <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
-              Projects
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2 flex items-center justify-between">
+              <span>Projects</span>
+              <button
+                onClick={() => openNewSession()}
+                className="text-sol-text-dim hover:text-sol-yellow transition-colors"
+                title="New session..."
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
             </div>
             <div className="space-y-0.5">
               {computedDirectories.slice(0, 8).map((dir) => (
