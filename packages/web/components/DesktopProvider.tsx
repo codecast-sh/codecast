@@ -9,11 +9,11 @@ import {
   checkForUpdates,
   notifyNative,
 } from "../lib/desktop";
-import { useQueueStore } from "../store/queueStore";
+import { useInboxStore } from "../store/inboxStore";
 
 export function DesktopProvider() {
   const router = useRouter();
-  const sessions = useQueueStore((s) => s.sessions);
+  const sessions = useInboxStore((s) => s.sessions);
   const prevCountRef = useRef<number | null>(null);
   const initRef = useRef(false);
 

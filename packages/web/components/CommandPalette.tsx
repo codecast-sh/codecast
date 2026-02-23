@@ -6,7 +6,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { useQueueStore } from "../store/queueStore";
+import { useInboxStore } from "../store/inboxStore";
 
 const NAV_PAGES = [
   { label: "Dashboard", path: "/dashboard", icon: "grid", keywords: "home sessions main" },
@@ -126,7 +126,7 @@ export function CommandPalette() {
       const inboxMatch = path.match(/^\/inbox\?s=(.+)$/);
       if (inboxMatch && pathname === "/inbox") {
         const sessionId = inboxMatch[1];
-        useQueueStore.getState().navigateToSession(sessionId);
+        useInboxStore.getState().navigateToSession(sessionId);
         window.history.replaceState({ inboxId: sessionId }, "", path);
       } else {
         router.push(path);

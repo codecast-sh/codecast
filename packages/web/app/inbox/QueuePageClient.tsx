@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -11,9 +10,8 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useQueueStore, InboxSession } from "../../store/queueStore";
-import { registerMutation } from "../../store/convexCache";
-import { useCurrentConversationStore } from "../../store/currentConversationStore";
+import { useInboxStore, InboxSession } from "../../store/inboxStore";
+import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
 import { cleanTitle } from "../../lib/conversationProcessor";
 
@@ -327,16 +325,16 @@ function InboxSessionPanel({
   onToggleShowAll: () => void;
   dismissedSessions: InboxSession[];
 }) {
-  const sessions = useQueueStore((s) => s.sessions);
-  const currentIndex = useQueueStore((s) => s.currentIndex);
-  const setCurrentIndex = useQueueStore((s) => s.setCurrentIndex);
-  const stashSession = useQueueStore((s) => s.stashSession);
-  const deferSession = useQueueStore((s) => s.deferSession);
-  const unstashSession = useQueueStore((s) => s.unstashSession);
-  const showDismissed = useQueueStore((s) => s.showDismissed);
-  const setShowDismissed = useQueueStore((s) => s.setShowDismissed);
-  const viewingDismissedId = useQueueStore((s) => s.viewingDismissedId);
-  const setViewingDismissedId = useQueueStore((s) => s.setViewingDismissedId);
+  const sessions = useInboxStore((s) => s.sessions);
+  const currentIndex = useInboxStore((s) => s.currentIndex);
+  const setCurrentIndex = useInboxStore((s) => s.setCurrentIndex);
+  const stashSession = useInboxStore((s) => s.stashSession);
+  const deferSession = useInboxStore((s) => s.deferSession);
+  const unstashSession = useInboxStore((s) => s.unstashSession);
+  const showDismissed = useInboxStore((s) => s.showDismissed);
+  const setShowDismissed = useInboxStore((s) => s.setShowDismissed);
+  const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
+  const setViewingDismissedId = useInboxStore((s) => s.setViewingDismissedId);
 
   const handleNavigateToSession = useCallback((targetId: string) => {
     const idx = sessions.findIndex((s) => s._id === targetId);
@@ -483,23 +481,19 @@ function InboxSessionPanel({
 export function QueuePageClient() {
   const searchParams = useSearchParams();
   const [showAll, setShowAll] = useState(false);
-  const activeSessions = useQuery(api.conversations.listIdleSessions, { show_all: showAll });
-  const dismissedQuery = useQuery(api.conversations.listDismissedSessions, {});
-  const patchConv = useMutation(api.conversations.patchConversation);
-  const sessions = useQueueStore((s) => s.sessions);
-  const dismissedSessions = useQueueStore((s) => s.dismissedSessions);
-  const currentIndex = useQueueStore((s) => s.currentIndex);
-  const syncFromConvex = useQueueStore((s) => s.syncFromConvex);
-  const syncDismissedFromConvex = useQueueStore((s) => s.syncDismissedFromConvex);
-  const advanceToNext = useQueueStore((s) => s.advanceToNext);
-  const navigateUp = useQueueStore((s) => s.navigateUp);
-  const navigateDown = useQueueStore((s) => s.navigateDown);
-  const stashSession = useQueueStore((s) => s.stashSession);
-  const deferSession = useQueueStore((s) => s.deferSession);
-  const rawSetCurrentIndex = useQueueStore((s) => s.setCurrentIndex);
-  const pinSession = useQueueStore((s) => s.pinSession);
-  const viewingDismissedId = useQueueStore((s) => s.viewingDismissedId);
-  const setViewingDismissedId = useQueueStore((s) => s.setViewingDismissedId);
+  const { activeSessions } = useSyncInboxSessions(showAll);
+  const sessions = useInboxStore((s) => s.sessions);
+  const dismissedSessions = useInboxStore((s) => s.dismissedSessions);
+  const currentIndex = useInboxStore((s) => s.currentIndex);
+  const advanceToNext = useInboxStore((s) => s.advanceToNext);
+  const navigateUp = useInboxStore((s) => s.navigateUp);
+  const navigateDown = useInboxStore((s) => s.navigateDown);
+  const stashSession = useInboxStore((s) => s.stashSession);
+  const deferSession = useInboxStore((s) => s.deferSession);
+  const rawSetCurrentIndex = useInboxStore((s) => s.setCurrentIndex);
+  const pinSession = useInboxStore((s) => s.pinSession);
+  const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
+  const setViewingDismissedId = useInboxStore((s) => s.setViewingDismissedId);
 
   const [showShortcuts, setShowShortcuts] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -525,28 +519,11 @@ export function QueuePageClient() {
     localStorage.setItem("inbox-layout", JSON.stringify(layout));
   }, []);
 
-  useEffect(() => {
-    registerMutation("conversations", (id, fields) =>
-      patchConv({ id: id as Id<"conversations">, fields })
-    );
-  }, [patchConv]);
   const isPopstateRef = useRef(false);
   const lastAppliedParamId = useRef<string | null>(null);
   const paramProcessedRef = useRef(!searchParams.get("s"));
 
-  useEffect(() => {
-    if (activeSessions) {
-      syncFromConvex(activeSessions);
-    }
-  }, [activeSessions, syncFromConvex]);
-
-  useEffect(() => {
-    if (dismissedQuery) {
-      syncDismissedFromConvex(dismissedQuery);
-    }
-  }, [dismissedQuery, syncDismissedFromConvex]);
-
-  const injectSession = useQueueStore((s) => s.injectSession);
+  const injectSession = useInboxStore((s) => s.injectSession);
   const setCurrentIndex = rawSetCurrentIndex;
 
   // ID we're trying to navigate to that isn't yet in the queue
@@ -622,10 +599,10 @@ export function QueuePageClient() {
   }, [pendingInjectId, directConv, sessions, rawSetCurrentIndex, injectSession, pinSession]);
 
   // Handle store-based navigation (from CommandPalette when already on /inbox)
-  const pendingNavigateId = useQueueStore((s) => s.pendingNavigateId);
+  const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
   useEffect(() => {
     if (!pendingNavigateId) return;
-    useQueueStore.setState({ pendingNavigateId: null });
+    useInboxStore.setState({ pendingNavigateId: null });
     const idx = sessions.findIndex((s) => s._id === pendingNavigateId);
     if (idx >= 0) {
       setPendingInjectId(null);
@@ -662,7 +639,7 @@ export function QueuePageClient() {
     ? dismissedSessions.find((s) => s._id === viewingDismissedId) ?? null
     : null;
 
-  const setCurrentConversation = useCurrentConversationStore((s) => s.set);
+  const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
 
   const rawCurrentSession = sessions[currentIndex];
   const currentSession = pendingInjectId && rawCurrentSession && rawCurrentSession._id !== pendingInjectId
@@ -690,7 +667,7 @@ export function QueuePageClient() {
     }
     const targetId = viewingDismissedId
       ? undefined
-      : useQueueStore.getState().getCurrentSession()?._id;
+      : useInboxStore.getState().getCurrentSession()?._id;
     if (!targetId) return;
     const url = new URL(window.location.href);
     if (!url.pathname.startsWith("/inbox")) return;

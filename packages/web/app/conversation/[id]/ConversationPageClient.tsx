@@ -13,8 +13,7 @@ import { toast } from "sonner";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useSharedConversationMessages } from "../../../hooks/useSharedConversationMessages";
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
-import { registerMutation } from "../../../store/convexCache";
-import { useCurrentConversationStore } from "../../../store/currentConversationStore";
+import { useInboxStore } from "../../../store/inboxStore";
 import { useForkNavigationStore } from "../../../store/forkNavigationStore";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -96,14 +95,15 @@ function OwnerView({
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
   const patchConv = useMutation(api.conversations.patchConversation);
 
+  const registerMutation = useInboxStore((s) => s.registerMutation);
   useEffect(() => {
     registerMutation("conversations", (docId, fields) =>
       patchConv({ id: docId as Id<"conversations">, fields })
     );
-  }, [patchConv]);
+  }, [patchConv, registerMutation]);
 
   const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
-  const setCurrentConversation = useCurrentConversationStore((s) => s.set);
+  const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
 
   useEffect(() => {
     if (conversation) {

@@ -33,10 +33,7 @@ import { copyToClipboard } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "./tools/MarkdownRenderer";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
-import { setDraft, getDraft, clearDraft, patch as cachePatch } from "../store/convexCache";
-import { usePendingSessionStore } from "../store/pendingSessionStore";
-import { useOptimisticMessagesStore } from "../store/optimisticMessagesStore";
-import { useQueueStore } from "../store/queueStore";
+import { useInboxStore } from "../store/inboxStore";
 import { useNewSessionStore } from "../store/newSessionStore";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
@@ -225,8 +222,8 @@ export interface ConversationViewHandle {
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const switchProject = useMutation(api.conversations.switchSessionProject);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
-  const updateSessionProject = useQueueStore((s) => s.updateSessionProject);
-  const storeSession = useQueueStore((s) =>
+  const updateSessionProject = useInboxStore((s) => s.updateSessionProject);
+  const storeSession = useInboxStore((s) =>
     s.sessions.find((sess) => sess._id === conversation._id || sess.stableKey === conversation._id)
   );
   const openNewSession = useNewSessionStore((s) => s.open);
@@ -246,7 +243,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     if (!trimmed) return;
     updateSessionProject(resolvedId, trimmed);
     if (!resolvedId.startsWith("temp_")) {
-      cachePatch("conversations", resolvedId, { project_path: trimmed, git_root: trimmed });
+      useInboxStore.getState().patch("conversations", resolvedId, { project_path: trimmed, git_root: trimmed });
       switchProject({ conversation_id: resolvedId as Id<"conversations">, project_path: trimmed }).catch(() => {});
     }
   }, [switchProject, resolvedId, updateSessionProject]);
@@ -3659,7 +3656,7 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
 }
 
 const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string, opts?: { inline?: boolean; focusInput?: boolean }) => void }) {
-  const cached = getDraft(conversationId);
+  const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
@@ -3670,8 +3667,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [showStuckBanner, setShowStuckBanner] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
   const resumeSessionMutation = useMutation(api.users.resumeSession);
-  const getRealId = usePendingSessionStore((s) => s.getRealId);
-  const addOptimistic = useOptimisticMessagesStore((s) => s.add);
+  const getRealId = useInboxStore((s) => s.getRealId);
+  const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
 
   const messageStatus = useQuery(
     api.pendingMessages.getMessageStatus,
@@ -3766,9 +3763,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
   const updateDraft = useCallback((text: string, images?: Array<{ storageId?: string; previewUrl?: string; name?: string }> | null) => {
     if (!text && (!images || images.length === 0)) {
-      clearDraft(conversationId);
+      useInboxStore.getState().clearDraft(conversationId);
     } else {
-      setDraft(conversationId, {
+      useInboxStore.getState().setDraft(conversationId, {
         draft_message: text || null,
         draft_image_storage_ids: images && images.length > 0 ? images : null,
       });
@@ -3783,11 +3780,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(() => {
-      const existing = getDraft(conversationId);
+      const existing = useInboxStore.getState().getDraft(conversationId);
       if (!val && !existing?.draft_image_storage_ids?.length) {
-        clearDraft(conversationId);
+        useInboxStore.getState().clearDraft(conversationId);
       } else {
-        setDraft(conversationId, { ...existing, draft_message: val || null });
+        useInboxStore.getState().setDraft(conversationId, { ...existing, draft_message: val || null });
       }
     }, 300);
   }, [conversationId]);
@@ -4211,7 +4208,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const sendEscape = useMutation(api.conversations.sendEscapeToSession);
   const sendInlineMessage = useMutation(api.pendingMessages.sendMessageToSession);
-  const addOptimisticMsg = useOptimisticMessagesStore((s) => s.add);
+  const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation) return;
