@@ -93,14 +93,6 @@ function OwnerView({
   autoFocusInput?: boolean;
 }) {
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
-  const patchConv = useMutation(api.conversations.patchConversation);
-
-  const registerMutation = useInboxStore((s) => s.registerMutation);
-  useEffect(() => {
-    registerMutation("conversations", (docId, fields) =>
-      patchConv({ id: docId as Id<"conversations">, fields })
-    );
-  }, [patchConv, registerMutation]);
 
   const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
   const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);

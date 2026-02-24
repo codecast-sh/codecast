@@ -972,7 +972,7 @@ function isPlanWriteToolCall(tc: ToolCall): boolean {
   }
 }
 
-function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, onStartShareSelection, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean; messageId?: string; onStartShareSelection?: (messageId: string) => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
+function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
   const isEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write" || tool.name === "apply_patch";
   const [expanded, setExpanded] = useState(isEdit);
   const isRead = tool.name === "Read" || tool.name === "file_read";
@@ -1301,7 +1301,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, o
   };
 
   if (isPlanWrite && content) {
-    return <PlanBlock content={content} timestamp={timestamp || Date.now()} collapsed={collapsed} />;
+    return <PlanBlock content={content} timestamp={timestamp || Date.now()} collapsed={collapsed} messageId={messageId} conversationId={conversationId} onOpenComments={onOpenComments} onStartShareSelection={onStartShareSelection} />;
   }
 
   return (
@@ -3112,7 +3112,9 @@ function AssistantBlock({
               changeIndex={toolCallToChangeIndexMap?.[tc.id]}
               shareSelectionMode={shareSelectionMode}
               messageId={messageId}
+              conversationId={conversationId}
               onStartShareSelection={onStartShareSelection}
+              onOpenComments={onOpenComments}
               collapsed={collapsed}
               timestamp={timestamp}
               images={images}
@@ -3259,7 +3261,7 @@ function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[
   return null;
 }
 
-function SystemBlock({ content, subtype, timestamp, messageUuid }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string }) {
+function SystemBlock({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: () => void; onStartShareSelection?: (messageId: string) => void }) {
   if (subtype === "compact_boundary") {
     return (
       <div className="my-6 flex items-center gap-3">
@@ -3280,7 +3282,7 @@ function SystemBlock({ content, subtype, timestamp, messageUuid }: { content: st
   }
 
   if (subtype === "plan" && content) {
-    return <PlanBlock content={content} timestamp={timestamp || Date.now()} />;
+    return <PlanBlock content={content} timestamp={timestamp || Date.now()} messageId={messageId} conversationId={conversationId} onOpenComments={onOpenComments} onStartShareSelection={onStartShareSelection} />;
   }
 
   if (subtype === "pull_request" && content) {
@@ -3374,11 +3376,21 @@ function CompactionSummaryBlock({ content }: { content: string }) {
 
 const PLAN_MAX_HEIGHT = 1800;
 
-function PlanBlock({ content, timestamp, collapsed }: { content: string; timestamp: number; collapsed?: boolean }) {
+function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; timestamp: number; collapsed?: boolean; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: () => void; onStartShareSelection?: (messageId: string) => void }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
+
+  const isRealMessageId = messageId && !messageId.startsWith("optimistic_");
+  const commentCount = useQuery(api.comments.getCommentCount,
+    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
+  );
+  const isBookmarked = useQuery(
+    api.bookmarks.isBookmarked,
+    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
+  );
+  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
   useEffect(() => {
     if (contentRef.current && !isExpanded) {
@@ -3393,6 +3405,28 @@ function PlanBlock({ content, timestamp, collapsed }: { content: string; timesta
     document.body.style.overflow = 'hidden';
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
+
+  const handleCopy = () => {
+    setTimeout(() => { copyToClipboard(content || "").then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
+  };
+
+  const handleCopyLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}#msg-${messageId}`;
+    setTimeout(() => { copyToClipboard(url).then(() => toast.success("Link copied!")).catch(() => toast.error("Failed to copy link")); });
+  };
+
+  const handleToggleBookmark = async () => {
+    if (!conversationId || !messageId) return;
+    try {
+      const result = await toggleBookmark({
+        conversation_id: conversationId,
+        message_id: messageId as Id<"messages">,
+      });
+      toast.success(result ? "Bookmarked!" : "Bookmark removed");
+    } catch {
+      toast.error("Failed to toggle bookmark");
+    }
+  };
 
   const title = content.match(/^#\s+(.+)$/m)?.[1] || "Plan";
 
@@ -3419,15 +3453,49 @@ function PlanBlock({ content, timestamp, collapsed }: { content: string; timesta
           <span className="text-xs font-medium text-sol-text-muted">Plan</span>
           <span className="text-xs text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
         </div>
-        <button
-          onClick={() => setFullscreen(true)}
-          className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors"
-          title="Fullscreen"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-0.5">
+          {onStartShareSelection && messageId && (
+            <button onClick={() => onStartShareSelection(messageId)} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Share">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+            </button>
+          )}
+          {messageId && (
+            <button onClick={handleCopyLink} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Copy link">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+            </button>
+          )}
+          {isRealMessageId && conversationId && (
+            <button onClick={handleToggleBookmark} className={`p-1 rounded hover:bg-sol-bg-highlight ${isBookmarked ? "text-amber-400" : "text-sol-text-dim hover:text-sol-text-muted"} transition-colors`} title={isBookmarked ? "Remove bookmark" : "Bookmark"}>
+              <svg className="w-3.5 h-3.5" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+              </svg>
+            </button>
+          )}
+          {onOpenComments && (
+            <button onClick={onOpenComments} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors flex items-center gap-0.5" title="Comments">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+              </svg>
+              {commentCount !== undefined && commentCount > 0 && (
+                <span className="text-[10px]">{commentCount}</span>
+              )}
+            </button>
+          )}
+          <button onClick={handleCopy} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Copy">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </button>
+          <button onClick={() => setFullscreen(true)} className="p-1 rounded hover:bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text-muted transition-colors" title="Fullscreen">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+            </svg>
+          </button>
+        </div>
       </div>
       <div className="px-4 py-3">
         <div
@@ -5485,7 +5553,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const msg = item.data as Message;
     if (msg.role === "system") {
       if (collapsed) return null;
-      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} />;
+      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} onStartShareSelection={handleStartShareSelection} />;
     }
 
     if (msg.role === "user") {
@@ -5525,7 +5593,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         }
         const planContent = extractPlanContent(msg.content);
         if (planContent) {
-          return <PlanBlock key={msg._id} content={planContent} timestamp={msg.timestamp} collapsed={collapsed} />;
+          return <PlanBlock key={msg._id} content={planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} onStartShareSelection={handleStartShareSelection} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
         return <UserPrompt key={msg._id} content={msg.content} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} />;

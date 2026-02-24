@@ -704,6 +704,21 @@ export default defineSchema({
     .index("by_status_run_at", ["status", "run_at"])
     .index("by_event_filter", ["status"]),
 
+  client_state: defineTable({
+    user_id: v.id("users"),
+    current_conversation_id: v.optional(v.string()),
+    show_dismissed: v.optional(v.boolean()),
+    dismissed_ids: v.optional(v.array(v.string())),
+    sidebar_collapsed: v.optional(v.boolean()),
+    zen_mode: v.optional(v.boolean()),
+    layout: v.optional(v.object({
+      sidebar: v.number(),
+      main: v.number(),
+    })),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"]),
+
   daemon_logs: defineTable({
     user_id: v.id("users"),
     level: v.union(

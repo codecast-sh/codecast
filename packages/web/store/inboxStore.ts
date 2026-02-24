@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { mutativeMiddleware, action } from "./mutativeMiddleware";
 
 // -- Types --
 
@@ -74,12 +75,20 @@ export type CurrentConversationContext = {
   source?: "inbox" | "sessions";
 };
 
-type MutationFn = (id: string, fields: Record<string, any>) => Promise<any>;
+export type ClientState = {
+  current_conversation_id?: string;
+  show_dismissed?: boolean;
+  dismissed_ids?: string[];
+  sidebar_collapsed?: boolean;
+  zen_mode?: boolean;
+  layout?: { sidebar: number; main: number };
+};
+
+type Draft = InboxStoreState;
 
 // -- Store interface --
 
 interface InboxStoreState {
-  // Session management
   sessions: InboxSession[];
   dismissedSessions: InboxSession[];
   currentIndex: number;
@@ -89,30 +98,39 @@ interface InboxStoreState {
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
 
-  // Messages
   messages: Record<string, Message[]>;
   optimisticMessages: Record<string, OptimisticMessage[]>;
   pagination: Record<string, PaginationState>;
   conversations: Record<string, ConversationMeta>;
 
-  // Patches, mutations, drafts
+  clientState: ClientState;
+
   pendingPatches: Record<string, Record<string, any>>;
-  mutations: Record<string, MutationFn>;
   drafts: Record<string, Record<string, any>>;
 
-  // Temp ID resolution
   tempIdMap: Record<string, string>;
 
-  // Current conversation
   currentConversation: CurrentConversationContext;
 
-  // -- Session actions --
-  syncSessionsFromConvex: (incoming: InboxSession[]) => void;
-  syncDismissedFromConvex: (incoming: InboxSession[]) => void;
-  advanceToNext: () => void;
+  // -- Dispatch (provided by middleware) --
+  _setDispatch: (fn: (action: string, args: any, patches?: any) => Promise<any>) => void;
+  _dispatch: (action: string, args: any, patches?: any) => Promise<any>;
+
+  // -- Wrapped actions (middleware creates aliases from do_* -> *) --
   stashSession: (id: string) => void;
   unstashSession: (id: string) => void;
   deferSession: (id: string) => void;
+  switchProject: (convId: string, path: string) => void;
+  sendMessage: (convId: string, content: string, imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) => Promise<any>;
+  resumeSession: (convId: string) => Promise<any>;
+  sendEscape: (convId: string) => void;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string }) => Promise<any>;
+
+  // -- Local actions --
+  advanceToNext: () => void;
+  syncSessionsFromConvex: (incoming: InboxSession[]) => void;
+  syncDismissedFromConvex: (incoming: InboxSession[]) => void;
+  syncClientState: (state: any) => void;
   navigateUp: () => void;
   navigateDown: () => void;
   setCurrentIndex: (index: number) => void;
@@ -140,11 +158,10 @@ interface InboxStoreState {
   setCurrentConversation: (ctx: CurrentConversationContext) => void;
   clearCurrentConversation: () => void;
 
-  // -- Patches --
+  // -- Patches (backward compat) --
   patch: (table: string, id: string, fields: Record<string, any>) => void;
   confirmPatch: (id: string) => void;
   applyPatch: <T extends { _id: string }>(doc: T) => T;
-  registerMutation: (table: string, fn: MutationFn) => void;
 
   // -- Drafts --
   setDraft: (id: string, fields: Record<string, any>) => void;
@@ -177,7 +194,8 @@ function stripImageRef(s: string): string {
   return s.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
 }
 
-export const useInboxStore = create<InboxStoreState>((set, get) => ({
+export const useInboxStore = create<InboxStoreState>(
+  mutativeMiddleware((set: any, get: any) => ({
   // -- Initial state --
   sessions: [],
   dismissedSessions: [],
@@ -193,8 +211,9 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
   pagination: {},
   conversations: {},
 
+  clientState: {},
+
   pendingPatches: {},
-  mutations: {},
   drafts: {},
 
   tempIdMap: {},
@@ -202,10 +221,96 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
   currentConversation: {},
 
   // =====================
-  // SESSION MANAGEMENT
+  // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
+  // Mark with action() to opt in. `this` is a mutative draft.
   // =====================
 
-  syncSessionsFromConvex: (incoming) => {
+  stashSession: action(function (this: Draft, id: string) {
+    if (this.conversations[id]) {
+      this.conversations[id].inbox_dismissed_at = Date.now();
+    }
+    this.dismissedIds.add(id);
+    this.injectedIds.delete(id);
+    const idx = this.sessions.findIndex((s: InboxSession) => s._id === id);
+    if (idx >= 0) {
+      this.sessions.splice(idx, 1);
+    }
+    if (this.currentIndex >= this.sessions.length) {
+      this.currentIndex = Math.max(0, this.sessions.length - 1);
+    }
+  }),
+
+  unstashSession: action(function (this: Draft, id: string) {
+    if (this.conversations[id]) {
+      this.conversations[id].inbox_dismissed_at = null;
+    }
+    this.dismissedIds.delete(id);
+  }),
+
+  deferSession: action(function (this: Draft, id: string) {
+    if (this.conversations[id]) {
+      this.conversations[id].inbox_deferred_at = Date.now();
+    }
+    const idx = this.sessions.findIndex((s: InboxSession) => s._id === id);
+    if (idx < 0 || this.sessions.length <= 1) return;
+    const session = { ...this.sessions[idx], is_deferred: true };
+    this.sessions.splice(idx, 1);
+    this.sessions.push(session as any);
+    if (idx < this.currentIndex) this.currentIndex--;
+    if (this.currentIndex >= this.sessions.length) {
+      this.currentIndex = Math.max(0, this.sessions.length - 1);
+    }
+  }),
+
+  switchProject: action(function (this: Draft, convId: string, path: string) {
+    const idx = this.sessions.findIndex((s: InboxSession) => s._id === convId);
+    if (idx >= 0) {
+      this.sessions[idx].project_path = path;
+      this.sessions[idx].git_root = path;
+    }
+    this.injectedIds.add(convId);
+    if (this.conversations[convId]) {
+      this.conversations[convId].project_path = path;
+      this.conversations[convId].git_root = path;
+    }
+  }),
+
+  sendMessage: action(function (this: Draft, convId: string, content: string, _imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) {
+    const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    if (!this.optimisticMessages[convId]) this.optimisticMessages[convId] = [];
+    this.optimisticMessages[convId].push({
+      _id: id,
+      role: "user" as const,
+      content,
+      timestamp: Date.now(),
+      _isOptimistic: true as const,
+      ...(images && images.length > 0 ? { images } : {}),
+    });
+  }),
+
+  resumeSession: action(function (_convId: string) {}),
+
+  sendEscape: action(function (_convId: string) {}),
+
+  createSession: action(function (_opts: { agent_type: string; project_path?: string; git_root?: string }) {}),
+
+  // =====================
+  // LOCAL METHODS (plain set/get, NOT wrapped by middleware)
+  // =====================
+
+  advanceToNext: () => {
+    const { sessions, currentIndex } = get();
+    const idleSessions = sessions.filter((s: InboxSession) => s.is_idle);
+    const currentId = sessions[currentIndex]?._id;
+    const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
+    const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
+    if (nextIdle && nextIdle._id !== currentId) {
+      const globalIdx = sessions.findIndex((s: InboxSession) => s._id === nextIdle._id);
+      if (globalIdx >= 0) set({ currentIndex: globalIdx });
+    }
+  },
+
+  syncSessionsFromConvex: (incoming: InboxSession[]) => {
     const { dismissedIds, currentIndex, sessions: prev, injectedIds, pendingPatches } = get();
 
     for (const s of incoming) {
@@ -222,9 +327,16 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     const incomingById = new Map(incoming.map((s) => [s._id, s]));
     const visibleIncoming = incoming.filter((s) => !dismissedIds.has(s._id));
 
+    const newConversations = { ...get().conversations };
+    for (const s of incoming) {
+      if (!newConversations[s._id]) {
+        newConversations[s._id] = { _id: s._id };
+      }
+    }
+
     if (prev.length === 0) {
       const clampedIndex = Math.min(currentIndex, Math.max(0, visibleIncoming.length - 1));
-      set({ sessions: visibleIncoming, currentIndex: clampedIndex });
+      set({ sessions: visibleIncoming, currentIndex: clampedIndex, conversations: newConversations });
       return;
     }
 
@@ -279,61 +391,23 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
       newIndex = Math.min(currentIndex, Math.max(0, merged.length - 1));
     }
 
-    set({ sessions: merged, currentIndex: newIndex });
+    set({ sessions: merged, currentIndex: newIndex, conversations: newConversations });
   },
 
-  syncDismissedFromConvex: (incoming) => {
+  syncDismissedFromConvex: (incoming: InboxSession[]) => {
     set({ dismissedSessions: incoming });
   },
 
-  advanceToNext: () => {
-    const { sessions, currentIndex } = get();
-    const idleSessions = sessions.filter((s) => s.is_idle);
-    const currentId = sessions[currentIndex]?._id;
-    const currentIdleIdx = idleSessions.findIndex((s) => s._id === currentId);
-    const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
-    if (nextIdle && nextIdle._id !== currentId) {
-      const globalIdx = sessions.findIndex((s) => s._id === nextIdle._id);
-      if (globalIdx >= 0) set({ currentIndex: globalIdx });
-    }
-  },
-
-  stashSession: (id) => {
-    const { sessions, currentIndex, dismissedIds, injectedIds } = get();
-    const newDismissed = new Set(dismissedIds);
-    newDismissed.add(id);
-    const newInjected = new Set(injectedIds);
-    newInjected.delete(id);
-
-    const visible = sessions.filter((s) => !newDismissed.has(s._id));
-    const newIndex = Math.min(currentIndex, Math.max(0, visible.length - 1));
-    set({ dismissedIds: newDismissed, injectedIds: newInjected, sessions: visible, currentIndex: newIndex });
-
-    get().patch("conversations", id, { inbox_dismissed_at: Date.now() });
-  },
-
-  unstashSession: (id) => {
-    const { dismissedIds } = get();
-    const newDismissed = new Set(dismissedIds);
-    newDismissed.delete(id);
-    set({ dismissedIds: newDismissed });
-
-    get().patch("conversations", id, { inbox_dismissed_at: null });
-  },
-
-  deferSession: (id) => {
-    const { sessions, currentIndex } = get();
-    const idx = sessions.findIndex((s) => s._id === id);
-    if (idx < 0 || sessions.length <= 1) return;
-    const session = { ...sessions[idx], is_deferred: true };
-    const updated = [...sessions];
-    updated.splice(idx, 1);
-    updated.push(session);
-    let newIndex = currentIndex;
-    if (idx < currentIndex) newIndex--;
-    set({ sessions: updated, currentIndex: Math.min(Math.max(0, newIndex), updated.length - 1) });
-
-    get().patch("conversations", id, { inbox_deferred_at: Date.now() });
+  syncClientState: (serverState: any) => {
+    if (!serverState) return;
+    set({ clientState: {
+      current_conversation_id: serverState.current_conversation_id,
+      show_dismissed: serverState.show_dismissed,
+      dismissed_ids: serverState.dismissed_ids,
+      sidebar_collapsed: serverState.sidebar_collapsed,
+      zen_mode: serverState.zen_mode,
+      layout: serverState.layout,
+    }});
   },
 
   navigateUp: () => {
@@ -348,18 +422,18 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     set({ currentIndex: (currentIndex + 1) % sessions.length });
   },
 
-  setCurrentIndex: (index) => {
+  setCurrentIndex: (index: number) => {
     const { sessions } = get();
     if (index >= 0 && index < sessions.length) {
       set({ currentIndex: index, viewingDismissedId: null });
     }
   },
 
-  setShowDismissed: (show) => {
+  setShowDismissed: (show: boolean) => {
     set({ showDismissed: show });
   },
 
-  setViewingDismissedId: (id) => {
+  setViewingDismissedId: (id: string | null) => {
     set({ viewingDismissedId: id });
   },
 
@@ -368,18 +442,18 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     return sessions[currentIndex] ?? null;
   },
 
-  injectSession: (session) => {
+  injectSession: (session: InboxSession) => {
     const { sessions, injectedIds, dismissedIds } = get();
     const next = new Set(injectedIds);
     next.add(session._id);
     const newDismissed = new Set(dismissedIds);
     if (newDismissed.delete(session._id)) {
-      get().patch("conversations", session._id, { inbox_dismissed_at: null });
+      get()._dispatch("patch", [], { conversations: { [session._id]: { inbox_dismissed_at: null } } }).catch(() => {});
     }
     set({ sessions: [session, ...sessions], currentIndex: 0, injectedIds: next, dismissedIds: newDismissed, viewingDismissedId: null });
   },
 
-  pinSession: (id) => {
+  pinSession: (id: string) => {
     const { injectedIds } = get();
     if (injectedIds.has(id)) return;
     const next = new Set(injectedIds);
@@ -387,9 +461,9 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     set({ injectedIds: next });
   },
 
-  updateSessionProject: (id, projectPath) => {
+  updateSessionProject: (id: string, projectPath: string) => {
     const { sessions, injectedIds } = get();
-    const updated = sessions.map((s) =>
+    const updated = sessions.map((s: InboxSession) =>
       s._id === id ? { ...s, project_path: projectPath, git_root: projectPath } : s
     );
     const next = new Set(injectedIds);
@@ -397,14 +471,14 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     set({ sessions: updated, injectedIds: next });
   },
 
-  navigateToSession: (id) => {
+  navigateToSession: (id: string) => {
     const { sessions, dismissedIds } = get();
     const newDismissed = new Set(dismissedIds);
     if (newDismissed.delete(id)) {
-      get().patch("conversations", id, { inbox_dismissed_at: null });
+      get()._dispatch("patch", [], { conversations: { [id]: { inbox_dismissed_at: null } } }).catch(() => {});
       set({ dismissedIds: newDismissed });
     }
-    const idx = sessions.findIndex((s) => s._id === id);
+    const idx = sessions.findIndex((s: InboxSession) => s._id === id);
     if (idx >= 0) {
       set({ currentIndex: idx, viewingDismissedId: null });
     } else {
@@ -412,17 +486,17 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     }
   },
 
-  replaceSessionId: (tempId, realId) => {
+  replaceSessionId: (tempId: string, realId: string) => {
     const { sessions, currentIndex, injectedIds } = get();
-    const tempIdx = sessions.findIndex((s) => s._id === tempId);
+    const tempIdx = sessions.findIndex((s: InboxSession) => s._id === tempId);
     if (tempIdx < 0) return;
     const newInjected = new Set(injectedIds);
     newInjected.delete(tempId);
     newInjected.add(realId);
-    const realIdx = sessions.findIndex((s) => s._id === realId);
+    const realIdx = sessions.findIndex((s: InboxSession) => s._id === realId);
     if (realIdx >= 0) {
-      const updated = sessions.filter((s) => s._id !== tempId);
-      const realInUpdated = updated.findIndex((s) => s._id === realId);
+      const updated = sessions.filter((s: InboxSession) => s._id !== tempId);
+      const realInUpdated = updated.findIndex((s: InboxSession) => s._id === realId);
       if (realInUpdated >= 0 && !updated[realInUpdated].stableKey) {
         updated[realInUpdated] = { ...updated[realInUpdated], stableKey: tempId };
       }
@@ -439,8 +513,8 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
   // MESSAGE MANAGEMENT
   // =====================
 
-  setMessages: (convId, msgs, meta) => {
-    set((s) => ({
+  setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => {
+    set((s: InboxStoreState) => ({
       messages: { ...s.messages, [convId]: msgs },
       pagination: {
         ...s.pagination,
@@ -449,17 +523,17 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     }));
   },
 
-  mergeMessages: (convId, msgs, direction, meta) => {
-    set((s) => {
+  mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => {
+    set((s: InboxStoreState) => {
       const existing = s.messages[convId] || [];
-      const existingIds = new Set(existing.map((m) => m._id));
-      const unique = msgs.filter((m) => !existingIds.has(m._id));
+      const existingIds = new Set(existing.map((m: Message) => m._id));
+      const unique = msgs.filter((m: Message) => !existingIds.has(m._id));
       if (unique.length === 0 && !meta) return s;
 
       const merged = direction === "prepend"
         ? [...unique, ...existing]
         : [...existing, ...unique];
-      merged.sort((a, b) => a.timestamp - b.timestamp);
+      merged.sort((a: Message, b: Message) => a.timestamp - b.timestamp);
 
       return {
         messages: { ...s.messages, [convId]: merged },
@@ -470,7 +544,7 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     });
   },
 
-  addOptimisticMessage: (convId, content, images) => {
+  addOptimisticMessage: (convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) => {
     const id = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const msg: OptimisticMessage = {
       _id: id,
@@ -480,7 +554,7 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
       _isOptimistic: true,
       ...(images && images.length > 0 ? { images } : {}),
     };
-    set((s) => ({
+    set((s: InboxStoreState) => ({
       optimisticMessages: {
         ...s.optimisticMessages,
         [convId]: [...(s.optimisticMessages[convId] || []), msg],
@@ -489,27 +563,27 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     return id;
   },
 
-  removeOptimisticMessage: (convId, messageId) => {
-    set((s) => {
+  removeOptimisticMessage: (convId: string, messageId: string) => {
+    set((s: InboxStoreState) => {
       const current = s.optimisticMessages[convId];
       if (!current) return s;
       return {
         optimisticMessages: {
           ...s.optimisticMessages,
-          [convId]: current.filter((m) => m._id !== messageId),
+          [convId]: current.filter((m: OptimisticMessage) => m._id !== messageId),
         },
       };
     });
   },
 
-  removeMatchingOptimistic: (convId, content) => {
-    set((s) => {
+  removeMatchingOptimistic: (convId: string, content: string) => {
+    set((s: InboxStoreState) => {
       const current = s.optimisticMessages[convId];
       if (!current) return s;
       const normalize = (str: string) => str.replace(/\[image\]/gi, "").trim();
       const trimmed = normalize(content);
       let removed = false;
-      const filtered = current.filter((m) => {
+      const filtered = current.filter((m: OptimisticMessage) => {
         if (!removed && normalize(m.content) === trimmed) {
           removed = true;
           return false;
@@ -523,8 +597,8 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     });
   },
 
-  setPagination: (convId, update) => {
-    set((s) => ({
+  setPagination: (convId: string, update: Partial<PaginationState>) => {
+    set((s: InboxStoreState) => ({
       pagination: {
         ...s.pagination,
         [convId]: { ...(s.pagination[convId] || DEFAULT_PAGINATION), ...update },
@@ -532,10 +606,10 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     }));
   },
 
-  initPagination: (convId) => {
+  initPagination: (convId: string) => {
     const existing = get().pagination[convId];
     if (existing) return;
-    set((s) => ({
+    set((s: InboxStoreState) => ({
       pagination: { ...s.pagination, [convId]: { ...DEFAULT_PAGINATION } },
     }));
   },
@@ -544,14 +618,14 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
   // METADATA
   // =====================
 
-  setConversationMeta: (convId, meta) => {
-    set((s) => ({
+  setConversationMeta: (convId: string, meta: ConversationMeta) => {
+    set((s: InboxStoreState) => ({
       conversations: { ...s.conversations, [convId]: meta },
     }));
   },
 
-  updateConversationMeta: (convId, partial) => {
-    set((s) => {
+  updateConversationMeta: (convId: string, partial: Record<string, any>) => {
+    set((s: InboxStoreState) => {
       const prev = s.conversations[convId];
       if (!prev) return s;
       return {
@@ -560,7 +634,7 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     });
   },
 
-  setCurrentConversation: (ctx) => {
+  setCurrentConversation: (ctx: CurrentConversationContext) => {
     set({ currentConversation: ctx });
   },
 
@@ -569,48 +643,45 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
   },
 
   // =====================
-  // PATCHES (optimistic mutations)
+  // PATCHES (backward compat, routes through _dispatch)
   // =====================
 
-  patch: (table, id, fields) => {
+  patch: (table: string, id: string, fields: Record<string, any>) => {
     const prev = get().pendingPatches[id] || {};
-    set((s) => ({
+    set((s: InboxStoreState) => ({
       pendingPatches: {
         ...s.pendingPatches,
         [id]: { ...prev, ...fields },
       },
     }));
 
-    const mutationFn = get().mutations[table];
-    if (mutationFn) {
-      mutationFn(id, fields).catch(() => {
-        const current = get().pendingPatches[id];
-        if (!current) return;
-        const rolled: Record<string, any> = { ...current };
-        for (const key of Object.keys(fields)) {
-          if (prev[key] !== undefined) {
-            rolled[key] = prev[key];
-          } else {
-            delete rolled[key];
-          }
-        }
-        if (Object.keys(rolled).length === 0) {
-          set((s) => {
-            const next = { ...s.pendingPatches };
-            delete next[id];
-            return { pendingPatches: next };
-          });
+    get()._dispatch("patch", [], { [table]: { [id]: fields } }).catch(() => {
+      const current = get().pendingPatches[id];
+      if (!current) return;
+      const rolled: Record<string, any> = { ...current };
+      for (const key of Object.keys(fields)) {
+        if (prev[key] !== undefined) {
+          rolled[key] = prev[key];
         } else {
-          set((s) => ({
-            pendingPatches: { ...s.pendingPatches, [id]: rolled },
-          }));
+          delete rolled[key];
         }
-      });
-    }
+      }
+      if (Object.keys(rolled).length === 0) {
+        set((s: InboxStoreState) => {
+          const next = { ...s.pendingPatches };
+          delete next[id];
+          return { pendingPatches: next };
+        });
+      } else {
+        set((s: InboxStoreState) => ({
+          pendingPatches: { ...s.pendingPatches, [id]: rolled },
+        }));
+      }
+    });
   },
 
-  confirmPatch: (id) => {
-    set((s) => {
+  confirmPatch: (id: string) => {
+    set((s: InboxStoreState) => {
       const next = { ...s.pendingPatches };
       delete next[id];
       return { pendingPatches: next };
@@ -623,28 +694,22 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     return { ...doc, ...pending };
   },
 
-  registerMutation: (table, fn) => {
-    set((s) => ({
-      mutations: { ...s.mutations, [table]: fn },
-    }));
-  },
-
   // =====================
   // DRAFTS
   // =====================
 
-  setDraft: (id, fields) => {
-    set((s) => ({
+  setDraft: (id: string, fields: Record<string, any>) => {
+    set((s: InboxStoreState) => ({
       drafts: { ...s.drafts, [id]: fields },
     }));
   },
 
-  getDraft: (id) => {
+  getDraft: (id: string) => {
     return get().drafts[id];
   },
 
-  clearDraft: (id) => {
-    set((s) => {
+  clearDraft: (id: string) => {
+    set((s: InboxStoreState) => {
       const next = { ...s.drafts };
       delete next[id];
       return { drafts: next };
@@ -655,7 +720,7 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
   // TEMP ID
   // =====================
 
-  resolveTempId: (tempId, realId) => {
+  resolveTempId: (tempId: string, realId: string) => {
     const state = get();
 
     const newTempIdMap = { ...state.tempIdMap, [tempId]: realId };
@@ -700,7 +765,7 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
     });
   },
 
-  getRealId: (id) => {
+  getRealId: (id: string) => {
     return get().tempIdMap[id] || id;
   },
 
@@ -708,26 +773,41 @@ export const useInboxStore = create<InboxStoreState>((set, get) => ({
   // SELECTORS
   // =====================
 
-  getSession: (id) => {
+  getSession: (id: string) => {
     const { sessions, dismissedSessions } = get();
-    const s = sessions.find((s) => s._id === id) || dismissedSessions.find((s) => s._id === id);
+    const s = sessions.find((s: InboxSession) => s._id === id) || dismissedSessions.find((s: InboxSession) => s._id === id);
     return s ? get().applyPatch(s as any) as InboxSession : undefined;
   },
 
-  getMergedMessages: (convId) => {
+  getMergedMessages: (convId: string) => {
     const { messages, optimisticMessages } = get();
     const cached = messages[convId] || [];
     const optimistic = optimisticMessages[convId] || [];
     if (optimistic.length === 0) return cached;
     const existingContents = new Set(
       cached
-        .filter((m) => m.role === "user" && m.content)
-        .map((m) => stripImageRef(m.content!))
+        .filter((m: Message) => m.role === "user" && m.content)
+        .map((m: Message) => stripImageRef(m.content!))
     );
     const fresh = optimistic.filter(
-      (m) => !existingContents.has(stripImageRef(m.content))
+      (m: OptimisticMessage) => !existingContents.has(stripImageRef(m.content))
     );
     if (fresh.length === 0) return cached;
-    return [...cached, ...fresh].sort((a, b) => a.timestamp - b.timestamp);
+    return [...cached, ...fresh].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
   },
-}));
+})) as any);
+
+// =====================
+// STORE PROXY
+// =====================
+
+type StoreProxy = InboxStoreState & { use: typeof useInboxStore };
+
+export const store = new Proxy({} as StoreProxy, {
+  get(_, prop) {
+    if (prop === "use") return useInboxStore;
+    const state = useInboxStore.getState();
+    const val = (state as any)[prop];
+    return val;
+  },
+});
