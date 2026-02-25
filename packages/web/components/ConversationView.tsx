@@ -5317,13 +5317,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && !hasMoreBelow && !userScrolledRef.current) {
-      virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
-      requestAnimationFrame(() => {
-        if (containerRef.current) {
-          containerRef.current.scrollTop = containerRef.current.scrollHeight;
-          lastScrollTopRef.current = containerRef.current.scrollTop;
-        }
-      });
+      const el = containerRef.current;
+      if (el) {
+        el.style.scrollBehavior = "smooth";
+        virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight;
+          lastScrollTopRef.current = el.scrollTop;
+          setTimeout(() => { el.style.scrollBehavior = ""; }, 500);
+        });
+      }
       setUserScrolled(false);
     }
   }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow, initialScrollDone]);
