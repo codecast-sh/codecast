@@ -4071,6 +4071,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
     // If a message is selected, fork from it then send the new content
     if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
+      if (draftTimerRef.current) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+      }
       isSelectionEditedRef.current = true;
       savedDraftRef.current = null;
       const content = message.trim();
@@ -4105,6 +4109,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     const trimmed = message.trim() || (finalImages.length > 0 ? "[image]" : "");
     const storageIds = finalImages.map(img => img.storageId!);
     const optimisticImages = finalImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
+    if (draftTimerRef.current) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
     addOptimistic(realId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
     setMessage("");
     clearAllImages();

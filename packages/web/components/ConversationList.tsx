@@ -985,7 +985,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
         <LoadingSkeleton />
       )}
       {groups.map((group) => (
-        <div key={group.label}>
+        <div key={group.label} className="first:mt-0 mt-6">
           <div className="pb-2 mb-3">
             <h2 className="text-xs font-medium tracking-wide uppercase text-sol-text-muted0">
               {group.label}
