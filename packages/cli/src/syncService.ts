@@ -80,6 +80,7 @@ export interface CreateConversationParams {
   parentConversationId?: string;
   gitCommitHash?: string;
   gitInfo?: GitInfo;
+  cliFlags?: string;
 }
 
 export class SyncService {
@@ -179,6 +180,7 @@ export class SyncService {
           git_diff: gitInfo?.diff,
           git_diff_staged: gitInfo?.diffStaged,
           git_root: gitInfo?.root,
+          cli_flags: params.cliFlags,
           api_token: this.apiToken,
         }
       );
@@ -474,6 +476,15 @@ export class SyncService {
     } catch {}
   }
 
+  async heartbeatManagedSession(sessionId: string): Promise<void> {
+    try {
+      await this.client.mutation("managedSessions:heartbeat" as any, {
+        session_id: sessionId,
+        api_token: this.apiToken,
+      });
+    } catch {}
+  }
+
   async updateMessageStatus(params: {
     messageId: string;
     status: "pending" | "delivered" | "failed";
@@ -492,6 +503,20 @@ export class SyncService {
       }
       throw error;
     }
+  }
+
+  async setSessionError(conversationId: string, error?: string): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.client.mutation(
+        "conversations:setSessionError" as any,
+        {
+          conversation_id: conversationId,
+          error,
+          api_token: this.apiToken,
+        }
+      );
+    } catch {}
   }
 
   async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked"): Promise<void> {

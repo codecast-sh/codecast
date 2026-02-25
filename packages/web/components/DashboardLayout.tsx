@@ -124,13 +124,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     };
 
     useInboxStore.getState().setConversationMeta(tempId, stubMeta);
-    useInboxStore.getState().setMessages(tempId, [], {
-      initialized: true,
-      lastTimestamp: null,
-      oldestTimestamp: null,
-      hasMoreAbove: false,
-      hasMoreBelow: false,
-    });
 
     if (isOnInboxPage) {
       injectSession({

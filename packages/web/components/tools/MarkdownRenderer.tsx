@@ -2,6 +2,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { CodeBlock } from "../CodeBlock";
 
 interface MarkdownRendererProps {
@@ -38,6 +40,77 @@ export function isPlanFile(filePath: string, content: string): boolean {
     }
   }
   return false;
+}
+
+const MD_IMAGE_COLLAPSED_HEIGHT = 100;
+
+export function CollapsibleImage({ src: rawSrc, alt }: { src?: string | Blob; alt?: string }) {
+  const src = typeof rawSrc === 'string' ? rawSrc : undefined;
+  const [fullscreen, setFullscreen] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [fullscreen]);
+
+  if (!src) return null;
+
+  return (
+    <>
+      <span
+        className="my-2 block cursor-pointer relative max-w-md"
+        style={{ minHeight: MD_IMAGE_COLLAPSED_HEIGHT }}
+        onClick={() => setFullscreen(true)}
+      >
+        {!loaded && (
+          <span className="absolute inset-0 block rounded-t border-x border-t border-sol-border bg-sol-bg-alt flex items-center justify-center z-10" style={{ height: MD_IMAGE_COLLAPSED_HEIGHT }}>
+            <span className="text-sol-text-dim text-xs">Loading image...</span>
+          </span>
+        )}
+        <span
+          className="block overflow-hidden rounded-t border-x border-t border-sol-border hover:border-sol-blue/50 transition-all"
+          style={{ height: MD_IMAGE_COLLAPSED_HEIGHT }}
+        >
+          <img
+            src={src}
+            alt={alt || "Image"}
+            className="w-full"
+            style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
+            onLoad={() => setLoaded(true)}
+          />
+        </span>
+        {loaded && (
+          <span
+            className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none block"
+            style={{ background: 'linear-gradient(to bottom, transparent, var(--image-fade-bg, var(--sol-bg, #0a0a0a)))' }}
+          />
+        )}
+      </span>
+      {fullscreen && createPortal(
+        <div className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center" onClick={() => setFullscreen(false)}>
+          <button
+            onClick={() => setFullscreen(false)}
+            className="absolute top-4 right-4 text-white/70 hover:text-white p-2 transition-colors"
+            title="Close (Esc)"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <img
+            src={src}
+            alt={alt || "Image"}
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded"
+            onClick={e => e.stopPropagation()}
+          />
+        </div>,
+        document.body
+      )}
+    </>
+  );
 }
 
 export function MarkdownRenderer({ content, filePath = '', className = '' }: MarkdownRendererProps) {
@@ -126,6 +199,7 @@ export function MarkdownRenderer({ content, filePath = '', className = '' }: Mar
           td: ({ children }) => (
             <td className="border border-sol-border/50 px-2 py-1">{children}</td>
           ),
+          img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
         }}
       >
         {content}

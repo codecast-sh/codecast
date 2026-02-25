@@ -304,6 +304,16 @@ export const markMessageDelivered = mutation({
       delivered_at: Date.now(),
     });
 
+    const remaining = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q) =>
+        q.eq("conversation_id", message.conversation_id).eq("status", "pending")
+      )
+      .first();
+    if (!remaining) {
+      await ctx.db.patch(message.conversation_id, { has_pending_messages: false });
+    }
+
     return { success: true };
   },
 });

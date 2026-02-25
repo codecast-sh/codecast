@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -30,7 +31,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { CommentPanel } from "./CommentPanel";
 import { PermissionCard } from "./PermissionCard";
 import { copyToClipboard } from "../lib/utils";
-import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "./tools/MarkdownRenderer";
+import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore } from "../store/inboxStore";
@@ -83,6 +84,7 @@ type Message = {
   tool_results?: ToolResult[];
   images?: ImageData[];
   subtype?: string;
+  _isOptimistic?: true;
   usage?: {
     input_tokens: number;
     output_tokens: number;
@@ -123,6 +125,7 @@ export type ConversationData = {
     share_token?: string;
     username: string;
   } | null;
+  is_favorite?: boolean;
   draft_message?: string;
   compaction_count?: number;
   loaded_start_index?: number;
@@ -1304,6 +1307,19 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, c
     return <PlanBlock content={content} timestamp={timestamp || Date.now()} collapsed={collapsed} messageId={messageId} conversationId={conversationId} onOpenComments={onOpenComments} onStartShareSelection={onStartShareSelection} />;
   }
 
+  const isCodecastImageRead = isRead && /codecast\/images\//.test(filePath);
+  if (isCodecastImageRead) {
+    return (
+      <div className="my-0.5 flex items-center gap-1.5 text-xs">
+        <svg className="w-3.5 h-3.5 text-sol-blue/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+        <span className="text-sol-text-dim italic">Viewing your image</span>
+      </div>
+    );
+  }
+
   return (
     <div className="my-0.5">
       <div
@@ -1488,7 +1504,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, c
                 </div>
               ) : isMarkdownResult ? (
                 <div className="p-2 prose prose-invert prose-sm max-w-none text-xs">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{processedContent}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} /> }}>{processedContent}</ReactMarkdown>
                 </div>
               ) : (
                 <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
@@ -2061,6 +2077,8 @@ function ThinkingBlock({ content, showContent = true }: { content: string; showC
   );
 }
 
+const IMAGE_COLLAPSED_HEIGHT = 100;
+
 function ImageBlock({ image }: { image: ImageData }) {
   const storageUrl = useQuery(
     api.images.getImageUrl,
@@ -2084,7 +2102,7 @@ function ImageBlock({ image }: { image: ImageData }) {
 
   if (!src) {
     return (
-      <div className="my-2 max-w-md rounded border border-sol-border bg-sol-bg-alt flex items-center justify-center" style={{ aspectRatio: '16 / 9' }}>
+      <div className="my-2 max-w-md rounded-t border-x border-t border-sol-border bg-sol-bg-alt flex items-center justify-center" style={{ height: IMAGE_COLLAPSED_HEIGHT }}>
         <span className="text-sol-text-dim text-xs">Loading image...</span>
       </div>
     );
@@ -2092,19 +2110,34 @@ function ImageBlock({ image }: { image: ImageData }) {
 
   return (
     <>
-      <div className="my-2 cursor-pointer" onClick={() => setFullscreen(true)}>
+      <div
+        className="my-2 cursor-pointer relative max-w-md"
+        style={{ minHeight: IMAGE_COLLAPSED_HEIGHT }}
+        onClick={() => setFullscreen(true)}
+      >
         {!loaded && (
-          <div className="max-w-md rounded border border-sol-border bg-sol-bg-alt flex items-center justify-center" style={{ aspectRatio: '16 / 9' }}>
+          <div className="absolute inset-0 rounded-t border-x border-t border-sol-border bg-sol-bg-alt flex items-center justify-center z-10" style={{ height: IMAGE_COLLAPSED_HEIGHT }}>
             <span className="text-sol-text-dim text-xs">Loading image...</span>
           </div>
         )}
-        <img
-          src={src}
-          alt="User provided image"
-          className="max-w-md rounded border border-sol-border hover:border-sol-blue/50 transition-colors"
-          style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
-          onLoad={() => setLoaded(true)}
-        />
+        <div
+          className="overflow-hidden rounded-t border-x border-t border-sol-border hover:border-sol-blue/50 transition-all"
+          style={{ height: IMAGE_COLLAPSED_HEIGHT }}
+        >
+          <img
+            src={src}
+            alt="User provided image"
+            className="w-full"
+            style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
+            onLoad={() => setLoaded(true)}
+          />
+        </div>
+        {loaded && (
+          <div
+            className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none"
+            style={{ background: 'linear-gradient(to bottom, transparent, var(--image-fade-bg, var(--sol-bg, #0a0a0a)))' }}
+          />
+        )}
       </div>
       {fullscreen && createPortal(
         <div className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center" onClick={() => setFullscreen(false)}>
@@ -2450,7 +2483,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null }) {
+function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -2526,7 +2559,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
       <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
         {onStartShareSelection && (
           <button
@@ -2628,7 +2661,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                   <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
                 ) : hasRichMarkdown(part.content) ? (
                   <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
-                    components={{ pre: ({ node, children, ...props }) => {
+                    components={{ img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => {
                       const codeElement = node?.children?.[0];
                       if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                         const className = codeElement.properties?.className as string[] | undefined;
@@ -2653,7 +2686,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                   <SkillCard key={i} name={part.skillName} description={part.skillDesc} path={part.skillPath} />
                 ) : isMarkdown || hasRichMarkdown(part.content) ? (
                   <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
-                    components={{ pre: ({ node, children, ...props }) => {
+                    components={{ img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />, pre: ({ node, children, ...props }) => {
                       const codeElement = node?.children?.[0];
                       if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                         const className = codeElement.properties?.className as string[] | undefined;
@@ -2674,6 +2707,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}
               components={{
+                img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                 pre: ({ node, children, ...props }) => {
                   const codeElement = node?.children?.[0];
                   if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
@@ -2758,6 +2792,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                   remarkPlugins={[remarkGfm]}
                   rehypePlugins={[rehypeHighlight]}
                   components={{
+                    img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                     pre: ({ node, children, ...props }) => {
                       const codeElement = node?.children?.[0];
                       if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
@@ -3140,6 +3175,7 @@ function AssistantBlock({
                     remarkPlugins={[remarkGfm]}
                     rehypePlugins={[rehypeHighlight]}
                     components={{
+                      img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                       pre: ({ node, children, ...props }) => {
                         const codeElement = node?.children?.[0];
                         if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
@@ -3211,6 +3247,7 @@ function AssistantBlock({
                   remarkPlugins={[remarkGfm]}
                   rehypePlugins={[rehypeHighlight]}
                   components={{
+                    img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                     pre: ({ node, children, ...props }) => {
                       const codeElement = node?.children?.[0];
                       if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
@@ -3365,7 +3402,7 @@ function CompactionSummaryBlock({ content }: { content: string }) {
       </button>
       {isExpanded && (
         <div className="mt-2 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-amber-500/30 text-xs prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} /> }}>
             {content}
           </ReactMarkdown>
         </div>
@@ -3507,6 +3544,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeHighlight]}
             components={{
+              img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
               pre: ({ node, children, ...props }) => {
                 const codeElement = node?.children?.[0];
                 if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
@@ -3568,6 +3606,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight]}
                 components={{
+                  img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                   pre: ({ node, children, ...props }) => {
                     const codeElement = node?.children?.[0];
                     if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
@@ -3726,8 +3765,10 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
 const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string, opts?: { inline?: boolean; focusInput?: boolean }) => void }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [lastStatus, setLastStatus] = useState<"delivered" | "failed" | null>(null);
+  const messageRef = useRef(message);
+  messageRef.current = message;
+  const convIdRef = useRef(conversationId);
+  const [isWaitingForUpload, setIsWaitingForUpload] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [shortcutTooltip, setShortcutTooltip] = useState<{ x: number; y: number } | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<Id<"pending_messages"> | null>(null);
@@ -3785,6 +3826,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   // The banner should only show when we sent a message and it wasn't delivered (handled by the effects above).
 
   const sendRef = useRef<HTMLDivElement>(null);
+  const pastedImagesRef = useRef<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>([]);
   const [pastedImages, setPastedImages] = useState<Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>>(() => {
     if (cached?.draft_image_storage_ids) {
       return (cached.draft_image_storage_ids as Array<{ storageId: string; previewUrl: string; name: string }>).map(img => ({
@@ -3802,6 +3844,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
+  pastedImagesRef.current = pastedImages;
 
   const handleForceResume = useCallback(async () => {
     if (isResuming) return;
@@ -3841,6 +3884,36 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   }, [conversationId]);
 
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (convIdRef.current !== conversationId) {
+      if (draftTimerRef.current) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+      }
+      const currentMsg = messageRef.current;
+      if (currentMsg) {
+        useInboxStore.getState().setDraft(conversationId, {
+          ...useInboxStore.getState().getDraft(conversationId),
+          draft_message: currentMsg,
+        });
+      }
+      convIdRef.current = conversationId;
+    }
+  }, [conversationId]);
+
+  useEffect(() => () => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    const msg = messageRef.current;
+    const id = convIdRef.current;
+    if (msg) {
+      useInboxStore.getState().setDraft(id, {
+        ...useInboxStore.getState().getDraft(id),
+        draft_message: msg,
+      });
+    }
+  }, []);
+
   const handleMessageChange = useCallback((val: string) => {
     setMessage(val);
     if (savedDraftRef.current !== null) {
@@ -3856,7 +3929,6 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       }
     }, 300);
   }, [conversationId]);
-  useEffect(() => () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); }, []);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -3897,8 +3969,15 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     resetTextareaHeight();
   }, [message]);
 
+  const mountConvIdRef = useRef(conversationId);
   useEffect(() => {
     if (textareaRef.current) {
+      const isIdTransition = mountConvIdRef.current !== conversationId;
+      mountConvIdRef.current = conversationId;
+      if (isIdTransition) {
+        if (autoFocusInput) textareaRef.current.focus();
+        return;
+      }
       const len = textareaRef.current.value.length;
       if (len > 0) {
         textareaRef.current.focus();
@@ -3964,13 +4043,34 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const hasUploadingImages = pastedImages.some(img => img.uploading);
     const readyImages = pastedImages.filter(img => !img.uploading && img.storageId);
-    const canSend = message.trim() || readyImages.length > 0;
-    if (!canSend || isSubmitting) return;
+    const canSend = message.trim() || readyImages.length > 0 || hasUploadingImages;
+    if (!canSend) return;
+
+    if (hasUploadingImages) {
+      setIsWaitingForUpload(true);
+      const waitForUploads = () => new Promise<void>((resolve) => {
+        const check = () => {
+          const current = pastedImagesRef.current;
+          if (current.every(img => !img.uploading)) {
+            resolve();
+          } else {
+            setTimeout(check, 100);
+          }
+        };
+        check();
+      });
+      await waitForUploads();
+      setIsWaitingForUpload(false);
+    }
+
+    const finalImages = pastedImagesRef.current.filter(img => !img.uploading && img.storageId);
+    const finalCanSend = message.trim() || finalImages.length > 0;
+    if (!finalCanSend) return;
 
     // If a message is selected, fork from it then send the new content
     if (isSelectionActive && selectedMessageUuid && onForkFromMessage) {
-      setIsSubmitting(true);
       isSelectionEditedRef.current = true;
       savedDraftRef.current = null;
       const content = message.trim();
@@ -3989,28 +4089,29 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             setPendingMessageId(msgId);
             setSentAt(Date.now());
             addOptimistic(realId, content);
-            setLastStatus("delivered");
-            setTimeout(() => setLastStatus(null), 2000);
           }
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "Failed to send rewrite");
-        } finally {
-          setIsSubmitting(false);
         }
       });
       return;
     }
 
-    setIsSubmitting(true);
-    setLastStatus(null);
+    const realId = getRealId(conversationId);
+    if (realId.startsWith("temp_")) {
+      toast.error("Session is still being created, please try again in a moment");
+      return;
+    }
+    const trimmed = message.trim() || (finalImages.length > 0 ? "[image]" : "");
+    const storageIds = finalImages.map(img => img.storageId!);
+    const optimisticImages = finalImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
+    addOptimistic(realId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
+    setMessage("");
+    clearAllImages();
+    updateDraft("", null);
+    requestAnimationFrame(() => textareaRef.current?.focus());
 
     try {
-      const realId = getRealId(conversationId);
-      if (realId.startsWith("temp_")) {
-        throw new Error("Session is still being created, please try again in a moment");
-      }
-      const trimmed = message.trim() || (readyImages.length > 0 ? "[image]" : "");
-      const storageIds = readyImages.map(img => img.storageId!);
       const msgId = await sendMessage({
         conversation_id: realId as Id<"conversations">,
         content: trimmed,
@@ -4019,20 +4120,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       setPendingMessageId(msgId);
       setSentAt(Date.now());
       setShowStuckBanner(false);
-      const optimisticImages = readyImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
-      addOptimistic(realId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
-      setLastStatus("delivered");
-      setMessage("");
-      clearAllImages();
-      updateDraft("", null);
-
-      setTimeout(() => setLastStatus(null), 2000);
-      requestAnimationFrame(() => textareaRef.current?.focus());
     } catch (error) {
-      setLastStatus("failed");
       toast.error(error instanceof Error ? error.message : "Failed to send message");
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -4048,7 +4137,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   };
 
-  const canSubmit = hasContent && !isSubmitting && !pastedImages.some(img => img.uploading);
+  const canSubmit = hasContent && !isWaitingForUpload;
 
   return (
     <div className="shrink-0 z-40 pointer-events-none sticky bottom-0">
@@ -4164,7 +4253,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   onPaste={handlePaste}
                   onFocus={() => setIsFocused(true)}
                   onBlur={() => setIsFocused(false)}
-                  disabled={isSubmitting}
+                  disabled={isWaitingForUpload}
                   placeholder="Send a message to this session..."
                   rows={1}
                   className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
@@ -4175,14 +4264,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                     disabled={!canSubmit}
                     className={`w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${!canSubmit ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"}`}
                   >
-                    {isSubmitting ? (
+                    {isWaitingForUpload ? (
                       <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                    ) : lastStatus === "delivered" ? (
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                       </svg>
                     ) : (
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -4270,24 +4355,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
 
-  const convLink = useCallback((id: string) => `/conversation/${id}`, []);
+  const pathname = usePathname();
+  const convLink = useCallback((id: string) => pathname === "/inbox" ? `/inbox?s=${id}` : `/conversation/${id}`, [pathname]);
 
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const sendEscape = useMutation(api.conversations.sendEscapeToSession);
   const sendInlineMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation) return;
+    let displayContent = content;
     try {
-      let displayContent = content;
-      try {
-        const parsed = JSON.parse(content);
-        if (parsed.__cc_poll && parsed.display) displayContent = parsed.display;
-      } catch {}
+      const parsed = JSON.parse(content);
+      if (parsed.__cc_poll && parsed.display) displayContent = parsed.display;
+    } catch {}
+    addOptimisticMsg(conversation._id, displayContent);
+    try {
       await sendInlineMessage({ conversation_id: conversation._id, content });
-      addOptimisticMsg(conversation._id, displayContent);
     } catch {
       toast.error("Failed to send message");
     }
@@ -4524,7 +4611,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (knownItemIdsRef.current.size > 0 && !isPaginatingRef.current) {
       const fresh = new Set<string>();
       for (const id of currentIds) {
-        if (!knownItemIdsRef.current.has(id)) fresh.add(id);
+        if (!knownItemIdsRef.current.has(id)) {
+          if (!id.startsWith("optimistic_")) {
+            const item = timeline.find(i => {
+              if (i.type === 'message') return (i.data as Message)._id === id;
+              if (i.type === 'commit') return `commit-${(i.data as any).sha || (i.data as any)._id}` === id;
+              return `pr-${(i.data as any)._id}` === id;
+            });
+            if (item?.type === 'message' && (item.data as Message).role === 'user') continue;
+          }
+          fresh.add(id);
+        }
       }
       if (fresh.size > 0 && fresh.size <= 20) {
         newItemIdsRef.current = fresh;
@@ -4712,14 +4809,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const buildResumeCommand = useCallback((targetAgent: "claude" | "codex"): string | null => {
     if (!conversation?.session_id) return null;
+    const projectDir = conversation.project_path || conversation.git_root;
+    const cdPrefix = projectDir ? `cd ${projectDir} && ` : "";
+    const flags = (conversation as any).cli_flags ? ` ${(conversation as any).cli_flags}` : "";
     const sourceAgent = conversation.agent_type === "codex" ? "codex" : "claude";
     if (targetAgent === sourceAgent) {
       return targetAgent === "codex"
-        ? `codex resume ${conversation.session_id}`
-        : `claude --resume ${conversation.session_id}`;
+        ? `${cdPrefix}codex resume ${conversation.session_id}`
+        : `${cdPrefix}claude --resume ${conversation.session_id}${flags}`;
     }
-    return `codecast resume ${conversation.session_id} --as ${targetAgent}`;
-  }, [conversation?.session_id, conversation?.agent_type]);
+    return `${cdPrefix}codecast resume ${conversation.session_id} --as ${targetAgent}`;
+  }, [conversation?.session_id, conversation?.agent_type, conversation?.project_path, conversation?.git_root, (conversation as any)?.cli_flags]);
 
   const handleCopyResumeCommand = useCallback(async (targetAgent: "claude" | "codex") => {
     try {
@@ -5596,11 +5696,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <PlanBlock key={msg._id} content={planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} onStartShareSelection={handleStartShareSelection} />;
         }
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} />;
+        return <UserPrompt key={msg._id} content={msg.content} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} />;
       }
       if (msg.images && msg.images.length > 0) {
         const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} />;
+        return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} />;
       }
       return null;
     }
@@ -5978,6 +6078,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           Copy Codex resume
                         </DropdownMenuItem>
                       </>
+                    )}
+                    {isOwner && (
+                      <DropdownMenuItem onSelect={() => {
+                        setTimeout(async () => {
+                          try {
+                            await toggleFavoriteMutation({ conversation_id: conversation._id });
+                            toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
+                          } catch { toast.error("Failed to update favorite"); }
+                        });
+                      }}>
+                        <svg className={`w-3 h-3 mr-1.5 ${conversation.is_favorite ? "text-amber-400" : ""}`} fill={conversation.is_favorite ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                        </svg>
+                        {conversation.is_favorite ? "Remove from favorites" : "Add to favorites"}
+                      </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>

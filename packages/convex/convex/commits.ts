@@ -240,12 +240,13 @@ export const clearMyGitHubData = mutation({
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
 
-    const conversationIds = new Set(conversations.map(c => c._id));
     let commitsDeleted = 0;
-
-    const allCommits = await ctx.db.query("commits").collect();
-    for (const commit of allCommits) {
-      if (commit.conversation_id && conversationIds.has(commit.conversation_id)) {
+    for (const conversation of conversations) {
+      const commits = await ctx.db
+        .query("commits")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversation._id))
+        .collect();
+      for (const commit of commits) {
         await ctx.db.delete(commit._id);
         commitsDeleted++;
       }

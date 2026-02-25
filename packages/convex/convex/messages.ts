@@ -163,8 +163,12 @@ export const addMessage = mutation({
     const convPatch: Record<string, unknown> = {
       message_count: newMessageCount,
       updated_at: msgTimestamp,
+      last_message_role: args.role,
     };
-    if (args.role === "user") {
+    if (args.role === "user" && args.content?.trim()) {
+      convPatch.last_message_preview = args.content.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200);
+      convPatch.last_user_message_at = msgTimestamp;
+    } else if (args.role === "user") {
       convPatch.last_user_message_at = msgTimestamp;
     }
     await ctx.db.patch(args.conversation_id, convPatch);
@@ -330,17 +334,22 @@ export const addMessages = mutation({
 
     if (insertedCount > 0) {
       const newMessageCount = conversation.message_count + insertedCount;
+      const lastMsg = args.messages[args.messages.length - 1];
       const convPatch: Record<string, unknown> = {
         message_count: newMessageCount,
         updated_at: maxTimestamp,
+        last_message_role: lastMsg.role,
       };
-      const hasUserMsg = args.messages.some((m) => m.role === "user");
-      if (hasUserMsg) {
-        const lastUserTs = args.messages
-          .filter((m) => m.role === "user")
-          .reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
+      const userMsgs = args.messages.filter((m) => m.role === "user");
+      if (userMsgs.length > 0) {
+        const lastUserMsg = userMsgs[userMsgs.length - 1];
+        const lastUserTs = userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
         if (lastUserTs > 0) {
           convPatch.last_user_message_at = lastUserTs;
+        }
+        const preview = lastUserMsg.content?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200);
+        if (preview) {
+          convPatch.last_message_preview = preview;
         }
       }
       await ctx.db.patch(args.conversation_id, convPatch);
@@ -349,9 +358,8 @@ export const addMessages = mutation({
       if (args.api_token) {
         userPatch.daemon_last_seen = Date.now();
       }
-      if (hasUserMsg) {
-        const lastUserTs = args.messages
-          .filter((m) => m.role === "user")
+      if (userMsgs.length > 0) {
+        const lastUserTs = userMsgs
           .reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
         if (lastUserTs > 0) {
           const user = await ctx.db.get(conversation.user_id);

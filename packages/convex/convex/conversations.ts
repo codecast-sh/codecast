@@ -1,5 +1,6 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
@@ -351,6 +352,7 @@ export const createConversation = mutation({
     git_diff: v.optional(v.string()),
     git_diff_staged: v.optional(v.string()),
     git_root: v.optional(v.string()),
+    cli_flags: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -467,6 +469,7 @@ export const createConversation = mutation({
       git_diff: args.git_diff,
       git_diff_staged: args.git_diff_staged,
       git_root: args.git_root,
+      cli_flags: args.cli_flags,
     });
     // Set short_id for O(1) lookup by truncated ID
     await ctx.db.patch(conversationId, {
@@ -640,7 +643,30 @@ export const getConversations = query({
       for (const m of teamMembers) ownerVisMap.set(m.user_id.toString(), m.visibility || "summary");
     }
 
-    const allConversations = await ctx.db.query("conversations").collect();
+    const ownConversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
+      .collect();
+
+    const teamConvArrays = await Promise.all(
+      memberships.map((m: any) =>
+        ctx.db
+          .query("conversations")
+          .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
+          .collect()
+      )
+    );
+
+    const ownIds = new Set(ownConversations.map((c: any) => c._id.toString()));
+    const allConversations = [...ownConversations];
+    for (const teamConvs of teamConvArrays) {
+      for (const c of teamConvs) {
+        if (!ownIds.has(c._id.toString())) {
+          allConversations.push(c);
+        }
+      }
+    }
+
     const filtered = allConversations.filter((c) => {
       const isOwn = c.user_id.toString() === args.user_id.toString();
       if (isOwn) return true;
@@ -1009,9 +1035,7 @@ export const getNewMessages = query({
       .collect();
 
     const { children: childConversations, map: childConversationMap, agentNameMap } =
-      messages.length > 0
-        ? await findChildConversations(ctx, args.conversation_id, messages)
-        : { children: [], map: {}, agentNameMap: {} };
+      await findChildConversations(ctx, args.conversation_id, messages);
 
     return {
       messages,
@@ -1021,6 +1045,187 @@ export const getNewMessages = query({
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
       updated_at: conversation.updated_at,
       title: conversation.title,
+    };
+  },
+});
+
+export const listMessages = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isShared = !!conversation.share_token;
+    let hasTeamAccess = false;
+    if (authUserId && !isOwner) {
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
+    }
+    if (!isOwner && !hasTeamAccess && !isShared) {
+      throw new Error("Access denied");
+    }
+
+    return await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("desc")
+      .paginate(args.paginationOpts);
+  },
+});
+
+export const getConversationWithMeta = query({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return null;
+    }
+
+    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isShared = !!conversation.share_token;
+    let hasTeamAccess = false;
+    if (authUserId && !isOwner) {
+      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
+    }
+    if (!isOwner && !hasTeamAccess && !isShared) {
+      return null;
+    }
+
+    const user = await ctx.db.get(conversation.user_id);
+
+    const title = conversation.title
+      || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
+      || "New Session";
+
+    const allChildren = await ctx.db
+      .query("conversations")
+      .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", args.conversation_id))
+      .collect();
+
+    const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
+    const subagentChildren = allChildren.filter((c: any) => c.is_subagent || !c.parent_message_uuid);
+    const firstMessagePreviews = new Map<string, string>();
+    for (const child of subagentChildren) {
+      const firstMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", child._id))
+        .first();
+      if (firstMsg?.content) {
+        const content = typeof firstMsg.content === "string" ? firstMsg.content : "";
+        const cleaned = content.replace(/<[^>]+>/g, "").trim();
+        firstMessagePreviews.set(child._id as string, cleaned.slice(0, 150));
+      }
+    }
+
+    const childConversations = allChildren
+      .filter((conv: any) => !NOISE_TITLE_PREFIXES.some((p) => (conv.title || "").startsWith(p)))
+      .map((conv: any) => ({
+        _id: conv._id,
+        title: conv.title || "New Session",
+        is_subagent: conv.is_subagent || !conv.parent_message_uuid,
+        first_message_preview: firstMessagePreviews.get(conv._id as string),
+      }));
+
+    const childByParentUuid: Record<string, string> = {};
+    for (const c of allChildren) {
+      if (c.parent_message_uuid) {
+        childByParentUuid[c.parent_message_uuid as string] = c._id as string;
+      }
+    }
+
+    const agentNameMap: Record<string, string> = {};
+    if (subagentChildren.length > 0) {
+      const subagentMatchData = subagentChildren
+        .filter((c: any) => firstMessagePreviews.has(c._id as string))
+        .map((c: any) => ({ _id: c._id as string, preview: firstMessagePreviews.get(c._id as string)! }));
+
+      const allParentMessages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+        .collect();
+      for (const msg of allParentMessages) {
+        if (msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            if (tc.name === "Task") {
+              try {
+                const inp = JSON.parse(tc.input);
+                if (inp.name && inp.prompt && !agentNameMap[inp.name]) {
+                  const childId = matchChildByPrompt(inp.prompt, subagentMatchData);
+                  if (childId) agentNameMap[inp.name] = childId;
+                }
+              } catch {}
+            }
+          }
+        }
+      }
+    }
+
+    let forkedFromDetails = null;
+    if (conversation.forked_from) {
+      const originalConv = await ctx.db.get(conversation.forked_from);
+      if (originalConv) {
+        const originalUser = await ctx.db.get(originalConv.user_id);
+        forkedFromDetails = {
+          conversation_id: originalConv._id,
+          share_token: originalConv.share_token,
+          username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
+        };
+      }
+    }
+
+    let parentConversationId: string | null = conversation.parent_conversation_id || null;
+    if (!parentConversationId && conversation.parent_message_uuid) {
+      const parentMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", conversation.parent_message_uuid))
+        .first();
+      if (parentMsg) {
+        parentConversationId = parentMsg.conversation_id;
+      }
+    }
+
+    const forkChildren = await ctx.db
+      .query("conversations")
+      .withIndex("by_forked_from", (q) => q.eq("forked_from", args.conversation_id))
+      .collect();
+
+    const forkChildrenDetails = await Promise.all(
+      forkChildren.map(async (fork) => {
+        const forkUser = await ctx.db.get(fork.user_id);
+        return {
+          _id: fork._id,
+          title: fork.title || "New Session",
+          short_id: fork.short_id,
+          started_at: fork.started_at,
+          username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
+          parent_message_uuid: fork.parent_message_uuid,
+        };
+      })
+    );
+
+    return {
+      ...conversation,
+      title,
+      user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
+      child_conversations: childConversations,
+      child_by_parent_uuid: childByParentUuid,
+      agent_name_map: agentNameMap,
+      fork_count: conversation.fork_count,
+      forked_from: conversation.forked_from,
+      forked_from_details: forkedFromDetails,
+      fork_children: forkChildrenDetails,
+      parent_conversation_id: parentConversationId,
     };
   },
 });
@@ -1222,16 +1427,11 @@ export const listConversations = query({
     const teamUserMap = new Map(allTeamUsers.map(u => [u._id.toString(), u]));
     const membershipVisibilityMap = new Map(teamMemberships.map(m => [m.user_id.toString(), m.visibility || "summary"]));
 
-    // Fetch directory_team_mappings for all team members to check project visibility
     const allMappings = args.filter === "team" && effectiveTeamId
-      ? await Promise.all(
-          allTeamUsers.map(u =>
-            ctx.db
-              .query("directory_team_mappings")
-              .withIndex("by_user_team", (q) => q.eq("user_id", u._id).eq("team_id", effectiveTeamId))
-              .collect()
-          )
-        ).then(results => results.flat())
+      ? await ctx.db
+          .query("directory_team_mappings")
+          .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
+          .collect()
       : [];
 
     // Build a map of users who have explicit directory mappings
@@ -4984,7 +5184,7 @@ export const listIdleSessions = query({
     const clusterStart = user?.work_cluster_started_at ?? user?.last_message_sent_at ?? 0;
     const clusterCutoff = clusterStart > 0 ? clusterStart - CLUSTER_WINDOW_MS : 0;
 
-    const candidates = [];
+    const results = [];
     for (const conv of conversations) {
       if (conv.is_subagent || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
 
@@ -4992,52 +5192,41 @@ export const listIdleSessions = query({
       if (title.toLowerCase() === "warmup") continue;
       if (NOISE_TITLE_PREFIXES.some((p) => title.startsWith(p))) continue;
 
-      const hasPendingForConv = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .filter((q) => q.eq(q.field("status"), "pending"))
-        .first();
+      let hasPending = !!conv.has_pending_messages;
+      let lastMsgRole = conv.last_message_role;
+      let lastUserMessage = conv.last_message_preview || null;
 
-      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPendingForConv) continue;
+      // Fallback for un-backfilled conversations: single query to get last message
+      if (!lastMsgRole && conv.message_count > 0) {
+        const lastMsg = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q) =>
+            q.eq("conversation_id", conv._id)
+          )
+          .order("desc")
+          .first();
+        if (lastMsg) {
+          lastMsgRole = lastMsg.role;
+          if (lastMsg.role === "user" && lastMsg.content?.trim()) {
+            lastUserMessage = lastMsg.content.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200);
+          }
+        }
+      }
+
+      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending) continue;
 
       const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
-      if (dismissed && !hasPendingForConv) continue;
+      if (dismissed && !hasPending) continue;
 
-      candidates.push({ conv, hasPendingForConv });
-    }
-
-    const NOISE_MSG_PREFIXES = [
-      "[Request interrupted",
-      "This session is being continued",
-      "continue",
-    ];
-    const isNoiseMsg = (c: string) => {
-      const t = c.trim();
-      return NOISE_MSG_PREFIXES.some((p) => t.startsWith(p)) || t.length < 4;
-    };
-
-    const results = [];
-    for (const { conv, hasPendingForConv } of candidates) {
       const daemonAlive = liveConvIds.has(conv._id.toString()) ||
         (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
 
-      const hasPending = hasPendingForConv;
-
-      const lastMsg = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_timestamp", (q) =>
-          q.eq("conversation_id", conv._id)
-        )
-        .order("desc")
-        .first();
-
-      const lastRoleIsUser = lastMsg?.role === "user";
-      const recentlyActive = (now - conv.updated_at) < 10 * 60 * 1000;
+      const lastRoleIsUser = lastMsgRole === "user";
       const recentlyUpdated = (now - conv.updated_at) < 45 * 1000;
 
       const isUnresponsive = conv.status === "active" && !daemonAlive && (
         (lastRoleIsUser && !recentlyUpdated) ||
-        (!!hasPending && (now - hasPending.created_at) > 15_000)
+        (hasPending && !recentlyUpdated)
       );
 
       const agentStatus = agentStatusMap.get(conv._id.toString());
@@ -5046,30 +5235,6 @@ export const listIdleSessions = query({
         : daemonAlive
           ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
           : !recentlyUpdated;
-
-      let lastUserMsg = null;
-      if (lastMsg?.role === "user" && lastMsg.content?.trim() && !isNoiseMsg(lastMsg.content)) {
-        lastUserMsg = lastMsg;
-      } else {
-        const msgCandidates = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_timestamp", (q) =>
-            q.eq("conversation_id", conv._id)
-          )
-          .order("desc")
-          .filter((q) =>
-            q.and(
-              q.eq(q.field("role"), "user"),
-              q.neq(q.field("content"), ""),
-              q.neq(q.field("content"), undefined),
-            )
-          )
-          .take(5);
-        const good = msgCandidates.find((m) => m.content?.trim() && !isNoiseMsg(m.content!));
-        if (good) {
-          lastUserMsg = good;
-        }
-      }
 
       const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
 
@@ -5089,10 +5254,11 @@ export const listIdleSessions = query({
         is_idle: isIdle,
         is_unresponsive: isUnresponsive,
         is_connected: !!daemonAlive,
-        has_pending: !!hasPending,
+        has_pending: hasPending,
         is_deferred: !!deferred,
         agent_status: agentStatus,
-        last_user_message: lastUserMsg?.content?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200) || null,
+        last_user_message: lastUserMessage,
+        session_error: conv.session_error,
       });
     }
 
@@ -5107,6 +5273,25 @@ export const listIdleSessions = query({
     });
 
     return results;
+  },
+});
+
+export const setSessionError = mutation({
+  args: {
+    conversation_id: v.string(),
+    error: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const convId = ctx.db.normalizeId("conversations", args.conversation_id);
+    if (!convId) return;
+    const conv = await ctx.db.get(convId);
+    if (!conv || conv.user_id !== userId) return;
+    await ctx.db.patch(convId, {
+      session_error: args.error,
+    });
   },
 });
 
@@ -5469,6 +5654,66 @@ export const backfillLastUserMessageAt = internalMutation({
     }
 
     return { patched, maxUserMsgAt: maxUserMsgAt > 0 ? new Date(maxUserMsgAt).toISOString() : "none" };
+  },
+});
+
+export const backfillDenormalizedFields = internalMutation({
+  args: { user_id: v.optional(v.id("users")) },
+  handler: async (ctx, args) => {
+    if (!args.user_id) return { patched: 0 };
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const convs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) =>
+        q.eq("user_id", args.user_id!).gte("updated_at", cutoff)
+      )
+      .collect();
+
+    let patched = 0;
+    for (const conv of convs) {
+      if (conv.last_message_role && conv.last_message_preview !== undefined) continue;
+
+      const patch: Record<string, unknown> = {};
+
+      const lastMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
+        .order("desc")
+        .first();
+      if (lastMsg) {
+        patch.last_message_role = lastMsg.role;
+      }
+
+      const lastUserMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
+        .order("desc")
+        .filter((q) => q.and(
+          q.eq(q.field("role"), "user"),
+          q.neq(q.field("content"), undefined),
+          q.neq(q.field("content"), ""),
+        ))
+        .first();
+      if (lastUserMsg?.content?.trim()) {
+        patch.last_message_preview = lastUserMsg.content
+          .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
+          .trim().slice(0, 200);
+      }
+
+      const pendingMsg = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q) =>
+          q.eq("conversation_id", conv._id).eq("status", "pending")
+        )
+        .first();
+      patch.has_pending_messages = !!pendingMsg;
+
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(conv._id, patch);
+        patched++;
+      }
+    }
+    return { patched };
   },
 });
 

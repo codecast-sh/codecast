@@ -143,7 +143,15 @@ export class SessionWatcher extends EventEmitter {
   }
 
   private extractSessionId(filePath: string): string {
-    return path.basename(filePath, ".jsonl");
+    const name = path.basename(filePath, ".jsonl");
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (UUID_RE.test(name)) return name;
+    try {
+      const head = fs.readFileSync(filePath, "utf-8").slice(0, 4096);
+      const m = head.match(/"sessionId"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i);
+      if (m) return m[1];
+    } catch {}
+    return name;
   }
 
   private extractProjectPath(filePath: string): string {

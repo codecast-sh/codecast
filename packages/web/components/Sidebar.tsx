@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useActiveTeamStore } from "../store/activeTeamStore";
@@ -134,6 +135,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
   const markTeamSeen = useMutation(api.conversations.markTeamConversationsSeen);
+  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
   const activeSessions = useQuery(api.conversations.listIdleSessions, {});
   const idleCount = activeSessions?.filter((s: any) => s.is_idle).length ?? 0;
   const openNewSession = useNewSessionStore((s) => s.open);
@@ -327,18 +329,31 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
             </div>
             <div className="space-y-0.5">
               {favorites.slice(0, 5).map((fav) => (
-                <Link
-                  key={fav._id}
-                  href={`/conversation/${fav._id}`}
-                  onClick={onMobileClose}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors group"
-                >
-                  <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                  </svg>
-                  <span className="truncate text-sm flex-1">{cleanTitle(fav.title || "New Session")}</span>
-                  <span className="text-[10px] text-sol-text-dim">{fav.message_count}</span>
-                </Link>
+                <div key={fav._id} className="flex items-center group">
+                  <Link
+                    href={`/conversation/${fav._id}`}
+                    onClick={onMobileClose}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors flex-1 min-w-0"
+                  >
+                    <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                    </svg>
+                    <span className="truncate text-sm flex-1">{cleanTitle(fav.title || "New Session")}</span>
+                    <span className="text-[10px] text-sol-text-dim">{fav.message_count}</span>
+                  </Link>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleFavorite({ conversation_id: fav._id as Id<"conversations"> });
+                    }}
+                    className="p-1 rounded opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0 mr-1"
+                    title="Remove from favorites"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
               ))}
             </div>
           </div>

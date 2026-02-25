@@ -217,6 +217,23 @@ export function extractCwd(content: string): string | undefined {
   return undefined;
 }
 
+export function detectCliFlags(content: string): string | null {
+  const flags: string[] = [];
+  const firstUserLine = content.split("\n").find(l => l.includes('"type":"user"'));
+  if (firstUserLine) {
+    try {
+      const parsed = JSON.parse(firstUserLine);
+      if (parsed.permissionMode === "bypassPermissions") {
+        flags.push("--dangerously-skip-permissions");
+      }
+    } catch {}
+  }
+  if (content.includes("mcp__claude-in-chrome__") || content.includes('"claude-in-chrome"')) {
+    flags.push("--chrome");
+  }
+  return flags.length > 0 ? flags.join(" ") : null;
+}
+
 export interface ClaudeMessage {
   type: "human" | "assistant" | "tool_use" | "tool_result";
   message?: string;

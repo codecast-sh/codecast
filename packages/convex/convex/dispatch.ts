@@ -175,6 +175,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const now = Date.now();
     await ctx.db.patch(convId as Id<"conversations">, {
       updated_at: now,
+      has_pending_messages: true,
       ...(conversation.status === "completed" ? { status: "active" as const } : {}),
       ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
     });

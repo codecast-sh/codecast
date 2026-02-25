@@ -7,6 +7,7 @@ import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import Link from "next/link";
 import { CodeBlock } from "@/components/CodeBlock";
+import { CollapsibleImage } from "@/components/tools/MarkdownRenderer";
 
 function formatRelativeTime(ts: number): string {
   const now = Date.now();
@@ -131,6 +132,7 @@ function PlanBlock({ content, timestamp }: { content: string; timestamp?: number
           remarkPlugins={[remarkGfm]}
           rehypePlugins={[rehypeHighlight]}
           components={{
+            img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
             pre: ({ node, children, ...props }) => {
               const codeElement = node?.children?.[0];
               if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
@@ -226,6 +228,7 @@ function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean 
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeHighlight]}
                 components={{
+                  img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
                   pre: ({ node, children, ...props }) => {
                     const codeElement = node?.children?.[0];
                     if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {

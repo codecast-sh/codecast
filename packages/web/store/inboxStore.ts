@@ -23,6 +23,7 @@ export type InboxSession = {
   agent_status?: "working" | "idle" | "permission_blocked";
   is_deferred?: boolean;
   last_user_message?: string | null;
+  session_error?: string;
   stableKey?: string;
   implementation_session?: { _id: string; title?: string };
 };

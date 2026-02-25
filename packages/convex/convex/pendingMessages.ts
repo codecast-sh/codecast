@@ -60,6 +60,7 @@ export const sendMessageToSession = mutation({
     const now = Date.now();
     await ctx.db.patch(args.conversation_id, {
       updated_at: now,
+      has_pending_messages: true,
       ...(conversation.status === "completed" ? { status: "active" } : {}),
       ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
     });
@@ -98,6 +99,18 @@ export const updateMessageStatus = mutation({
       status: args.status,
       delivered_at: args.delivered_at,
     });
+
+    if (args.status !== "pending") {
+      const remaining = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q) =>
+          q.eq("conversation_id", message.conversation_id).eq("status", "pending")
+        )
+        .first();
+      if (!remaining) {
+        await ctx.db.patch(message.conversation_id, { has_pending_messages: false });
+      }
+    }
 
     return { success: true };
   },

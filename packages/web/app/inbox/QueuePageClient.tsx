@@ -31,7 +31,7 @@ function getProjectName(gitRoot?: string, projectPath?: string): string {
   return path.split("/").filter(Boolean).pop() || "unknown";
 }
 
-const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null }) {
+const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string }) {
   const {
     conversation,
     hasMoreAbove,
@@ -104,7 +104,16 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           </button>
         </div>
       )}
-      {looksAbandoned && resumeState === "idle" && (
+      {sessionError && resumeState === "idle" && (
+        <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />
+          {sessionError}
+          <button onClick={handleManualResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors">
+            Resume
+          </button>
+        </div>
+      )}
+      {looksAbandoned && !sessionError && resumeState === "idle" && (
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-bg-alt/90 border-b border-sol-border/50 text-sol-text-dim text-xs backdrop-blur-sm">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/50" />
           Session unresponsive — send a message or
@@ -189,7 +198,10 @@ function SessionCard({
             {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            {session.is_unresponsive && (
+            {session.session_error && (
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
+            )}
+            {session.is_unresponsive && !session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
             )}
             {session.has_pending && !session.is_unresponsive && (
@@ -761,6 +773,7 @@ export function QueuePageClient() {
               isIdle={viewingDismissedSession.is_idle}
               onSendAndAdvance={() => setViewingDismissedId(null)}
               lastUserMessage={viewingDismissedSession.last_user_message}
+              sessionError={viewingDismissedSession.session_error}
             />
           ) : currentSession ? (
             <InboxConversation
@@ -769,6 +782,7 @@ export function QueuePageClient() {
               isIdle={currentSession.is_idle}
               onSendAndAdvance={handleSendAndAdvance}
               lastUserMessage={currentSession.last_user_message}
+              sessionError={currentSession.session_error}
             />
           ) : pendingInjectId ? (
             <div className="h-full flex items-center justify-center text-sol-text-dim">

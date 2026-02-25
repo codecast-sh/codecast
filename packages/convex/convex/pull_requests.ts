@@ -272,8 +272,19 @@ export const getPRsForConversation = query({
     conversation_id: v.id("conversations"),
   },
   handler: async (ctx, args) => {
-    const allPRs = await ctx.db.query("pull_requests").collect();
-    return allPRs.filter((pr) =>
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return [];
+
+    let prs;
+    if (conversation.team_id) {
+      prs = await ctx.db
+        .query("pull_requests")
+        .withIndex("by_team_id", (q) => q.eq("team_id", conversation.team_id!))
+        .collect();
+    } else {
+      prs = await ctx.db.query("pull_requests").collect();
+    }
+    return prs.filter((pr) =>
       pr.linked_session_ids.includes(args.conversation_id)
     );
   },

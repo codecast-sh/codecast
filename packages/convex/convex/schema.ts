@@ -162,6 +162,16 @@ export default defineSchema({
     draft_message: v.optional(v.string()),
     last_user_message_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
+    cli_flags: v.optional(v.string()),
+    last_message_role: v.optional(v.union(
+      v.literal("user"),
+      v.literal("assistant"),
+      v.literal("system"),
+      v.literal("tool")
+    )),
+    last_message_preview: v.optional(v.string()),
+    has_pending_messages: v.optional(v.boolean()),
+    session_error: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -405,6 +415,7 @@ export default defineSchema({
     retry_count: v.number(),
   })
     .index("by_conversation_id", ["conversation_id"])
+    .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_user_status", ["from_user_id", "status"]),
 
   managed_sessions: defineTable({
