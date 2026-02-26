@@ -49,9 +49,7 @@ export class CodexWatcher extends EventEmitter {
     // Scan existing files sorted by mtime (newest first)
     this.emitExistingFilesSorted();
 
-    const pattern = path.join(this.historyPath, "**", "*.jsonl");
-
-    this.watcher = watch(pattern, {
+    this.watcher = watch(this.historyPath, {
       persistent: true,
       ignoreInitial: true, // We handle initial files ourselves for sorting
       awaitWriteFinish: {
@@ -61,11 +59,15 @@ export class CodexWatcher extends EventEmitter {
     });
 
     this.watcher.on("add", (filePath) => {
-      this.handleFileEvent(filePath, "add");
+      if (filePath.endsWith(".jsonl")) {
+        this.handleFileEvent(filePath, "add");
+      }
     });
 
     this.watcher.on("change", (filePath) => {
-      this.handleFileEvent(filePath, "change");
+      if (filePath.endsWith(".jsonl")) {
+        this.handleFileEvent(filePath, "change");
+      }
     });
 
     this.watcher.on("error", (err: unknown) => {
