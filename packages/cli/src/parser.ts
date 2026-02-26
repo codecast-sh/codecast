@@ -6,7 +6,7 @@ type ContentBlock =
   | { type: "image"; source: { type: string; media_type: string; data: string } };
 
 export interface ClaudeSessionEntry {
-  type: "user" | "assistant" | "human" | "summary" | "file-history-snapshot" | "system";
+  type: "user" | "assistant" | "human" | "summary" | "file-history-snapshot" | "system" | "queue-operation";
   subtype?: "local_command" | "stop_hook_summary" | "compact_boundary";
   uuid?: string;
   parentUuid?: string;
@@ -21,6 +21,7 @@ export interface ClaudeSessionEntry {
     model?: string;
   };
   summary?: string;
+  operation?: "enqueue" | "remove";
 }
 
 export interface ToolCall {
@@ -81,6 +82,16 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
           subtype: entry.subtype,
         });
       }
+      continue;
+    }
+
+    if (entry.type === "queue-operation" && entry.operation === "enqueue" && entry.content) {
+      messages.push({
+        uuid: entry.uuid,
+        role: "user",
+        content: entry.content,
+        timestamp,
+      });
       continue;
     }
 
@@ -296,13 +307,104 @@ interface CodexSessionEntry {
     type?: string;
     status?: string;
     role?: "developer" | "user" | "assistant" | "system";
-    content?: Array<{ type: string; text?: string }> | string;
-    summary?: string;
+    content?: Array<{
+      type: string;
+      text?: string;
+      image_url?: string;
+      image_data?: string;
+      media_type?: string;
+      url?: string;
+    }> | string;
+    summary?: Array<{ type: string; text?: string }> | string;
     name?: string;
     call_id?: string;
     arguments?: string;
-    output?: string;
+    output?: Array<{
+      type: string;
+      text?: string;
+      image_url?: string;
+      image_data?: string;
+      media_type?: string;
+      url?: string;
+    }> | string;
     input?: string;
+  };
+}
+
+function sanitizeCodexText(content: string): string {
+  return content
+    .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function parseCodexImageItem(item: {
+  image_url?: string;
+  image_data?: string;
+  media_type?: string;
+  url?: string;
+}): ImageBlock | null {
+  if (typeof item.image_data === "string" && typeof item.media_type === "string") {
+    return {
+      mediaType: item.media_type,
+      data: item.image_data,
+    };
+  }
+
+  const imageUrl = typeof item.image_url === "string"
+    ? item.image_url
+    : typeof item.url === "string"
+      ? item.url
+      : undefined;
+
+  if (!imageUrl) return null;
+  const match = imageUrl.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
+  if (!match) return null;
+
+  return {
+    mediaType: match[1],
+    data: match[2],
+  };
+}
+
+function extractCodexTextAndImages(
+  content: Array<{
+    type: string;
+    text?: string;
+    image_url?: string;
+    image_data?: string;
+    media_type?: string;
+    url?: string;
+  }> | string | undefined,
+): { text: string; images: ImageBlock[] } {
+  if (typeof content === "string") {
+    return { text: sanitizeCodexText(content), images: [] };
+  }
+  if (!Array.isArray(content)) {
+    return { text: "", images: [] };
+  }
+
+  const textParts: string[] = [];
+  const images: ImageBlock[] = [];
+
+  for (const item of content) {
+    if (item.type === "input_text" || item.type === "output_text" || item.type === "text") {
+      if (typeof item.text === "string" && item.text.length > 0) {
+        textParts.push(item.text);
+      }
+      continue;
+    }
+
+    if (item.type === "input_image" || item.type === "output_image" || item.type === "image") {
+      const parsedImage = parseCodexImageItem(item);
+      if (parsedImage) {
+        images.push(parsedImage);
+      }
+    }
+  }
+
+  return {
+    text: sanitizeCodexText(textParts.join("\n")),
+    images,
   };
 }
 
@@ -313,10 +415,17 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
   let currentAssistantThinking = "";
   let currentToolCalls: ToolCall[] = [];
   let currentToolResults: ToolResult[] = [];
+  let currentAssistantImages: ImageBlock[] = [];
   let lastTimestamp = Date.now();
 
   const flushAssistantMessage = () => {
-    if (currentAssistantContent || currentAssistantThinking || currentToolCalls.length > 0) {
+    if (
+      currentAssistantContent ||
+      currentAssistantThinking ||
+      currentToolCalls.length > 0 ||
+      currentToolResults.length > 0 ||
+      currentAssistantImages.length > 0
+    ) {
       messages.push({
         role: "assistant",
         content: currentAssistantContent.trim(),
@@ -324,11 +433,13 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
         thinking: currentAssistantThinking.trim() || undefined,
         toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : undefined,
         toolResults: currentToolResults.length > 0 ? [...currentToolResults] : undefined,
+        images: currentAssistantImages.length > 0 ? [...currentAssistantImages] : undefined,
       });
       currentAssistantContent = "";
       currentAssistantThinking = "";
       currentToolCalls = [];
       currentToolResults = [];
+      currentAssistantImages = [];
     }
   };
 
@@ -351,31 +462,33 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
       const role = payload.role;
       if (role === "developer" || role === "system") continue;
 
-      const contentArray = Array.isArray(payload.content) ? payload.content : [];
-      const textContent = contentArray
-        .filter((c) => c.type === "input_text" || c.type === "output_text")
-        .map((c) => c.text || "")
-        .join("\n");
+      const { text, images } = extractCodexTextAndImages(payload.content);
+      const trimmedText = text.trim();
 
       if (role === "user") {
         flushAssistantMessage();
-        const trimmed = textContent.trim();
         const isSystemContext =
-          trimmed.startsWith("<environment_context>") ||
-          trimmed.startsWith("<INSTRUCTIONS>") ||
-          trimmed.startsWith("# AGENTS.md instructions") ||
-          trimmed.startsWith("<permissions") ||
-          trimmed.startsWith("<collaboration_mode>") ||
-          trimmed.startsWith("<app-context>");
-        if (textContent && !isSystemContext) {
+          trimmedText.startsWith("<environment_context>") ||
+          trimmedText.startsWith("<INSTRUCTIONS>") ||
+          trimmedText.startsWith("# AGENTS.md instructions") ||
+          trimmedText.startsWith("<permissions") ||
+          trimmedText.startsWith("<collaboration_mode>") ||
+          trimmedText.startsWith("<app-context>");
+        if ((trimmedText || images.length > 0) && !isSystemContext) {
           messages.push({
             role: "user",
-            content: textContent,
+            content: trimmedText,
             timestamp,
+            images: images.length > 0 ? images : undefined,
           });
         }
       } else if (role === "assistant") {
-        currentAssistantContent += (currentAssistantContent ? "\n" : "") + textContent;
+        if (trimmedText) {
+          currentAssistantContent += (currentAssistantContent ? "\n" : "") + trimmedText;
+        }
+        if (images.length > 0) {
+          currentAssistantImages.push(...images);
+        }
       }
     } else if (payload.type === "reasoning") {
       const contentArray = Array.isArray(payload.content) ? payload.content : [];
@@ -388,19 +501,44 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
       }
     } else if (payload.type === "function_call") {
       let args: Record<string, unknown> = {};
-      try {
-        args = payload.arguments ? JSON.parse(payload.arguments) : {};
-      } catch {}
+      if (payload.arguments) {
+        try {
+          const parsed = JSON.parse(payload.arguments);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            args = parsed as Record<string, unknown>;
+          } else if (typeof parsed === "string" && parsed.trim()) {
+            args = { input: parsed };
+          } else if (payload.arguments.trim()) {
+            args = { input: payload.arguments };
+          }
+        } catch {
+          if (payload.arguments.trim()) {
+            args = { input: payload.arguments };
+          }
+        }
+      }
       currentToolCalls.push({
         id: payload.call_id || "",
         name: payload.name || "",
         input: args,
       });
     } else if (payload.type === "function_call_output") {
+      const outputParsed = extractCodexTextAndImages(payload.output);
       currentToolResults.push({
         toolUseId: payload.call_id || "",
-        content: payload.output || "",
+        content: typeof payload.output === "string"
+          ? payload.output
+          : outputParsed.text,
       });
+      if (outputParsed.images.length > 0) {
+        currentAssistantImages.push(
+          ...outputParsed.images.map((img) => ({
+            mediaType: img.mediaType,
+            data: img.data,
+            toolUseId: payload.call_id || undefined,
+          })),
+        );
+      }
     } else if (payload.type === "custom_tool_call") {
       currentToolCalls.push({
         id: payload.call_id || "",
@@ -408,10 +546,22 @@ export function parseCodexSessionFile(content: string): ParsedMessage[] {
         input: payload.input ? { input: payload.input } : {},
       });
     } else if (payload.type === "custom_tool_call_output") {
+      const outputParsed = extractCodexTextAndImages(payload.output);
       currentToolResults.push({
         toolUseId: payload.call_id || "",
-        content: payload.output || "",
+        content: typeof payload.output === "string"
+          ? payload.output
+          : outputParsed.text,
       });
+      if (outputParsed.images.length > 0) {
+        currentAssistantImages.push(
+          ...outputParsed.images.map((img) => ({
+            mediaType: img.mediaType,
+            data: img.data,
+            toolUseId: payload.call_id || undefined,
+          })),
+        );
+      }
     }
   }
 

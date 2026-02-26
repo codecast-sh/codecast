@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from "bun:test";
-import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, type ClaudeSessionEntry } from "./parser.js";
+import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, type ClaudeSessionEntry } from "./parser.js";
 
 describe("Parser malformed JSON handling", () => {
   test("parseSessionLine logs warning and returns null for malformed JSON", () => {
@@ -81,6 +81,132 @@ describe("Parser malformed JSON handling", () => {
     expect(contentWarning).toContain('...');
 
     console.warn = originalWarn;
+  });
+});
+
+describe("parser - codex images", () => {
+  test("extracts user inline image blocks and strips codex image tags from text", () => {
+    const jsonl = JSON.stringify({
+      timestamp: "2026-02-25T00:00:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "<image name=[Image #1]>\n</image>\nPlease inspect this" },
+          { type: "input_image", image_url: "data:image/png;base64,QUJDRA==" },
+        ],
+      },
+    });
+
+    const messages = parseCodexSessionFile(jsonl);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("user");
+    expect(messages[0].content).toBe("Please inspect this");
+    expect(messages[0].images).toHaveLength(1);
+    expect(messages[0].images?.[0]).toEqual({
+      mediaType: "image/png",
+      data: "QUJDRA==",
+    });
+  });
+
+  test("extracts tool output images and associates them to tool call ids", () => {
+    const lines = [
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "browser-tools.screenshot",
+          call_id: "call_1",
+          arguments: "{\"fullPage\":true}",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: [
+            { type: "output_text", text: "captured image" },
+            { type: "input_image", image_url: "data:image/jpeg;base64,AAAA" },
+          ],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Done." }],
+        },
+      }),
+    ];
+
+    const messages = parseCodexSessionFile(lines.join("\n"));
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("assistant");
+    expect(messages[0].content).toBe("Done.");
+    expect(messages[0].toolCalls).toHaveLength(1);
+    expect(messages[0].toolCalls?.[0].id).toBe("call_1");
+    expect(messages[0].toolResults).toHaveLength(1);
+    expect(messages[0].toolResults?.[0]).toEqual({
+      toolUseId: "call_1",
+      content: "captured image",
+    });
+    expect(messages[0].images).toHaveLength(1);
+    expect(messages[0].images?.[0]).toEqual({
+      mediaType: "image/jpeg",
+      data: "AAAA",
+      toolUseId: "call_1",
+    });
+  });
+
+  test("preserves raw function_call arguments for apply_patch", () => {
+    const rawPatch = "*** Begin Patch\n*** Update File: src/test.ts\n@@\n-foo\n+bar\n*** End Patch";
+    const lines = [
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "apply_patch",
+          call_id: "call_patch_1",
+          arguments: rawPatch,
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call_patch_1",
+          output: "{\"output\":\"Success\"}",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-02-25T00:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Done." }],
+        },
+      }),
+    ];
+
+    const messages = parseCodexSessionFile(lines.join("\n"));
+    expect(messages).toHaveLength(1);
+    expect(messages[0].toolCalls).toHaveLength(1);
+    expect(messages[0].toolCalls?.[0]).toEqual({
+      id: "call_patch_1",
+      name: "apply_patch",
+      input: { input: rawPatch },
+    });
   });
 });
 
