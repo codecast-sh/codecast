@@ -426,7 +426,7 @@ export default defineSchema({
     tmux_session: v.optional(v.string()),
     started_at: v.number(),
     last_heartbeat: v.number(),
-    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"))),
+    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"))),
     agent_status_updated_at: v.optional(v.number()),
   })
     .index("by_session_id", ["session_id"])

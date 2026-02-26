@@ -245,6 +245,8 @@ export const isSessionManaged = query({
       pid: session.pid,
       last_heartbeat: session.last_heartbeat,
       tmux_session: session.tmux_session,
+      agent_status: session.agent_status,
+      agent_status_updated_at: session.agent_status_updated_at,
     };
   },
 });
@@ -321,7 +323,8 @@ export const markMessageDelivered = mutation({
 export const updateAgentStatus = mutation({
   args: {
     conversation_id: v.id("conversations"),
-    agent_status: v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked")),
+    agent_status: v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected")),
+    client_ts: v.optional(v.number()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -338,9 +341,13 @@ export const updateAgentStatus = mutation({
     if (!session) return;
     if (session.user_id.toString() !== authUserId.toString()) return;
 
+    if (args.client_ts && session.agent_status_updated_at && args.client_ts < session.agent_status_updated_at) {
+      return;
+    }
+
     await ctx.db.patch(session._id, {
       agent_status: args.agent_status,
-      agent_status_updated_at: Date.now(),
+      agent_status_updated_at: args.client_ts || Date.now(),
     });
   },
 });

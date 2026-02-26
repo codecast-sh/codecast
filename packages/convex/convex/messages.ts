@@ -379,10 +379,19 @@ export const addMessages = mutation({
         await ctx.db.patch(conversation.user_id, userPatch);
       }
 
-      if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount) && !shouldGenerateTitle(conversation.message_count)) {
-        await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
-          conversation_id: args.conversation_id,
-        });
+      if (!conversation.skip_title_generation) {
+        let shouldGen = false;
+        for (let c = conversation.message_count + 1; c <= newMessageCount; c++) {
+          if (shouldGenerateTitle(c)) { shouldGen = true; break; }
+        }
+        if (!shouldGen && conversation.subtitle === undefined && newMessageCount > 2) {
+          shouldGen = true;
+        }
+        if (shouldGen) {
+          await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
+            conversation_id: args.conversation_id,
+          });
+        }
       }
     }
 

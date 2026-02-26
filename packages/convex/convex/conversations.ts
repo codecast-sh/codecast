@@ -5169,7 +5169,7 @@ export const listIdleSessions = query({
     );
 
     const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000;
-    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked">();
+    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected">();
     for (const s of managedSessions) {
       if (s.conversation_id && s.agent_status && s.agent_status_updated_at &&
           (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS) {
@@ -5208,7 +5208,12 @@ export const listIdleSessions = query({
         if (lastMsg) {
           lastMsgRole = lastMsg.role;
           if (lastMsg.role === "user" && lastMsg.content?.trim()) {
-            lastUserMessage = lastMsg.content.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200);
+            lastUserMessage = lastMsg.content
+              .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
+              .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+              .replace(/\[image\]/gi, "")
+              .trim()
+              .slice(0, 200);
           }
         }
       }
@@ -5231,7 +5236,7 @@ export const listIdleSessions = query({
 
       const agentStatus = agentStatusMap.get(conv._id.toString());
       const isIdle = agentStatus
-        ? agentStatus !== "working"
+        ? agentStatus !== "working" && agentStatus !== "compacting" && agentStatus !== "thinking" && agentStatus !== "connected"
         : daemonAlive
           ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
           : !recentlyUpdated;
@@ -5697,7 +5702,10 @@ export const backfillDenormalizedFields = internalMutation({
       if (lastUserMsg?.content?.trim()) {
         patch.last_message_preview = lastUserMsg.content
           .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
-          .trim().slice(0, 200);
+          .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+          .replace(/\[image\]/gi, "")
+          .trim()
+          .slice(0, 200);
       }
 
       const pendingMsg = await ctx.db
