@@ -382,7 +382,7 @@ function InboxSessionPanel({
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
         {newSessions.length > 0 && (
-          <>
+          <div>
             <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-blue">
                 New ({newSessions.length})
@@ -399,11 +399,11 @@ function InboxSessionPanel({
                 onDefer={deferSession}
               />
             ))}
-          </>
+          </div>
         )}
 
         {needsInput.length > 0 && (
-          <>
+          <div>
             <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-yellow">
                 Needs Input ({needsInput.length})
@@ -420,11 +420,11 @@ function InboxSessionPanel({
                 onDefer={deferSession}
               />
             ))}
-          </>
+          </div>
         )}
 
         {working.length > 0 && (
-          <>
+          <div>
             <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-green">
                 Working ({working.length})
@@ -442,7 +442,7 @@ function InboxSessionPanel({
                 variant="working"
               />
             ))}
-          </>
+          </div>
         )}
 
         {sessions.length === 0 && (
