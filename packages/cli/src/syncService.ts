@@ -519,7 +519,7 @@ export class SyncService {
     } catch {}
   }
 
-  async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked"): Promise<void> {
+  async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected", clientTs?: number): Promise<void> {
     if (!this.apiToken) return;
     try {
       await this.client.mutation(
@@ -527,6 +527,7 @@ export class SyncService {
         {
           conversation_id: conversationId,
           agent_status: status,
+          client_ts: clientTs || Date.now(),
           api_token: this.apiToken,
         }
       );
