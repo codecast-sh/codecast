@@ -1,0 +1,42 @@
+{
+  "name": "@codecast/electron",
+  "version": "0.1.0",
+  "description": "Codecast Desktop (Electron)",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "CODECAST_URL=http://local.codecast.sh electron .",
+    "build": "electron-builder -m --config.mac.target=dir",
+    "build:local": "electron-builder -m --config.mac.target=dir --config.mac.identity=null",
+    "install:local": "npm run build:local && pkill -f Codecast.app 2>/dev/null; sleep 1 && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && echo 'Installed to /Applications'"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "sh.codecast.desktop",
+    "productName": "Codecast",
+    "files": [
+      "main.js",
+      "preload.js"
+    ],
+    "directories": {
+      "buildResources": "assets"
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.icns",
+      "darkModeSupport": true,
+      "minimumSystemVersion": "10.15"
+    },
+    "protocols": [
+      {
+        "name": "Codecast",
+        "schemes": ["codecast"]
+      }
+    ]
+  }
+}

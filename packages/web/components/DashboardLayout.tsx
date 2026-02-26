@@ -16,10 +16,11 @@ import { Logo } from "./Logo";
 import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose, Plus } from "lucide-react";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { SetupPromptBanner } from "./SetupPromptBanner";
+import { DesktopAppBanner } from "./DesktopAppBanner";
 import { useNewSessionStore } from "../store/newSessionStore";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
-import { desktopHeaderClass } from "../lib/desktop";
+import { desktopHeaderClass, setupDesktopDrag } from "../lib/desktop";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -76,7 +77,19 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const replaceSessionId = useInboxStore((s) => s.replaceSessionId);
   const resolveTempId = useInboxStore((s) => s.resolveTempId);
   const creatingRef = useRef(false);
-  const desktopClass = desktopHeaderClass();
+  const [desktopClass, setDesktopClass] = useState("");
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    setDesktopClass(desktopHeaderClass());
+    const timer = setTimeout(() => setDesktopClass(desktopHeaderClass()), 500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    return setupDesktopDrag(header);
+  }, [desktopClass]);
 
   const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
   const isOnCommitPage = pathname?.includes("/commit/") ?? false;
@@ -197,7 +210,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
       {/* Header spans full width */}
-      <header className={`flex-shrink-0 border-b border-sol-border bg-sol-bg/95 backdrop-blur-sm z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""}`}>
+      <header ref={headerRef} className={`flex-shrink-0 border-b border-sol-border bg-sol-bg/95 backdrop-blur-sm z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""}`}>
         <div className="px-2 sm:px-4 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Logo + toggle */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -279,6 +292,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         </div>
       </header>
 
+      <DesktopAppBanner />
       <SetupPromptBanner />
 
       {/* Content area with sidebar and main */}
@@ -314,7 +328,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                 />
               </div>
             </Panel>
-            <Separator className="w-px bg-sol-border hover:w-1.5 hover:bg-sol-cyan data-[resize-handle-active]:w-1.5 data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-[width,background-color] duration-150" />
+            <Separator className="relative w-1 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
             <Panel id="main" minSize={0}>
               {isFullWidthPage ? (
                 <div className="h-full">

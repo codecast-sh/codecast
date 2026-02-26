@@ -583,14 +583,31 @@ pre[class*="language-"] {
   cursor: col-resize !important;
 }
 
-/* Tauri desktop: titlebar drag region for overlay titlebar */
-.tauri-drag-region {
+/* Desktop: titlebar drag region for overlay titlebar */
+.tauri-drag-region,
+.electron-drag-region {
   -webkit-app-region: drag;
 }
 .tauri-drag-region button,
 .tauri-drag-region a,
 .tauri-drag-region input,
-.tauri-drag-region [role="button"] {
+.tauri-drag-region [role="button"],
+.electron-drag-region button,
+.electron-drag-region a,
+.electron-drag-region input,
+.electron-drag-region [role="button"] {
   -webkit-app-region: no-drag;
+}
+
+/* Tauri desktop: WKWebView scroll perf optimizations */
+.tauri-desktop [data-main-scroll],
+.tauri-desktop [data-radix-scroll-area-viewport],
+.tauri-desktop .overflow-y-auto,
+.tauri-desktop .overflow-auto {
+  -webkit-overflow-scrolling: touch;
+  will-change: scroll-position;
+}
+.tauri-desktop [data-index] {
+  contain: layout style paint;
 }
 

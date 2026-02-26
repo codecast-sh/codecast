@@ -498,6 +498,11 @@ async function executeRemoteCommand(
               agentType,
             });
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
+            if (agentType === "claude") {
+              discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
+                log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
+              });
+            }
           }
         } catch (spawnErr) {
           error = `Failed to start session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
@@ -2896,6 +2901,51 @@ type StartedSessionInfo = {
 const startedSessionTmux = new Map<string, StartedSessionInfo>();
 const STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
 
+const UUID_JSONL_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
+
+async function discoverAndLinkSession(
+  conversationId: string,
+  tmuxSession: string,
+  cwd: string,
+): Promise<void> {
+  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+  const projectDirName = cwd.replace(/\//g, "-");
+  const projectDir = path.join(claudeProjectsDir, projectDirName);
+
+  const existingFiles = new Set<string>();
+  if (fs.existsSync(projectDir)) {
+    for (const f of fs.readdirSync(projectDir)) {
+      if (UUID_JSONL_RE.test(f)) existingFiles.add(f);
+    }
+  }
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    if (!startedSessionTmux.has(conversationId)) {
+      log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked by watcher, stopping discovery`);
+      return;
+    }
+    if (!fs.existsSync(projectDir)) continue;
+    for (const f of fs.readdirSync(projectDir)) {
+      const m = f.match(UUID_JSONL_RE);
+      if (!m || existingFiles.has(f)) continue;
+      const sessionId = m[1];
+      const cache = readConversationCache();
+      if (cache[sessionId]) continue;
+      cache[sessionId] = conversationId;
+      saveConversationCache(cache);
+      if (syncServiceRef) {
+        syncServiceRef.updateSessionId(conversationId, sessionId).catch(() => {});
+        syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
+      }
+      startedSessionTmux.delete(conversationId);
+      log(`[DISCOVER] Linked session ${sessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via JSONL discovery`);
+      return;
+    }
+  }
+  log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
+}
+
 const planHandoffChildren = new Map<string, string>();
 
 // Track subagent sessions whose parent hasn't been cached yet: childSessionId -> parentSessionId
@@ -3394,7 +3444,7 @@ async function deliverMessage(
 
   if (!sessionId) {
     const started = startedSessionTmux.get(conversationId);
-    if (started && Date.now() - started.startedAt < STARTED_SESSION_TTL_MS) {
+    if (started) {
       try {
         await execAsync(`tmux has-session -t '${started.tmuxSession}' 2>/dev/null`);
         for (let i = 0; i < 40; i++) {
@@ -3409,8 +3459,6 @@ async function deliverMessage(
         log(`Started session tmux ${started.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
         startedSessionTmux.delete(conversationId);
       }
-    } else if (started) {
-      startedSessionTmux.delete(conversationId);
     }
 
     log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
@@ -4235,10 +4283,14 @@ function startWatchdog(
     // Validate process cache
     validateProcessCache();
 
-    // Prune stale started session entries
+    // Prune started session entries only if tmux session is dead
     for (const [convId, entry] of startedSessionTmux.entries()) {
       if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
-        startedSessionTmux.delete(convId);
+        try {
+          execSync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 2000 });
+        } catch {
+          startedSessionTmux.delete(convId);
+        }
       }
     }
 

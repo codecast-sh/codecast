@@ -7,6 +7,7 @@ import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
 import { Logo, LogoIcon } from "@/components/Logo";
+import { isDesktop } from "@/lib/desktop";
 
 function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" }) {
   const colors = {
@@ -197,6 +198,10 @@ export default function LandingPage() {
   const router = useRouter();
 
   useEffect(() => {
+    if (isDesktop()) {
+      router.replace("/login");
+      return;
+    }
     if (!isLoading && isAuthenticated) {
       router.replace("/dashboard");
     }
@@ -901,6 +906,7 @@ export default function LandingPage() {
               <ul className="space-y-2 text-sm text-stone-500">
                 <li><Link href="#how-it-works" className="hover:text-stone-900">How it works</Link></li>
                 <li><Link href="/features" className="hover:text-stone-900">CLI</Link></li>
+                <li><Link href="/download/mac" className="hover:text-stone-900">Desktop App</Link></li>
                 <li><Link href="/security" className="hover:text-stone-900">Security</Link></li>
                 <li><Link href="/pricing" className="hover:text-stone-900">Pricing</Link></li>
               </ul>

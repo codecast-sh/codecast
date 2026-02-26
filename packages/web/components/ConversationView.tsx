@@ -43,6 +43,7 @@ import { useForkMessages } from "../hooks/useForkMessages";
 import { BranchSelector } from "./BranchSelector";
 import { ForkTreePanel } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
+import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -5194,7 +5195,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
       return 40;
     },
-    overscan: 50,
+    overscan: 5,
     paddingStart: 16,
     paddingEnd: 100,
     isScrollingResetDelay: 150,
@@ -5294,6 +5295,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  const [deskClass, setDeskClass] = useState("");
+  useEffect(() => {
+    setDeskClass(desktopHeaderClass());
+  }, []);
+
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    return setupDesktopDrag(el);
+  }, [deskClass]);
 
   useEffect(() => {
     const el = messageInputRef.current;
@@ -6144,7 +6156,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
-      <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""}`}>
+      <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass}`}>
         <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1">
           <div className="flex items-center gap-2 min-w-0">
             <Link

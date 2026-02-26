@@ -3,6 +3,11 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+#[tauri::command]
+pub fn start_window_drag(window: tauri::Window) -> Result<(), String> {
+    window.start_dragging().map_err(|e| e.to_string())
+}
+
 #[allow(deprecated)]
 #[tauri::command]
 pub fn set_badge_count(count: u32) {

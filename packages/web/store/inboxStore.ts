@@ -98,6 +98,7 @@ interface InboxStoreState {
   showDismissed: boolean;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
+  mruStack: string[];
 
   messages: Record<string, Message[]>;
   optimisticMessages: Record<string, OptimisticMessage[]>;
@@ -143,6 +144,7 @@ interface InboxStoreState {
   updateSessionProject: (id: string, projectPath: string) => void;
   navigateToSession: (id: string) => void;
   replaceSessionId: (tempId: string, realId: string) => void;
+  touchMru: (id: string) => void;
 
   // -- Message actions --
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => void;
@@ -206,6 +208,7 @@ export const useInboxStore = create<InboxStoreState>(
   showDismissed: false,
   viewingDismissedId: null,
   pendingNavigateId: null,
+  mruStack: [],
 
   messages: {},
   optimisticMessages: {},
@@ -485,6 +488,12 @@ export const useInboxStore = create<InboxStoreState>(
     } else {
       set({ pendingNavigateId: id, viewingDismissedId: null });
     }
+  },
+
+  touchMru: (id: string) => {
+    const { mruStack } = get();
+    const filtered = mruStack.filter((s: string) => s !== id);
+    set({ mruStack: [id, ...filtered] });
   },
 
   replaceSessionId: (tempId: string, realId: string) => {

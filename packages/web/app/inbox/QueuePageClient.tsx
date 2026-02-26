@@ -12,8 +12,12 @@ import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, InboxSession } from "../../store/inboxStore";
 import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
+import { useSessionSwitcher } from "../../hooks/useSessionSwitcher";
+import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
 import { cleanTitle } from "../../lib/conversationProcessor";
+import { SharePopover } from "../../components/SharePopover";
+import { toast } from "sonner";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -45,6 +49,9 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   } = useConversationMessages(sessionId);
 
   const resumeSession = useMutation(api.users.resumeSession);
+  const setPrivacy = useMutation(api.conversations.setPrivacy);
+  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
+  const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
 
   const lastMsg = conversation?.messages?.[conversation.messages.length - 1];
@@ -87,6 +94,22 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
     );
   }
 
+  const convId = conversation._id as Id<"conversations">;
+  const shareUrl = conversation.share_token
+    ? `${typeof window !== "undefined" ? window.location.origin : ""}/conversation/${convId}`
+    : null;
+  const shareControls = (
+    <SharePopover
+      isPrivate={conversation.is_private !== false}
+      teamVisibility={(conversation as any).team_visibility}
+      hasShareToken={!!conversation.share_token}
+      onSetPrivate={async () => { await setPrivacy({ conversation_id: convId, is_private: true }); toast.success("Made private"); }}
+      onSetTeamVisibility={async (mode) => { await setTeamVisibility({ conversation_id: convId, team_visibility: mode }); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
+      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); }}
+      shareUrl={shareUrl}
+    />
+  );
+
   return (
     <div className="relative h-full">
       {(resumeState === "resuming" || resumeState === "sent") && (
@@ -125,6 +148,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       <ConversationDiffLayout
         conversation={conversation as ConversationData}
         embedded
+        headerExtra={shareControls}
         hasMoreAbove={hasMoreAbove}
         hasMoreBelow={hasMoreBelow}
         isLoadingOlder={isLoadingOlder}
@@ -177,7 +201,7 @@ function SessionCard({
 
   return (
     <div
-      className={`relative group border-b border-sol-border/30 transition-colors ${
+      className={`relative group border-b border-sol-border/30 transition-colors overflow-hidden ${
         isActive
           ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
           : isWorking
@@ -187,9 +211,12 @@ function SessionCard({
               : "hover:bg-sol-bg-alt/80"
       }`}
     >
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => onSelect(globalIndex)}
-        className="w-full text-left px-3 py-2 pr-8"
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
+        className="w-full text-left px-3 py-2 pr-8 cursor-pointer"
       >
         <div className="flex items-center justify-between gap-2 mb-0.5">
           <div className={`text-sm truncate leading-tight ${
@@ -268,7 +295,7 @@ function SessionCard({
             </span>
           </div>
         )}
-      </button>
+      </div>
       {(onDismiss || onDefer) && (
         <div className="absolute top-1.5 right-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           {onDismiss && (
@@ -506,6 +533,9 @@ export function QueuePageClient() {
   const pinSession = useInboxStore((s) => s.pinSession);
   const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useInboxStore((s) => s.setViewingDismissedId);
+  const touchMru = useInboxStore((s) => s.touchMru);
+
+  const switcherState = useSessionSwitcher();
 
   const [showShortcuts, setShowShortcuts] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -667,8 +697,9 @@ export function QueuePageClient() {
         agentType: currentSession.agent_type,
         source: "inbox",
       });
+      touchMru(currentSession._id);
     }
-  }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation]);
+  }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru]);
 
   // Sync URL when current session changes (but not before initial param is resolved)
   useEffect(() => {
@@ -763,6 +794,12 @@ export function QueuePageClient() {
 
   return (
     <DashboardLayout>
+      {switcherState.open && (
+        <SessionSwitcher
+          sessions={switcherState.mruSessions}
+          selectedIndex={switcherState.selectedIndex}
+        />
+      )}
       <div className="flex flex-col h-full">
       <Group orientation="horizontal" className="flex-1 min-h-0" defaultLayout={inboxLayout} onLayoutChange={handleInboxLayoutChange}>
         <Panel id="inbox-main" defaultSize="76%" minSize="30%">
@@ -817,7 +854,7 @@ export function QueuePageClient() {
             </div>
           )}
         </Panel>
-        <Separator className="w-px bg-sol-border hover:w-1.5 hover:bg-sol-cyan data-[resize-handle-active]:w-1.5 data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-[width,background-color] duration-150" />
+        <Separator className="relative w-1 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
         <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
           <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={dismissedSessions} />
         </Panel>
@@ -843,6 +880,11 @@ export function QueuePageClient() {
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">←</kbd>
             dismiss
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Tab</kbd>
+            switch
           </span>
           <span className="flex items-center gap-1">
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
