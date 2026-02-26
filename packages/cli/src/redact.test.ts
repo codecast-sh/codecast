@@ -59,6 +59,12 @@ describe("redactSecrets", () => {
   test("does not redact short patterns", () => {
     expect(redactSecrets("sk-short")).toBe("sk-short");
   });
+
+  test("handles non-string content", () => {
+    expect(redactSecrets({ token: "sk-1234567890abcdefghij1234567890abcdefghij" } as any))
+      .toContain("[REDACTED_API_KEY]");
+    expect(redactSecrets(null as any)).toBe("");
+  });
 });
 
 describe("containsSecrets", () => {
@@ -70,6 +76,11 @@ describe("containsSecrets", () => {
   test("returns false for normal text", () => {
     expect(containsSecrets("Hello world")).toBe(false);
     expect(containsSecrets("sk-short")).toBe(false);
+  });
+
+  test("handles non-string content", () => {
+    expect(containsSecrets({ token: "sk-1234567890abcdefghij1234567890abcdefghij" } as any)).toBe(true);
+    expect(containsSecrets(null as any)).toBe(false);
   });
 });
 

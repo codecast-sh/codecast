@@ -13,7 +13,14 @@ const API_KEY_PATTERNS = [
 ];
 
 export function redactSecrets(content: string): string {
-  let result = content;
+  let result =
+    typeof content === "string"
+      ? content
+      : content === null || content === undefined
+        ? ""
+        : typeof content === "object"
+          ? JSON.stringify(content)
+          : String(content);
   for (const pattern of API_KEY_PATTERNS) {
     pattern.lastIndex = 0;
     result = result.replace(pattern, "[REDACTED_API_KEY]");
@@ -22,9 +29,17 @@ export function redactSecrets(content: string): string {
 }
 
 export function containsSecrets(content: string): boolean {
+  const normalized =
+    typeof content === "string"
+      ? content
+      : content === null || content === undefined
+        ? ""
+        : typeof content === "object"
+          ? JSON.stringify(content)
+          : String(content);
   return API_KEY_PATTERNS.some((pattern) => {
     pattern.lastIndex = 0;
-    return pattern.test(content);
+    return pattern.test(normalized);
   });
 }
 
