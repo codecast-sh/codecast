@@ -554,6 +554,91 @@ echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s)}" > "$REG
 exit 0
 `;
 
+const CODECAST_STATUS_HOOK = `#!/bin/bash
+# Reports Claude Code lifecycle events to codecast daemon via status files
+set -uo pipefail
+
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
+[ -z "$SESSION_ID" ] && exit 0
+
+EVENT=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('hook_event_name',''))" 2>/dev/null)
+NOTIF_TYPE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('notification_type',''))" 2>/dev/null)
+SOURCE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('source',''))" 2>/dev/null)
+
+STATUS=""
+case "$EVENT" in
+  UserPromptSubmit) STATUS="thinking" ;;
+  PreToolUse) STATUS="working" ;;
+  PreCompact) STATUS="compacting" ;;
+  Stop) STATUS="idle" ;;
+  Notification)
+    case "$NOTIF_TYPE" in
+      permission_prompt) STATUS="permission_blocked" ;;
+      idle_prompt) STATUS="idle" ;;
+    esac
+    ;;
+  SessionStart)
+    [ "$SOURCE" = "compact" ] && STATUS="working"
+    ;;
+esac
+
+[ -z "$STATUS" ] && exit 0
+
+STATUS_DIR="$HOME/.codecast/agent-status"
+mkdir -p "$STATUS_DIR"
+echo "{\\"status\\":\\"$STATUS\\",\\"ts\\":$(date +%s)}" > "$STATUS_DIR/$SESSION_ID.json"
+exit 0
+`;
+
+function installStatusHook(): void {
+  const home = process.env.HOME || "";
+  const hooksDir = path.join(home, ".claude", "hooks");
+  const hookFile = path.join(hooksDir, "codecast-status.sh");
+  const settingsFile = path.join(home, ".claude", "settings.json");
+
+  try {
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.writeFileSync(hookFile, CODECAST_STATUS_HOOK, { mode: 0o755 });
+
+    let settings: any = {};
+    if (fs.existsSync(settingsFile)) {
+      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+    }
+
+    if (!settings.hooks) settings.hooks = {};
+
+    const hookEntry = {
+      type: "command",
+      command: hookFile,
+      timeout: 5,
+    };
+
+    for (const event of ["UserPromptSubmit", "PreToolUse", "PreCompact", "Stop", "Notification", "SessionStart"] as const) {
+      if (!settings.hooks[event]) settings.hooks[event] = [];
+
+      const hookArray = settings.hooks[event] as any[];
+      const alreadyPresent = hookArray.some((matcher: any) => {
+        const hooks = matcher.hooks || [];
+        return hooks.some((h: any) => h.command?.includes("codecast-status.sh"));
+      });
+
+      if (!alreadyPresent) {
+        if (hookArray.length > 0 && hookArray[0].matcher === "") {
+          hookArray[0].hooks = hookArray[0].hooks || [];
+          hookArray[0].hooks.push(hookEntry);
+        } else {
+          hookArray.unshift({ matcher: "", hooks: [hookEntry] });
+        }
+      }
+    }
+
+    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+  } catch {
+    // Ignore errors - hook is optional enhancement
+  }
+}
+
 function installSessionRegisterHook(): void {
   const home = process.env.HOME || "";
   const hooksDir = path.join(home, ".claude", "hooks");
@@ -1033,6 +1118,7 @@ async function runAuth(): Promise<void> {
 
   installSlashCommand();
   installSessionRegisterHook();
+  installStatusHook();
 
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
@@ -5843,6 +5929,7 @@ program
         installTaskSnippet(true);
       }
       installSessionRegisterHook();
+      installStatusHook();
 
       // Restart daemon if it was running
       if (daemonWasRunning) {
@@ -7014,6 +7101,7 @@ checkForUpdates().then(async (available) => {
       installTaskSnippet(true);
     }
     installSessionRegisterHook();
+    installStatusHook();
     console.log("Update complete. Restart codecast to use the new version.\n");
   } else {
     showUpdateNotice(available);
