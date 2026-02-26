@@ -321,4 +321,93 @@ describe("extractFileChanges", () => {
     expect(changes[1].messageId).toBe("msg1");
     expect(changes[2].messageId).toBe("msg1");
   });
+
+  it("should extract apply_patch changes into file changes", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: /src/a.ts",
+      "@@",
+      "-const a = 1;",
+      "+const a = 2;",
+      "*** Add File: /src/b.ts",
+      "+export const b = true;",
+      "*** End Patch",
+    ].join("\n");
+
+    const messages: Message[] = [
+      {
+        _id: "msg1" as any,
+        _creationTime: 1000,
+        conversation_id: "conv1" as any,
+        role: "assistant",
+        timestamp: 1000,
+        tool_calls: [
+          {
+            id: "patch1",
+            name: "apply_patch",
+            input: JSON.stringify({ input: patch }),
+          },
+        ],
+      },
+    ];
+
+    const changes = extractFileChanges(messages);
+
+    expect(changes).toHaveLength(2);
+    expect(changes[0]).toMatchObject({
+      id: "patch1:0",
+      toolCallId: "patch1",
+      filePath: "/src/a.ts",
+      changeType: "edit",
+      oldContent: "const a = 1;",
+      newContent: "const a = 2;",
+    });
+    expect(changes[1]).toMatchObject({
+      id: "patch1:1",
+      toolCallId: "patch1",
+      filePath: "/src/b.ts",
+      changeType: "write",
+      newContent: "export const b = true;",
+    });
+  });
+
+  it("should extract raw apply_patch input (non-JSON tool input)", () => {
+    const rawPatch = [
+      "*** Begin Patch",
+      "*** Update File: /src/c.ts",
+      "@@",
+      "-old",
+      "+new",
+      "*** End Patch",
+    ].join("\n");
+
+    const messages: Message[] = [
+      {
+        _id: "msg1" as any,
+        _creationTime: 1000,
+        conversation_id: "conv1" as any,
+        role: "assistant",
+        timestamp: 1000,
+        tool_calls: [
+          {
+            id: "patch2",
+            name: "apply_patch",
+            input: rawPatch,
+          },
+        ],
+      },
+    ];
+
+    const changes = extractFileChanges(messages);
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      id: "patch2:0",
+      toolCallId: "patch2",
+      filePath: "/src/c.ts",
+      changeType: "edit",
+      oldContent: "old",
+      newContent: "new",
+    });
+  });
 });

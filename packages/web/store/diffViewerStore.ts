@@ -4,6 +4,7 @@ import { LRUCache } from '../lib/lruCache';
 
 export interface FileChange {
   id: string;
+  toolCallId?: string;
   sequenceIndex: number;
   messageId: string;
   filePath: string;

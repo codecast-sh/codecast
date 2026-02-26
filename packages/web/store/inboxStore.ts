@@ -20,7 +20,7 @@ export type InboxSession = {
   is_unresponsive?: boolean;
   is_connected?: boolean;
   has_pending: boolean;
-  agent_status?: "working" | "idle" | "permission_blocked";
+  agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected";
   is_deferred?: boolean;
   last_user_message?: string | null;
   session_error?: string;

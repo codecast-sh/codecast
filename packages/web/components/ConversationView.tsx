@@ -42,6 +42,7 @@ import { useMessageSelection } from "../hooks/useMessageSelection";
 import { useForkMessages } from "../hooks/useForkMessages";
 import { BranchSelector } from "./BranchSelector";
 import { ForkTreePanel } from "./ForkTreePanel";
+import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -389,6 +390,95 @@ function stripSystemTags(content: string): string {
     .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, '')
     .replace(/^\s*Caveat:.*$/gm, '')
     .replace(/\n{3,}/g, '\n\n');
+}
+
+type ParsedApiError = {
+  statusCode: number;
+  message: string;
+  errorType?: string;
+  requestId?: string;
+};
+
+function parseApiErrorContent(content?: string | null): ParsedApiError | null {
+  if (!content) return null;
+  const trimmed = content.trim();
+  const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
+  if (!match) return null;
+
+  const statusCode = Number(match[1]);
+  const payloadText = (match[2] || "").trim();
+  let message = "";
+  let errorType: string | undefined;
+  let requestId: string | undefined;
+
+  if (payloadText.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(payloadText) as Record<string, unknown>;
+      if (typeof parsed.request_id === "string") {
+        requestId = parsed.request_id;
+      }
+
+      const parsedError = parsed.error;
+      if (parsedError && typeof parsedError === "object" && !Array.isArray(parsedError)) {
+        const errorRecord = parsedError as Record<string, unknown>;
+        if (typeof errorRecord.type === "string") {
+          errorType = errorRecord.type;
+        }
+        if (typeof errorRecord.message === "string") {
+          message = errorRecord.message;
+        }
+      }
+    } catch {
+      // Keep fallback values for non-JSON payloads.
+    }
+  }
+
+  if (!requestId) {
+    requestId = trimmed.match(/\b(req_[A-Za-z0-9]+)\b/)?.[1];
+  }
+  if (!message) {
+    message = statusCode === 500 ? "Internal server error" : "API request failed";
+  }
+
+  return { statusCode, message, errorType, requestId };
+}
+
+function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compact?: boolean }) {
+  const isServerError = error.statusCode >= 500;
+
+  return (
+    <div className={`rounded-lg border ${isServerError ? "border-sol-red/40 bg-sol-red/10" : "border-amber-500/30 bg-amber-500/10"} ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-semibold ${isServerError ? "bg-sol-red/20 text-sol-red" : "bg-amber-500/20 text-amber-500"}`}>
+          !
+        </span>
+        <span className={`text-xs font-semibold uppercase tracking-wide ${isServerError ? "text-sol-red" : "text-amber-500"}`}>
+          API Error
+        </span>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${isServerError ? "border-sol-red/40 bg-sol-red/10 text-sol-red" : "border-amber-500/40 bg-amber-500/10 text-amber-500"}`}>
+          {error.statusCode}
+        </span>
+        {error.errorType && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-dim font-mono">
+            {error.errorType}
+          </span>
+        )}
+      </div>
+      <p className={`mt-1 text-sm ${isServerError ? "text-sol-red" : "text-amber-500"}`}>
+        {error.message}
+      </p>
+      {error.requestId && (
+        <p className="mt-1 text-[11px] text-sol-text-muted font-mono">
+          request_id: <span className="text-sol-text-secondary">{error.requestId}</span>
+        </p>
+      )}
+      {!compact && (
+        <p className="mt-1 text-xs text-sol-text-dim">
+          Provider-side failure. Retry the request; if it repeats, include the request ID.
+        </p>
+      )}
+    </div>
+  );
 }
 
 function truncateStr(s: string, max: number): string {
@@ -975,8 +1065,20 @@ function isPlanWriteToolCall(tc: ToolCall): boolean {
   }
 }
 
-function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
-  const isEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write" || tool.name === "apply_patch";
+interface ToolChangeRange {
+  start: number;
+  end: number;
+}
+
+interface ToolCallChangeSelection {
+  index: number;
+  range: ToolChangeRange;
+}
+
+function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; changeRange?: ToolChangeRange; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
+  const isApplyPatch = tool.name === "apply_patch";
+  const isStandardEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write";
+  const isEdit = isStandardEdit || isApplyPatch;
   const [expanded, setExpanded] = useState(isEdit);
   const isRead = tool.name === "Read" || tool.name === "file_read";
   const isCodexShell = tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec";
@@ -991,10 +1093,16 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, c
   try {
     parsedInput = JSON.parse(tool.input);
   } catch {}
+  const rawToolInput = tool.input || "";
 
   const filePath = String(parsedInput.file_path || "");
   const relativePath = getRelativePath(filePath);
   const language = getFileExtension(filePath);
+  const applyPatchInput = tool.name === "apply_patch" ? getApplyPatchInput(rawToolInput) : "";
+  const applyPatchDiffs = useMemo(
+    () => (tool.name === "apply_patch" ? parseApplyPatchSections(applyPatchInput) : []),
+    [tool.name, applyPatchInput],
+  );
 
   // Markdown file detection
   const isMarkdown = isMarkdownFile(filePath);
@@ -1027,7 +1135,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, c
   }, [mdFullscreen]);
 
   const getToolSummary = () => {
-    if (isEdit || isRead) return relativePath;
+    if (isStandardEdit || isRead) return relativePath;
     if (isBash) {
       const cmd = String(parsedInput.command || parsedInput.cmd || "");
       if (cmd) return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd;
@@ -1037,8 +1145,11 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, c
     if (isCodeSearch && parsedInput.query) return truncateStr(String(parsedInput.query), 40);
 
     if (tool.name === "apply_patch") {
-      const input = String(parsedInput.input || parsedInput.patch || "");
-      const fileMatch = input.match(/\*\*\* (?:Update|Add|Delete) File: (.+)/);
+      if (applyPatchDiffs.length > 0) {
+        const firstPath = getRelativePath(applyPatchDiffs[0].filePath);
+        return applyPatchDiffs.length > 1 ? `${firstPath} (+${applyPatchDiffs.length - 1})` : firstPath;
+      }
+      const fileMatch = applyPatchInput.match(/\*\*\* (?:Update|Add|Delete) File:\s+(.+)/);
       if (fileMatch) return getRelativePath(fileMatch[1].trim());
       return "Apply patch";
     }
@@ -1204,7 +1315,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, c
 
   // Extract starting line number from Edit result (format: "   42→content")
   const getStartLine = () => {
-    if (!isEdit || !result) return 1;
+    if (!isStandardEdit || !result) return 1;
     const match = result.content.match(/^\s*(\d+)→/m);
     return match ? parseInt(match[1], 10) : 1;
   };
@@ -1277,26 +1388,41 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, c
 
   const toolColor = toolColors[tool.name] || getMcpColor(tool.name);
 
-  const isClickable = isEdit && changeIndex !== undefined;
+  const targetStart = changeRange?.start ?? changeIndex;
+  const targetEnd = changeRange?.end ?? changeIndex;
+  const hasTargetRange = targetStart !== undefined && targetEnd !== undefined;
+  const isClickable = isEdit && hasTargetRange;
   const isSelected = isClickable && (
-    selectedChangeIndex === changeIndex ||
-    (rangeStart !== null && rangeEnd !== null && changeIndex >= rangeStart && changeIndex <= rangeEnd)
+    (selectedChangeIndex !== null &&
+      targetStart !== undefined &&
+      targetEnd !== undefined &&
+      selectedChangeIndex >= targetStart &&
+      selectedChangeIndex <= targetEnd) ||
+    (rangeStart !== null &&
+      rangeEnd !== null &&
+      targetStart !== undefined &&
+      targetEnd !== undefined &&
+      Math.max(rangeStart, targetStart) <= Math.min(rangeEnd, targetEnd))
   );
 
   const handleClick = (e: React.MouseEvent) => {
     if (shareSelectionMode) {
       return;
     }
-    if (isClickable) {
+    if (isClickable && targetStart !== undefined && targetEnd !== undefined) {
       e.stopPropagation();
       if (e.metaKey || e.ctrlKey) {
-        if (selectedChangeIndex !== null && selectedChangeIndex !== changeIndex) {
-          selectRange(selectedChangeIndex, changeIndex);
+        if (selectedChangeIndex !== null) {
+          selectRange(selectedChangeIndex, targetEnd);
         } else {
-          selectChange(changeIndex);
+          selectRange(targetStart, targetEnd);
         }
       } else {
-        selectChange(changeIndex);
+        if (targetStart !== targetEnd) {
+          selectRange(targetStart, targetEnd);
+        } else {
+          selectChange(targetStart);
+        }
       }
     } else {
       setExpanded(!expanded);
@@ -1367,7 +1493,7 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, c
       {expanded && (
         <div className="mt-1 rounded overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
           {/* Markdown toggle header */}
-          {isMarkdown && (isRead || (tool.name === "Write" && parsedInput.content)) && (
+          {isMarkdown && (isRead || (tool.name === "Write" && Boolean(parsedInput.content))) && (
             <div className="flex items-center justify-between px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/30">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-sol-text-dim">{language}</span>
@@ -1475,6 +1601,36 @@ function ToolBlock({ tool, result, changeIndex, shareSelectionMode, messageId, c
                 startLine={1}
                 language={language}
               />
+            )
+          ) : tool.name === "apply_patch" ? (
+            applyPatchDiffs.length > 0 ? (
+              <div className="max-h-80 overflow-auto">
+                {applyPatchDiffs.map((diff, idx) => {
+                  const diffLanguage = getFileExtension(diff.filePath);
+                  const diffStartLine = diff.hunks[0]?.oldStart || diff.hunks[0]?.newStart || 1;
+                  return (
+                    <div key={`${diff.filePath}-${idx}`} className={idx > 0 ? "border-t border-sol-border/20" : ""}>
+                      <div className="px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/20">
+                        <span className="text-xs font-mono text-sol-text-dim truncate">{getRelativePath(diff.filePath)}</span>
+                      </div>
+                      <DiffView
+                        oldStr={diff.oldContent}
+                        newStr={diff.newContent}
+                        startLine={diffStartLine}
+                        language={diffLanguage}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ) : applyPatchInput.trim() ? (
+              <div className="max-h-80 overflow-auto">
+                <pre className="p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap text-sol-text-secondary">
+                  {applyPatchInput}
+                </pre>
+              </div>
+            ) : (
+              <div className="p-2 text-xs text-sol-text-dim">Patch input unavailable</div>
             )
           ) : isBash && (parsedInput.command || parsedInput.cmd) ? (
             <div className="max-h-80 overflow-auto">
@@ -2232,13 +2388,30 @@ function SkillExpansionBlock({ content, timestamp, cmdName }: { content: string;
         </svg>
       </button>
       {expanded && (
-        <div className="mt-1 rounded-md bg-sol-bg-alt/25 border border-sol-border/20 p-3 text-xs text-sol-text-muted whitespace-pre-wrap overflow-y-auto font-mono leading-relaxed">
-          {content
+        <div className="mt-1 rounded-md bg-sol-bg-alt/25 border border-sol-border/20 p-3 text-xs text-sol-text-muted overflow-y-auto leading-relaxed prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeHighlight]}
+            components={{
+              img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
+              pre: ({ node, children, ...props }) => {
+                const codeElement = node?.children?.[0];
+                if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                  const className = codeElement.properties?.className as string[] | undefined;
+                  const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                  const codeContent = codeElement.children?.[0];
+                  const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                  if (code) return <CodeBlock code={code} language={language} />;
+                }
+                return <pre {...props}>{children}</pre>;
+              },
+            }}
+          >{content
             .replace(/<command-name>[^<]*<\/command-name>\s*/g, "")
             .replace(/<command-message>[^<]*<\/command-message>\s*/g, "")
             .replace(/^Base directory for this skill:[^\n]*\n?/, "")
             .replace(/<[^>]+>/g, "")
-            .trim()}
+            .trim()}</ReactMarkdown>
         </div>
       )}
     </div>
@@ -2250,12 +2423,26 @@ function isInterruptMessage(content: string): boolean {
   return trimmed.startsWith("[Request interrupted") || trimmed.startsWith("[Request cancelled");
 }
 
-function InterruptStatusLine() {
+function isCodexTurnAbortedMessage(content: string): boolean {
+  const trimmed = content.trim();
+  return trimmed.startsWith("<turn_aborted>") && trimmed.includes("</turn_aborted>");
+}
+
+function isInterruptLikeMessage(content: string, agentType?: string): boolean {
+  if (isInterruptMessage(content)) return true;
+  return agentType === "codex" && isCodexTurnAbortedMessage(content);
+}
+
+function InterruptStatusLine({ label = "user interrupted", tone = "sky" }: { label?: string; tone?: "sky" | "amber" }) {
+  const lineClass = tone === "amber"
+    ? "flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent"
+    : "flex-1 h-px bg-gradient-to-r from-transparent via-sky-400/40 to-transparent";
+  const textClass = tone === "amber" ? "text-xs text-amber-500 font-medium" : "text-xs text-sky-400 font-medium";
   return (
     <div className="my-6 flex items-center gap-3">
-      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sky-400/40 to-transparent" />
-      <span className="text-xs text-sky-400 font-medium">user interrupted</span>
-      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-sky-400/40 to-transparent" />
+      <div className={lineClass} />
+      <span className={textClass}>{label}</span>
+      <div className={lineClass} />
     </div>
   );
 }
@@ -2273,6 +2460,25 @@ function parseTaskNotification(content: string): { taskId: string; status: strin
   const summary = inner.match(/<summary>(.*?)<\/summary>/)?.[1] || '';
   const outputFile = inner.match(/<output-file>(.*?)<\/output-file>/)?.[1];
   return { taskId, status, summary, outputFile };
+}
+
+function isCompactionPromptMessage(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  return (
+    trimmed.includes("Your task is to create a detailed summary of the conversation so far") &&
+    trimmed.includes("IMPORTANT: Do NOT use any tools.") &&
+    trimmed.includes("You MUST respond with ONLY the <summary>...</summary> block")
+  );
+}
+
+function extractCompactionSummaryContent(content: string): string {
+  if (!content) return "";
+  const summaryMatch = content.match(/<summary>\s*([\s\S]*?)\s*<\/summary>/i);
+  if (summaryMatch?.[1]) {
+    return summaryMatch[1].trim();
+  }
+  return content.replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").trim();
 }
 
 const taskStatusConfig: Record<string, { icon: string; color: string; bg: string }> = {
@@ -2492,6 +2698,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   const [fullscreen, setFullscreen] = useState(false);
   const displayContent = content
     .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
+    .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
     .replace(/\[image\]/gi, "")
     .trim();
   const isMarkdown = hasRichMarkdown(displayContent);
@@ -2850,7 +3057,7 @@ function AssistantBlock({
   agentNameToChildMap,
   showHeader = true,
   onOpenComments,
-  toolCallToChangeIndexMap,
+  toolCallChangeSelectionMap,
   isHighlighted,
   onToggleCollapsed,
   isSequenceExpanded,
@@ -2885,7 +3092,7 @@ function AssistantBlock({
   agentNameToChildMap?: Record<string, string>;
   showHeader?: boolean;
   onOpenComments?: () => void;
-  toolCallToChangeIndexMap?: Record<string, number>;
+  toolCallChangeSelectionMap?: Record<string, ToolCallChangeSelection>;
   isHighlighted?: boolean;
   onToggleCollapsed?: () => void;
   isSequenceExpanded?: boolean;
@@ -2916,6 +3123,7 @@ function AssistantBlock({
   const displayContent = strippedContent && agentNameToChildMap
     ? linkifyMentions(strippedContent, agentNameToChildMap)
     : strippedContent;
+  const parsedApiError = useMemo(() => parseApiErrorContent(displayContent), [displayContent]);
   const hasContent = displayContent && displayContent.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
@@ -3144,7 +3352,8 @@ function AssistantBlock({
               key={tc.id}
               tool={tc}
               result={toolResultMap[tc.id]}
-              changeIndex={toolCallToChangeIndexMap?.[tc.id]}
+              changeIndex={toolCallChangeSelectionMap?.[tc.id]?.index}
+              changeRange={toolCallChangeSelectionMap?.[tc.id]?.range}
               shareSelectionMode={shareSelectionMode}
               messageId={messageId}
               conversationId={conversationId}
@@ -3160,8 +3369,10 @@ function AssistantBlock({
 
         {hasContent && (
           <>
-            <div className={`text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap break-words" : "prose prose-invert prose-sm max-w-none"}`}>
-              {collapsed ? (
+            <div className={parsedApiError ? "" : `text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap break-words" : "prose prose-invert prose-sm max-w-none"}`}>
+              {parsedApiError ? (
+                <ApiErrorCard error={parsedApiError} compact={!!collapsed} />
+              ) : collapsed ? (
                 <div className="relative overflow-hidden" style={lines.length > COLLAPSED_LINES ? { maskImage: 'linear-gradient(to bottom, black 50%, transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black 50%, transparent)' } : undefined}>
                   <span>{truncatedContent}</span>
                 </div>
@@ -3197,7 +3408,7 @@ function AssistantBlock({
                 </div>
               )}
             </div>
-            {!collapsed && (isOverflowing || !contentExpanded) && (
+            {!collapsed && !parsedApiError && (isOverflowing || !contentExpanded) && (
               <div className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => setFullscreen(true)}
@@ -3243,28 +3454,32 @@ function AssistantBlock({
                 </button>
               </div>
               <div className="prose prose-invert prose-sm max-w-none text-sol-text">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[rehypeHighlight]}
-                  components={{
-                    img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                    pre: ({ node, children, ...props }) => {
-                      const codeElement = node?.children?.[0];
-                      if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                        const className = codeElement.properties?.className as string[] | undefined;
-                        const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                        const codeContent = codeElement.children?.[0];
-                        const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
-                        if (code) {
-                          return <CodeBlock code={code} language={language} />;
+                {parsedApiError ? (
+                  <ApiErrorCard error={parsedApiError} />
+                ) : (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeHighlight]}
+                    components={{
+                      img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
+                      pre: ({ node, children, ...props }) => {
+                        const codeElement = node?.children?.[0];
+                        if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                          const className = codeElement.properties?.className as string[] | undefined;
+                          const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                          const codeContent = codeElement.children?.[0];
+                          const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                          if (code) {
+                            return <CodeBlock code={code} language={language} />;
+                          }
                         }
-                      }
-                      return <pre {...props}>{children}</pre>;
-                    },
-                  }}
-                >
-                  {displayContent}
-                </ReactMarkdown>
+                        return <pre {...props}>{children}</pre>;
+                      },
+                    }}
+                  >
+                    {displayContent}
+                  </ReactMarkdown>
+                )}
               </div>
             </div>
           </div>,
@@ -3762,7 +3977,7 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string, opts?: { inline?: boolean; focusInput?: boolean }) => void }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, agentStatus, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string, opts?: { inline?: boolean; focusInput?: boolean }) => void }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -4152,7 +4367,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         <div className="relative">
-          {(isFocused || shortcutTooltip || isWaitingForResponse || isThinking || isConversationLive || showStuckBanner) && (
+          {(isFocused || shortcutTooltip || showStuckBanner || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
               <p className="text-[11px] text-sol-text-dim/70">
                 {showStuckBanner && sessionId ? (
@@ -4174,6 +4389,33 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                       </button>
                     </span>
                   )
+                ) : agentStatus === "thinking" ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sol-violet/50 animate-pulse" />
+                    Thinking...
+                  </span>
+                ) : agentStatus === "compacting" ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400/60 animate-pulse" />
+                    Compacting...
+                  </span>
+                ) : agentStatus === "permission_blocked" ? (
+                  <span className="flex items-center gap-1.5 text-sol-orange">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sol-orange animate-pulse" />
+                    Permission needed
+                  </span>
+                ) : agentStatus === "connected" ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/50 animate-pulse" />
+                    Connected
+                  </span>
+                ) : agentStatus === "working" ? (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Working
+                  </span>
+                ) : agentStatus === "idle" ? (
+                  "\u00A0"
                 ) : isThinking ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-sol-violet/50 animate-pulse" />
@@ -4479,11 +4721,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [selectedMessageIds, messages, generateShareLink]);
 
-  const toolCallToChangeIndexMap = useMemo(() => {
+  const toolCallChangeSelectionMap = useMemo(() => {
     const fileChanges = extractFileChanges(messages as any);
-    const map: Record<string, number> = {};
+    const map: Record<string, ToolCallChangeSelection> = {};
     for (const change of fileChanges) {
-      map[change.id] = change.sequenceIndex;
+      const key = change.toolCallId || change.id;
+      const existing = map[key];
+      if (!existing) {
+        map[key] = {
+          index: change.sequenceIndex,
+          range: {
+            start: change.sequenceIndex,
+            end: change.sequenceIndex,
+          },
+        };
+        continue;
+      }
+      existing.index = change.sequenceIndex;
+      existing.range.end = change.sequenceIndex;
     }
     return map;
   }, [messages]);
@@ -4574,7 +4829,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (last.type !== 'message') return false;
     const msg = last.data as Message;
     if (msg.role !== 'user') return false;
-    if (msg.content && isInterruptMessage(msg.content)) return false;
+    if (msg.content && isInterruptLikeMessage(msg.content, conversation.agent_type)) return false;
     return true;
   }, [conversation, timeline, hasMoreBelow]);
 
@@ -4599,13 +4854,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (msg.role !== 'user' || !msg.content?.trim()) continue;
       const t = msg.content.trim();
       if (t.length < 4 || NOISE_PREFIXES.some(p => t.startsWith(p))) continue;
-      if (isCommandMessage(t) || isInterruptMessage(t) || isSkillExpansion(t)) continue;
+      if (isCommandMessage(t) || isInterruptLikeMessage(t, conversation?.agent_type) || isSkillExpansion(t)) continue;
       const stripped = t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
       if (!stripped || stripped.length < 4) continue;
       indices.push(i);
     }
     return indices;
-  }, [timeline]);
+  }, [timeline, conversation?.agent_type]);
 
   const [activeStickyMsg, setActiveStickyMsg] = useState<{ index: number; content: string; id: string } | null>(null);
 
@@ -4796,7 +5051,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (msg.role === "system") return false;
         if (msg.role === "user" && msg.tool_results) return false;
         if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return false;
-        if (msg.role === "user" && msg.content && isInterruptMessage(msg.content)) return false;
+        if (msg.role === "user" && msg.content && isInterruptLikeMessage(msg.content, conversation?.agent_type)) return false;
         if (msg.role === "user" && msg.content && isSkillExpansion(msg.content)) return false;
         return msg.content && msg.content.trim().length > 0;
       })
@@ -4816,18 +5071,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   const buildResumeCommand = useCallback((targetAgent: "claude" | "codex"): string | null => {
-    if (!conversation?.session_id) return null;
+    const sessionId = managedSession?.session_id || conversation?.session_id;
+    if (!sessionId || !conversation) return null;
     const projectDir = conversation.project_path || conversation.git_root;
     const cdPrefix = projectDir ? `cd ${projectDir} && ` : "";
     const flags = (conversation as any).cli_flags ? ` ${(conversation as any).cli_flags}` : "";
     const sourceAgent = conversation.agent_type === "codex" ? "codex" : "claude";
     if (targetAgent === sourceAgent) {
       return targetAgent === "codex"
-        ? `${cdPrefix}codex resume ${conversation.session_id}`
-        : `${cdPrefix}claude --resume ${conversation.session_id}${flags}`;
+        ? `${cdPrefix}codex resume ${sessionId}`
+        : `${cdPrefix}claude --resume ${sessionId}${flags}`;
     }
-    return `${cdPrefix}codecast resume ${conversation.session_id} --as ${targetAgent}`;
-  }, [conversation?.session_id, conversation?.agent_type, conversation?.project_path, conversation?.git_root, (conversation as any)?.cli_flags]);
+    return `${cdPrefix}codecast resume ${sessionId} --as ${targetAgent}`;
+  }, [managedSession?.session_id, conversation?.session_id, conversation?.agent_type, conversation?.project_path, conversation?.git_root, (conversation as any)?.cli_flags]);
 
   const handleCopyResumeCommand = useCallback(async (targetAgent: "claude" | "codex") => {
     try {
@@ -4893,7 +5149,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (collapsed) {
         if (msg.role === "system") return 0;
         if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return 0;
-        if (msg.role === "user" && msg.content && isInterruptMessage(msg.content)) return 0;
+        if (msg.role === "user" && msg.content && isInterruptLikeMessage(msg.content, conversation?.agent_type)) return 0;
         if (msg.role === "user" && msg.content && isSkillExpansion(msg.content)) return 0;
         if (msg.role === "user" && msg.content && isTaskNotification(msg.content)) return 0;
         if (msg.role === "assistant") {
@@ -4916,7 +5172,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (msg.role === "system") return 8;
       if (msg.role === "user") {
         if (msg.content && isCommandMessage(msg.content)) return 30;
-        if (msg.content && isInterruptMessage(msg.content)) return 30;
+        if (msg.content && isInterruptLikeMessage(msg.content, conversation?.agent_type)) return 30;
         if (msg.content && isSkillExpansion(msg.content)) return 44;
         if (msg.content && isTaskNotification(msg.content)) return 40;
         if (msg.content && msg.content.length > 200) {
@@ -5614,6 +5870,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return idMap;
   }, [conversation?.messages]);
 
+  const getPreviousNonToolResultMessage = (index: number): Message | null => {
+    for (let i = index - 1; i >= 0; i--) {
+      const prevItem = timeline[i];
+      if (!prevItem || prevItem.type !== "message") continue;
+      const prevMsg = prevItem.data as Message;
+      if (prevMsg.role === "user" && prevMsg.tool_results && prevMsg.tool_results.length > 0 && (!prevMsg.content || !prevMsg.content.trim())) {
+        continue;
+      }
+      if (prevMsg.role === "user" && prevMsg.content && isCommandMessage(prevMsg.content)) {
+        continue;
+      }
+      return prevMsg;
+    }
+    return null;
+  };
+
   const renderItem = (item: TimelineItem, index: number) => {
     if (!item || index < 0 || index >= timeline.length) return null;
     if (item.type === 'commit') {
@@ -5676,6 +5948,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           if (collapsed) return null;
           return <CommandStatusLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
         }
+        if (conversation?.agent_type === "codex" && isCodexTurnAbortedMessage(msg.content)) {
+          if (collapsed) return null;
+          return <InterruptStatusLine key={msg._id} label="turn aborted" tone="amber" />;
+        }
         if (isInterruptMessage(msg.content)) {
           if (collapsed) return null;
           return <InterruptStatusLine key={msg._id} />;
@@ -5688,6 +5964,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           if (collapsed) return null;
           return <TaskNotificationLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
         }
+        if (isCompactionPromptMessage(msg.content)) {
+          return null;
+        }
         // Check if previous message was a command - if so, this is likely the expanded skill prompt
         const prevItemForSkill = index > 0 ? timeline[index - 1] : null;
         const prevMsgForSkill = prevItemForSkill?.type === 'message' ? (prevItemForSkill.data as Message) : null;
@@ -5697,8 +5976,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <SkillExpansionBlock key={msg._id} content={msg.content} timestamp={msg.timestamp} cmdName={cmdMatch?.[1]?.replace(/^\//, "")} />;
         }
         // Check if previous message was a compact_boundary - if so, render as compaction summary
-        const prevItem = index > 0 ? timeline[index - 1] : null;
-        const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
+        const prevMsg = getPreviousNonToolResultMessage(index);
         if (prevMsg?.role === 'system' && prevMsg?.subtype === 'compact_boundary') {
           return <CompactionSummaryBlock key={msg._id} content={msg.content} />;
         }
@@ -5717,6 +5995,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (msg.role === "assistant") {
+      const prevMsgForCompaction = getPreviousNonToolResultMessage(index);
+      if (prevMsgForCompaction?.role === "user" && prevMsgForCompaction.content && isCompactionPromptMessage(prevMsgForCompaction.content)) {
+        const summaryContent = extractCompactionSummaryContent(msg.content || "");
+        if (!summaryContent) return null;
+        return <CompactionSummaryBlock key={msg._id} content={summaryContent} />;
+      }
+
       // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
       // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
       let prevIdx = index - 1;
@@ -5797,7 +6082,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
 
       const relevantToolResults = msg.tool_calls
-        ?.map(tc => globalToolResultMap[tc.id])
+        ?.map(tc => msg.tool_results?.find((tr) => tr.tool_use_id === tc.id) || globalToolResultMap[tc.id])
         .filter((tr): tr is ToolResult => tr !== undefined);
 
       // Determine effective collapsed state for this message
@@ -5822,7 +6107,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           agentNameToChildMap={agentNameToChildMap}
           showHeader={effectiveCollapsed ? true : (isFirstInSequence || (collapsed && msg._id === sequenceStartId))}
           onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)}
-          toolCallToChangeIndexMap={toolCallToChangeIndexMap}
+          toolCallChangeSelectionMap={toolCallChangeSelectionMap}
           isHighlighted={highlightedMessageId === msg._id}
           isSequenceExpanded={isSequenceExpanded}
           runMessageIds={runMessageIds}
@@ -5884,10 +6169,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </Tooltip>
             </TooltipProvider>
 
-            {isConversationLive && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex-shrink-0">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Working
+            {(managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || (!managedSession?.agent_status && isConversationLive)) && (
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${
+                managedSession?.agent_status === "thinking" ? "bg-sol-violet/10 text-sol-violet border border-sol-violet/30" :
+                managedSession?.agent_status === "compacting" ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" :
+                managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange/10 text-sol-orange border border-sol-orange/30" :
+                managedSession?.agent_status === "connected" ? "bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30" :
+                "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+                  managedSession?.agent_status === "thinking" ? "bg-sol-violet" :
+                  managedSession?.agent_status === "compacting" ? "bg-amber-400" :
+                  managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange" :
+                  managedSession?.agent_status === "connected" ? "bg-sol-cyan" :
+                  "bg-emerald-400"
+                }`} />
+                {managedSession?.agent_status === "thinking" ? "Thinking" :
+                 managedSession?.agent_status === "compacting" ? "Compacting" :
+                 managedSession?.agent_status === "permission_blocked" ? "Needs Input" :
+                 managedSession?.agent_status === "connected" ? "Connected" :
+                 "Working"}
               </span>
             )}
 
@@ -6243,7 +6544,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <UserIcon />
                 <span className="text-sol-blue text-xs font-medium">{conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
               </div>
-              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8 pr-4">{activeStickyMsg.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim()}</div>
+              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8 pr-4">{activeStickyMsg.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "").replace(/\[image\]/gi, "").trim()}</div>
             </div>
           </div>
         </div>
@@ -6432,7 +6733,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {showMessageInput && conversation && (
         <div ref={messageInputRef}>
-          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} />
+          <MessageInput conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status as any} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} />
         </div>
       )}
 

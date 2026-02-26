@@ -1,7 +1,9 @@
 import type { Doc } from "@codecast/convex/convex/_generated/dataModel";
+import { getApplyPatchInput, parseApplyPatchSections } from "./applyPatchParser";
 
 export interface FileChange {
   id: string;
+  toolCallId?: string;
   sequenceIndex: number;
   messageId: string;
   filePath: string;
@@ -27,20 +29,56 @@ export function extractFileChanges(messages: Message[]): FileChange[] {
     }
 
     for (const toolCall of message.tool_calls) {
-      if (toolCall.name !== "Edit" && toolCall.name !== "Write" && toolCall.name !== "Bash") {
+      if (
+        toolCall.name !== "Edit" &&
+        toolCall.name !== "Write" &&
+        toolCall.name !== "file_edit" &&
+        toolCall.name !== "file_write" &&
+        toolCall.name !== "apply_patch" &&
+        toolCall.name !== "Bash"
+      ) {
+        continue;
+      }
+
+      if (toolCall.name === "apply_patch") {
+        const patchInput = getApplyPatchInput(toolCall.input);
+        if (!patchInput) {
+          continue;
+        }
+
+        const sections = parseApplyPatchSections(patchInput);
+        if (sections.length === 0) {
+          continue;
+        }
+
+        sections.forEach((section, sectionIndex) => {
+          const isAdd = section.operation === "Add";
+          changes.push({
+            id: `${toolCall.id}:${sectionIndex}`,
+            toolCallId: toolCall.id,
+            sequenceIndex: sequenceIndex++,
+            messageId: message._id,
+            filePath: section.filePath,
+            changeType: isAdd ? "write" : "edit",
+            oldContent: section.oldContent || undefined,
+            newContent: section.newContent,
+            timestamp: message.timestamp,
+          });
+        });
         continue;
       }
 
       try {
         const params = JSON.parse(toolCall.input);
 
-        if (toolCall.name === "Edit") {
+        if (toolCall.name === "Edit" || toolCall.name === "file_edit") {
           if (!params.file_path || !params.new_string) {
             continue;
           }
 
           changes.push({
             id: toolCall.id,
+            toolCallId: toolCall.id,
             sequenceIndex: sequenceIndex++,
             messageId: message._id,
             filePath: params.file_path,
@@ -49,13 +87,14 @@ export function extractFileChanges(messages: Message[]): FileChange[] {
             newContent: params.new_string,
             timestamp: message.timestamp,
           });
-        } else if (toolCall.name === "Write") {
+        } else if (toolCall.name === "Write" || toolCall.name === "file_write") {
           if (!params.file_path || !params.content) {
             continue;
           }
 
           changes.push({
             id: toolCall.id,
+            toolCallId: toolCall.id,
             sequenceIndex: sequenceIndex++,
             messageId: message._id,
             filePath: params.file_path,
@@ -78,6 +117,7 @@ export function extractFileChanges(messages: Message[]): FileChange[] {
 
           changes.push({
             id: toolCall.id,
+            toolCallId: toolCall.id,
             sequenceIndex: sequenceIndex++,
             messageId: message._id,
             filePath: "git commit",
