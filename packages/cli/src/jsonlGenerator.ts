@@ -469,9 +469,16 @@ function mapToolName(name: string): string {
   return "shell_command";
 }
 
-export function generateCodexJsonl(data: ExportResult): { jsonl: string; sessionId: string } {
+export interface GenerateCodexJsonlOptions {
+  sessionId?: string;
+}
+
+export function generateCodexJsonl(
+  data: ExportResult,
+  options: GenerateCodexJsonlOptions = {}
+): { jsonl: string; sessionId: string } {
   const lines: string[] = [];
-  const sessionId = uuidv4();
+  const sessionId = options.sessionId || uuidv4();
   const cwd = data.conversation.project_path || process.cwd();
   const startTime = data.conversation.started_at;
 

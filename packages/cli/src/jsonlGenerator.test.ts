@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchExport, generateClaudeCodeJsonl, type ExportResult } from "./jsonlGenerator.js";
+import { fetchExport, generateClaudeCodeJsonl, generateCodexJsonl, type ExportResult } from "./jsonlGenerator.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -254,5 +254,38 @@ describe("generateClaudeCodeJsonl", () => {
     // Mid history should be omitted.
     expect(chat.some((l) => l.type === "assistant" && l.message?.content?.[0]?.text === "a1")).toBe(false);
     expect(chat.some((l) => l.type === "user" && l.message?.content === "u2")).toBe(false);
+  });
+});
+
+describe("generateCodexJsonl", () => {
+  test("uses provided session id in session_meta payload", () => {
+    const forcedSessionId = "019c95d9-ef8b-7d43-b08f-647d85b2e5a6";
+    const data: ExportResult = {
+      conversation: {
+        id: "conv",
+        title: "t",
+        session_id: "session",
+        agent_type: "codex",
+        project_path: "/tmp/project",
+        model: "gpt-5",
+        message_count: 2,
+        started_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "hi", timestamp: "2026-01-01T00:00:00.000Z" },
+        { role: "assistant", content: "hello", timestamp: "2026-01-01T00:00:00.100Z" },
+      ],
+    };
+
+    const { jsonl, sessionId } = generateCodexJsonl(data, { sessionId: forcedSessionId });
+    expect(sessionId).toBe(forcedSessionId);
+
+    const firstLine = JSON.parse(jsonl.trim().split("\n")[0]) as {
+      type?: string;
+      payload?: { id?: string };
+    };
+    expect(firstLine.type).toBe("session_meta");
+    expect(firstLine.payload?.id).toBe(forcedSessionId);
   });
 });
