@@ -4,10 +4,18 @@ import * as os from "os";
 import * as path from "path";
 import { Database } from "bun:sqlite";
 import { execSync, exec, spawn } from "child_process";
+import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
+import {
+  choosePreferredCodexCandidate,
+  hasCodexSessionFileOpen,
+  isResumeInvocation,
+  matchSingleFreshStartedConversation,
+  matchStartedConversation,
+} from "./sessionProcessMatcher.js";
 import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
 import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractGeminiProjectHash, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
@@ -23,7 +31,14 @@ import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate } from "./update.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { TaskScheduler } from "./taskScheduler.js";
-import { fetchExport, generateClaudeCodeJsonl, writeClaudeCodeSession, chooseClaudeTailMessagesForTokenBudget } from "./jsonlGenerator.js";
+import {
+  fetchExport,
+  generateClaudeCodeJsonl,
+  generateCodexJsonl,
+  writeClaudeCodeSession,
+  writeCodexSession,
+  chooseClaudeTailMessagesForTokenBudget,
+} from "./jsonlGenerator.js";
 
 const _execAsync = promisify(exec);
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
@@ -123,18 +138,23 @@ const lastErrorNotification = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
 
+type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected";
+const lastHookStatus = new Map<string, { status: AgentStatus; ts: number }>();
+const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
+
 function sendAgentStatus(
   syncService: SyncService,
   conversationId: string,
   sessionId: string,
-  status: "working" | "idle" | "permission_blocked",
+  status: AgentStatus,
+  clientTs?: number,
 ): void {
   if (status === "working") {
     const last = lastWorkingStatusSent.get(sessionId) ?? 0;
     if (Date.now() - last < WORKING_STATUS_THROTTLE_MS) return;
     lastWorkingStatusSent.set(sessionId, Date.now());
   }
-  syncService.updateSessionAgentStatus(conversationId, status).catch(() => {});
+  syncService.updateSessionAgentStatus(conversationId, status, clientTs).catch(() => {});
 }
 
 function truncateForNotification(text: string, maxLen = 200): string {
@@ -429,7 +449,9 @@ async function executeRemoteCommand(
       }
       case "start_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
-        const agentType: string = parsed.agent_type || "claude";
+        const rawAgentType = parsed.agent_type;
+        const agentType: "claude" | "codex" | "gemini" =
+          rawAgentType === "codex" || rawAgentType === "gemini" ? rawAgentType : "claude";
         const projectPath: string = parsed.project_path || process.env.HOME || "/tmp";
         const prompt: string | undefined = parsed.prompt;
         const conversationId: string | undefined = parsed.conversation_id;
@@ -469,7 +491,12 @@ async function executeRemoteCommand(
           result = JSON.stringify({ tmux_session: tmuxSession, agent_type: agentType, project_path: cwd });
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
           if (conversationId) {
-            startedSessionTmux.set(conversationId, { tmuxSession, projectPath: cwd, startedAt: Date.now() });
+            startedSessionTmux.set(conversationId, {
+              tmuxSession,
+              projectPath: cwd,
+              startedAt: Date.now(),
+              agentType,
+            });
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
           }
         } catch (spawnErr) {
@@ -492,7 +519,7 @@ async function executeRemoteCommand(
           error = `No session found for conversation ${conversationId}`;
           break;
         }
-        const proc = await findSessionProcess(sessionId);
+        const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
         if (!proc) {
           error = `No running process for session ${sessionId.slice(0, 8)}`;
           break;
@@ -536,7 +563,7 @@ async function executeRemoteCommand(
         const reverse = buildReverseConversationCache(cache);
         const sessionId = reverse[conversationId];
         if (sessionId) {
-          const proc = await findSessionProcess(sessionId);
+          const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
           if (proc) {
             const tmuxTarget = await findTmuxPaneForTty(proc.tty);
             if (tmuxTarget) {
@@ -1123,9 +1150,12 @@ async function processSessionFile(
 
       let matchedStartedConversation: string | null = null;
       if (startedSessionTmux.size > 0) {
+        const startedClaudeEntries = Array.from(startedSessionTmux.entries())
+          .filter(([, entry]) => entry.agentType === "claude");
         const proc = await findSessionProcess(sessionId, "claude").catch(() => null);
+        let tmuxSessionName: string | null = null;
         if (proc) {
-          let tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0];
+          tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
           if (!tmuxSessionName) {
             const tmuxPane = await findTmuxPaneForTty(proc.tty);
             if (tmuxPane) {
@@ -1133,24 +1163,15 @@ async function processSessionFile(
               cacheSessionProcess(sessionId, proc, tmuxPane);
             }
           }
-          if (tmuxSessionName) {
-            for (const [convId, entry] of startedSessionTmux.entries()) {
-              if (entry.tmuxSession === tmuxSessionName) {
-                matchedStartedConversation = convId;
-                log(`Matched session ${sessionId.slice(0, 8)} to conversation ${convId.slice(0, 12)} via tmux ${tmuxSessionName}`);
-                break;
-              }
-            }
-          }
         }
-        if (!matchedStartedConversation) {
-          for (const [convId, entry] of startedSessionTmux.entries()) {
-            if (entry.projectPath === actualProjectPath && Date.now() - entry.startedAt < 300_000) {
-              matchedStartedConversation = convId;
-              log(`Matched session ${sessionId.slice(0, 8)} to conversation ${convId.slice(0, 12)} via projectPath fallback`);
-              break;
-            }
-          }
+        matchedStartedConversation = matchStartedConversation(startedClaudeEntries, {
+          tmuxSessionName,
+          projectPath: actualProjectPath,
+        });
+        if (matchedStartedConversation && tmuxSessionName) {
+          log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
+        } else if (matchedStartedConversation && actualProjectPath) {
+          log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
         }
       }
 
@@ -1189,6 +1210,20 @@ async function processSessionFile(
         }
         log(`Created conversation ${conversationId} for session ${sessionId}`);
         syncStats.conversationsCreated++;
+
+        // Detect tmux and register managed session
+        findSessionProcess(sessionId, "claude").then((proc) => {
+          if (!proc) return;
+          findTmuxPaneForTty(proc.tty).then((tmuxPane) => {
+            const tmuxSessionName = tmuxPane?.split(":")[0];
+            syncService.registerManagedSession(sessionId, proc.pid, tmuxSessionName, conversationId).catch(() => {});
+            if (tmuxSessionName) log(`Registered managed session for ${sessionId.slice(0, 8)} (tmux: ${tmuxSessionName})`);
+          }).catch(() => {
+            syncService.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {});
+          });
+        }).catch(() => {
+          syncService.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {});
+        });
 
         // Resolve any pending subagents waiting for this session as their parent
         for (const [childSessionId, parentSessionId] of pendingSubagentParents) {
@@ -1381,11 +1416,11 @@ async function processSessionFile(
         ).then((decision) => {
           if (decision) {
             const response = decision.approved ? "y" : "n";
-            log(`Attempting to inject response '${response}' to Claude Code`);
+            log(`Attempting to inject response '${response}' to session ${sessionId.slice(0, 8)}`);
 
-            findSessionProcess(sessionId).then((proc) => {
+            findSessionProcess(sessionId, detectSessionAgentType(sessionId)).then((proc) => {
               if (!proc) {
-                log("No Claude Code process found for session");
+                log("No process found for session");
                 return;
               }
               findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
@@ -1436,7 +1471,12 @@ async function processSessionFile(
       if (!permissionPrompt) {
         const existingTimer = idleTimers.get(sessionId);
         if (existingTimer) clearTimeout(existingTimer);
-        sendAgentStatus(syncService, conversationId, sessionId, "working");
+
+        const hookEntry = lastHookStatus.get(sessionId);
+        const hookIsRecent = hookEntry && (Date.now() / 1000 - hookEntry.ts) < 30;
+        if (!hookIsRecent) {
+          sendAgentStatus(syncService, conversationId, sessionId, "working");
+        }
 
         const hasPendingToolCalls = (lastAssistantMessage.toolCalls?.length ?? 0) > 0 &&
           !messages.some(m => m.role === "assistant" && (m.toolResults?.length ?? 0) > 0 &&
@@ -1460,6 +1500,9 @@ async function processSessionFile(
                 const currentStats = fs.statSync(capturedFilePath);
                 if (currentStats.size !== capturedSize) return;
               } catch { return; }
+
+              const hookIdle = lastHookStatus.get(sessionId);
+              if (hookIdle && (Date.now() / 1000 - hookIdle.ts) < 30) return;
 
               lastIdleNotifiedSize.set(sessionId, capturedSize);
               sendAgentStatus(syncService, conversationId, sessionId, "idle");
@@ -1928,37 +1971,86 @@ async function processCodexSession(
       try {
         const projectPath = extractCodexCwd(fullContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
+        let matchedStartedConversation: string | null = null;
 
-        const firstUserMessage = messages.find(msg => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        if (startedSessionTmux.size > 0) {
+          const startedCodexEntries = Array.from(startedSessionTmux.entries())
+            .filter(([, entry]) => entry.agentType === "codex");
+          const proc = await findSessionProcess(sessionId, "codex").catch(() => null);
+          let tmuxSessionName: string | null = null;
 
-        conversationId = await syncService.createConversation({
-          userId,
-          teamId,
-          sessionId,
-          agentType: "codex",
-          projectPath,
-          slug: undefined,
-          title,
-          startedAt: firstMessageTimestamp,
-          parentMessageUuid: undefined,
-          gitInfo: undefined,
-        });
-        conversationCache[sessionId] = conversationId;
-        saveConversationCache(conversationCache);
-        log(`Created conversation ${conversationId} for Codex session ${sessionId}`);
+          if (proc) {
+            tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
+            if (!tmuxSessionName) {
+              const tmuxPane = await findTmuxPaneForTty(proc.tty);
+              if (tmuxPane) {
+                tmuxSessionName = tmuxPane.split(":")[0];
+                cacheSessionProcess(sessionId, proc, tmuxPane);
+              }
+            }
+          }
 
-        if ((global as any).activeSessions) {
-          (global as any).activeSessions.set(conversationId, {
-            sessionId,
-            conversationId,
-            projectPath: "",
+          matchedStartedConversation = matchStartedConversation(startedCodexEntries, {
+            tmuxSessionName,
+            projectPath,
           });
+
+          if (matchedStartedConversation && tmuxSessionName) {
+            log(`Matched codex session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
+          } else if (matchedStartedConversation && projectPath) {
+            log(`Matched codex session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
+          } else {
+            matchedStartedConversation = matchSingleFreshStartedConversation(startedCodexEntries);
+            if (matchedStartedConversation) {
+              log(`Matched codex session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via fresh-start fallback`);
+            }
+          }
         }
 
-        if (pendingMessages[sessionId]) {
-          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
-          delete pendingMessages[sessionId];
+        if (matchedStartedConversation) {
+          conversationId = matchedStartedConversation;
+          const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
+          conversationCache[sessionId] = conversationId;
+          saveConversationCache(conversationCache);
+          syncService.updateSessionId(conversationId, sessionId).catch(() => {});
+          if (tmuxEntry) {
+            syncService.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {});
+          }
+          startedSessionTmux.delete(matchedStartedConversation);
+          log(`Linked Codex session ${sessionId} to existing started conversation ${conversationId}`);
+        } else {
+
+          const firstUserMessage = messages.find(msg => msg.role === "user");
+          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+
+          conversationId = await syncService.createConversation({
+            userId,
+            teamId,
+            sessionId,
+            agentType: "codex",
+            projectPath,
+            slug: undefined,
+            title,
+            startedAt: firstMessageTimestamp,
+            parentMessageUuid: undefined,
+            gitInfo: undefined,
+          });
+          conversationCache[sessionId] = conversationId;
+          saveConversationCache(conversationCache);
+          log(`Created conversation ${conversationId} for Codex session ${sessionId}`);
+
+          if ((global as any).activeSessions) {
+            (global as any).activeSessions.set(conversationId, {
+              sessionId,
+              conversationId,
+              projectPath: "",
+            });
+          }
+
+          if (pendingMessages[sessionId]) {
+            await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+            delete pendingMessages[sessionId];
+          }
         }
       } catch (err) {
         if (err instanceof AuthExpiredError) {
@@ -2270,6 +2362,12 @@ function buildReverseConversationCache(cache: ConversationCache): Record<string,
   return reverse;
 }
 
+function detectSessionAgentType(sessionId: string): "claude" | "codex" | "gemini" {
+  if (sessionId.startsWith("session-")) return "gemini";
+  const sessionFile = findSessionFile(sessionId);
+  return sessionFile?.agentType ?? "claude";
+}
+
 function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "codex" | "gemini"): void {
   try {
     const registryDir = path.join(CONFIG_DIR, "session-registry");
@@ -2287,6 +2385,18 @@ function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "cod
         fs.writeFileSync(registryFile, JSON.stringify({ pid: result.pid, tty: result.tty, ts: Math.floor(Date.now() / 1000) }));
         log(`Opportunistically registered session ${sessionId.slice(0, 8)}: pid=${result.pid}, tty=${result.tty}`);
       } catch {}
+      if (syncServiceRef) {
+        const cache = readConversationCache();
+        const conversationId = cache[sessionId];
+        if (conversationId) {
+          findTmuxPaneForTty(result.tty).then((tmuxPane) => {
+            const tmuxSessionName = tmuxPane?.split(":")[0];
+            syncServiceRef!.registerManagedSession(sessionId, result.pid, tmuxSessionName, conversationId).catch(() => {});
+          }).catch(() => {
+            syncServiceRef!.registerManagedSession(sessionId, result.pid, undefined, conversationId).catch(() => {});
+          });
+        }
+      }
     }).catch(() => {});
   } catch {}
 }
@@ -2312,10 +2422,14 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
         // Verify process is still alive and is a claude-like process
         const { stdout: checkPs } = await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`);
         if (checkPs.trim()) {
+          if (agentType === "codex") {
+            log(`Ignoring registry candidate for codex session ${sessionId.slice(0, 8)} (pid=${pid})`);
+          } else {
           const result = { pid, tty, sessionId };
           cacheSessionProcess(sessionId, result);
           log(`Found session ${sessionId.slice(0, 8)} via registry: pid=${pid}, tty=${tty}`);
           return result;
+          }
         } else {
           // Process is dead, clean up stale registry
           try { fs.unlinkSync(registryFile); } catch {}
@@ -2323,23 +2437,121 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
       }
     } catch {}
 
-    // Strategy A: grep for --resume <sessionId> (exact match for resumed sessions)
+    // Strategy A: find resumed sessions by command line
     try {
-      const { stdout } = await execAsync(`ps aux | grep -E '${binaryPattern}.*--resume' | grep -v grep`);
+      const { stdout } = await execAsync(`ps aux | grep -E '${binaryPattern}' | grep -v grep | grep -v 'codecast'`);
       const lines = stdout.trim().split("\n");
+      const geminiCandidates: Array<{ pid: number; tty: string }> = [];
+      const codexResumeCandidates: Array<{ pid: number; tty: string }> = [];
       for (const line of lines) {
-        if (!line.includes(sessionId)) continue;
+        if (!line.trim()) continue;
+        const isResume = isResumeInvocation(agentType, line);
+        if (!isResume && agentType !== "gemini") continue;
         const parts = line.trim().split(/\s+/);
         if (parts.length < 7) continue;
         const pid = parseInt(parts[1], 10);
         const tty = parts[6];
         if (isNaN(pid) || tty === "?" || tty === "??") continue;
-        const result = { pid, tty: normalizeTty(tty), sessionId };
+        const normalizedTty = normalizeTty(tty);
+        if (line.includes(sessionId)) {
+          if (agentType === "codex") {
+            codexResumeCandidates.push({ pid, tty: normalizedTty });
+            continue;
+          }
+          const result = { pid, tty: normalizedTty, sessionId };
+          cacheSessionProcess(sessionId, result);
+          log(`Found session ${sessionId.slice(0, 8)} via resume process match: pid=${pid}`);
+          return result;
+        }
+        if (agentType === "gemini") {
+          geminiCandidates.push({ pid, tty: normalizedTty });
+        }
+      }
+
+      if (agentType === "gemini" && geminiCandidates.length > 0) {
+        if (geminiCandidates.length === 1) {
+          const only = geminiCandidates[0];
+          const result = { pid: only.pid, tty: only.tty, sessionId };
+          cacheSessionProcess(sessionId, result);
+          log(`Found Gemini session ${sessionId.slice(0, 8)} via single process candidate: pid=${only.pid}`);
+          return result;
+        }
+
+        // Gemini CLI may not expose session ids in argv; pick most recently started candidate.
+        let newest: { pid: number; tty: string; startedAt: number } | null = null;
+        for (const c of geminiCandidates) {
+          try {
+            const { stdout: startOut } = await execAsync(`ps -o lstart= -p ${c.pid}`);
+            const startedAt = new Date(startOut.trim()).getTime();
+            if (!isNaN(startedAt) && (!newest || startedAt > newest.startedAt)) {
+              newest = { pid: c.pid, tty: c.tty, startedAt };
+            }
+          } catch {}
+        }
+
+        if (newest) {
+          const result = { pid: newest.pid, tty: newest.tty, sessionId };
+          cacheSessionProcess(sessionId, result);
+          log(`Found Gemini session ${sessionId.slice(0, 8)} via newest process heuristic: pid=${newest.pid}`);
+          return result;
+        }
+
+        const fallback = geminiCandidates[0];
+        const result = { pid: fallback.pid, tty: fallback.tty, sessionId };
         cacheSessionProcess(sessionId, result);
-        log(`Found session ${sessionId.slice(0, 8)} via --resume grep: pid=${pid}`);
+        log(`Found Gemini session ${sessionId.slice(0, 8)} via fallback process candidate: pid=${fallback.pid}`);
         return result;
       }
     } catch {}
+
+    // Strategy A2: Codex live-session matching by open JSONL file (works for non-resume iTerm sessions)
+    if (agentType === "codex") {
+      try {
+        const { stdout } = await execAsync(`ps aux | grep -E 'codex' | grep -v grep | grep -v 'codecast'`);
+        const lines = stdout.trim().split("\n");
+        const candidates: Array<{ pid: number; tty: string; tmuxTarget: string | null }> = [];
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const parts = line.trim().split(/\s+/);
+          if (parts.length < 7) continue;
+          const pid = parseInt(parts[1], 10);
+          const tty = parts[6];
+          if (isNaN(pid) || tty === "?" || tty === "??") continue;
+
+          try {
+            const { stdout: lsofOut } = await execAsync(`lsof -p ${pid} 2>/dev/null`);
+            if (!hasCodexSessionFileOpen(lsofOut, sessionId)) continue;
+            const normalizedTty = normalizeTty(tty);
+            let tmuxTarget: string | null = null;
+            try {
+              tmuxTarget = await findTmuxPaneForTty(normalizedTty);
+            } catch {}
+            candidates.push({ pid, tty: normalizedTty, tmuxTarget });
+          } catch {}
+        }
+
+        if (candidates.length > 0) {
+          const preferred = choosePreferredCodexCandidate(candidates);
+          if (!preferred) return null;
+          const result = { pid: preferred.pid, tty: preferred.tty, sessionId };
+          cacheSessionProcess(sessionId, result, preferred.tmuxTarget || undefined);
+          if (preferred.tmuxTarget) {
+            log(`Found codex session ${sessionId.slice(0, 8)} via lsof session file match (tmux): pid=${preferred.pid}`);
+          } else {
+            log(`Found codex session ${sessionId.slice(0, 8)} via lsof session file match (non-tmux preferred): pid=${preferred.pid}`);
+          }
+          return result;
+        }
+
+        if (codexResumeCandidates.length > 0) {
+          const candidate = codexResumeCandidates[0];
+          const result = { pid: candidate.pid, tty: candidate.tty, sessionId };
+          cacheSessionProcess(sessionId, result);
+          log(`Found codex session ${sessionId.slice(0, 8)} via resume process fallback: pid=${candidate.pid}`);
+          return result;
+        }
+      } catch {}
+    }
 
     // Strategy B: Scan tmux sessions named cc-resume-* or codecast-*
     try {
@@ -2524,7 +2736,8 @@ async function injectViaTmux(target: string, content: string): Promise<void> {
     log(`Injected poll response via tmux to ${target}`);
     return;
   }
-  const escaped = content.replace(/'/g, "'\\''");
+  const sanitized = content.replace(/\r?\n/g, " ");
+  const escaped = sanitized.replace(/'/g, "'\\''");
   await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
   await new Promise(resolve => setTimeout(resolve, 150));
   await execAsync(`tmux send-keys -t '${target}' Enter`);
@@ -2673,7 +2886,14 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
 const resumeSessionCache = new Map<string, string>();
 const resumeHeartbeatIntervals = new Map<string, NodeJS.Timeout>();
 
-const startedSessionTmux = new Map<string, { tmuxSession: string; projectPath: string; startedAt: number }>();
+type StartedSessionInfo = {
+  tmuxSession: string;
+  projectPath: string;
+  startedAt: number;
+  agentType: "claude" | "codex" | "gemini";
+};
+
+const startedSessionTmux = new Map<string, StartedSessionInfo>();
 const STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
 
 const planHandoffChildren = new Map<string, string>();
@@ -2799,6 +3019,11 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       const nonInteractiveCmd = `env -u CLAUDECODE ${resumeCmd} -p "$(cat '${tmpFile}')" --output-format stream-json --verbose; rm -f '${tmpFile}'`;
       await execAsync(`tmux send-keys -t '${tmuxSession}' '${nonInteractiveCmd.replace(/'/g, "'\\''")}'  Enter`);
       log(`Auto-resumed ${agentType} session ${shortId} in tmux ${tmuxSession} (non-interactive), cwd=${cwd}`);
+      resumeSessionCache.set(sessionId, tmuxSession);
+      if (syncServiceRef) {
+        syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
+        syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+      }
       return true;
     }
 
@@ -2808,33 +3033,56 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
 
     log(`Auto-resumed ${agentType} session ${shortId} in tmux ${tmuxSession}, cwd=${cwd}, cmd=${resumeCmd}`);
 
-    // Wait for agent to start up
-    const startupDelay = agentType === "gemini" ? 3000 : 8000;
-    await new Promise(resolve => setTimeout(resolve, startupDelay));
+    // Register managed session early so the web UI can show "Connected" status
+    resumeSessionCache.set(sessionId, tmuxSession);
+    if (syncServiceRef) {
+      syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
+      syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+      const existing = resumeHeartbeatIntervals.get(sessionId);
+      if (existing) clearInterval(existing);
+      const interval = setInterval(() => {
+        syncServiceRef!.heartbeatManagedSession(sessionId).catch(() => {});
+      }, 30000);
+      resumeHeartbeatIntervals.set(sessionId, interval);
+    }
 
-    // Verify the agent actually started by checking pane content for fatal startup errors
-    try {
-      const { stdout: paneContent } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
-      const fatalErrors = [
-        "cannot be launched inside another",
-        "command not found",
-        "No such file or directory",
-        "Session not found",
-        "No conversation found",
-        "is not an object",
-        "ENOENT",
-      ];
-      const hasFatalError = fatalErrors.some(e => paneContent.includes(e));
-      if (hasFatalError) {
-        log(`Auto-resume verification failed for ${shortId}: agent did not start. Pane: ${paneContent.slice(0, 300)}`);
-        try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
-        return false;
-      }
-    } catch {}
+    // Poll for agent readiness - check every 250ms, bail on fatal errors
+    const fatalErrors = [
+      "cannot be launched inside another",
+      "command not found",
+      "No such file or directory",
+      "Session not found",
+      "No conversation found",
+      "is not an object",
+      "ENOENT",
+    ];
+    const startTime = Date.now();
+    let ready = false;
+
+    for (let i = 0; i < 40; i++) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      try {
+        const { stdout: paneContent } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
+        if (fatalErrors.some(e => paneContent.includes(e))) {
+          log(`Auto-resume verification failed for ${shortId}: agent did not start. Pane: ${paneContent.slice(0, 300)}`);
+          try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
+          return false;
+        }
+        if (await isTmuxAgentAlive(tmuxSession)) {
+          log(`Agent ${shortId} ready after ${Date.now() - startTime}ms`);
+          ready = true;
+          break;
+        }
+      } catch {}
+    }
+    if (!ready) {
+      log(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
+    }
 
     // Inject the message (skip if empty — resume-only mode)
     if (content) {
-      const escaped = content.replace(/'/g, "'\\''");
+      const sanitized = content.replace(/\r?\n/g, " ");
+      const escaped = sanitized.replace(/'/g, "'\\''");
       await execAsync(`tmux send-keys -t '${tmuxSession}' -l '${escaped}'`);
       await new Promise(resolve => setTimeout(resolve, 150));
       await execAsync(`tmux send-keys -t '${tmuxSession}' Enter`);
@@ -2843,16 +3091,6 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       log(`Auto-resumed ${agentType} session ${shortId} (no message to inject)`);
     }
 
-    resumeSessionCache.set(sessionId, tmuxSession);
-    if (syncServiceRef) {
-      syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
-      const existing = resumeHeartbeatIntervals.get(sessionId);
-      if (existing) clearInterval(existing);
-      const interval = setInterval(() => {
-        syncServiceRef!.heartbeatManagedSession(sessionId).catch(() => {});
-      }, 30000);
-      resumeHeartbeatIntervals.set(sessionId, interval);
-    }
     return true;
   } catch (err) {
     log(`Auto-resume failed for ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -2900,23 +3138,41 @@ async function repairAndResumeSession(
   try {
     log(`Repairing session ${sessionId.slice(0, 8)} via Convex regeneration...`);
     const exportData = await fetchExport(siteUrl, config.auth_token!, convId);
-    const TOKEN_BUDGET = 100_000;
-    const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-    const { jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages });
+    const sessionFile = findSessionFile(sessionId);
+    const isCodexSession = sessionFile?.agentType === "codex";
+
+    let jsonl: string;
+    let tailMessages: number | undefined;
+    if (isCodexSession) {
+      ({ jsonl } = generateCodexJsonl(exportData, { sessionId }));
+    } else {
+      const TOKEN_BUDGET = 100_000;
+      tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
+      ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages }));
+    }
+
     const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
 
     // Backup original and write repaired
-    const sessionFile = findSessionFile(sessionId);
     if (sessionFile) {
       const bakPath = sessionFile.path + ".bak";
       if (!fs.existsSync(bakPath)) {
         fs.copyFileSync(sessionFile.path, bakPath);
       }
       fs.writeFileSync(sessionFile.path, jsonl);
-      log(`Repaired JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
+      if (isCodexSession) {
+        log(`Repaired Codex JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} messages)`);
+      } else {
+        log(`Repaired JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
+      }
     } else {
-      writeClaudeCodeSession(jsonl, sessionId, projectPath);
-      log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
+      if (isCodexSession) {
+        writeCodexSession(jsonl, sessionId, "rollout");
+        log(`Wrote new Codex session file for ${sessionId.slice(0, 8)}`);
+      } else {
+        writeClaudeCodeSession(jsonl, sessionId, projectPath);
+        log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
+      }
     }
 
     const resumed = await autoResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride || projectPath, convId);
@@ -3141,10 +3397,9 @@ async function deliverMessage(
     if (started && Date.now() - started.startedAt < STARTED_SESSION_TTL_MS) {
       try {
         await execAsync(`tmux has-session -t '${started.tmuxSession}' 2>/dev/null`);
-        const elapsed = Date.now() - started.startedAt;
-        if (elapsed < 10000) {
-          log(`Waiting ${10000 - elapsed}ms for Claude to initialize in ${started.tmuxSession}`);
-          await new Promise(resolve => setTimeout(resolve, 10000 - elapsed));
+        for (let i = 0; i < 40; i++) {
+          if (await isTmuxAgentAlive(started.tmuxSession)) break;
+          await new Promise(resolve => setTimeout(resolve, 250));
         }
         await injectViaTmux(started.tmuxSession + ":0.0", content);
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
@@ -4391,6 +4646,63 @@ async function main(): Promise<void> {
 
   watcher.start();
 
+  // Agent status hook file watcher
+  fs.mkdirSync(AGENT_STATUS_DIR, { recursive: true });
+  const statusWatcher = chokidarWatch(AGENT_STATUS_DIR, {
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 50, pollInterval: 20 },
+  });
+  statusWatcher.on("add", handleStatusFile).on("change", handleStatusFile);
+
+  function handleStatusFile(filePath: string) {
+    try {
+      const basename = path.basename(filePath, ".json");
+      if (!basename || !filePath.endsWith(".json")) return;
+      const sessionId = basename;
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const data = JSON.parse(raw) as { status: AgentStatus; ts: number };
+      if (!data.status || !data.ts) return;
+
+      const convId = conversationCache[sessionId];
+      if (!convId) return;
+
+      const prev = lastHookStatus.get(sessionId);
+      if (prev && prev.ts >= data.ts) return;
+
+      const statusChanged = !prev || prev.status !== data.status;
+      lastHookStatus.set(sessionId, data);
+
+      if (data.status === "compacting" || data.status === "idle" || data.status === "thinking") {
+        const existingTimer = idleTimers.get(sessionId);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          idleTimers.delete(sessionId);
+        }
+      }
+
+      if (statusChanged) {
+        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000);
+        log(`Hook status: ${data.status} for session ${sessionId.slice(0, 8)}`);
+      }
+    } catch {}
+  }
+
+  // Clean up stale agent-status files every 30 minutes
+  const statusCleanupInterval = setInterval(() => {
+    try {
+      const files = fs.readdirSync(AGENT_STATUS_DIR);
+      const cutoff = Date.now() - 60 * 60 * 1000;
+      for (const file of files) {
+        const fp = path.join(AGENT_STATUS_DIR, file);
+        const stat = fs.statSync(fp);
+        if (stat.mtimeMs < cutoff) {
+          fs.unlinkSync(fp);
+          lastHookStatus.delete(path.basename(file, ".json"));
+        }
+      }
+    } catch {}
+  }, 30 * 60 * 1000);
+
   // Startup scan: sync any files that were missed while daemon was down
   const performStartupScan = async () => {
     const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
@@ -4768,6 +5080,8 @@ async function main(): Promise<void> {
                 }
               }
 
+              syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(() => {});
+
               try {
                 const delivered = await deliverMessage(
                   msg.conversation_id,
@@ -4843,7 +5157,7 @@ async function main(): Promise<void> {
               let injected = false;
 
               if (sessionId) {
-                const proc = await findSessionProcess(sessionId);
+                const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
                 if (proc) {
                   const tmuxTarget = await findTmuxPaneForTty(proc.tty);
                   if (tmuxTarget) {
@@ -4962,8 +5276,10 @@ async function main(): Promise<void> {
     clearInterval(versionCheckInterval);
     clearInterval(reconciliationInterval);
     clearInterval(eventLoopMonitorInterval);
+    clearInterval(statusCleanupInterval);
     log("Watchdog and reconciliation stopped");
 
+    statusWatcher.close();
     watcher.stop();
     cursorWatcher.stop();
     cursorTranscriptWatcher.stop();
