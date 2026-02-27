@@ -2932,6 +2932,12 @@ async function discoverAndLinkSession(
       const sessionId = m[1];
       const cache = readConversationCache();
       if (cache[sessionId]) continue;
+      const reverseCache = buildReverseConversationCache(cache);
+      if (reverseCache[conversationId]) {
+        log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
+        startedSessionTmux.delete(conversationId);
+        return;
+      }
       cache[sessionId] = conversationId;
       saveConversationCache(cache);
       if (syncServiceRef) {
@@ -3447,14 +3453,20 @@ async function deliverMessage(
     if (started) {
       try {
         await execAsync(`tmux has-session -t '${started.tmuxSession}' 2>/dev/null`);
+        let agentAlive = false;
         for (let i = 0; i < 40; i++) {
-          if (await isTmuxAgentAlive(started.tmuxSession)) break;
+          if (await isTmuxAgentAlive(started.tmuxSession)) { agentAlive = true; break; }
           await new Promise(resolve => setTimeout(resolve, 250));
         }
-        await injectViaTmux(started.tmuxSession + ":0.0", content);
-        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-        log(`Delivered message to started session tmux ${started.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-        return true;
+        if (!agentAlive) {
+          log(`Started session tmux ${started.tmuxSession} exists but agent is dead, falling through`);
+          startedSessionTmux.delete(conversationId);
+        } else {
+          await injectViaTmux(started.tmuxSession + ":0.0", content);
+          await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+          log(`Delivered message to started session tmux ${started.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+          return true;
+        }
       } catch (err) {
         log(`Started session tmux ${started.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
         startedSessionTmux.delete(conversationId);
@@ -4287,7 +4299,7 @@ function startWatchdog(
     for (const [convId, entry] of startedSessionTmux.entries()) {
       if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
         try {
-          execSync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 2000 });
+          await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 2000 });
         } catch {
           startedSessionTmux.delete(convId);
         }
