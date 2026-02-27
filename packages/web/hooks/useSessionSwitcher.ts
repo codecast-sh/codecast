@@ -23,6 +23,7 @@ export function useSessionSwitcher() {
   const overlayOpen = useRef(false);
   const selectedIdx = useRef(0);
   const mruSnap = useRef<InboxSession[]>([]);
+  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getMruSessions = useCallback((): InboxSession[] => {
     const { sessions, mruStack } = useInboxStore.getState();
@@ -40,6 +41,7 @@ export function useSessionSwitcher() {
   }, []);
 
   const commit = useCallback((sessions: InboxSession[], idx: number) => {
+    if (peekTimer.current) { clearTimeout(peekTimer.current); peekTimer.current = null; }
     const target = sessions[idx];
     if (target) {
       const { sessions: all } = useInboxStore.getState();
@@ -90,10 +92,19 @@ export function useSessionSwitcher() {
         if (tabCount.current === 1) {
           pending.current = true;
           selectedIdx.current = 1;
+          peekTimer.current = setTimeout(() => {
+            peekTimer.current = null;
+            if (pending.current && ctrlHeld.current) {
+              pending.current = false;
+              overlayOpen.current = true;
+              updateRender();
+            }
+          }, 200);
           return;
         }
 
         if (tabCount.current === 2) {
+          if (peekTimer.current) { clearTimeout(peekTimer.current); peekTimer.current = null; }
           pending.current = false;
           overlayOpen.current = true;
           selectedIdx.current = Math.min(2, mru.length - 1);
@@ -112,6 +123,7 @@ export function useSessionSwitcher() {
         ctrlHeld.current = false;
 
         if (pending.current) {
+          if (peekTimer.current) { clearTimeout(peekTimer.current); peekTimer.current = null; }
           const mru = mruSnap.current.length >= 2 ? mruSnap.current : getMruSessions();
           if (mru.length >= 2) {
             commit(mru, 1);
@@ -136,6 +148,7 @@ export function useSessionSwitcher() {
     return () => {
       window.removeEventListener("keydown", onDown, true);
       window.removeEventListener("keyup", onUp, true);
+      if (peekTimer.current) clearTimeout(peekTimer.current);
     };
   }, [getMruSessions, commit, updateRender]);
 

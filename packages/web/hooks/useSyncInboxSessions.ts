@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
@@ -12,6 +12,8 @@ export function useSyncInboxSessions(showAll: boolean) {
   const syncSessionsFromConvex = useInboxStore((s) => s.syncSessionsFromConvex);
   const syncDismissedFromConvex = useInboxStore((s) => s.syncDismissedFromConvex);
   const _setDispatch = useInboxStore((s) => s._setDispatch);
+
+  const prevActiveIdsRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
     _setDispatch((action, args, patches) => dispatchMutation({ action, args, patches }));
@@ -34,6 +36,22 @@ export function useSyncInboxSessions(showAll: boolean) {
       useInboxStore.getState().syncClientState(clientState);
     }
   }, [clientState]);
+
+  useEffect(() => {
+    if (!activeSessions || !dismissedQuery) return;
+    const activeIds = new Set(activeSessions.map((s) => s._id.toString()));
+    const prev = prevActiveIdsRef.current;
+    if (prev) {
+      const currentSession = useInboxStore.getState().getCurrentSession();
+      if (currentSession && prev.has(currentSession._id) && !activeIds.has(currentSession._id)) {
+        const dismissed = dismissedQuery.find((s) => s._id.toString() === currentSession._id);
+        if (dismissed?.implementation_session) {
+          useInboxStore.getState().navigateToSession(dismissed.implementation_session._id);
+        }
+      }
+    }
+    prevActiveIdsRef.current = activeIds;
+  }, [activeSessions, dismissedQuery]);
 
   return { activeSessions };
 }

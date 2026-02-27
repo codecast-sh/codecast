@@ -424,6 +424,7 @@ function InboxSessionPanel({
                 onSelect={(idx) => { setViewingDismissedId(null); setCurrentIndex(idx); }}
                 onDismiss={stashSession}
                 onDefer={deferSession}
+                onNavigateToSession={handleNavigateToSession}
               />
             ))}
           </div>
@@ -445,6 +446,7 @@ function InboxSessionPanel({
                 onSelect={(idx) => { setViewingDismissedId(null); setCurrentIndex(idx); }}
                 onDismiss={stashSession}
                 onDefer={deferSession}
+                onNavigateToSession={handleNavigateToSession}
               />
             ))}
           </div>
@@ -466,6 +468,7 @@ function InboxSessionPanel({
                 onSelect={(idx) => { setViewingDismissedId(null); setCurrentIndex(idx); }}
                 onDismiss={stashSession}
                 onDefer={deferSession}
+                onNavigateToSession={handleNavigateToSession}
                 variant="working"
               />
             ))}
