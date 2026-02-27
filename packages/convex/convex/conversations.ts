@@ -5243,6 +5243,22 @@ export const listIdleSessions = query({
 
       const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
 
+      let implementationSession: { _id: string; title?: string } | undefined;
+      if (conv.message_count > 0) {
+        const children = await ctx.db
+          .query("conversations")
+          .withIndex("by_parent_conversation_id", (q) =>
+            q.eq("parent_conversation_id", conv._id)
+          )
+          .take(5);
+        const implChild = children.find(
+          (c) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
+        );
+        if (implChild) {
+          implementationSession = { _id: implChild._id.toString(), title: implChild.title };
+        }
+      }
+
       results.push({
         _id: conv._id,
         session_id: conv.session_id,
@@ -5264,6 +5280,7 @@ export const listIdleSessions = query({
         agent_status: agentStatus,
         last_user_message: lastUserMessage,
         session_error: conv.session_error,
+        implementation_session: implementationSession,
       });
     }
 
