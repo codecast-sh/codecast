@@ -110,15 +110,7 @@ case "$cmd" in
     browser-tools kill --ports "$AGENT_BROWSER_PORT" --force
     rm -f "$auth_state_file" >/dev/null 2>&1 || true
     ;;
-  screenshot)
-    ensure_browser_started
-    if ((${#rest[@]})); then
-      browser-tools-screenshot --port "$AGENT_BROWSER_PORT" "${rest[@]}"
-    else
-      browser-tools-screenshot --port "$AGENT_BROWSER_PORT"
-    fi
-    ;;
-  console|cookies|eval|inspect|nav|pick)
+  console|cookies|eval|inspect|nav|pick|screenshot)
     ensure_browser_started
     if ((${#rest[@]})); then
       browser-tools "$cmd" --port "$AGENT_BROWSER_PORT" "${rest[@]}"
