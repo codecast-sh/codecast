@@ -117,6 +117,38 @@ else
 fi
 echo ""
 
+# 5. Desktop app (Electron) - only when packages/electron has changed
+echo "5. Checking desktop app for changes..."
+LAST_DESKTOP_UPDATE=$(git log -1 --format=%H -- packages/electron/)
+LAST_DESKTOP_MARKER=".last-desktop-deploy"
+
+if [[ -f "$LAST_DESKTOP_MARKER" ]] && [[ "$(cat "$LAST_DESKTOP_MARKER")" == "$LAST_DESKTOP_UPDATE" ]]; then
+  echo "   No desktop changes since last deploy - skipping"
+else
+  echo "   Desktop changes detected. Build and deploy? (y/N)"
+  read -r DEPLOY_DESKTOP
+  if [[ "$DEPLOY_DESKTOP" == "y" || "$DEPLOY_DESKTOP" == "Y" ]]; then
+    cd packages/electron
+    echo "   Building signed desktop app..."
+    NOTARIZE_KEYCHAIN_PROFILE=codecast npm run build
+    echo "   Creating distribution zip..."
+    ditto -c -k --keepParent dist/mac-arm64/Codecast.app /tmp/Codecast-mac-arm64.zip
+    echo "   Uploading to R2..."
+    npx wrangler r2 object put codecast-dl/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip
+    ELECTRON_VERSION=$(node -p "require('./package.json').version")
+    cd ../..
+    echo "$LAST_DESKTOP_UPDATE" > "$LAST_DESKTOP_MARKER"
+    # Bump download route version for cache busting
+    ROUTE_FILE="packages/web/app/download/mac/route.ts"
+    sed -i '' "s/const VERSION = \".*\"/const VERSION = \"$ELECTRON_VERSION\"/" "$ROUTE_FILE"
+    echo "   ✓ Desktop app v$ELECTRON_VERSION deployed to dl.codecast.sh/Codecast-mac-arm64.zip"
+    echo "   ✓ Download route cache-bust version updated"
+  else
+    echo "   Skipped"
+  fi
+fi
+echo ""
+
 echo "=== Deployment Complete ==="
 echo ""
 echo "Deployed:"
@@ -124,6 +156,7 @@ echo "  - Convex:  https://marvelous-meerkat-539.convex.cloud"
 echo "  - CLI:     https://dl.codecast.sh/latest.json"
 echo "  - Web:     https://codecast.sh (Railway auto-deploys on push)"
 echo "  - Mobile:  OTA via EAS Update"
+echo "  - Desktop: dl.codecast.sh/Codecast-mac-arm64.zip (if deployed)"
 echo ""
 echo "Tailing Railway build logs (Ctrl+C to stop)..."
 echo ""
