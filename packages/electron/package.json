@@ -9,9 +9,10 @@
     "dev": "CODECAST_URL=http://local.codecast.sh electron .",
     "build": "electron-builder -m --config.mac.target=dir",
     "build:local": "electron-builder -m --config.mac.target=dir --config.mac.identity=null",
-    "install:local": "npm run build:local && pkill -f Codecast.app 2>/dev/null; sleep 1 && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && echo 'Installed to /Applications'"
+    "install:local": "npm run build:local && pkill -f Codecast.app 2>/dev/null; sleep 1 && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && xattr -cr /Applications/Codecast.app && echo 'Installed to /Applications'"
   },
   "devDependencies": {
+    "@electron/notarize": "^3.1.1",
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0"
   },
@@ -26,11 +27,16 @@
       "buildResources": "assets"
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": ["zip"],
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
       "darkModeSupport": true,
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "10.15",
+      "identity": "Ashot Petrosian (WRG9THCK9Q)",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist"
     },
     "protocols": [
       {
