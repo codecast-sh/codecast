@@ -4562,6 +4562,180 @@ program
   });
 
 program
+  .command("uninstall")
+  .description("Completely remove codecast from this machine")
+  .option("--keep-config", "Keep ~/.codecast config directory")
+  .option("-y, --yes", "Skip confirmation prompt")
+  .action(async (options) => {
+    if (!options.yes) {
+      const rl = await import("readline");
+      const iface = rl.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise<string>((resolve) => {
+        iface.question("This will remove codecast, its daemon, auto-start config, and all local data. Continue? [y/N] ", resolve);
+      });
+      iface.close();
+      if (answer.toLowerCase() !== "y" && answer.toLowerCase() !== "yes") {
+        console.log("Aborted");
+        process.exit(0);
+      }
+    }
+
+    const home = process.env.HOME || "";
+
+    // 1. Stop daemon
+    if (fs.existsSync(PID_FILE)) {
+      console.log("Stopping daemon...");
+      stopDaemon();
+    }
+
+    // 2. Remove auto-start
+    switch (process.platform) {
+      case "darwin": {
+        const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
+        const plistPath = path.join(launchAgentsDir, "sh.codecast.daemon.plist");
+        const watchdogPlistPath = path.join(launchAgentsDir, "sh.codecast.watchdog.plist");
+        const uid = `gui/${process.getuid!()}`;
+        spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
+        spawnSync("launchctl", ["bootout", uid, watchdogPlistPath], { stdio: "ignore" });
+        if (fs.existsSync(plistPath)) fs.unlinkSync(plistPath);
+        if (fs.existsSync(watchdogPlistPath)) fs.unlinkSync(watchdogPlistPath);
+        console.log("Removed LaunchAgents");
+        break;
+      }
+      case "linux": {
+        const servicePath = path.join(home, ".config", "systemd", "user", "codecast.service");
+        if (fs.existsSync(servicePath)) {
+          spawnSync("systemctl", ["--user", "disable", "--now", "codecast.service"], { stdio: "ignore" });
+          fs.unlinkSync(servicePath);
+          spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+          console.log("Removed systemd service");
+        }
+        break;
+      }
+      case "win32": {
+        spawnSync("schtasks", ["/Delete", "/TN", "CodecastDaemon", "/F"], { stdio: "ignore" });
+        console.log("Removed scheduled task");
+        break;
+      }
+    }
+
+    // 3. Remove hooks from ~/.claude/settings.json and hook scripts
+    const claudeDir = path.join(home, ".claude");
+    const settingsFile = path.join(claudeDir, "settings.json");
+    const hookFiles = ["codecast-status.sh", "session-register.sh", "stable-feed.sh"];
+
+    if (fs.existsSync(settingsFile)) {
+      try {
+        const settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+        if (settings.hooks) {
+          let modified = false;
+          for (const event of Object.keys(settings.hooks)) {
+            const hookArray = settings.hooks[event];
+            if (!Array.isArray(hookArray)) continue;
+            for (const matcher of hookArray) {
+              if (!Array.isArray(matcher.hooks)) continue;
+              const before = matcher.hooks.length;
+              matcher.hooks = matcher.hooks.filter((h: any) =>
+                !h.command || !hookFiles.some(f => h.command.includes(f))
+              );
+              if (matcher.hooks.length !== before) modified = true;
+            }
+            settings.hooks[event] = hookArray.filter((m: any) =>
+              !Array.isArray(m.hooks) || m.hooks.length > 0
+            );
+            if (settings.hooks[event].length === 0) delete settings.hooks[event];
+          }
+          if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+          if (modified) {
+            fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+            console.log("Removed hooks from ~/.claude/settings.json");
+          }
+        }
+      } catch {
+        // settings.json parse error, skip
+      }
+    }
+
+    const hooksDir = path.join(claudeDir, "hooks");
+    for (const f of hookFiles) {
+      const p = path.join(hooksDir, f);
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    }
+
+    // 4. Remove slash command
+    const commandFile = path.join(claudeDir, "commands", "codecast.md");
+    if (fs.existsSync(commandFile)) {
+      fs.unlinkSync(commandFile);
+      console.log("Removed ~/.claude/commands/codecast.md");
+    }
+
+    // 5. Remove memory/task snippets from CLAUDE.md, AGENTS.md, cursor rules
+    const snippetFiles = [
+      path.join(claudeDir, "CLAUDE.md"),
+      path.join(home, ".codex", "AGENTS.md"),
+      path.join(home, ".cursor", "rules", "codecast.mdc"),
+    ];
+
+    for (const filePath of snippetFiles) {
+      if (!fs.existsSync(filePath)) continue;
+
+      // cursor rules file is entirely ours, just delete it
+      if (filePath.endsWith("codecast.mdc")) {
+        fs.unlinkSync(filePath);
+        console.log(`Removed ${filePath.replace(home, "~")}`);
+        continue;
+      }
+
+      let content = fs.readFileSync(filePath, "utf-8");
+      let changed = false;
+
+      // Remove memory snippet
+      const memStart = content.indexOf("## Memory");
+      if (memStart !== -1 && content.includes("codecast search")) {
+        const memEndMarker = content.indexOf(MEMORY_SNIPPET_END, memStart);
+        let memEnd = memEndMarker !== -1 ? memEndMarker + MEMORY_SNIPPET_END.length : content.length;
+        if (content[memEnd] === "\n") memEnd++;
+        content = content.slice(0, memStart) + content.slice(memEnd);
+        changed = true;
+      }
+
+      // Remove task snippet
+      const taskStart = content.indexOf("## Async Tasks");
+      if (taskStart !== -1 && content.includes("codecast task")) {
+        const taskEndMarker = content.indexOf(TASK_SNIPPET_END, taskStart);
+        let taskEnd = taskEndMarker !== -1 ? taskEndMarker + TASK_SNIPPET_END.length : content.length;
+        if (content[taskEnd] === "\n") taskEnd++;
+        content = content.slice(0, taskStart) + content.slice(taskEnd);
+        changed = true;
+      }
+
+      if (changed) {
+        fs.writeFileSync(filePath, content.trimEnd() + "\n");
+        console.log(`Removed codecast snippets from ${filePath.replace(home, "~")}`);
+      }
+    }
+
+    // 6. Remove config directory
+    if (!options.keepConfig) {
+      if (fs.existsSync(CONFIG_DIR)) {
+        fs.rmSync(CONFIG_DIR, { recursive: true, force: true });
+        console.log(`Removed ${CONFIG_DIR}`);
+      }
+    } else {
+      console.log(`Kept ${CONFIG_DIR}`);
+    }
+
+    // 7. Remove binary
+    const binaryPath = path.join(home, ".local", "bin", "codecast");
+    if (fs.existsSync(binaryPath)) {
+      fs.unlinkSync(binaryPath);
+      console.log(`Removed ${binaryPath}`);
+    }
+
+    console.log("\nCodecast has been uninstalled.");
+  });
+
+program
   .command("links")
   .description(
     "Get dashboard and share URLs for the current session\n\n" +
