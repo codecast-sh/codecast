@@ -773,7 +773,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Mobile App */}
+      {/* Native Apps */}
       <section id="mobile-app" className="max-w-6xl mx-auto px-6 py-20">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
@@ -782,7 +782,7 @@ export default function LandingPage() {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-50"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
               </span>
-              <span className="tracking-wider font-mono text-[11px] uppercase font-medium">iOS App</span>
+              <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Native Apps</span>
             </div>
             <h2 className="text-3xl font-bold text-stone-900 mb-4">
               Code on the go
@@ -817,7 +817,16 @@ export default function LandingPage() {
                 Search your full session history
               </li>
             </ul>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
+              <a
+                href="https://codecast.sh/download/mac"
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-900 text-white rounded-lg font-medium hover:bg-stone-800 transition-colors"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                </svg>
+                macOS Desktop App
+              </a>
               <span className="inline-flex items-center gap-2 px-4 py-2.5 bg-stone-200 text-stone-500 rounded-lg font-medium cursor-not-allowed">
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
@@ -832,7 +841,7 @@ export default function LandingPage() {
               </span>
             </div>
             <p className="text-sm text-stone-500 mt-3">
-              Want early access? <a href="mailto:hello@codecast.sh?subject=TestFlight%20Beta" className="text-amber-600 hover:text-amber-700 underline underline-offset-2">Email us</a> to join the TestFlight beta.
+              Want early access to mobile? <a href="mailto:hello@codecast.sh?subject=TestFlight%20Beta" className="text-amber-600 hover:text-amber-700 underline underline-offset-2">Email us</a> to join the TestFlight beta.
             </p>
           </div>
           <div className="relative">
