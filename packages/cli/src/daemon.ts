@@ -430,6 +430,11 @@ async function executeRemoteCommand(
           const success = await performUpdate();
           if (success) {
             const newVersion = getVersion();
+            if (compareVersions(newVersion, currentVersion) <= 0) {
+              logLifecycle("update_noop", `v${currentVersion} -> v${newVersion}, requested version not available`);
+              await flushRemoteLogs();
+              return;
+            }
             logLifecycle("update_complete", `Updated from v${currentVersion} to v${newVersion}`);
             await flushRemoteLogs();
             log("Update successful, restarting...");
@@ -626,6 +631,32 @@ async function executeRemoteCommand(
           }
           result = JSON.stringify({ resumed: true, session_id: sessionId });
           log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
+        } else if (conversationId && projectPath) {
+          log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, starting fresh session in ${projectPath}`);
+          const shortId = Math.random().toString(36).slice(2, 8);
+          const tmuxSession = `cc-claude-${shortId}`;
+          const cwd = fs.existsSync(projectPath) ? projectPath : (process.env.HOME || "/tmp");
+          let extraFlags = config.claude_args || "";
+          const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; claude${extraFlags ? " " + extraFlags : ""}`;
+          const execPath = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
+          const execOpts = { timeout: 5000, env: { ...process.env, PATH: execPath } };
+          try {
+            execSync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
+            execSync(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
+            startedSessionTmux.set(conversationId, {
+              tmuxSession,
+              projectPath: cwd,
+              startedAt: Date.now(),
+              agentType: "claude",
+            });
+            discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
+              log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
+            });
+            result = JSON.stringify({ started_fresh: true, tmux_session: tmuxSession });
+            log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+          } catch (spawnErr) {
+            error = `Failed to start fresh session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
+          }
         } else {
           error = `Failed to resume session ${sessionId.slice(0, 8)} — session file may not exist locally`;
         }
@@ -3114,6 +3145,8 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
     ];
     const startTime = Date.now();
     let ready = false;
+    let consecutiveAlive = 0;
+    const ALIVE_THRESHOLD = 3;
 
     for (let i = 0; i < 40; i++) {
       await new Promise(resolve => setTimeout(resolve, 250));
@@ -3125,9 +3158,14 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
           return false;
         }
         if (await isTmuxAgentAlive(tmuxSession)) {
-          log(`Agent ${shortId} ready after ${Date.now() - startTime}ms`);
-          ready = true;
-          break;
+          consecutiveAlive++;
+          if (consecutiveAlive >= ALIVE_THRESHOLD) {
+            log(`Agent ${shortId} ready after ${Date.now() - startTime}ms`);
+            ready = true;
+            break;
+          }
+        } else {
+          consecutiveAlive = 0;
         }
       } catch {}
     }
@@ -3194,6 +3232,10 @@ async function repairAndResumeSession(
   try {
     log(`Repairing session ${sessionId.slice(0, 8)} via Convex regeneration...`);
     const exportData = await fetchExport(siteUrl, config.auth_token!, convId);
+    if (exportData.messages.length === 0) {
+      log(`Repair aborted for ${sessionId.slice(0, 8)}: conversation has 0 messages, nothing to resume`);
+      return false;
+    }
     const sessionFile = findSessionFile(sessionId);
     const isCodexSession = sessionFile?.agentType === "codex";
 
@@ -3381,6 +3423,10 @@ async function materializeSession(
     try {
       log(`Materializing session for conversation ${conversationId.slice(0, 12)}...`);
       const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
+      if (exportData.messages.length === 0) {
+        log(`Materialization skipped for ${conversationId.slice(0, 12)}: conversation has 0 messages`);
+        return null;
+      }
 
       const TOKEN_BUDGET = 100_000;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
@@ -4134,10 +4180,13 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
       const success = await performUpdate();
       if (success) {
         const newVersion = getVersion();
+        if (compareVersions(newVersion, currentVersion) <= 0) {
+          logLifecycle("forced_update_noop", `${currentVersion} -> ${newVersion}, target ${minVersion} not available yet`);
+          await flushRemoteLogs();
+          return false;
+        }
         logLifecycle("forced_update_complete", `${currentVersion} -> ${newVersion}`);
         await flushRemoteLogs();
-        // Don't set skipRespawn -- let exit handler + launchd serve as safety nets
-        // in case spawnReplacement silently fails
         spawnReplacement();
         await new Promise(resolve => setTimeout(resolve, 500));
         process.exit(0);
