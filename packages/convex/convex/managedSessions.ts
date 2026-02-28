@@ -247,6 +247,7 @@ export const isSessionManaged = query({
       tmux_session: session.tmux_session,
       agent_status: session.agent_status,
       agent_status_updated_at: session.agent_status_updated_at,
+      permission_mode: session.permission_mode,
     };
   },
 });
@@ -326,6 +327,7 @@ export const updateAgentStatus = mutation({
     agent_status: v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected")),
     client_ts: v.optional(v.number()),
     api_token: v.optional(v.string()),
+    permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"))),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -341,14 +343,21 @@ export const updateAgentStatus = mutation({
     if (!session) return;
     if (session.user_id.toString() !== authUserId.toString()) return;
 
-    if (args.client_ts && session.agent_status_updated_at && args.client_ts < session.agent_status_updated_at) {
-      return;
+    const patch: Record<string, any> = {};
+
+    if (args.permission_mode !== undefined) {
+      patch.permission_mode = args.permission_mode;
     }
 
-    await ctx.db.patch(session._id, {
-      agent_status: args.agent_status,
-      agent_status_updated_at: args.client_ts || Date.now(),
-    });
+    const tsStale = args.client_ts && session.agent_status_updated_at && args.client_ts < session.agent_status_updated_at;
+    if (!tsStale) {
+      patch.agent_status = args.agent_status;
+      patch.agent_status_updated_at = args.client_ts || Date.now();
+    }
+
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(session._id, patch);
+    }
   },
 });
 

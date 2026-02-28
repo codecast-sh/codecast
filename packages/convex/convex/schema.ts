@@ -264,6 +264,7 @@ export default defineSchema({
     .index("by_conversation_uuid", ["conversation_id", "message_uuid"])
     .index("by_message_uuid", ["message_uuid"])
     .index("by_timestamp", ["timestamp"])
+    .index("by_conversation_role_timestamp", ["conversation_id", "role", "timestamp"])
     .searchIndex("search_content", {
       searchField: "content",
       filterFields: ["conversation_id"],
@@ -438,6 +439,7 @@ export default defineSchema({
     last_heartbeat: v.number(),
     agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"))),
     agent_status_updated_at: v.optional(v.number()),
+    permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"))),
   })
     .index("by_session_id", ["session_id"])
     .index("by_conversation_id", ["conversation_id"])
@@ -730,12 +732,39 @@ export default defineSchema({
     current_conversation_id: v.optional(v.string()),
     show_dismissed: v.optional(v.boolean()),
     dismissed_ids: v.optional(v.array(v.string())),
+
+    ui: v.optional(v.object({
+      theme: v.optional(v.union(v.literal("dark"), v.literal("light"))),
+      sidebar_collapsed: v.optional(v.boolean()),
+      zen_mode: v.optional(v.boolean()),
+      sticky_headers_disabled: v.optional(v.boolean()),
+      diff_panel_open: v.optional(v.boolean()),
+      file_diff_view_mode: v.optional(v.union(v.literal("unified"), v.literal("split"))),
+      active_team_id: v.optional(v.string()),
+      active_filter: v.optional(v.union(v.literal("my"), v.literal("team"))),
+      inbox_shortcuts_hidden: v.optional(v.boolean()),
+    })),
+
+    layouts: v.optional(v.object({
+      dashboard: v.optional(v.object({ sidebar: v.number(), main: v.number() })),
+      inbox: v.optional(v.object({ main: v.number(), sidebar: v.number() })),
+      conversation_diff: v.optional(v.object({ content: v.number(), diff: v.number() })),
+      file_diff: v.optional(v.object({ tree: v.number(), content: v.number() })),
+    })),
+
+    dismissed: v.optional(v.object({
+      desktop_app: v.optional(v.boolean()),
+      setup_prompt: v.optional(v.number()),
+    })),
+
+    // deprecated: kept for backward compat during migration
     sidebar_collapsed: v.optional(v.boolean()),
     zen_mode: v.optional(v.boolean()),
     layout: v.optional(v.object({
       sidebar: v.number(),
       main: v.number(),
     })),
+
     updated_at: v.number(),
   })
     .index("by_user_id", ["user_id"]),

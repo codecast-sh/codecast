@@ -4,13 +4,42 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 
-const IMMUTABLE_FIELDS: Record<string, Set<string>> = {
-  conversations: new Set([
-    "_id", "_creationTime", "user_id", "session_id", "team_id",
-    "started_at", "message_count", "short_id", "share_token",
-    "is_private", "team_visibility", "auto_shared", "status", "agent_type",
-  ]),
-  client_state: new Set(["_id", "_creationTime", "user_id"]),
+type TableConfig =
+  | {
+      kind: "collection";
+      ownerField: string;
+      immutable: Set<string>;
+      beforePatch?: (doc: any, safe: Record<string, any>) => Record<string, any>;
+    }
+  | {
+      kind: "singleton";
+      ownerField: string;
+      lookupIndex: string;
+      immutable: Set<string>;
+    };
+
+const TABLE_CONFIG: Record<string, TableConfig> = {
+  conversations: {
+    kind: "collection",
+    ownerField: "user_id",
+    immutable: new Set([
+      "_id", "_creationTime", "user_id", "session_id", "team_id",
+      "started_at", "message_count", "short_id", "share_token",
+      "is_private", "team_visibility", "auto_shared", "status", "agent_type",
+    ]),
+    beforePatch: (doc, safe) => {
+      if (safe.inbox_dismissed_at && typeof safe.inbox_dismissed_at === "number") {
+        safe.inbox_dismissed_at = Math.max(Date.now(), doc.updated_at + 1);
+      }
+      return safe;
+    },
+  },
+  client_state: {
+    kind: "singleton",
+    ownerField: "user_id",
+    lookupIndex: "by_user_id",
+    immutable: new Set(["_id", "_creationTime", "user_id"]),
+  },
 };
 
 export const dispatch = mutation({
@@ -39,32 +68,36 @@ async function applyPatches(
   patches: Record<string, Record<string, Record<string, any>>>
 ) {
   for (const [table, docs] of Object.entries(patches)) {
-    const immutable = IMMUTABLE_FIELDS[table];
-    if (!immutable) continue;
+    const config = TABLE_CONFIG[table];
+    if (!config) continue;
 
-    for (const [docId, fields] of Object.entries(docs)) {
+    for (const [docKey, fields] of Object.entries(docs)) {
       const safe: Record<string, any> = {};
       for (const [k, val] of Object.entries(fields)) {
-        if (!immutable.has(k)) safe[k] = val === null ? undefined : val;
+        if (!config.immutable.has(k)) safe[k] = val === null ? undefined : val;
       }
       if (Object.keys(safe).length === 0) continue;
 
-      if (table === "conversations") {
-        const doc = await ctx.db.get(docId as Id<"conversations">);
-        if (!doc || doc.user_id !== userId) continue;
-        if (safe.inbox_dismissed_at && typeof safe.inbox_dismissed_at === "number") {
-          safe.inbox_dismissed_at = Math.max(Date.now(), (doc as any).updated_at + 1);
-        }
-        await ctx.db.patch(docId as Id<"conversations">, safe);
-      } else if (table === "client_state") {
+      if (config.kind === "collection") {
+        const doc = await ctx.db.get(docKey as Id<any>);
+        if (!doc || (doc as any)[config.ownerField] !== userId) continue;
+        const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
+        await ctx.db.patch(docKey as Id<any>, finalSafe);
+      } else {
         const existing = await ctx.db
-          .query("client_state")
-          .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+          .query(table as any)
+          .withIndex(config.lookupIndex, (q: any) =>
+            q.eq(config.ownerField, userId)
+          )
           .first();
         if (existing) {
           await ctx.db.patch(existing._id, { ...safe, updated_at: Date.now() });
         } else {
-          await ctx.db.insert("client_state", { user_id: userId, ...safe, updated_at: Date.now() });
+          await ctx.db.insert(table as any, {
+            [config.ownerField]: userId,
+            ...safe,
+            updated_at: Date.now(),
+          });
         }
       }
     }

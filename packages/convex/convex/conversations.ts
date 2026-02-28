@@ -5267,7 +5267,7 @@ export const listIdleSessions = query({
       if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending) continue;
 
       const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
-      if (dismissed && !hasPending) continue;
+      if (dismissed) continue;
 
       const daemonAlive = liveConvIds.has(conv._id.toString()) ||
         (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
@@ -5928,5 +5928,54 @@ export const switchSessionAgent = mutation({
     if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
 
     await ctx.db.patch(args.conversation_id, { agent_type: args.agent_type });
+  },
+});
+
+export const getUserMessages = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return [];
+    if (conv.user_id !== userId) {
+      const membership = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", conv.team_id!))
+        .first();
+      if (!membership) return [];
+    }
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_role_timestamp", (q) =>
+        q.eq("conversation_id", args.conversation_id).eq("role", "user")
+      )
+      .order("asc")
+      .collect();
+    return messages
+      .filter((m) => {
+        if (!m.content || !m.content.trim()) return false;
+        const t = m.content.trim();
+        const NOISE_PREFIXES = [
+          "<task-notification", "<system-reminder", "<command-name>", "<command-message>",
+          "<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>",
+          "[Request interrupted", "[Request cancelled",
+          "This session is being continued",
+          "Your task is to create a detailed summary",
+          "Please continue the conversation",
+          "Read the output file to retrieve the result:",
+          "Caveat:",
+        ];
+        if (NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
+        if (t.includes("Your task is to create a detailed summary of the conversation so far")) return false;
+        if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;
+        return true;
+      })
+      .map((m) => ({
+        _id: m._id,
+        message_uuid: m.message_uuid,
+        content: m.content!.slice(0, 500),
+        timestamp: m.timestamp,
+      }));
   },
 });
