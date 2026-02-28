@@ -54,7 +54,9 @@ packages/web/binaries/
 # Deploy secrets
 .env.deploy
 
-# OTA marker
+# Deploy markers
 .last-mobile-ota
+.last-cli-deploy
+.last-desktop-deploy
 .dmux/
 .wrangler/

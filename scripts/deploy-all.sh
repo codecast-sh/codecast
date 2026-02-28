@@ -64,7 +64,7 @@ cd ../..
 echo "   ✓ Convex deployed"
 echo ""
 
-# 2. Check if CLI needs release (compare local version vs deployed version)
+# 2. Check if CLI needs release
 echo "2. Checking CLI for changes..."
 cd packages/cli
 
@@ -74,16 +74,40 @@ echo "   Current CLI version: $CURRENT_VERSION"
 REMOTE_VERSION=$(curl -s https://dl.codecast.sh/latest.json | grep -o '"version":"[^"]*"' | cut -d'"' -f4 2>/dev/null || echo "")
 echo "   Deployed CLI version: ${REMOTE_VERSION:-unknown}"
 
+LAST_CLI_MARKER="../../.last-cli-deploy"
+LAST_CLI_HASH=$(git log -1 --format=%H -- .)
+PREV_CLI_HASH=""
+[[ -f "$LAST_CLI_MARKER" ]] && PREV_CLI_HASH=$(cat "$LAST_CLI_MARKER")
+
+CLI_NEEDS_DEPLOY=false
 if [[ "$CURRENT_VERSION" != "$REMOTE_VERSION" ]]; then
   echo "   Version mismatch - deploying..."
+  CLI_NEEDS_DEPLOY=true
+elif [[ "$LAST_CLI_HASH" != "$PREV_CLI_HASH" ]]; then
+  echo "   Code changed since last deploy but version not bumped."
+  # Auto-bump patch version
+  IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+  NEW_PATCH=$((PATCH + 1))
+  NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+  echo "   Auto-bumping version: $CURRENT_VERSION -> $NEW_VERSION"
+  sed -i '' "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" package.json
+  sed -i '' "s/const VERSION = \"$CURRENT_VERSION\"/const VERSION = \"$NEW_VERSION\"/" src/update.ts
+  CURRENT_VERSION="$NEW_VERSION"
+  git add package.json src/update.ts
+  git commit -m "chore(cli): bump version to $NEW_VERSION"
+  CLI_NEEDS_DEPLOY=true
+fi
+
+if $CLI_NEEDS_DEPLOY; then
   if $FORCE_CLI; then
     ./scripts/deploy.sh --force
   else
     ./scripts/deploy.sh
   fi
+  echo "$LAST_CLI_HASH" > "$LAST_CLI_MARKER"
   echo "   ✓ CLI v$CURRENT_VERSION deployed"
 else
-  echo "   CLI v$CURRENT_VERSION already deployed - skipping"
+  echo "   CLI v$CURRENT_VERSION already deployed, no code changes - skipping"
 fi
 cd ../..
 echo ""
