@@ -2,11 +2,13 @@ const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, sh
 const path = require("path");
 
 const PROD_URL = "https://codecast.sh";
+const LOCAL_URL = "http://local.codecast.sh";
 const BASE_URL = process.env.CODECAST_URL || PROD_URL;
 
 let mainWindow = null;
 let tray = null;
 let deepLinkUrl = null;
+let currentBaseUrl = BASE_URL;
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -64,7 +66,7 @@ function createWindow() {
     backgroundColor: "#002b36",
   });
 
-  mainWindow.loadURL(BASE_URL);
+  mainWindow.loadURL(currentBaseUrl);
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
@@ -83,7 +85,7 @@ function createWindow() {
 
   // Open external links in browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (!url.startsWith(BASE_URL)) {
+    if (!url.startsWith(currentBaseUrl)) {
       shell.openExternal(url);
       return { action: "deny" };
     }
@@ -161,13 +163,14 @@ function buildAppMenu() {
 // IPC handlers
 ipcMain.handle("get-app-version", () => app.getVersion());
 ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
+ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 
 app.whenReady().then(() => {
   createWindow();
   createTray();
   buildAppMenu();
 
-  // Global shortcut: Cmd+Option+Space to toggle
+  // Global shortcut: Cmd+Option+Space to toggle window
   globalShortcut.register("CommandOrControl+Alt+Space", () => {
     if (!mainWindow) return;
     if (mainWindow.isVisible() && mainWindow.isFocused()) {
@@ -176,6 +179,22 @@ app.whenReady().then(() => {
       mainWindow.show();
       mainWindow.focus();
     }
+  });
+
+  // Global shortcut: Cmd+Ctrl+Shift+F9 to toggle local/prod
+  globalShortcut.register("CommandOrControl+Shift+Alt+F9", () => {
+    if (!mainWindow) return;
+    currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
+    const env = currentBaseUrl === PROD_URL ? "prod" : "local";
+    mainWindow.loadURL(currentBaseUrl);
+    mainWindow.webContents.once("did-finish-load", () => {
+      mainWindow.webContents.executeJavaScript(
+        "document.documentElement.classList.add('electron-desktop')"
+      );
+      mainWindow.webContents.executeJavaScript(
+        `document.title = '[${env.toUpperCase()}] ' + document.title`
+      );
+    });
   });
 });
 
