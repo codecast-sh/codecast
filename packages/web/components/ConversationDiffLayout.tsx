@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 import { FileDiffLayout, DiffFile } from "./FileDiffLayout";
 import type { FileChange } from "../store/diffViewerStore";
-import { useClientPref } from "../hooks/useClientPref";
+import { useInboxStore } from "../store/inboxStore";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -67,7 +67,8 @@ export function ConversationDiffLayout({
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-  const [layoutPref, setLayoutPref] = useClientPref("layouts", "conversation_diff", DEFAULT_DIFF_LAYOUT);
+  const layoutPref = useInboxStore(s => s.clientState.layouts?.conversation_diff ?? DEFAULT_DIFF_LAYOUT);
+  const updateLayout = useInboxStore(s => s.updateClientLayout);
   const layout: Layout = { "content-panel": layoutPref.content, "diff-panel": layoutPref.diff };
   const conversationRef = useRef<ConversationViewHandle>(null);
 
@@ -142,7 +143,7 @@ export function ConversationDiffLayout({
   }, [nextChange, prevChange, toggleDiffMode, toggleFileTree, clearSelection]);
 
   const handleLayoutChange = (newLayout: Layout) => {
-    setLayoutPref({ content: newLayout["content-panel"] || 40, diff: newLayout["diff-panel"] || 60 });
+    updateLayout("conversation_diff", { content: newLayout["content-panel"] || 40, diff: newLayout["diff-panel"] || 60 });
   };
 
   const changesOverlay = changes.length > 0 && !diffPanelOpen ? <ChangesBar changes={changes} /> : null;

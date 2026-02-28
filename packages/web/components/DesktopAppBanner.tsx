@@ -3,10 +3,11 @@
 import { useState, useEffect } from "react";
 import { X, Monitor, ArrowRight } from "lucide-react";
 import { isDesktop } from "../lib/desktop";
-import { useClientPref } from "../hooks/useClientPref";
+import { useInboxStore } from "../store/inboxStore";
 
 export function DesktopAppBanner() {
-  const [dismissed, setDismissed] = useClientPref("dismissed", "desktop_app", false);
+  const dismissed = useInboxStore(s => s.clientState.dismissed?.desktop_app ?? false);
+  const updateDismissed = useInboxStore(s => s.updateClientDismissed);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
@@ -33,7 +34,7 @@ export function DesktopAppBanner() {
             <ArrowRight className="w-3 h-3" />
           </a>
           <button
-            onClick={() => setDismissed(true)}
+            onClick={() => updateDismissed("desktop_app", true)}
             className="p-1 text-sol-text-dim hover:text-sol-text transition-colors"
             aria-label="Dismiss"
           >

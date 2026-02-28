@@ -25,7 +25,7 @@ import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 import { DiffView } from "./DiffView";
 import { parsePatch, getFileStatus } from "../lib/patchParser";
 import { cn, copyToClipboard } from "../lib/utils";
-import { useClientPref } from "../hooks/useClientPref";
+import { useInboxStore } from "../store/inboxStore";
 
 export interface DiffFile {
   filename: string;
@@ -690,16 +690,18 @@ export function FileDiffLayout({
 
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
-  const [layoutPref, setLayoutPref] = useClientPref("layouts", "file_diff", DEFAULT_FILE_DIFF_LAYOUT);
+  const layoutPref = useInboxStore(s => s.clientState.layouts?.file_diff ?? DEFAULT_FILE_DIFF_LAYOUT);
+  const updateLayout = useInboxStore(s => s.updateClientLayout);
+  const updateUI = useInboxStore(s => s.updateClientUI);
   const layout: Layout = { "file-tree": layoutPref.tree, "diff-content": layoutPref.content };
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [viewMode, setViewMode] = useClientPref("ui", "file_diff_view_mode", "unified" as const);
+  const viewMode = useInboxStore(s => s.clientState.ui?.file_diff_view_mode ?? "unified");
   const selectedFileRef = useRef<HTMLButtonElement>(null);
 
   const toggleViewMode = () => {
-    setViewMode(viewMode === "split" ? "unified" : "split");
+    updateUI({ file_diff_view_mode: viewMode === "split" ? "unified" : "split" });
   };
 
   useEffect(() => {
@@ -782,7 +784,7 @@ export function FileDiffLayout({
   }, [currentFileIndex, strippedFiles, toggleViewMode]);
 
   const handleLayoutChange = (newLayout: Layout) => {
-    setLayoutPref({ tree: newLayout["file-tree"] || 25, content: newLayout["diff-content"] || 75 });
+    updateLayout("file_diff", { tree: newLayout["file-tree"] || 25, content: newLayout["diff-content"] || 75 });
   };
 
   const handleSelectFile = (filename: string) => {

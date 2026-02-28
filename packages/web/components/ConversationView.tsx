@@ -46,7 +46,6 @@ import { BranchSelector } from "./BranchSelector";
 import { ForkTreePanel } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
-import { useClientPref } from "../hooks/useClientPref";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -4953,7 +4952,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const stickyGapRef = useRef<{ prevIdx: number } | null>(null);
   const dismissedStickyIdsRef = useRef<Set<string>>(new Set());
   const stickyElRef = useRef<HTMLDivElement>(null);
-  const [stickyDisabled, setStickyDisabled] = useClientPref("ui", "sticky_headers_disabled", false);
+  const stickyDisabled = useInboxStore(s => s.clientState.ui?.sticky_headers_disabled ?? false);
+  const updateUI = useInboxStore(s => s.updateClientUI);
   const headerRef = useRef<HTMLElement>(null);
   const [headerHeight, setHeaderHeight] = useState(32);
   const messageInputRef = useRef<HTMLDivElement>(null);
@@ -6932,7 +6932,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => {
                       const next = !stickyDisabled;
-                      setStickyDisabled(next);
+                      updateUI({ sticky_headers_disabled: next });
                       if (next) { setStickyMsgVisible(false); setActiveStickyMsg(null); }
                     }}>
                       {stickyDisabled ? "Enable sticky headers" : "Disable sticky headers"}

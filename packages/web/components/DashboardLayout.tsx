@@ -20,7 +20,6 @@ import { DesktopAppBanner } from "./DesktopAppBanner";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
 import { desktopHeaderClass, setupDesktopDrag } from "../lib/desktop";
-import { useClientPref } from "../hooks/useClientPref";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -35,9 +34,11 @@ const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
 
 export function DashboardLayout({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useClientPref("ui", "sidebar_collapsed", false);
-  const [isZenMode, setIsZenMode] = useClientPref("ui", "zen_mode", false);
-  const [layout, setLayout] = useClientPref("layouts", "dashboard", DEFAULT_LAYOUT);
+  const isSidebarCollapsed = useInboxStore(s => s.clientState.ui?.sidebar_collapsed ?? false);
+  const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
+  const layout = useInboxStore(s => s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT);
+  const updateUI = useInboxStore(s => s.updateClientUI);
+  const updateLayout = useInboxStore(s => s.updateClientLayout);
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const pathname = usePathname();
@@ -82,11 +83,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   }, []);
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
-    setLayout({ sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
+    updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
   };
 
   const toggleSidebar = () => {
-    setIsSidebarCollapsed(!isSidebarCollapsed);
+    updateUI({ sidebar_collapsed: !isSidebarCollapsed });
   };
 
   const handleQuickCreate = useCallback(() => {
@@ -158,7 +159,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       }
       if (e.key === "." && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
-        setIsZenMode(!isZenMode);
+        updateUI({ zen_mode: !isZenMode });
       }
       if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
@@ -173,7 +174,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hideSidebar, isSidebarCollapsed, isZenMode, isOnInboxPage, currentConvContext, openNewSession, handleQuickCreate, setIsZenMode]);
+  }, [hideSidebar, isSidebarCollapsed, isZenMode, isOnInboxPage, currentConvContext, openNewSession, handleQuickCreate, updateUI]);
 
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">

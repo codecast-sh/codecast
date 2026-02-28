@@ -18,7 +18,6 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { SharePopover } from "../../components/SharePopover";
 import { toast } from "sonner";
-import { useClientPref } from "../../hooks/useClientPref";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -553,18 +552,20 @@ export function QueuePageClient() {
 
   const switcherState = useSessionSwitcher();
 
-  const [shortcutsHidden, setShortcutsHidden] = useClientPref("ui", "inbox_shortcuts_hidden", false);
+  const shortcutsHidden = useInboxStore(s => s.clientState.ui?.inbox_shortcuts_hidden ?? false);
+  const updateUI = useInboxStore(s => s.updateClientUI);
   const showShortcuts = !shortcutsHidden;
   const toggleShortcuts = useCallback(() => {
-    setShortcutsHidden(!shortcutsHidden);
-  }, [shortcutsHidden, setShortcutsHidden]);
+    updateUI({ inbox_shortcuts_hidden: !shortcutsHidden });
+  }, [shortcutsHidden, updateUI]);
 
   const DEFAULT_INBOX_LAYOUT = { main: 76, sidebar: 24 };
-  const [inboxLayoutPref, setInboxLayoutPref] = useClientPref("layouts", "inbox", DEFAULT_INBOX_LAYOUT);
+  const inboxLayoutPref = useInboxStore(s => s.clientState.layouts?.inbox ?? DEFAULT_INBOX_LAYOUT);
+  const updateLayout = useInboxStore(s => s.updateClientLayout);
   const inboxLayout = { "inbox-main": inboxLayoutPref.main, "inbox-sidebar": inboxLayoutPref.sidebar };
   const handleInboxLayoutChange = useCallback((layout: { [key: string]: number }) => {
-    setInboxLayoutPref({ main: layout["inbox-main"] || 76, sidebar: layout["inbox-sidebar"] || 24 });
-  }, [setInboxLayoutPref]);
+    updateLayout("inbox", { main: layout["inbox-main"] || 76, sidebar: layout["inbox-sidebar"] || 24 });
+  }, [updateLayout]);
 
   const isPopstateRef = useRef(false);
   const lastAppliedParamId = useRef<string | null>(null);

@@ -5,12 +5,13 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { X, Terminal, ArrowRight } from "lucide-react";
-import { useClientPref } from "../hooks/useClientPref";
+import { useInboxStore } from "../store/inboxStore";
 
 const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000;
 
 export function SetupPromptBanner() {
-  const [dismissedTs, setDismissedTs] = useClientPref("dismissed", "setup_prompt", 0);
+  const dismissedTs = useInboxStore(s => s.clientState.dismissed?.setup_prompt ?? 0);
+  const updateDismissed = useInboxStore(s => s.updateClientDismissed);
   const [mounted, setMounted] = useState(false);
 
   const user = useQuery(api.users.getCurrentUser);
@@ -51,7 +52,7 @@ export function SetupPromptBanner() {
             <ArrowRight className="w-3 h-3" />
           </Link>
           <button
-            onClick={() => setDismissedTs(Date.now())}
+            onClick={() => updateDismissed("setup_prompt", Date.now())}
             className="p-1 text-sol-text-dim hover:text-sol-text transition-colors"
             aria-label="Dismiss"
           >
