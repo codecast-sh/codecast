@@ -1,6 +1,6 @@
 {
   "name": "@codecast/electron",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Codecast Desktop (Electron)",
   "main": "main.js",
   "private": true,
@@ -29,7 +29,7 @@
     },
     "afterSign": "notarize.js",
     "mac": {
-      "target": ["zip"],
+      "target": ["dmg", "zip"],
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
       "darkModeSupport": true,
@@ -39,6 +39,10 @@
       "gatekeeperAssess": false,
       "entitlements": "entitlements.mac.plist",
       "entitlementsInherit": "entitlements.mac.plist"
+    },
+    "dmg": {
+      "title": "Codecast",
+      "artifactName": "Codecast-${version}-arm64.${ext}"
     },
     "protocols": [
       {

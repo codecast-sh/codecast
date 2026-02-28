@@ -130,19 +130,26 @@ else
   if [[ "$DEPLOY_DESKTOP" == "y" || "$DEPLOY_DESKTOP" == "Y" ]]; then
     cd packages/electron
     echo "   Building signed desktop app..."
-    NOTARIZE_KEYCHAIN_PROFILE=codecast npm run build
-    echo "   Creating distribution zip..."
-    ditto -c -k --keepParent dist/mac-arm64/Codecast.app /tmp/Codecast-mac-arm64.zip
-    echo "   Uploading to R2..."
-    npx wrangler r2 object put codecast-dl/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip
+    PATH="/bin:/usr/bin:$PATH" NOTARIZE_KEYCHAIN_PROFILE=codecast npm run build
     ELECTRON_VERSION=$(node -p "require('./package.json').version")
+    DMG_FILE=$(find dist -name "*.dmg" -maxdepth 1 | head -1)
+    if [ -z "$DMG_FILE" ]; then
+      echo "   ERROR: No DMG found in dist/"
+      exit 1
+    fi
+    DMG_NAME="Codecast-${ELECTRON_VERSION}-arm64.dmg"
+    echo "   Uploading DMG to R2..."
+    npx wrangler r2 object put "codecast/$DMG_NAME" --file "$DMG_FILE" --remote
+    echo "   Uploading zip to R2 (fallback)..."
+    ditto -c -k --keepParent dist/mac-arm64/Codecast.app /tmp/Codecast-mac-arm64.zip
+    npx wrangler r2 object put codecast/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip --remote
     cd ../..
     echo "$LAST_DESKTOP_UPDATE" > "$LAST_DESKTOP_MARKER"
-    # Bump download route version for cache busting
+    # Update download route to point to new DMG
     ROUTE_FILE="packages/web/app/download/mac/route.ts"
+    sed -i '' "s|Codecast-.*-arm64.dmg|Codecast-${ELECTRON_VERSION}-arm64.dmg|" "$ROUTE_FILE"
     sed -i '' "s/const VERSION = \".*\"/const VERSION = \"$ELECTRON_VERSION\"/" "$ROUTE_FILE"
-    echo "   ✓ Desktop app v$ELECTRON_VERSION deployed to dl.codecast.sh/Codecast-mac-arm64.zip"
-    echo "   ✓ Download route cache-bust version updated"
+    echo "   ✓ Desktop app v$ELECTRON_VERSION deployed to dl.codecast.sh/$DMG_NAME"
   else
     echo "   Skipped"
   fi
@@ -156,7 +163,7 @@ echo "  - Convex:  https://marvelous-meerkat-539.convex.cloud"
 echo "  - CLI:     https://dl.codecast.sh/latest.json"
 echo "  - Web:     https://codecast.sh (Railway auto-deploys on push)"
 echo "  - Mobile:  OTA via EAS Update"
-echo "  - Desktop: dl.codecast.sh/Codecast-mac-arm64.zip (if deployed)"
+echo "  - Desktop: dl.codecast.sh/Codecast-<version>-arm64.dmg (if deployed)"
 echo ""
 echo "Tailing Railway build logs (Ctrl+C to stop)..."
 echo ""
