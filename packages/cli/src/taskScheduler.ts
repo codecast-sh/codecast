@@ -101,7 +101,12 @@ export class TaskScheduler {
     if (agentType === "codex") {
       args.push("codex", `"$(cat ${promptFile})"`);
       const extraArgs = this.config.codex_args;
-      if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
+      if (extraArgs) {
+        args.push(...extraArgs.split(/\s+/).filter(Boolean));
+      }
+      if (!args.some(a => a.includes("--full-auto") || a.includes("--ask-for-approval") || a.includes("--dangerously-bypass"))) {
+        args.push("--dangerously-bypass-approvals-and-sandbox");
+      }
     } else {
       args.push("claude", "-p", `"$(cat ${promptFile})"`, "--dangerously-skip-permissions");
       const extraArgs = this.config.claude_args;

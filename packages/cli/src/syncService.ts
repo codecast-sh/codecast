@@ -212,6 +212,25 @@ export class SyncService {
     }
   }
 
+  async linkPlanHandoff(parentConversationId: string, childConversationId: string): Promise<void> {
+    await this.throttle();
+    try {
+      await this.client.mutation(
+        "conversations:linkPlanHandoff" as any,
+        {
+          parent_conversation_id: parentConversationId,
+          child_conversation_id: childConversationId,
+          api_token: this.apiToken,
+        }
+      );
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
   async addMessage(params: {
     conversationId: string;
     messageUuid?: string;

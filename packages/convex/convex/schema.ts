@@ -61,6 +61,10 @@ export default defineSchema({
       codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
       gemini: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
     })),
+    available_agents: v.optional(v.array(v.object({
+      name: v.string(),
+      description: v.optional(v.string()),
+    }))),
   })
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])
@@ -77,7 +81,8 @@ export default defineSchema({
       v.literal("start_session"),
       v.literal("escape"),
       v.literal("resume_session"),
-      v.literal("kill_session")
+      v.literal("kill_session"),
+      v.literal("send_keys")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),

@@ -173,25 +173,12 @@ export const addMessage = mutation({
     }
     await ctx.db.patch(args.conversation_id, convPatch);
 
-    const userPatch: Record<string, unknown> = {};
-    if (args.api_token) {
-      userPatch.daemon_last_seen = Date.now();
-    }
-    if (args.role === "user") {
-      const user = await ctx.db.get(conversation.user_id);
-      if (!user?.last_message_sent_at || msgTimestamp > user.last_message_sent_at) {
-        if (user?.last_message_sent_at) {
-          userPatch.prev_message_sent_at = user.last_message_sent_at;
-          const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-          if (msgTimestamp - user.last_message_sent_at > GAP_THRESHOLD_MS) {
-            userPatch.work_cluster_started_at = msgTimestamp;
-          }
-        }
-        userPatch.last_message_sent_at = msgTimestamp;
-      }
-    }
-    if (Object.keys(userPatch).length > 0) {
-      await ctx.db.patch(conversation.user_id, userPatch);
+    if (args.api_token || args.role === "user") {
+      await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
+        userId: conversation.user_id,
+        daemonSeen: !!args.api_token,
+        messageTimestamp: args.role === "user" ? msgTimestamp : undefined,
+      });
     }
 
     if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount)) {
@@ -354,29 +341,15 @@ export const addMessages = mutation({
       }
       await ctx.db.patch(args.conversation_id, convPatch);
 
-      const userPatch: Record<string, unknown> = {};
-      if (args.api_token) {
-        userPatch.daemon_last_seen = Date.now();
-      }
-      if (userMsgs.length > 0) {
-        const lastUserTs = userMsgs
-          .reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
-        if (lastUserTs > 0) {
-          const user = await ctx.db.get(conversation.user_id);
-          if (!user?.last_message_sent_at || lastUserTs > user.last_message_sent_at) {
-            if (user?.last_message_sent_at) {
-              userPatch.prev_message_sent_at = user.last_message_sent_at;
-              const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-              if (lastUserTs - user.last_message_sent_at > GAP_THRESHOLD_MS) {
-                userPatch.work_cluster_started_at = lastUserTs;
-              }
-            }
-            userPatch.last_message_sent_at = lastUserTs;
-          }
-        }
-      }
-      if (Object.keys(userPatch).length > 0) {
-        await ctx.db.patch(conversation.user_id, userPatch);
+      const lastUserTs = userMsgs.length > 0
+        ? userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0)
+        : 0;
+      if (args.api_token || lastUserTs > 0) {
+        await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
+          userId: conversation.user_id,
+          daemonSeen: !!args.api_token,
+          messageTimestamp: lastUserTs > 0 ? lastUserTs : undefined,
+        });
       }
 
       if (!conversation.skip_title_generation) {

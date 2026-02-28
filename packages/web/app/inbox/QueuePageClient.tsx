@@ -161,7 +161,19 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
         onSendAndAdvance={onSendAndAdvance}
         autoFocusInput
         backHref="/inbox"
-        fallbackStickyContent={lastUserMessage?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim() || null}
+        fallbackStickyContent={(() => {
+          if (!lastUserMessage) return null;
+          const cleaned = lastUserMessage
+            .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+            .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
+            .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+            .replace(/\[image\]/gi, "")
+            .trim();
+          if (!cleaned) return null;
+          const noisePrefixes = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>"];
+          if (noisePrefixes.some(p => cleaned.startsWith(p))) return null;
+          return cleaned;
+        })()}
       />
     </div>
   );

@@ -280,19 +280,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                   openNewSession({});
                 }
               }}
-              className="md:hidden p-1.5 rounded-lg text-sol-cyan bg-sol-cyan/10 border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-all"
-              title="New session"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => {
-                if (currentConvContext.projectPath || currentConvContext.gitRoot) {
-                  handleQuickCreate();
-                } else {
-                  openNewSession({});
-                }
-              }}
               className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:border-sol-cyan/50 transition-all"
               title="New session (Ctrl+N)"
             >

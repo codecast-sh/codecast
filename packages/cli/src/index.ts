@@ -3897,8 +3897,8 @@ async function convertAndLaunch(
     launchCodex(sessionId, resolvedArgs, showArgsHint, projectPath);
   } else {
     const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
-    const AUTO_TRIM_THRESHOLD_TOKENS = 150_000;
-    const AUTO_TRIM_TARGET_TOKENS = 120_000;
+    const AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
+    const AUTO_TRIM_TARGET_TOKENS = 100_000;
 
     const estimatedTokens = estimateClaudeImportTokens(data);
     let tailMessages: number | undefined;
@@ -5972,8 +5972,8 @@ program
           openInNewTab(cmd, data.conversation.project_path);
         } else {
           const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
-          const AUTO_TRIM_THRESHOLD_TOKENS = 150_000;
-          const AUTO_TRIM_TARGET_TOKENS = 120_000;
+          const AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
+          const AUTO_TRIM_TARGET_TOKENS = 100_000;
 
           const estimatedTokens = estimateClaudeImportTokens(data);
           let tailMessages: number | undefined;

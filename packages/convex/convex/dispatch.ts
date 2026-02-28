@@ -52,6 +52,9 @@ async function applyPatches(
       if (table === "conversations") {
         const doc = await ctx.db.get(docId as Id<"conversations">);
         if (!doc || doc.user_id !== userId) continue;
+        if (safe.inbox_dismissed_at && typeof safe.inbox_dismissed_at === "number") {
+          safe.inbox_dismissed_at = Math.max(Date.now(), (doc as any).updated_at + 1);
+        }
         await ctx.db.patch(docId as Id<"conversations">, safe);
       } else if (table === "client_state") {
         const existing = await ctx.db

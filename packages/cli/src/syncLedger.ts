@@ -22,6 +22,7 @@ export interface SyncRecord {
   lastSyncedPosition: number;
   messageCount: number;
   conversationId?: string;
+  isLegacyFallback?: boolean;
 }
 
 interface SyncLedger {
@@ -62,9 +63,10 @@ export function getSyncRecord(filePath: string): SyncRecord | null {
   const positions = loadPositions();
   if (positions[filePath] !== undefined) {
     return {
-      lastSyncedAt: 0, // Unknown, but we have position
+      lastSyncedAt: 0,
       lastSyncedPosition: positions[filePath],
-      messageCount: 0, // Unknown
+      messageCount: 0,
+      isLegacyFallback: true,
     };
   }
 

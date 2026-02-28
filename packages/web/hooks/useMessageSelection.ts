@@ -25,7 +25,7 @@ export function useMessageSelection({
 }: {
   timeline: TimelineItem[];
   virtualizer: { scrollToIndex: (index: number, opts?: any) => void } | null;
-  onForkFromMessage?: (messageUuid: string, opts?: { inline?: boolean; focusInput?: boolean }) => void;
+  onForkFromMessage?: (messageUuid: string) => void;
   onSelectMessage?: (messageUuid: string | null, content: string | null) => void;
   enabled?: boolean;
 }) {
@@ -113,7 +113,7 @@ export function useMessageSelection({
         const item = timeline[selectedIndex];
         if (item?.type === "message" && item.data.message_uuid && onForkFromMessage) {
           selectAndNotify(null);
-          onForkFromMessage(item.data.message_uuid, { inline: true });
+          onForkFromMessage(item.data.message_uuid);
         }
         return;
       }

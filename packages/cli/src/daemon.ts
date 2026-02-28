@@ -20,7 +20,7 @@ import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
 import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractGeminiProjectHash, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
-import { markSynced, getSyncRecord, findUnsyncedFiles } from "./syncLedger.js";
+import { markSynced, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
@@ -70,15 +70,16 @@ interface Config {
 
 function getPermissionFlags(agentType: "claude" | "codex" | "gemini", config?: Config | null): string | null {
   const modes = config?.agent_permission_modes;
-  if (!modes) return null;
 
   if (agentType === "claude") {
-    if (modes.claude === "bypass") return "--permission-mode bypassPermissions";
+    if (modes?.claude === "bypass") return "--permission-mode bypassPermissions";
   } else if (agentType === "codex") {
     const existing = config?.codex_args || "";
     if (existing.includes("--full-auto") || existing.includes("--ask-for-approval") || existing.includes("--dangerously-bypass")) return null;
-    if (modes.codex === "full_auto") return "--full-auto";
-    if (modes.codex === "bypass") return "-a never -s danger-full-access";
+    if (modes?.codex === "full_auto") return "--full-auto";
+    if (modes?.codex === "default") return null;
+    // Default to bypass when no explicit config is set
+    return "--dangerously-bypass-approvals-and-sandbox";
   } else if (agentType === "gemini") {
     // gemini flags TBD
   }
@@ -510,7 +511,24 @@ async function executeRemoteCommand(
           const extraArgs = config.codex_args || "";
           if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
           const permFlags = getPermissionFlags(agentType, config);
-          if (permFlags) binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
+          if (permFlags) {
+            binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
+            // First-time notification: let user know Codex is running in full-access mode
+            if (!config.codex_args && !config.agent_permission_modes?.codex) {
+              const flagFile = path.join(CONFIG_DIR, ".codex-bypass-notified");
+              if (!fs.existsSync(flagFile)) {
+                fs.writeFileSync(flagFile, new Date().toISOString());
+                if (conversationId) {
+                  syncService.createSessionNotification({
+                    conversation_id: conversationId,
+                    type: "info",
+                    title: "Codex running in full-access mode",
+                    message: "Codex is running without permission prompts by default. Configure with: codecast config codex_args",
+                  }).catch(() => {});
+                }
+              }
+            }
+          }
         } else if (agentType === "gemini") {
           binary = "gemini";
           if (prompt) binaryArgs.push(prompt);
@@ -589,6 +607,41 @@ async function executeRemoteCommand(
           } catch (killErr) {
             error = `Failed to send SIGINT to pid ${proc.pid}: ${killErr}`;
           }
+        }
+        break;
+      }
+      case "send_keys": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId = parsed.conversation_id;
+        const keys = parsed.keys;
+        if (!conversationId || !keys) {
+          error = "Missing conversation_id or keys";
+          break;
+        }
+        const ALLOWED_KEYS = new Set(["BTab", "Escape", "Enter", "Tab", "Up", "Down", "Left", "Right", "Space", "BSpace"]);
+        if (!ALLOWED_KEYS.has(keys)) {
+          error = `Key '${keys}' not in allowlist`;
+          break;
+        }
+        const cache = readConversationCache();
+        const reverse = buildReverseConversationCache(cache);
+        const sessionId = reverse[conversationId];
+        if (!sessionId) {
+          error = `No session found for conversation ${conversationId}`;
+          break;
+        }
+        const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
+        if (!proc) {
+          error = `No running process for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+        if (tmuxTarget) {
+          await execAsync(`tmux send-keys -t '${tmuxTarget}' ${keys}`);
+          result = "keys_sent";
+          log(`[REMOTE] Sent ${keys} to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
+        } else {
+          error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
         }
         break;
       }
@@ -1162,6 +1215,34 @@ async function processSessionFile(
           log(`Failed to update title: ${errMsg}`);
         }
       }
+
+      if (!planHandoffChecked.has(sessionId)) {
+        planHandoffChecked.add(sessionId);
+        const allMessages = parseSessionFile(fullContent);
+        const userMsgs = allMessages.filter(m => m.role === "user").slice(0, 3);
+        for (const msg of userMsgs) {
+          if (!msg.content) continue;
+          const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
+          if (handoffMatch) {
+            const jsonlPath = handoffMatch[1];
+            const parentSessionMatch = jsonlPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
+            if (parentSessionMatch) {
+              const parentSessionId = parentSessionMatch[1];
+              const parentConvId = conversationCache[parentSessionId];
+              if (parentConvId) {
+                try {
+                  await syncService.linkPlanHandoff(parentConvId, conversationId);
+                  planHandoffChildren.set(parentConvId, conversationId);
+                  log(`Retroactive plan handoff: linked ${sessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
+                } catch (err) {
+                  log(`Failed retroactive plan handoff link: ${err instanceof Error ? err.message : String(err)}`);
+                }
+              }
+            }
+            break;
+          }
+        }
+      }
     }
 
   if (messages.length === 0) {
@@ -1210,18 +1291,23 @@ async function processSessionFile(
           }
         }
       }
-      if (!parentConversationId && firstUserMessage?.content) {
-        const handoffMatch = firstUserMessage.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
-        if (handoffMatch) {
-          const jsonlPath = handoffMatch[1];
-          const parentSessionMatch = jsonlPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
-          if (parentSessionMatch) {
-            const parentSessionId = parentSessionMatch[1];
-            if (conversationCache[parentSessionId]) {
-              parentConversationId = conversationCache[parentSessionId];
-              isPlanHandoff = true;
-              log(`Detected plan handoff parent for ${sessionId}: ${parentConversationId} (from ${parentSessionId})`);
+      if (!parentConversationId) {
+        const userMessages = messages.filter(msg => msg.role === "user").slice(0, 3);
+        for (const msg of userMessages) {
+          if (!msg.content) continue;
+          const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
+          if (handoffMatch) {
+            const jsonlPath = handoffMatch[1];
+            const parentSessionMatch = jsonlPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
+            if (parentSessionMatch) {
+              const parentSessionId = parentSessionMatch[1];
+              if (conversationCache[parentSessionId]) {
+                parentConversationId = conversationCache[parentSessionId];
+                isPlanHandoff = true;
+                log(`Detected plan handoff parent for ${sessionId}: ${parentConversationId} (from ${parentSessionId})`);
+              }
             }
+            break;
           }
         }
       }
@@ -2794,6 +2880,20 @@ function parsePollMessage(content: string): PollMessage | null {
   return null;
 }
 
+function normalizePromptText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+export function tmuxPromptStillHasInput(paneContent: string, input: string): boolean {
+  const normalizedInput = normalizePromptText(input);
+  if (!normalizedInput) return false;
+  const recent = paneContent.split("\n").slice(-30).join("\n");
+  const lastPromptIndex = recent.lastIndexOf("❯");
+  if (lastPromptIndex === -1) return false;
+  const fromPrompt = recent.slice(lastPromptIndex);
+  return normalizePromptText(fromPrompt).includes(normalizedInput);
+}
+
 async function injectViaTmux(target: string, content: string): Promise<void> {
   const poll = parsePollMessage(content);
   if (poll) {
@@ -2844,6 +2944,14 @@ async function injectViaTmux(target: string, content: string): Promise<void> {
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
+  const contentPrefix = sanitized.slice(0, 40);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      const { stdout: echoCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -20`);
+      if (tmuxPromptStillHasInput(echoCheck, contentPrefix)) break;
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
   await new Promise(resolve => setTimeout(resolve, 150));
   await execAsync(`tmux send-keys -t '${target}' Enter`);
 
@@ -2851,11 +2959,8 @@ async function injectViaTmux(target: string, content: string): Promise<void> {
   for (let retry = 0; retry < 3; retry++) {
     await new Promise(resolve => setTimeout(resolve, 500));
     try {
-      const { stdout: postCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -5`);
-      const lastLines = postCheck.split("\n").filter(l => l.trim()).slice(-5).join("\n");
-      // If we see the sanitized content still sitting in the input area (between ❯ markers), Enter didn't go through
-      const contentPrefix = sanitized.slice(0, 40);
-      if (lastLines.includes(contentPrefix) && /❯/.test(lastLines)) {
+      const { stdout: postCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -20`);
+      if (tmuxPromptStillHasInput(postCheck, contentPrefix)) {
         log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
         await execAsync(`tmux send-keys -t '${target}' Enter`);
       } else {
@@ -3175,6 +3280,7 @@ async function discoverAndLinkSession(
 }
 
 const planHandoffChildren = new Map<string, string>();
+const planHandoffChecked = new Set<string>();
 
 // Track subagent sessions whose parent hasn't been cached yet: childSessionId -> parentSessionId
 const pendingSubagentParents = new Map<string, string>();
@@ -4041,14 +4147,7 @@ function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): stri
 
           // Check sync ledger for this file
           const syncRecord = getSyncRecord(filePath);
-          if (!syncRecord) {
-            // Never synced - add to stale list
-            staleFiles.push(filePath);
-          } else if (fileStat.mtimeMs > syncRecord.lastSyncedAt) {
-            // Modified after last sync - add to stale list
-            staleFiles.push(filePath);
-          } else if (fileStat.size > syncRecord.lastSyncedPosition) {
-            // New content since last sync
+          if (shouldTreatClaudeFileAsStale(fileStat, syncRecord)) {
             staleFiles.push(filePath);
           }
         } catch {
@@ -4061,6 +4160,19 @@ function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): stri
   }
 
   return staleFiles;
+}
+
+export function shouldTreatClaudeFileAsStale(
+  fileStat: { mtimeMs: number; size: number },
+  syncRecord: SyncRecord | null
+): boolean {
+  if (!syncRecord) {
+    return true;
+  }
+  if (!syncRecord.isLegacyFallback && fileStat.mtimeMs > syncRecord.lastSyncedAt) {
+    return true;
+  }
+  return fileStat.size > syncRecord.lastSyncedPosition;
 }
 
 function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
@@ -5112,7 +5224,61 @@ async function main(): Promise<void> {
   };
 
   // Run startup scan in background (don't block daemon startup)
-  performStartupScan().catch(err => {
+  performStartupScan().then(async () => {
+    // Backfill: detect unlinked plan handoff children
+    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+    let linked = 0;
+    const alreadyLinked = new Set(planHandoffChildren.values());
+    for (const [childSessionId, childConvId] of Object.entries(conversationCache)) {
+      if (alreadyLinked.has(childConvId)) continue;
+      const possiblePaths = [
+        path.join(claudeProjectsDir, `-Users-ashot-src-codecast`, `${childSessionId}.jsonl`),
+      ];
+      // Find the JSONL file across all project dirs
+      try {
+        const projDirs = fs.readdirSync(claudeProjectsDir);
+        for (const dir of projDirs) {
+          const fp = path.join(claudeProjectsDir, dir, `${childSessionId}.jsonl`);
+          if (fs.existsSync(fp) && !possiblePaths.includes(fp)) {
+            possiblePaths.push(fp);
+          }
+        }
+      } catch {}
+      for (const fp of possiblePaths) {
+        if (!fs.existsSync(fp)) continue;
+        try {
+          const content = fs.readFileSync(fp, "utf-8");
+          const msgs = parseSessionFile(content);
+          const userMsgs = msgs.filter(m => m.role === "user").slice(0, 3);
+          for (const msg of userMsgs) {
+            if (!msg.content) continue;
+            const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
+            if (handoffMatch) {
+              const jsonlPath = handoffMatch[1];
+              const parentMatch = jsonlPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
+              if (parentMatch) {
+                const parentSessionId = parentMatch[1];
+                const parentConvId = conversationCache[parentSessionId];
+                if (parentConvId && parentConvId !== childConvId) {
+                  try {
+                    await syncService.linkPlanHandoff(parentConvId, childConvId);
+                    planHandoffChildren.set(parentConvId, childConvId);
+                    linked++;
+                    log(`Backfill: linked plan handoff ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
+                  } catch (err) {
+                    log(`Backfill: failed to link ${childSessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+                  }
+                }
+              }
+              break;
+            }
+          }
+        } catch {}
+        break;
+      }
+    }
+    if (linked > 0) log(`Backfill: linked ${linked} plan handoff session(s)`);
+  }).catch(err => {
     logError("Startup scan failed", err instanceof Error ? err : new Error(String(err)));
   });
 

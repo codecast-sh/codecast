@@ -74,9 +74,16 @@ export function buildCompositeTimeline(
       const forkConvId = activeBranches[firstForkPoint.uuid];
       const forkMsgs = loadedForkMessages[forkConvId];
 
-      if (forkMsgs && forkMsgs.length > 0) {
+      if (forkMsgs !== undefined) {
         const mainPrefix = messages.slice(0, firstForkPoint.idx + 1);
-        effectiveMessages = [...mainPrefix, ...forkMsgs];
+        const forkPointInFork = forkMsgs.findIndex(
+          (m) => m.message_uuid === firstForkPoint.uuid
+        );
+        const divergentForkMsgs =
+          forkPointInFork !== -1
+            ? forkMsgs.slice(forkPointInFork + 1)
+            : forkMsgs;
+        effectiveMessages = [...mainPrefix, ...divergentForkMsgs];
       }
     }
   }

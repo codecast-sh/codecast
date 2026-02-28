@@ -367,9 +367,11 @@ export default function ConversationPage() {
   const [targetMessageId, setTargetMessageId] = useState<string | undefined>(undefined);
 
   const resetForkNav = useForkNavigationStore((s) => s.reset);
+  const resetForkData = useInboxStore((s) => s.resetForkNav);
 
   useEffect(() => {
     resetForkNav();
+    resetForkData();
     const hash = window.location.hash;
     if (hash && hash.startsWith("#msg-")) {
       setTargetMessageId(hash.slice(5));

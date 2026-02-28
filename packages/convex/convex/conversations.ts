@@ -373,12 +373,20 @@ export const createConversation = mutation({
       .first();
 
     if (existing) {
-      if (args.parent_conversation_id && !existing.parent_conversation_id) {
-        const isSubagent = !!args.parent_conversation_id && !args.parent_message_uuid;
-        await ctx.db.patch(existing._id, {
-          parent_conversation_id: args.parent_conversation_id as Id<"conversations">,
-          is_subagent: isSubagent || undefined,
-        });
+      if (args.parent_conversation_id) {
+        const patch: Record<string, any> = {};
+        if (!existing.parent_conversation_id) {
+          patch.parent_conversation_id = args.parent_conversation_id as Id<"conversations">;
+        }
+        if (args.parent_message_uuid && !existing.parent_message_uuid) {
+          patch.parent_message_uuid = args.parent_message_uuid;
+          patch.is_subagent = undefined;
+        } else if (!existing.parent_conversation_id && !args.parent_message_uuid) {
+          patch.is_subagent = true;
+        }
+        if (Object.keys(patch).length > 0) {
+          await ctx.db.patch(existing._id, patch);
+        }
       }
       return existing._id;
     }
@@ -855,6 +863,10 @@ export const getAllMessages = query({
     const forkChildrenDetails = await Promise.all(
       forkChildren.map(async (fork) => {
         const forkUser = await ctx.db.get(fork.user_id);
+        const forkMessages = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", fork._id))
+          .collect();
         return {
           _id: fork._id,
           title: fork.title || "New Session",
@@ -862,9 +874,23 @@ export const getAllMessages = query({
           started_at: fork.started_at,
           username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
           parent_message_uuid: fork.parent_message_uuid,
+          agent_type: fork.agent_type,
+          message_count: forkMessages.length,
         };
       })
     );
+
+    const mainMsgCountsByFork: Record<string, number> = {};
+    const forkPointUuids = new Set(forkChildren.map(f => f.parent_message_uuid).filter(Boolean));
+    if (forkPointUuids.size > 0) {
+      for (const uuid of forkPointUuids) {
+        const forkPointMsg = messages.find(m => m.message_uuid === uuid);
+        if (forkPointMsg) {
+          const afterCount = messages.filter(m => m.timestamp > forkPointMsg.timestamp).length;
+          mainMsgCountsByFork[uuid!] = afterCount;
+        }
+      }
+    }
 
     const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
 
@@ -885,6 +911,7 @@ export const getAllMessages = query({
       compaction_count: compactionCount,
       fork_children: forkChildrenDetails,
       parent_conversation_id: parentConversationId,
+      main_message_counts_by_fork: mainMsgCountsByFork,
     };
   },
 });
@@ -1203,6 +1230,10 @@ export const getConversationWithMeta = query({
     const forkChildrenDetails = await Promise.all(
       forkChildren.map(async (fork) => {
         const forkUser = await ctx.db.get(fork.user_id);
+        const forkMessages = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", fork._id))
+          .collect();
         return {
           _id: fork._id,
           title: fork.title || "New Session",
@@ -1210,6 +1241,8 @@ export const getConversationWithMeta = query({
           started_at: fork.started_at,
           username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
           parent_message_uuid: fork.parent_message_uuid,
+          agent_type: fork.agent_type,
+          message_count: forkMessages.length,
         };
       })
     );
@@ -3704,6 +3737,12 @@ export const forkFromMessage = mutation({
     conversation_id: v.string(),
     message_uuid: v.optional(v.string()),
     api_token: v.optional(v.string()),
+    target_agent_type: v.optional(v.union(
+      v.literal("claude_code"),
+      v.literal("codex"),
+      v.literal("cursor"),
+      v.literal("gemini")
+    )),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -3751,14 +3790,19 @@ export const forkFromMessage = mutation({
       messagesToCopy = allMessages.slice(0, forkIndex + 1);
     }
 
+    const agentType = args.target_agent_type || original.agent_type;
+    const agentLabels: Record<string, string> = { claude_code: "Claude", codex: "Codex", cursor: "Cursor", gemini: "Gemini" };
+    const isAgentSwitch = args.target_agent_type && args.target_agent_type !== original.agent_type;
+    const titlePrefix = isAgentSwitch ? `${agentLabels[args.target_agent_type!] || args.target_agent_type}: ` : "Fork: ";
+
     const now = Date.now();
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       team_id: original.team_id,
-      agent_type: original.agent_type,
+      agent_type: agentType,
       session_id: `forked-${original.session_id}-${crypto.randomUUID()}`,
       slug: original.slug,
-      title: original.title ? `Fork: ${original.title}` : undefined,
+      title: original.title ? `${titlePrefix}${original.title}` : undefined,
       subtitle: original.subtitle,
       project_hash: original.project_hash,
       project_path: original.project_path,
@@ -3858,6 +3902,7 @@ export const getConversationTree = query({
       parent_message_uuid?: string;
       started_at: number;
       status: string;
+      agent_type?: string;
       is_current: boolean;
       children: TreeNode[];
     };
@@ -3878,6 +3923,7 @@ export const getConversationTree = query({
         parent_message_uuid: node.parent_message_uuid,
         started_at: node.started_at,
         status: node.status,
+        agent_type: node.agent_type,
         is_current: node._id.toString() === conv!._id.toString(),
         children: childTrees,
       };
@@ -5327,7 +5373,7 @@ export const dismissFromInbox = mutation({
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv || conv.user_id !== userId) throw new Error("Not found");
     await ctx.db.patch(args.conversation_id, {
-      inbox_dismissed_at: Date.now(),
+      inbox_dismissed_at: Math.max(Date.now(), conv.updated_at + 1),
     });
   },
 });
@@ -5406,6 +5452,30 @@ export const linkSessionsInternal = internalMutation({
   },
 });
 
+export const linkPlanHandoff = mutation({
+  args: {
+    parent_conversation_id: v.id("conversations"),
+    child_conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const child = await ctx.db.get(args.child_conversation_id);
+    if (!child || child.user_id !== userId) throw new Error("Child not found");
+
+    if (child.parent_message_uuid === "plan-handoff") return;
+
+    await ctx.db.patch(args.child_conversation_id, {
+      parent_conversation_id: args.parent_conversation_id,
+      parent_message_uuid: "plan-handoff",
+    });
+  },
+});
+
 export const adminLookupConversation = mutation({
   args: {
     conversation_id: v.optional(v.id("conversations")),
@@ -5432,6 +5502,7 @@ export const adminLookupConversation = mutation({
       session_id: conv.session_id,
       title: conv.title,
       parent_conversation_id: conv.parent_conversation_id,
+      parent_message_uuid: conv.parent_message_uuid,
       is_subagent: conv.is_subagent,
       inbox_dismissed_at: conv.inbox_dismissed_at,
       project_path: conv.project_path,
@@ -5762,6 +5833,27 @@ export const sendEscapeToSession = mutation({
   },
 });
 
+export const sendKeysToSession = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    keys: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "send_keys",
+      args: JSON.stringify({ conversation_id: args.conversation_id, keys: args.keys }),
+      created_at: Date.now(),
+    });
+  },
+});
+
 export const killSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -5820,5 +5912,21 @@ export const switchSessionProject = mutation({
       }),
       created_at: now + 1,
     });
+  },
+});
+
+export const switchSessionAgent = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("gemini")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+
+    await ctx.db.patch(args.conversation_id, { agent_type: args.agent_type });
   },
 });

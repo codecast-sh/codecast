@@ -12,8 +12,23 @@ type TreeNode = {
   parent_message_uuid?: string;
   started_at: number;
   status: string;
+  agent_type?: string;
   is_current: boolean;
   children: TreeNode[];
+};
+
+const agentColors: Record<string, string> = {
+  claude_code: "text-amber-400",
+  codex: "text-emerald-400",
+  cursor: "text-blue-400",
+  gemini: "text-blue-400",
+};
+
+const agentLabels: Record<string, string> = {
+  claude_code: "Claude",
+  codex: "Codex",
+  cursor: "Cursor",
+  gemini: "Gemini",
 };
 
 function TreeRow({
@@ -49,6 +64,11 @@ function TreeRow({
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
             </svg>
+          </span>
+        )}
+        {node.agent_type && (
+          <span className={`text-[9px] font-medium flex-shrink-0 ${agentColors[node.agent_type] || "text-sol-text-dim"}`}>
+            {agentLabels[node.agent_type] || node.agent_type}
           </span>
         )}
         <span className="truncate flex-1 min-w-0">{node.title}</span>

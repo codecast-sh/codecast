@@ -76,6 +76,36 @@ export const setTheme = mutation({
   },
 });
 
+export const updateUserActivity = internalMutation({
+  args: {
+    userId: v.id("users"),
+    daemonSeen: v.optional(v.boolean()),
+    messageTimestamp: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const patch: Record<string, unknown> = {};
+    if (args.daemonSeen) {
+      patch.daemon_last_seen = Date.now();
+    }
+    if (args.messageTimestamp) {
+      const user = await ctx.db.get(args.userId);
+      if (user && (!user.last_message_sent_at || args.messageTimestamp > user.last_message_sent_at)) {
+        if (user.last_message_sent_at) {
+          patch.prev_message_sent_at = user.last_message_sent_at;
+          const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+          if (args.messageTimestamp - user.last_message_sent_at > GAP_THRESHOLD_MS) {
+            patch.work_cluster_started_at = args.messageTimestamp;
+          }
+        }
+        patch.last_message_sent_at = args.messageTimestamp;
+      }
+    }
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(args.userId, patch);
+    }
+  },
+});
+
 export const updateDaemonLastSeen = mutation({
   args: {
     user_id: v.id("users"),

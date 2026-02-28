@@ -68,6 +68,17 @@ export type PaginationState = {
 
 export type ConversationMeta = Record<string, any>;
 
+export type ForkChild = {
+  _id: string;
+  title: string;
+  short_id?: string;
+  started_at?: number;
+  username?: string;
+  parent_message_uuid?: string;
+  message_count?: number;
+  agent_type?: string;
+};
+
 export type CurrentConversationContext = {
   conversationId?: string;
   projectPath?: string;
@@ -114,6 +125,10 @@ interface InboxStoreState {
 
   currentConversation: CurrentConversationContext;
 
+  // -- Fork navigation --
+  activeBranches: Record<string, string>;
+  optimisticForkChildren: ForkChild[];
+
   // -- Dispatch (provided by middleware) --
   _setDispatch: (fn: (action: string, args: any, patches?: any) => Promise<any>) => void;
   _dispatch: (action: string, args: any, patches?: any) => Promise<any>;
@@ -142,6 +157,7 @@ interface InboxStoreState {
   injectSession: (session: InboxSession) => void;
   pinSession: (id: string) => void;
   updateSessionProject: (id: string, projectPath: string) => void;
+  patchSession: (id: string, fields: Partial<InboxSession>) => void;
   navigateToSession: (id: string) => void;
   replaceSessionId: (tempId: string, realId: string) => void;
   touchMru: (id: string) => void;
@@ -174,6 +190,14 @@ interface InboxStoreState {
   // -- Temp ID --
   resolveTempId: (tempId: string, realId: string) => void;
   getRealId: (id: string) => string;
+
+  // -- Fork navigation --
+  switchBranch: (messageUuid: string, convId: string) => void;
+  clearBranch: (messageUuid: string) => void;
+  addOptimisticFork: (fork: ForkChild) => void;
+  pruneOptimisticForks: (serverIds: Set<string>) => void;
+  resolveForkId: (tempId: string, realId: string) => void;
+  resetForkNav: () => void;
 
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
@@ -224,25 +248,39 @@ export const useInboxStore = create<InboxStoreState>(
 
   currentConversation: {},
 
+  activeBranches: {},
+  optimisticForkChildren: [],
+
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
   // Mark with action() to opt in. `this` is a mutative draft.
   // =====================
 
-  stashSession: action(function (this: Draft, id: string) {
-    if (this.conversations[id]) {
-      this.conversations[id].inbox_dismissed_at = Date.now();
+  stashSession: (id: string) => {
+    const { sessions, dismissedIds, injectedIds, currentIndex, conversations } = get();
+    const newDismissed = new Set(dismissedIds);
+    newDismissed.add(id);
+    const newInjected = new Set(injectedIds);
+    newInjected.delete(id);
+    const newSessions = sessions.filter((s: InboxSession) => s._id !== id);
+    const newConversations = { ...conversations };
+    if (newConversations[id]) {
+      newConversations[id] = { ...newConversations[id], inbox_dismissed_at: Date.now() };
     }
-    this.dismissedIds.add(id);
-    this.injectedIds.delete(id);
-    const idx = this.sessions.findIndex((s: InboxSession) => s._id === id);
-    if (idx >= 0) {
-      this.sessions.splice(idx, 1);
-    }
-    if (this.currentIndex >= this.sessions.length) {
-      this.currentIndex = Math.max(0, this.sessions.length - 1);
-    }
-  }),
+    const newIndex = currentIndex >= newSessions.length
+      ? Math.max(0, newSessions.length - 1)
+      : currentIndex;
+    set({
+      sessions: newSessions,
+      dismissedIds: newDismissed,
+      injectedIds: newInjected,
+      currentIndex: newIndex,
+      conversations: newConversations,
+    });
+    get()._dispatch("patch", [], {
+      conversations: { [id]: { inbox_dismissed_at: Date.now() } },
+    }).catch(() => {});
+  },
 
   unstashSession: action(function (this: Draft, id: string) {
     if (this.conversations[id]) {
@@ -473,6 +511,17 @@ export const useInboxStore = create<InboxStoreState>(
     const next = new Set(injectedIds);
     next.add(id);
     set({ sessions: updated, injectedIds: next });
+  },
+
+  patchSession: (id: string, fields: Partial<InboxSession>) => {
+    const { sessions, injectedIds, pendingPatches } = get();
+    const updated = sessions.map((s: InboxSession) =>
+      s._id === id ? { ...s, ...fields } : s
+    );
+    const next = new Set(injectedIds);
+    next.add(id);
+    const prev = pendingPatches[id] || {};
+    set({ sessions: updated, injectedIds: next, pendingPatches: { ...pendingPatches, [id]: { ...prev, ...fields } } });
   },
 
   navigateToSession: (id: string) => {
@@ -777,6 +826,66 @@ export const useInboxStore = create<InboxStoreState>(
 
   getRealId: (id: string) => {
     return get().tempIdMap[id] || id;
+  },
+
+  // =====================
+  // FORK NAVIGATION
+  // =====================
+
+  switchBranch: (messageUuid: string, convId: string) => {
+    set((s: InboxStoreState) => ({
+      activeBranches: { ...s.activeBranches, [messageUuid]: convId },
+    }));
+  },
+
+  clearBranch: (messageUuid: string) => {
+    set((s: InboxStoreState) => {
+      const next = { ...s.activeBranches };
+      delete next[messageUuid];
+      return { activeBranches: next };
+    });
+  },
+
+  addOptimisticFork: (fork: ForkChild) => {
+    set((s: InboxStoreState) => ({
+      optimisticForkChildren: [...s.optimisticForkChildren, fork],
+    }));
+  },
+
+  pruneOptimisticForks: (serverIds: Set<string>) => {
+    const current = get().optimisticForkChildren;
+    const filtered = current.filter((f: ForkChild) => !serverIds.has(f._id));
+    if (filtered.length === current.length) return;
+    set({ optimisticForkChildren: filtered });
+  },
+
+  resolveForkId: (tempId: string, realId: string) => {
+    const state = get();
+    const newActiveBranches = { ...state.activeBranches };
+    for (const [uuid, convId] of Object.entries(newActiveBranches)) {
+      if (convId === tempId) newActiveBranches[uuid] = realId;
+    }
+    const newOptimistic = state.optimisticForkChildren.map((f: ForkChild) =>
+      f._id === tempId ? { ...f, _id: realId } : f
+    );
+    const newMessages = { ...state.messages };
+    if (newMessages[tempId]) {
+      newMessages[realId] = newMessages[tempId];
+      delete newMessages[tempId];
+    }
+    set({
+      activeBranches: newActiveBranches,
+      optimisticForkChildren: newOptimistic,
+      messages: newMessages,
+      tempIdMap: { ...state.tempIdMap, [tempId]: realId },
+    });
+  },
+
+  resetForkNav: () => {
+    set({
+      activeBranches: {},
+      optimisticForkChildren: [],
+    });
   },
 
   // =====================
