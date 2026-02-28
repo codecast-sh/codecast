@@ -163,7 +163,8 @@ const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
 
 type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected";
-const lastHookStatus = new Map<string, { status: AgentStatus; ts: number }>();
+type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
+const lastHookStatus = new Map<string, { status: AgentStatus; ts: number; permission_mode?: PermissionMode }>();
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
 
 function sendAgentStatus(
@@ -172,13 +173,14 @@ function sendAgentStatus(
   sessionId: string,
   status: AgentStatus,
   clientTs?: number,
+  permissionMode?: PermissionMode,
 ): void {
-  if (status === "working") {
+  if (status === "working" && !permissionMode) {
     const last = lastWorkingStatusSent.get(sessionId) ?? 0;
     if (Date.now() - last < WORKING_STATUS_THROTTLE_MS) return;
     lastWorkingStatusSent.set(sessionId, Date.now());
   }
-  syncService.updateSessionAgentStatus(conversationId, status, clientTs).catch(() => {});
+  syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
 }
 
 function truncateForNotification(text: string, maxLen = 200): string {
@@ -619,8 +621,10 @@ async function executeRemoteCommand(
           break;
         }
         const ALLOWED_KEYS = new Set(["BTab", "Escape", "Enter", "Tab", "Up", "Down", "Left", "Right", "Space", "BSpace"]);
-        if (!ALLOWED_KEYS.has(keys)) {
-          error = `Key '${keys}' not in allowlist`;
+        const keyList = keys.split(" ");
+        const invalidKey = keyList.find((k: string) => !ALLOWED_KEYS.has(k));
+        if (invalidKey) {
+          error = `Key '${invalidKey}' not in allowlist`;
           break;
         }
         const cache = readConversationCache();
@@ -5089,7 +5093,7 @@ async function main(): Promise<void> {
       if (!basename || !filePath.endsWith(".json")) return;
       const sessionId = basename;
       const raw = fs.readFileSync(filePath, "utf-8");
-      const data = JSON.parse(raw) as { status: AgentStatus; ts: number };
+      const data = JSON.parse(raw) as { status: AgentStatus; ts: number; permission_mode?: PermissionMode };
       if (!data.status || !data.ts) return;
 
       const convId = conversationCache[sessionId];
@@ -5099,6 +5103,7 @@ async function main(): Promise<void> {
       if (prev && prev.ts >= data.ts) return;
 
       const statusChanged = !prev || prev.status !== data.status;
+      const modeChanged = data.permission_mode && (!prev || prev.permission_mode !== data.permission_mode);
       lastHookStatus.set(sessionId, data);
 
       if (data.status === "compacting" || data.status === "idle" || data.status === "thinking") {
@@ -5109,9 +5114,9 @@ async function main(): Promise<void> {
         }
       }
 
-      if (statusChanged) {
-        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000);
-        log(`Hook status: ${data.status} for session ${sessionId.slice(0, 8)}`);
+      if (statusChanged || modeChanged) {
+        sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
+        log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ''} for session ${sessionId.slice(0, 8)}`);
       }
     } catch {}
   }
