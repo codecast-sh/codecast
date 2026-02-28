@@ -211,10 +211,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
       {/* Header spans full width */}
       <header ref={headerRef} className={`flex-shrink-0 border-b border-sol-border bg-sol-bg/95 backdrop-blur-sm z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""}`}>
-        <div className="px-2 sm:px-4 py-2 sm:py-3 flex items-center gap-1.5 sm:gap-3">
+        <div className="px-2 sm:px-4 py-1.5 sm:py-3 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Logo + toggle */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            <Logo size="sm" showText={true} />
+            <span className="hidden sm:contents"><Logo size="sm" showText={true} /></span>
+            <span className="sm:hidden"><Logo size="sm" showText={false} /></span>
             {!hideSidebar && (
               <>
                 <button
@@ -271,6 +272,19 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                 )}
               </button>
             )}
+            <button
+              onClick={() => {
+                if (currentConvContext.projectPath || currentConvContext.gitRoot) {
+                  handleQuickCreate();
+                } else {
+                  openNewSession({});
+                }
+              }}
+              className="md:hidden p-1.5 rounded-lg text-sol-cyan bg-sol-cyan/10 border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-all"
+              title="New session"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
             <button
               onClick={() => {
                 if (currentConvContext.projectPath || currentConvContext.gitRoot) {
@@ -353,7 +367,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             className="md:hidden fixed inset-0 z-40 bg-black/50"
             onClick={() => setIsMobileSidebarOpen(false)}
           />
-          <div className="md:hidden fixed inset-y-0 left-0 z-50 w-[85vw] max-w-xs">
+          <div className="md:hidden fixed inset-y-0 left-0 z-50 w-[85vw] max-w-sm shadow-xl animate-slide-in-left">
             <Sidebar
               filter={filter}
               onFilterChange={onFilterChange}

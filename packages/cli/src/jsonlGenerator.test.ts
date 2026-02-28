@@ -255,6 +255,117 @@ describe("generateClaudeCodeJsonl", () => {
     expect(chat.some((l) => l.type === "assistant" && l.message?.content?.[0]?.text === "a1")).toBe(false);
     expect(chat.some((l) => l.type === "user" && l.message?.content === "u2")).toBe(false);
   });
+
+  test("drops orphan tool_result blocks that do not match immediately previous assistant tool_use ids", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv",
+        title: "t",
+        session_id: "session",
+        agent_type: "codex",
+        project_path: "/tmp/project",
+        model: "claude-opus-4-5-20251101",
+        message_count: 4,
+        started_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        {
+          role: "user",
+          content: "",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          tool_results: [{ tool_use_id: "orphan_0", content: "orphan start" }],
+        },
+        {
+          role: "assistant",
+          content: "Running tool",
+          timestamp: "2026-01-01T00:00:00.100Z",
+          tool_calls: [{ id: "call_1", name: "Bash", input: "{\"command\":\"echo hi\"}" }],
+        },
+        {
+          role: "user",
+          content: "done",
+          timestamp: "2026-01-01T00:00:00.200Z",
+          tool_results: [
+            { tool_use_id: "call_1", content: "ok" },
+            { tool_use_id: "orphan_1", content: "orphan trailing" },
+          ],
+        },
+        {
+          role: "assistant",
+          content: "complete",
+          timestamp: "2026-01-01T00:00:00.300Z",
+        },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data);
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+    const userEntries = lines.filter((l) => l.type === "user");
+
+    const toolResultIds: string[] = [];
+    for (const entry of userEntries) {
+      const content = entry?.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (block?.type === "tool_result" && typeof block?.tool_use_id === "string") {
+          toolResultIds.push(block.tool_use_id);
+        }
+      }
+    }
+
+    expect(toolResultIds).toEqual(["call_1"]);
+    expect(toolResultIds.includes("orphan_0")).toBe(false);
+    expect(toolResultIds.includes("orphan_1")).toBe(false);
+  });
+
+  test("does not emit orphan tool_result blocks when truncation starts on a tool result message", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv",
+        title: "t",
+        session_id: "session",
+        agent_type: "codex",
+        project_path: "/tmp/project",
+        model: "claude-opus-4-5-20251101",
+        message_count: 4,
+        started_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "u1", timestamp: "2026-01-01T00:00:00.000Z" },
+        {
+          role: "assistant",
+          content: "tool call",
+          timestamp: "2026-01-01T00:00:00.100Z",
+          tool_calls: [{ id: "call_2", name: "Bash", input: "{\"command\":\"pwd\"}" }],
+        },
+        {
+          role: "user",
+          content: "",
+          timestamp: "2026-01-01T00:00:00.200Z",
+          tool_results: [{ tool_use_id: "call_2", content: "first result" }],
+        },
+        {
+          role: "user",
+          content: "",
+          timestamp: "2026-01-01T00:00:00.300Z",
+          tool_results: [{ tool_use_id: "call_2", content: "orphan after truncate" }],
+        },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data, { tailMessages: 1 });
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+    const userEntries = lines.filter((l) => l.type === "user");
+
+    const hasToolResult = userEntries.some((entry) => {
+      const content = entry?.message?.content;
+      return Array.isArray(content) && content.some((block) => block?.type === "tool_result");
+    });
+
+    expect(hasToolResult).toBe(false);
+  });
 });
 
 describe("generateCodexJsonl", () => {

@@ -42,6 +42,13 @@ const ResendOTPPasswordReset = Email({
 });
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
+  session: {
+    totalDurationMs: 1000 * 60 * 60 * 24 * 90, // 90 days
+    inactiveDurationMs: 1000 * 60 * 60 * 24 * 30, // 30 days
+  },
+  jwt: {
+    durationMs: 1000 * 60 * 60 * 24, // 24 hours
+  },
   callbacks: {
     async redirect({ redirectTo }) {
       if (redirectTo.startsWith("codecast://") || redirectTo.startsWith("exp+codecast://")) {

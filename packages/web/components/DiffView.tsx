@@ -374,7 +374,7 @@ export function DiffView({
       {needsTruncation && (
         <button
           onClick={() => setFullyExpanded(true)}
-          className="block w-full text-center py-1 text-[11px] text-sol-blue hover:text-sol-cyan transition-colors"
+          className="block w-full text-center py-2 sm:py-1 text-xs sm:text-[11px] text-sol-blue hover:text-sol-cyan transition-colors"
         >
           show {totalCodeLines - maxLines} more lines
         </button>

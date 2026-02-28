@@ -61,6 +61,29 @@ interface Config {
   codex_args?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];
+  agent_permission_modes?: {
+    claude?: "default" | "bypass";
+    codex?: "default" | "full_auto" | "bypass";
+    gemini?: "default" | "bypass";
+  };
+}
+
+function getPermissionFlags(agentType: "claude" | "codex" | "gemini", config?: Config | null): string | null {
+  const modes = config?.agent_permission_modes;
+  if (!modes) return null;
+
+  if (agentType === "claude") {
+    if (modes.claude === "bypass") return "--permission-mode bypassPermissions";
+  } else if (agentType === "codex") {
+    const existing = config?.codex_args || "";
+    if (existing.includes("--full-auto") || existing.includes("--ask-for-approval") || existing.includes("--dangerously-bypass")) return null;
+    if (modes.codex === "full_auto") return "--full-auto";
+    if (modes.codex === "bypass") return "-a never -s danger-full-access";
+  } else if (agentType === "gemini") {
+    // gemini flags TBD
+  }
+
+  return null;
 }
 
 interface ConversationCache {
@@ -342,6 +365,19 @@ async function sendHeartbeat(): Promise<void> {
         }
       }
     }
+
+    if (data.agent_permission_modes !== undefined) {
+      const currentConfig = readConfig();
+      const serverModes = data.agent_permission_modes;
+      const localModes = currentConfig?.agent_permission_modes;
+      if (JSON.stringify(serverModes) !== JSON.stringify(localModes)) {
+        log(`Agent permission modes updated from server: ${JSON.stringify(serverModes)}`);
+        patchConfig({ agent_permission_modes: serverModes });
+        if (activeConfig) {
+          activeConfig.agent_permission_modes = serverModes;
+        }
+      }
+    }
   } catch (err) {
     log(`Heartbeat error: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -471,8 +507,10 @@ async function executeRemoteCommand(
         if (agentType === "codex") {
           binary = "codex";
           if (prompt) binaryArgs.push(prompt);
-          const extraArgs = config.codex_args;
+          const extraArgs = config.codex_args || "";
           if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
+          const permFlags = getPermissionFlags(agentType, config);
+          if (permFlags) binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
         } else if (agentType === "gemini") {
           binary = "gemini";
           if (prompt) binaryArgs.push(prompt);
@@ -481,8 +519,12 @@ async function executeRemoteCommand(
           if (prompt) {
             binaryArgs.push("-p", prompt);
           }
-          const extraArgs = config.claude_args;
+          const extraArgs = config.claude_args || "";
           if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
+          const permFlags = getPermissionFlags(agentType, config);
+          if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode")) {
+            binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
+          }
         }
 
         const shellCmd = [binary, ...binaryArgs].map(a => a.includes(" ") ? `'${a.replace(/'/g, "'\\''")}'` : a).join(" ");
@@ -2051,6 +2093,7 @@ async function processCodexSession(
           syncService.updateSessionId(conversationId, sessionId).catch(() => {});
           if (tmuxEntry) {
             syncService.registerManagedSession(sessionId, process.pid, tmuxEntry.tmuxSession, conversationId).catch(() => {});
+            startCodexPermissionPoller(sessionId, tmuxEntry.tmuxSession, conversationId, syncService);
           }
           startedSessionTmux.delete(matchedStartedConversation);
           log(`Linked Codex session ${sessionId} to existing started conversation ${conversationId}`);
@@ -2181,6 +2224,11 @@ async function processCodexSession(
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
     tryRegisterSessionProcess(sessionId, "codex");
+
+    // Agent status tracking for Codex sessions
+    if (conversationId) {
+      sendAgentStatus(syncService, conversationId, sessionId, "working");
+    }
 
     updateStateCallback();
   } catch (err) {
@@ -2773,10 +2821,49 @@ async function injectViaTmux(target: string, content: string): Promise<void> {
     return;
   }
   const sanitized = content.replace(/\r?\n/g, " ");
-  const escaped = sanitized.replace(/'/g, "'\\''");
-  await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
+
+  // Check if there's a blocking dialog and dismiss it first
+  try {
+    const { stdout: preCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -5`);
+    if (/Press enter to continue|Update available/i.test(preCheck) && !/❯/.test(preCheck.split("\n").slice(-5).join("\n"))) {
+      log(`Clearing blocking dialog before inject to ${target}`);
+      await execAsync(`tmux send-keys -t '${target}' Enter`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  } catch {}
+
+  const id = `cc-${process.pid}-${Date.now()}`;
+  const tmpFile = `/tmp/${id}`;
+  try {
+    fs.writeFileSync(tmpFile, sanitized);
+    await execAsync(`tmux load-buffer -b '${id}' '${tmpFile}'`);
+    await execAsync(`tmux paste-buffer -t '${target}' -b '${id}' -d`);
+  } catch (err) {
+    const escaped = sanitized.replace(/'/g, "'\\''");
+    await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
   await new Promise(resolve => setTimeout(resolve, 150));
   await execAsync(`tmux send-keys -t '${target}' Enter`);
+
+  // Verify the message was submitted - if text is still in the input, retry Enter
+  for (let retry = 0; retry < 3; retry++) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    try {
+      const { stdout: postCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -5`);
+      const lastLines = postCheck.split("\n").filter(l => l.trim()).slice(-5).join("\n");
+      // If we see the sanitized content still sitting in the input area (between ❯ markers), Enter didn't go through
+      const contentPrefix = sanitized.slice(0, 40);
+      if (lastLines.includes(contentPrefix) && /❯/.test(lastLines)) {
+        log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
+        await execAsync(`tmux send-keys -t '${target}' Enter`);
+      } else {
+        break;
+      }
+    } catch { break; }
+  }
+
   log(`Injected via tmux to ${target}`);
 }
 
@@ -2921,6 +3008,110 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
 
 const resumeSessionCache = new Map<string, string>();
 const resumeHeartbeatIntervals = new Map<string, NodeJS.Timeout>();
+
+// Codex tmux pane monitoring for permission prompts
+const codexPermissionPollers = new Map<string, NodeJS.Timeout>();
+const codexPermissionPending = new Set<string>(); // sessionIds currently waiting for permission decision
+
+const CODEX_PERMISSION_PATTERNS = [
+  /Would you like to run the following command\?/,
+  /Press enter to confirm or esc to cancel/,
+  /Do you want to proceed\?/,
+];
+
+function detectCodexPermissionFromPane(paneContent: string): { reason: string; command: string } | null {
+  if (!CODEX_PERMISSION_PATTERNS.some(p => p.test(paneContent))) return null;
+
+  let reason = "";
+  let command = "";
+  const lines = paneContent.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.includes("Reason:")) {
+      reason = line.replace(/.*Reason:\s*/, "").trim();
+    }
+    if (line.startsWith("$ ")) {
+      command = line.slice(2).trim();
+      // Collect continuation lines (long commands wrap)
+      for (let j = i + 1; j < lines.length && j < i + 5; j++) {
+        const next = lines[j].trim();
+        if (next && !next.startsWith("1.") && !next.startsWith("2.") && !next.startsWith("3.") && !next.startsWith("Press ")) {
+          command += " " + next;
+        } else break;
+      }
+    }
+  }
+
+  return { reason: reason || "Command approval requested", command: command.slice(0, 300) };
+}
+
+function startCodexPermissionPoller(sessionId: string, tmuxSession: string, conversationId: string, syncService: SyncService): void {
+  if (codexPermissionPollers.has(sessionId)) return;
+
+  const interval = setInterval(async () => {
+    if (codexPermissionPending.has(sessionId)) return; // already waiting for decision
+
+    try {
+      const { stdout: paneContent } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -30 2>/dev/null`);
+      const prompt = detectCodexPermissionFromPane(paneContent);
+      if (!prompt) return;
+
+      codexPermissionPending.add(sessionId);
+      log(`Codex permission prompt detected in tmux for session ${sessionId.slice(0, 8)}: ${prompt.reason.slice(0, 100)}`);
+
+      sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
+
+      const preview = truncateForNotification(
+        `${prompt.command || prompt.reason}`, 200
+      );
+      syncService.createSessionNotification({
+        conversation_id: conversationId,
+        type: "permission_request",
+        title: "codecast - Permission needed",
+        message: preview,
+      }).catch(() => {});
+
+      const permissionPrompt = {
+        tool_name: "exec_command",
+        arguments_preview: prompt.command || prompt.reason,
+      };
+
+      handlePermissionRequest(syncService, conversationId, sessionId, permissionPrompt, log)
+        .then(async (decision) => {
+          if (decision) {
+            // Codex uses Enter to approve, Escape to deny
+            const key = decision.approved ? "Enter" : "Escape";
+            log(`Injecting Codex permission '${key}' for session ${sessionId.slice(0, 8)}`);
+            try {
+              await execAsync(`tmux send-keys -t '${tmuxSession}' ${key}`);
+            } catch (err) {
+              log(`Failed to inject Codex permission key: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          sendAgentStatus(syncService, conversationId, sessionId, "working");
+          codexPermissionPending.delete(sessionId);
+        })
+        .catch((err) => {
+          log(`Codex permission handling error: ${err instanceof Error ? err.message : String(err)}`);
+          codexPermissionPending.delete(sessionId);
+        });
+    } catch {
+      // tmux session may have ended
+    }
+  }, 3000);
+
+  codexPermissionPollers.set(sessionId, interval);
+  log(`Started Codex permission poller for session ${sessionId.slice(0, 8)} on tmux ${tmuxSession}`);
+}
+
+function stopCodexPermissionPoller(sessionId: string): void {
+  const interval = codexPermissionPollers.get(sessionId);
+  if (interval) {
+    clearInterval(interval);
+    codexPermissionPollers.delete(sessionId);
+    codexPermissionPending.delete(sessionId);
+  }
+}
 
 type StartedSessionInfo = {
   tmuxSession: string;
@@ -3071,7 +3262,9 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
 
   if (agentType === "codex") {
     cwd = validOverride || extractCodexCwd(jsonlContent) || process.env.HOME || "/tmp";
-    const extraFlags = config?.codex_args || "";
+    let extraFlags = config?.codex_args || "";
+    const permFlags = getPermissionFlags("codex", config);
+    if (permFlags) extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
     resumeCmd = `codex resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
   } else if (agentType === "gemini") {
     cwd = validOverride || process.env.HOME || "/tmp";
@@ -3088,6 +3281,10 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
         }
       }
     } catch {}
+    const permFlags = getPermissionFlags("claude", config);
+    if (permFlags && !extraFlags.includes("--dangerously-skip-permissions") && !extraFlags.includes("--permission-mode")) {
+      extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
+    }
     resumeCmd = `claude --resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
   }
 
@@ -3131,9 +3328,15 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
         syncServiceRef!.heartbeatManagedSession(sessionId).catch(() => {});
       }, 30000);
       resumeHeartbeatIntervals.set(sessionId, interval);
+
+      // Start tmux pane monitoring for Codex permission prompts
+      if (agentType === "codex" && conversationId) {
+        startCodexPermissionPoller(sessionId, tmuxSession, conversationId, syncServiceRef);
+      }
     }
 
     // Poll for agent readiness - check every 250ms, bail on fatal errors
+    // Must see the input prompt (❯) to know the TUI is ready for input
     const fatalErrors = [
       "cannot be launched inside another",
       "command not found",
@@ -3143,12 +3346,11 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       "is not an object",
       "ENOENT",
     ];
+    const promptPattern = /❯/;
     const startTime = Date.now();
     let ready = false;
-    let consecutiveAlive = 0;
-    const ALIVE_THRESHOLD = 3;
 
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 60; i++) {
       await new Promise(resolve => setTimeout(resolve, 250));
       try {
         const { stdout: paneContent } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
@@ -3157,15 +3359,10 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
           try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
           return false;
         }
-        if (await isTmuxAgentAlive(tmuxSession)) {
-          consecutiveAlive++;
-          if (consecutiveAlive >= ALIVE_THRESHOLD) {
-            log(`Agent ${shortId} ready after ${Date.now() - startTime}ms`);
-            ready = true;
-            break;
-          }
-        } else {
-          consecutiveAlive = 0;
+        if (promptPattern.test(paneContent) && await isTmuxAgentAlive(tmuxSession)) {
+          log(`Agent ${shortId} ready (prompt visible) after ${Date.now() - startTime}ms`);
+          ready = true;
+          break;
         }
       } catch {}
     }
@@ -3175,11 +3372,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
 
     // Inject the message (skip if empty — resume-only mode)
     if (content) {
-      const sanitized = content.replace(/\r?\n/g, " ");
-      const escaped = sanitized.replace(/'/g, "'\\''");
-      await execAsync(`tmux send-keys -t '${tmuxSession}' -l '${escaped}'`);
-      await new Promise(resolve => setTimeout(resolve, 150));
-      await execAsync(`tmux send-keys -t '${tmuxSession}' Enter`);
+      await injectViaTmux(tmuxSession + ":0.0", content);
       log(`Injected message to auto-resumed ${agentType} session ${shortId}`);
     } else {
       log(`Auto-resumed ${agentType} session ${shortId} (no message to inject)`);
@@ -3372,6 +3565,7 @@ async function postDeliveryHealthCheck(
     log(`Health check: agent process dead in ${tmuxSession} for ${sessionId.slice(0, 8)}`);
     try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
     resumeSessionCache.delete(sessionId);
+    stopCodexPermissionPoller(sessionId);
     const hbInterval = resumeHeartbeatIntervals.get(sessionId);
     if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
 
@@ -3519,11 +3713,19 @@ async function deliverMessage(
       }
     }
 
-    log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
-    sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
-    if (!sessionId) {
-      log(`Cannot deliver: no local session and materialization failed for ${conversationId}`);
-      return false;
+    const freshCache = readConversationCache();
+    const freshReverse = buildReverseConversationCache(freshCache);
+    sessionId = freshReverse[conversationId];
+    if (sessionId) {
+      conversationCache[sessionId] = conversationId;
+      log(`Found session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} via disk cache refresh`);
+    } else {
+      log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
+      sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
+      if (!sessionId) {
+        log(`Cannot deliver: no local session and materialization failed for ${conversationId}`);
+        return false;
+      }
     }
   }
 
@@ -3554,6 +3756,7 @@ async function deliverMessage(
       if (!(await isTmuxAgentAlive(cachedTmux))) {
         log(`Cached tmux ${cachedTmux} has no live agent process, clearing cache`);
         resumeSessionCache.delete(sessionId);
+        stopCodexPermissionPoller(sessionId);
         const hbInterval = resumeHeartbeatIntervals.get(sessionId);
         if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
         try { await execAsync(`tmux kill-session -t '${cachedTmux}' 2>/dev/null`); } catch {}
@@ -3565,6 +3768,7 @@ async function deliverMessage(
       }
     } catch {
       resumeSessionCache.delete(sessionId);
+      stopCodexPermissionPoller(sessionId);
       const hbInterval = resumeHeartbeatIntervals.get(sessionId);
       if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
     }

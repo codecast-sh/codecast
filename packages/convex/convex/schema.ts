@@ -56,6 +56,11 @@ export default defineSchema({
     autostart_enabled: v.optional(v.boolean()),
     daemon_pid: v.optional(v.number()),
     last_heartbeat: v.optional(v.number()),
+    agent_permission_modes: v.optional(v.object({
+      claude: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
+      codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
+      gemini: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
+    })),
   })
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])

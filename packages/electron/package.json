@@ -7,7 +7,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "CODECAST_URL=http://local.codecast.sh electron .",
-    "build": "electron-builder -m --config.mac.target=dir",
+    "build": "electron-builder -m",
+    "build:dir": "electron-builder -m --config.mac.target=dir",
     "build:local": "electron-builder -m --config.mac.target=dir --config.mac.identity=null",
     "install:local": "npm run build:local && pkill -f Codecast.app 2>/dev/null; sleep 1 && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && xattr -cr /Applications/Codecast.app && echo 'Installed to /Applications'"
   },
@@ -26,6 +27,7 @@
     "directories": {
       "buildResources": "assets"
     },
+    "afterSign": "notarize.js",
     "mac": {
       "target": ["zip"],
       "category": "public.app-category.developer-tools",

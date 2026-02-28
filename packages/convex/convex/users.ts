@@ -135,6 +135,7 @@ export const daemonHeartbeat = mutation({
       sync_projects: user?.sync_projects ?? [],
       team_id: user?.active_team_id ?? user?.team_id ?? undefined,
       min_cli_version: minVersionConfig?.value ?? undefined,
+      agent_permission_modes: user?.agent_permission_modes ?? undefined,
     };
   },
 });
@@ -1591,5 +1592,35 @@ export const getProjectsWithTeamsForCLI = query({
       });
 
     return { projects };
+  },
+});
+
+export const getAgentPermissionModes = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const user = await ctx.db.get(userId);
+    return user?.agent_permission_modes ?? null;
+  },
+});
+
+export const updateAgentPermissionModes = mutation({
+  args: {
+    claude: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
+    codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
+    gemini: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    await ctx.db.patch(userId, {
+      agent_permission_modes: {
+        claude: args.claude,
+        codex: args.codex,
+        gemini: args.gemini,
+      },
+    });
+    return userId;
   },
 });

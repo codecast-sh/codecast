@@ -176,14 +176,14 @@ export function NotificationBell() {
           />
         </svg>
         {unreadCount !== undefined && unreadCount > 0 && (
-          <span className="absolute top-0 right-0 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold leading-none text-white bg-red-600 rounded-full transform translate-x-1/2 -translate-y-1/2">
+          <span className="absolute top-0 right-0 inline-flex items-center justify-center px-1 sm:px-1.5 py-0.5 text-[10px] sm:text-xs font-bold leading-none text-white bg-red-600 rounded-full transform translate-x-1/2 -translate-y-1/2 min-w-[16px] sm:min-w-[18px]">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-[520px] bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden z-50">
+        <div className="absolute right-0 mt-2 w-[calc(100vw-1rem)] sm:w-[520px] max-w-[520px] bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden z-50">
           <div className="px-5 py-3 border-b border-sol-border flex items-center justify-between">
             <h3 className="text-sm font-semibold text-sol-text">Notifications</h3>
             {unreadCount !== undefined && unreadCount > 0 && (

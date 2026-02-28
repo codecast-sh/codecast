@@ -196,9 +196,9 @@ export function ConversationDiffLayout({
     return (
       <div className={`${heightClass} w-full`}>
         <Tabs defaultValue="conversation" className="h-full flex flex-col">
-          <TabsList className="grid w-full grid-cols-2 shrink-0">
-            <TabsTrigger value="conversation">Conversation</TabsTrigger>
-            <TabsTrigger value="diff">
+          <TabsList className="grid w-full grid-cols-2 shrink-0 h-9 sm:h-11">
+            <TabsTrigger value="conversation" className="py-1.5 sm:py-2 text-xs sm:text-sm">Conversation</TabsTrigger>
+            <TabsTrigger value="diff" className="py-1.5 sm:py-2 text-xs sm:text-sm">
               Diff {changes.length > 0 && `(${changes.length})`}
             </TabsTrigger>
           </TabsList>
@@ -498,7 +498,8 @@ function ChangesBar({ changes }: { changes: FileChange[] }) {
         )}
       </div>
       <span className="text-[11px] text-sol-text-dim group-hover:text-sol-text-secondary transition-colors">
-        {uniqueFiles.length} file{uniqueFiles.length !== 1 ? "s" : ""} changed
+        <span className="sm:hidden">{uniqueFiles.length}</span>
+        <span className="hidden sm:inline">{uniqueFiles.length} file{uniqueFiles.length !== 1 ? "s" : ""} changed</span>
       </span>
       <svg className="w-3 h-3 text-sol-text-dim/60 group-hover:text-sol-text-dim transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />

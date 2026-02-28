@@ -535,6 +535,61 @@ function extractPlanContent(text: string): string | null {
   return null;
 }
 
+type UserMessageKind =
+  | { kind: 'normal' }
+  | { kind: 'command' }
+  | { kind: 'interrupt'; tone: 'sky' | 'amber' }
+  | { kind: 'skill_expansion'; cmdName?: string }
+  | { kind: 'task_notification' }
+  | { kind: 'compaction_prompt' }
+  | { kind: 'compaction_summary' }
+  | { kind: 'plan'; planContent: string }
+  | { kind: 'noise' }
+  | { kind: 'tool_results_only' }
+  | { kind: 'empty' };
+
+const STICKY_NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "continue", "<task-notification>"];
+
+function classifyUserMessage(
+  msg: Message,
+  agentType?: string,
+  immediatePrev?: Message | null,
+  contextPrev?: Message | null,
+): UserMessageKind {
+  if (msg.tool_results && msg.tool_results.length > 0 && (!msg.content || !msg.content.trim())) {
+    return { kind: 'tool_results_only' };
+  }
+  const content = msg.content;
+  if (!content || !content.trim()) {
+    return msg.images?.length ? { kind: 'normal' } : { kind: 'empty' };
+  }
+  const t = content.trim();
+  if (isCommandMessage(t)) return { kind: 'command' };
+  if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
+  if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
+  if (isSkillExpansion(t)) return { kind: 'skill_expansion' };
+  if (isTaskNotification(t)) return { kind: 'task_notification' };
+  if (isCompactionPromptMessage(t)) return { kind: 'compaction_prompt' };
+  if (immediatePrev?.role === 'user' && immediatePrev?.content && isCommandMessage(immediatePrev.content) && t.length > 200) {
+    const cmdMatch = immediatePrev.content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
+    return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
+  }
+  if (contextPrev?.role === 'system' && contextPrev?.subtype === 'compact_boundary') {
+    return { kind: 'compaction_summary' };
+  }
+  const planContent = extractPlanContent(t);
+  if (planContent) return { kind: 'plan', planContent };
+  if (t.length < 4 || STICKY_NOISE_PREFIXES.some(p => t.startsWith(p))) {
+    const stripped = t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
+    if (!stripped || stripped.length < 4) return { kind: 'noise' };
+  }
+  return { kind: 'normal' };
+}
+
+function isStickyWorthy(kind: UserMessageKind): boolean {
+  return kind.kind === 'normal' || kind.kind === 'plan';
+}
+
 function formatRelativeTime(ts: number): string {
   const now = Date.now();
   const diff = now - ts;
@@ -704,9 +759,9 @@ function ConversationMetadata({
         </div>
       )}
       {model && (
-        <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
-          <span className="text-sol-text-dim hidden sm:inline">&middot;</span>
-          <span className="font-mono truncate max-w-[120px] sm:max-w-none" title={model}>{formatModel(model)}</span>
+        <div className="hidden sm:flex items-center gap-1 flex-shrink-0">
+          <span className="text-sol-text-dim">&middot;</span>
+          <span className="font-mono truncate max-w-none" title={model}>{formatModel(model)}</span>
         </div>
       )}
       {startedAt && (
@@ -717,17 +772,17 @@ function ConversationMetadata({
       )}
       {messageCount !== undefined && messageCount > 0 && (
         <button
-          className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0 hover:text-sol-text-muted transition-colors cursor-pointer"
+          className="hidden sm:flex items-center gap-1 flex-shrink-0 hover:text-sol-text-muted transition-colors cursor-pointer"
           title="Copy conversation ID"
           onClick={() => { if (conversationId) setTimeout(() => { copyToClipboard(conversationId).then(() => toast.success("ID copied")); }); }}
         >
-          <span className="text-sol-text-dim hidden sm:inline">&middot;</span>
+          <span className="text-sol-text-dim">&middot;</span>
           <span>{messageCount} {messageCount === 1 ? "msg" : "msgs"}</span>
         </button>
       )}
       {startedAt && (
-        <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
-          <span className="text-sol-text-dim hidden sm:inline">&middot;</span>
+        <div className="hidden sm:flex items-center gap-1 flex-shrink-0">
+          <span className="text-sol-text-dim">&middot;</span>
           <span>{formatDuration(startedAt)}</span>
         </div>
       )}
@@ -1463,7 +1518,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
       >
         <span className={`font-mono ${toolColor}`}>{formatToolName(tool.name)}</span>
         {summary && (
-          <span className="text-sol-text-muted font-mono truncate">{summary}</span>
+          <span className="text-sol-text-muted font-mono truncate min-w-0">{summary}</span>
         )}
         {executedTabUrl && (
           <a
@@ -1635,13 +1690,13 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
             )
           ) : isBash && (parsedInput.command || parsedInput.cmd) ? (
             <div className="max-h-80 overflow-auto">
-              <div className="px-2 py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
-                <pre className="text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+              <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
+                <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
                   $ {String(parsedInput.command || parsedInput.cmd)}
                 </pre>
               </div>
               {processedContent && processedContent.trim() ? (
-                <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
+                <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
                   {processedContent}
                 </pre>
               ) : (
@@ -3419,7 +3474,7 @@ function AssistantBlock({
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
                   </svg>
-                  <span className="text-xs text-sol-text-dim">Full Screen</span>
+                  <span className="hidden sm:inline text-xs text-sol-text-dim">Full Screen</span>
                 </button>
                 <button
                   onClick={() => setContentExpanded(e => !e)}
@@ -4435,7 +4490,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                 ) : isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
               </p>
               <div className="flex items-center gap-2">
-                <p className="text-[11px] opacity-[0.55] flex items-center gap-1">
+                <p className="text-[11px] opacity-[0.55] hidden sm:flex items-center gap-1">
                   <kbd className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">Alt</kbd>
                   <span className="text-[9px]">+</span>
                   <kbd className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">↵</kbd>
@@ -4462,7 +4517,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               </div>
             </div>
           )}
-          <form onSubmit={handleSubmit} className={`mx-auto px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+          <form onSubmit={handleSubmit} className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
             <div className={`flex flex-col bg-sol-bg-alt border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
@@ -4505,7 +4560,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   onFocus={() => setIsFocused(true)}
                   onBlur={() => setIsFocused(false)}
                   disabled={isWaitingForUpload}
-                  placeholder="Send a message to this session..."
+                  placeholder="Send a message..."
                   rows={1}
                   className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                 />
@@ -4824,15 +4879,42 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     ) as TimelineItem[];
   }, [messages, commits, pullRequests, activeBranches, loadedForkMessages]);
 
+  const userMsgKindMap = useMemo(() => {
+    const map = new Map<string, UserMessageKind>();
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      const msg = item.data as Message;
+      if (msg.role !== 'user') continue;
+      let immediatePrev: Message | null = null;
+      for (let j = i - 1; j >= 0; j--) {
+        if (timeline[j].type === 'message') { immediatePrev = timeline[j].data as Message; break; }
+      }
+      let contextPrev: Message | null = null;
+      for (let j = i - 1; j >= 0; j--) {
+        const p = timeline[j];
+        if (p.type !== 'message') continue;
+        const pm = p.data as Message;
+        if (pm.role === 'user' && pm.tool_results?.length && (!pm.content || !pm.content.trim())) continue;
+        if (pm.role === 'user' && pm.content && isCommandMessage(pm.content)) continue;
+        contextPrev = pm;
+        break;
+      }
+      map.set(msg._id, classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev));
+    }
+    return map;
+  }, [timeline, conversation?.agent_type]);
+
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
     const last = timeline[timeline.length - 1];
     if (last.type !== 'message') return false;
     const msg = last.data as Message;
     if (msg.role !== 'user') return false;
-    if (msg.content && isInterruptLikeMessage(msg.content, conversation.agent_type)) return false;
+    const kind = userMsgKindMap.get(msg._id);
+    if (kind?.kind === 'interrupt') return false;
     return true;
-  }, [conversation, timeline, hasMoreBelow]);
+  }, [conversation, timeline, hasMoreBelow, userMsgKindMap]);
 
   const isThinking = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
@@ -4846,22 +4928,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation, timeline, hasMoreBelow]);
 
   const stickyUserMsgIndices = useMemo(() => {
-    const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "continue", "<task-notification>"];
     const indices: number[] = [];
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
       const msg = item.data as Message;
-      if (msg.role !== 'user' || !msg.content?.trim()) continue;
-      const t = msg.content.trim();
-      if (t.length < 4 || NOISE_PREFIXES.some(p => t.startsWith(p))) continue;
-      if (isCommandMessage(t) || isInterruptLikeMessage(t, conversation?.agent_type) || isSkillExpansion(t)) continue;
-      const stripped = t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
-      if (!stripped || stripped.length < 4) continue;
-      indices.push(i);
+      if (msg.role !== 'user') continue;
+      const kind = userMsgKindMap.get(msg._id);
+      if (kind && isStickyWorthy(kind)) indices.push(i);
     }
     return indices;
-  }, [timeline, conversation?.agent_type]);
+  }, [timeline, userMsgKindMap]);
 
   const [activeStickyMsg, setActiveStickyMsg] = useState<{ index: number; content: string; id: string } | null>(null);
 
@@ -5050,10 +5127,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const formattedMessages = messages
       .filter((msg) => {
         if (msg.role === "system") return false;
-        if (msg.role === "user" && msg.tool_results) return false;
-        if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return false;
-        if (msg.role === "user" && msg.content && isInterruptLikeMessage(msg.content, conversation?.agent_type)) return false;
-        if (msg.role === "user" && msg.content && isSkillExpansion(msg.content)) return false;
+        if (msg.role === "user") {
+          const kind = userMsgKindMap.get(msg._id);
+          if (!kind || !isStickyWorthy(kind)) return false;
+        }
         return msg.content && msg.content.trim().length > 0;
       })
       .map((msg) => {
@@ -5149,10 +5226,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const msg = item.data as Message;
       if (collapsed) {
         if (msg.role === "system") return 0;
-        if (msg.role === "user" && msg.content && isCommandMessage(msg.content)) return 0;
-        if (msg.role === "user" && msg.content && isInterruptLikeMessage(msg.content, conversation?.agent_type)) return 0;
-        if (msg.role === "user" && msg.content && isSkillExpansion(msg.content)) return 0;
-        if (msg.role === "user" && msg.content && isTaskNotification(msg.content)) return 0;
+        if (msg.role === "user") {
+          const kind = userMsgKindMap.get(msg._id);
+          if (kind && kind.kind !== 'normal' && kind.kind !== 'plan') return 0;
+        }
         if (msg.role === "assistant") {
           const hasTextContent = msg.content && msg.content.trim().length > 0;
           if (!hasTextContent) return 0;
@@ -5172,14 +5249,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       if (msg.role === "system") return 8;
       if (msg.role === "user") {
-        if (msg.content && isCommandMessage(msg.content)) return 30;
-        if (msg.content && isInterruptLikeMessage(msg.content, conversation?.agent_type)) return 30;
-        if (msg.content && isSkillExpansion(msg.content)) return 44;
-        if (msg.content && isTaskNotification(msg.content)) return 40;
-        if (msg.content && msg.content.length > 200) {
-          const pi = index > 0 ? timeline[index - 1] : null;
-          const pm = pi?.type === 'message' ? (pi.data as Message) : null;
-          if (pm?.role === 'user' && pm?.content && isCommandMessage(pm.content)) return 44;
+        const kind = userMsgKindMap.get(msg._id);
+        switch (kind?.kind) {
+          case 'command': return 30;
+          case 'interrupt': return 30;
+          case 'skill_expansion': return 44;
+          case 'task_notification': return 40;
+          case 'compaction_prompt': return 0;
+          case 'compaction_summary': return 60;
+          case 'noise': return 0;
+          case 'tool_results_only': return 0;
+          case 'empty': return 0;
         }
         const lines = (msg.content || "").split("\n").length;
         return Math.max(60, lines * 18 + 40);
@@ -5887,11 +5967,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const prevItem = timeline[i];
       if (!prevItem || prevItem.type !== "message") continue;
       const prevMsg = prevItem.data as Message;
-      if (prevMsg.role === "user" && prevMsg.tool_results && prevMsg.tool_results.length > 0 && (!prevMsg.content || !prevMsg.content.trim())) {
-        continue;
-      }
-      if (prevMsg.role === "user" && prevMsg.content && isCommandMessage(prevMsg.content)) {
-        continue;
+      if (prevMsg.role === "user") {
+        const kind = userMsgKindMap.get(prevMsg._id);
+        if (kind?.kind === 'tool_results_only' || kind?.kind === 'command') continue;
       }
       return prevMsg;
     }
@@ -5952,63 +6030,40 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (msg.role === "user") {
-      if (msg.tool_results && msg.tool_results.length > 0 && (!msg.content || !msg.content.trim())) {
-        return null;
-      }
-      if (msg.content && msg.content.trim()) {
-        if (isCommandMessage(msg.content)) {
-          if (collapsed) return null;
-          return <CommandStatusLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
-        }
-        if (conversation?.agent_type === "codex" && isCodexTurnAbortedMessage(msg.content)) {
-          if (collapsed) return null;
-          return <InterruptStatusLine key={msg._id} label="turn aborted" tone="amber" />;
-        }
-        if (isInterruptMessage(msg.content)) {
-          if (collapsed) return null;
-          return <InterruptStatusLine key={msg._id} />;
-        }
-        if (isSkillExpansion(msg.content)) {
-          if (collapsed) return null;
-          return <SkillExpansionBlock key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
-        }
-        if (isTaskNotification(msg.content)) {
-          if (collapsed) return null;
-          return <TaskNotificationLine key={msg._id} content={msg.content} timestamp={msg.timestamp} />;
-        }
-        if (isCompactionPromptMessage(msg.content)) {
+      const kind = userMsgKindMap.get(msg._id) ?? { kind: 'normal' as const };
+      switch (kind.kind) {
+        case 'tool_results_only':
+        case 'compaction_prompt':
+        case 'noise':
+        case 'empty':
           return null;
-        }
-        // Check if previous message was a command - if so, this is likely the expanded skill prompt
-        const prevItemForSkill = index > 0 ? timeline[index - 1] : null;
-        const prevMsgForSkill = prevItemForSkill?.type === 'message' ? (prevItemForSkill.data as Message) : null;
-        if (prevMsgForSkill?.role === 'user' && prevMsgForSkill?.content && isCommandMessage(prevMsgForSkill.content) && msg.content.length > 200) {
+        case 'command':
           if (collapsed) return null;
-          const cmdMatch = prevMsgForSkill.content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
-          return <SkillExpansionBlock key={msg._id} content={msg.content} timestamp={msg.timestamp} cmdName={cmdMatch?.[1]?.replace(/^\//, "")} />;
+          return <CommandStatusLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+        case 'interrupt':
+          if (collapsed) return null;
+          return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
+        case 'skill_expansion':
+          if (collapsed) return null;
+          return <SkillExpansionBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} cmdName={kind.cmdName} />;
+        case 'task_notification':
+          if (collapsed) return null;
+          return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+        case 'compaction_summary':
+          return <CompactionSummaryBlock key={msg._id} content={msg.content!} />;
+        case 'plan':
+          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} onStartShareSelection={handleStartShareSelection} />;
+        case 'normal': {
+          if (!msg.content?.trim() && !(msg.images && msg.images.length > 0)) return null;
+          const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} />;
         }
-        // Check if previous message was a compact_boundary - if so, render as compaction summary
-        const prevMsg = getPreviousNonToolResultMessage(index);
-        if (prevMsg?.role === 'system' && prevMsg?.subtype === 'compact_boundary') {
-          return <CompactionSummaryBlock key={msg._id} content={msg.content} />;
-        }
-        const planContent = extractPlanContent(msg.content);
-        if (planContent) {
-          return <PlanBlock key={msg._id} content={planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} onStartShareSelection={handleStartShareSelection} />;
-        }
-        const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} />;
       }
-      if (msg.images && msg.images.length > 0) {
-        const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-        return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} />;
-      }
-      return null;
     }
 
     if (msg.role === "assistant") {
       const prevMsgForCompaction = getPreviousNonToolResultMessage(index);
-      if (prevMsgForCompaction?.role === "user" && prevMsgForCompaction.content && isCompactionPromptMessage(prevMsgForCompaction.content)) {
+      if (prevMsgForCompaction?.role === "user" && userMsgKindMap.get(prevMsgForCompaction._id)?.kind === 'compaction_prompt') {
         const summaryContent = extractCompactionSummaryContent(msg.content || "");
         if (!summaryContent) return null;
         return <CompactionSummaryBlock key={msg._id} content={summaryContent} />;
@@ -6157,11 +6212,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   return (
     <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
       <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass}`}>
-        <div className="max-w-4xl mx-auto px-2 sm:px-3 md:px-4 py-1">
+        <div className="max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0">
             <Link
               href={backHref}
-              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-xs flex-shrink-0"
+              className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm sm:text-xs flex-shrink-0 p-1 -m-1 sm:p-0 sm:m-0"
             >
               &larr;
             </Link>
@@ -6196,17 +6251,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   managedSession?.agent_status === "connected" ? "bg-sol-cyan" :
                   "bg-emerald-400"
                 }`} />
-                {managedSession?.agent_status === "thinking" ? "Thinking" :
+                <span className="hidden sm:inline">{managedSession?.agent_status === "thinking" ? "Thinking" :
                  managedSession?.agent_status === "compacting" ? "Compacting" :
                  managedSession?.agent_status === "permission_blocked" ? "Needs Input" :
                  managedSession?.agent_status === "connected" ? "Connected" :
-                 "Working"}
+                 "Working"}</span>
+                <span className="sm:hidden">{managedSession?.agent_status === "thinking" ? "Think" :
+                 managedSession?.agent_status === "compacting" ? "Compact" :
+                 managedSession?.agent_status === "permission_blocked" ? "Input" :
+                 managedSession?.agent_status === "connected" ? "Conn" :
+                 "Work"}</span>
               </span>
             )}
 
             {conversation && (
               <TooltipProvider delayDuration={300}>
-              <div className="flex items-center gap-1 flex-shrink-0">
+              <div className="flex items-center gap-1 flex-shrink-0 overflow-hidden">
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
@@ -6237,7 +6297,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <span
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
+                        className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
                         onClick={() => {
                           if (conversation.git_remote_url) {
                             const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
@@ -6619,8 +6679,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           >
             {/* Earlier messages indicator at top */}
             {hasMoreAbove && !isLoadingOlder && (
-              <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
-                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-xs shadow-sm pointer-events-auto">
+              <div className="sticky top-0 z-10 flex justify-center py-1 sm:py-2 pointer-events-none">
+                <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-[10px] sm:text-xs shadow-sm pointer-events-auto">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
                   </svg>
@@ -6632,8 +6692,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
             {/* Loading indicator at top */}
             {isLoadingOlder && (
-              <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-xs pointer-events-auto">
+              <div className="sticky top-0 z-10 flex justify-center py-1 sm:py-2 pointer-events-none">
+                <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-full bg-sol-bg-alt/90 border border-sol-border text-sol-text-muted text-[10px] sm:text-xs pointer-events-auto">
                   <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -6665,7 +6725,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`max-w-4xl mx-auto px-2 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {content}
                     </div>
                   )}
@@ -6750,7 +6810,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       {timeline.length > 0 && (
-        <div className="absolute right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115) }}>
+        <div className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115) }}>
           <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
@@ -6764,16 +6824,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     });
                   }
                 }}
-                className={`p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((!isNearTop && isScrollable) || hasMoreAbove) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                className={`p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((!isNearTop && isScrollable) || hasMoreAbove) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label="Scroll to top"
               >
                 {isLoadingOlder ? (
-                  <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <svg className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                 ) : (
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
                   </svg>
                 )}
@@ -6791,23 +6851,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }
                   setUserScrolled(false);
                 }}
-                className={`p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((userScrolled && isScrollable) || hasMoreBelow) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                className={`p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((userScrolled && isScrollable) || hasMoreBelow) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 aria-label="Scroll to bottom"
               >
                 {isLoadingNewer ? (
-                  <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <svg className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                 ) : (
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
                   </svg>
                 )}
               </button>
           </div>
           {(isScrollable && (!isNearTop || userScrolled) || hasMoreAbove || hasMoreBelow) && (
-            <div className="w-1.5 relative border border-sol-border overflow-hidden">
+            <div className="hidden sm:block w-1.5 relative border border-sol-border overflow-hidden">
               <div
                 ref={scrollProgressRef}
                 className="w-full bg-sol-cyan/60 absolute inset-x-0 top-0"

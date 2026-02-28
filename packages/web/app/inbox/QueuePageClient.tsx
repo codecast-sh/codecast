@@ -216,7 +216,7 @@ function SessionCard({
         tabIndex={0}
         onClick={() => onSelect(globalIndex)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
-        className="w-full text-left px-3 py-2 pr-8 cursor-pointer"
+        className="w-full text-left px-2.5 sm:px-3 py-1.5 sm:py-2 pr-7 sm:pr-8 cursor-pointer"
       >
         <div className="flex items-center justify-between gap-2 mb-0.5">
           <div className={`text-sm truncate leading-tight ${
@@ -795,6 +795,71 @@ export function QueuePageClient() {
     }
   }
 
+  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
+  const [isMobileInbox, setIsMobileInbox] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsMobileInbox(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  const inboxContent = (
+    <>
+      {viewingDismissedSession ? (
+        <InboxConversation
+          key={viewingDismissedSession._id}
+          sessionId={viewingDismissedSession._id}
+          isIdle={viewingDismissedSession.is_idle}
+          onSendAndAdvance={() => setViewingDismissedId(null)}
+          lastUserMessage={viewingDismissedSession.last_user_message}
+          sessionError={viewingDismissedSession.session_error}
+        />
+      ) : currentSession ? (
+        <InboxConversation
+          key={currentSession.stableKey || currentSession._id}
+          sessionId={currentSession._id}
+          isIdle={currentSession.is_idle}
+          onSendAndAdvance={handleSendAndAdvance}
+          lastUserMessage={currentSession.last_user_message}
+          sessionError={currentSession.session_error}
+        />
+      ) : pendingInjectId ? (
+        <div className="h-full flex items-center justify-center text-sol-text-dim">
+          <div className="flex items-center gap-2">
+            <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            <span className="text-sm">Loading session...</span>
+          </div>
+        </div>
+      ) : (
+        <div className="h-full flex items-center justify-center">
+          <div className="text-center">
+            {activeSessions === undefined ? (
+              <svg className="w-12 h-12 mx-auto mb-3 text-sol-text-dim animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+            ) : (
+              <svg className="w-12 h-12 mx-auto mb-3 text-sol-text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            )}
+            <p className="text-sol-text-muted text-sm">
+              {activeSessions === undefined ? "Loading..." : "No active sessions"}
+            </p>
+            <p className="text-sol-text-dim text-xs mt-1">
+              Sessions will appear here when agents are running
+            </p>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   return (
     <DashboardLayout>
       {switcherState.open && (
@@ -804,65 +869,39 @@ export function QueuePageClient() {
         />
       )}
       <div className="flex flex-col h-full">
-      <Group orientation="horizontal" className="flex-1 min-h-0" defaultLayout={inboxLayout} onLayoutChange={handleInboxLayoutChange}>
-        <Panel id="inbox-main" defaultSize="76%" minSize="30%">
-          {viewingDismissedSession ? (
-            <InboxConversation
-              key={viewingDismissedSession._id}
-              sessionId={viewingDismissedSession._id}
-              isIdle={viewingDismissedSession.is_idle}
-              onSendAndAdvance={() => setViewingDismissedId(null)}
-              lastUserMessage={viewingDismissedSession.last_user_message}
-              sessionError={viewingDismissedSession.session_error}
-            />
-          ) : currentSession ? (
-            <InboxConversation
-              key={currentSession.stableKey || currentSession._id}
-              sessionId={currentSession._id}
-              isIdle={currentSession.is_idle}
-              onSendAndAdvance={handleSendAndAdvance}
-              lastUserMessage={currentSession.last_user_message}
-              sessionError={currentSession.session_error}
-            />
-          ) : pendingInjectId ? (
-            <div className="h-full flex items-center justify-center text-sol-text-dim">
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <span className="text-sm">Loading session...</span>
+      {isMobileInbox ? (
+        <div className="flex-1 min-h-0 relative">
+          <div className="h-full">{inboxContent}</div>
+          <button
+            onClick={() => setMobileSessionsOpen(!mobileSessionsOpen)}
+            className="absolute top-2 right-2 z-30 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sol-bg-alt/95 border border-sol-border/60 text-sol-text-dim text-xs backdrop-blur-sm shadow-md hover:text-sol-text hover:border-sol-border transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
+            </svg>
+            {sessions.length}
+          </button>
+          {mobileSessionsOpen && (
+            <>
+              <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setMobileSessionsOpen(false)} />
+              <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
+                <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={dismissedSessions} />
               </div>
-            </div>
-          ) : (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center">
-                {activeSessions === undefined ? (
-                  <svg className="w-12 h-12 mx-auto mb-3 text-sol-text-dim animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                ) : (
-                  <svg className="w-12 h-12 mx-auto mb-3 text-sol-text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                )}
-                <p className="text-sol-text-muted text-sm">
-                  {activeSessions === undefined ? "Loading..." : "No active sessions"}
-                </p>
-                <p className="text-sol-text-dim text-xs mt-1">
-                  Sessions will appear here when agents are running
-                </p>
-              </div>
-            </div>
+            </>
           )}
-        </Panel>
-        <Separator className="relative w-1 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
-        <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
-          <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={dismissedSessions} />
-        </Panel>
-      </Group>
-      {showShortcuts && (
+        </div>
+      ) : (
+        <Group orientation="horizontal" className="flex-1 min-h-0" defaultLayout={inboxLayout} onLayoutChange={handleInboxLayoutChange}>
+          <Panel id="inbox-main" defaultSize="76%" minSize="30%">
+            {inboxContent}
+          </Panel>
+          <Separator className="relative w-1 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
+          <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
+            <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={dismissedSessions} />
+          </Panel>
+        </Group>
+      )}
+      {showShortcuts && !isMobileInbox && (
         <div className="flex-shrink-0 px-3 py-1.5 border-t border-sol-border/50 bg-sol-bg-alt/40 flex items-center gap-4 text-[10px] text-sol-text-dim">
           <span className="flex items-center gap-1">
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>

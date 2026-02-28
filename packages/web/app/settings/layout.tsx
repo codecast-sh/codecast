@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/button";
 
 const tabs = [
   { name: "CLI Setup", path: "/settings/cli" },
+  { name: "Agents", path: "/settings/agents" },
   { name: "Sync", path: "/settings/sync" },
   { name: "Profile", path: "/settings/profile" },
   { name: "Accounts", path: "/settings/accounts" },

@@ -337,6 +337,24 @@ export interface GenerateClaudeCodeJsonlOptions {
   tailMessages?: number;
 }
 
+type ExportedToolResult = NonNullable<ExportedMessage["tool_results"]>[number];
+
+function partitionToolResultsByExpected(
+  results: ExportedMessage["tool_results"] | undefined,
+  expectedToolUseIds: Set<string>
+): { matched: ExportedToolResult[]; orphaned: ExportedToolResult[] } {
+  const matched: ExportedToolResult[] = [];
+  const orphaned: ExportedToolResult[] = [];
+  for (const tr of results || []) {
+    if (expectedToolUseIds.has(tr.tool_use_id)) {
+      matched.push(tr);
+    } else {
+      orphaned.push(tr);
+    }
+  }
+  return { matched, orphaned };
+}
+
 export function generateClaudeCodeJsonl(
   data: ExportResult,
   options: GenerateClaudeCodeJsonlOptions = {}
@@ -345,6 +363,7 @@ export function generateClaudeCodeJsonl(
   const sessionId = uuidv4();
   const cwd = data.conversation.project_path || process.cwd();
   let parentUuid: string | null = null;
+  let expectedToolUseIds = new Set<string>();
 
   const firstUuid = uuidv4();
   lines.push(JSON.stringify({
@@ -382,20 +401,29 @@ export function generateClaudeCodeJsonl(
     const uuid = msg.message_uuid || uuidv4();
 
     if (msg.role === "user") {
-      if (msg.tool_results && msg.tool_results.length > 0) {
-        const content = msg.tool_results.map((tr) => ({
-          type: "tool_result" as const,
-          tool_use_id: tr.tool_use_id,
-          content: [{ type: "text" as const, text: truncate(tr.content || "") }],
-        }));
+      const { matched } = partitionToolResultsByExpected(msg.tool_results, expectedToolUseIds);
+      if (matched.length > 0) {
+        const content: Array<Record<string, unknown>> = [];
+        if (msg.content && msg.content.trim().length > 0) {
+          content.push({ type: "text", text: msg.content });
+        }
+        for (const tr of matched) {
+          content.push({
+            type: "tool_result",
+            tool_use_id: tr.tool_use_id,
+            content: [{ type: "text", text: truncate(tr.content || "") }],
+            ...(tr.is_error ? { is_error: true } : {}),
+          });
+        }
         lines.push(JSON.stringify({
           parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
           version: "2.1.29", gitBranch: "main", type: "user",
           message: { role: "user", content },
           uuid, timestamp: msg.timestamp,
-          toolUseResult: msg.tool_results.map((tr) => ({ type: "text", text: tr.content || "" })),
+          toolUseResult: matched.map((tr) => ({ type: "text", text: tr.content || "" })),
         }));
-      } else {
+        parentUuid = uuid;
+      } else if (msg.content && msg.content.length > 0) {
         lines.push(JSON.stringify({
           parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
           version: "2.1.29", gitBranch: "main", type: "user",
@@ -403,16 +431,19 @@ export function generateClaudeCodeJsonl(
           uuid, timestamp: msg.timestamp,
           thinkingMetadata: { maxThinkingTokens: 31999 }, todos: [], permissionMode: "bypassPermissions",
         }));
+        parentUuid = uuid;
       }
-      parentUuid = uuid;
+      expectedToolUseIds = new Set();
     } else if (msg.role === "assistant") {
       const contentBlocks: any[] = [];
+      const assistantToolUseIds = new Set<string>();
       if (msg.content) contentBlocks.push({ type: "text", text: msg.content });
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
           let input: any = {};
           try { input = JSON.parse(tc.input); } catch {}
           contentBlocks.push({ type: "tool_use", id: tc.id, name: tc.name, input });
+          assistantToolUseIds.add(tc.id);
         }
       }
       if (contentBlocks.length === 0) contentBlocks.push({ type: "text", text: "" });
@@ -431,22 +462,26 @@ export function generateClaudeCodeJsonl(
         type: "assistant", uuid, timestamp: msg.timestamp,
       }));
       parentUuid = uuid;
+      expectedToolUseIds = assistantToolUseIds;
 
-      if (msg.tool_results && msg.tool_results.length > 0) {
+      const { matched: inlineMatched } = partitionToolResultsByExpected(msg.tool_results, expectedToolUseIds);
+      if (inlineMatched.length > 0) {
         const trUuid = uuidv4();
-        const trContent = msg.tool_results.map((tr) => ({
+        const trContent = inlineMatched.map((tr) => ({
           type: "tool_result" as const,
           tool_use_id: tr.tool_use_id,
           content: [{ type: "text" as const, text: truncate(tr.content || "") }],
+          ...(tr.is_error ? { is_error: true } : {}),
         }));
         lines.push(JSON.stringify({
           parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
           version: "2.1.29", gitBranch: "main", type: "user",
           message: { role: "user", content: trContent },
           uuid: trUuid, timestamp: msg.timestamp,
-          toolUseResult: msg.tool_results.map((tr) => ({ type: "text", text: tr.content || "" })),
+          toolUseResult: inlineMatched.map((tr) => ({ type: "text", text: tr.content || "" })),
         }));
         parentUuid = trUuid;
+        expectedToolUseIds = new Set();
       }
     }
   }
@@ -521,18 +556,20 @@ export function generateCodexJsonl(
             payload: { type: "function_call_output", call_id: tr.tool_use_id, output: tr.is_error ? `Error:\n${tr.content}` : `Exit code: 0\nOutput:\n${tr.content}` },
           }));
         }
-      } else if (msg.content) {
-        lines.push(JSON.stringify({ timestamp: ts, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: msg.content }] } }));
-        lines.push(JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message: msg.content, images: [], local_images: [], text_elements: [] } }));
-        lines.push(JSON.stringify({
-          timestamp: ts, type: "turn_context",
-          payload: {
-            cwd, approval_policy: "never", sandbox_policy: { type: "danger-full-access" },
-            model: "gpt-5.2-codex", personality: "friendly",
-            collaboration_mode: { mode: "code", settings: { model: "gpt-5.2-codex", reasoning_effort: "high", developer_instructions: "you are now in code mode.\n" } },
-            effort: "high", summary: "auto",
-          },
-        }));
+      } else {
+        if (msg.content) {
+          lines.push(JSON.stringify({ timestamp: ts, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: msg.content }] } }));
+          lines.push(JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "user_message", message: msg.content, images: [], local_images: [], text_elements: [] } }));
+          lines.push(JSON.stringify({
+            timestamp: ts, type: "turn_context",
+            payload: {
+              cwd, approval_policy: "never", sandbox_policy: { type: "danger-full-access" },
+              model: "gpt-5.2-codex", personality: "friendly",
+              collaboration_mode: { mode: "code", settings: { model: "gpt-5.2-codex", reasoning_effort: "high", developer_instructions: "you are now in code mode.\n" } },
+              effort: "high", summary: "auto",
+            },
+          }));
+        }
       }
     } else if (msg.role === "assistant") {
       if (msg.thinking) {

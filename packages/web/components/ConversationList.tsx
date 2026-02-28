@@ -849,6 +849,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
           label: "Learn how to sync",
           href: "/cli",
         }}
+        variant="onboarding"
       />
     );
   }
@@ -872,7 +873,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
       }}
       onBlur={() => setFocusedIndex(-1)}>
       {/* Filter bar */}
-      <div className="flex flex-wrap gap-1.5 sm:gap-2 items-center pt-2">
+      <div className="flex gap-1.5 sm:gap-2 items-center pt-1 sm:pt-2 overflow-x-auto pb-1 scrollbar-auto sm:flex-wrap sm:overflow-x-visible sm:pb-0">
         {filter === "my" && (
           <button
             onClick={() => openNewSession()}
@@ -985,14 +986,14 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
         <LoadingSkeleton />
       )}
       {groups.map((group) => (
-        <div key={group.label} className="first:mt-0 mt-6">
-          <div className="pb-2 mb-3">
-            <h2 className="text-xs font-medium tracking-wide uppercase text-sol-text-muted0">
+        <div key={group.label} className="first:mt-0 mt-4 sm:mt-6">
+          <div className="pb-1.5 sm:pb-2 mb-2 sm:mb-3">
+            <h2 className="text-[10px] sm:text-xs font-medium tracking-wide uppercase text-sol-text-muted0">
               {group.label}
             </h2>
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-2 sm:space-y-3">
             {group.conversations.map((conv) => {
               const convIndex = flatConversations.findIndex(c => c._id === conv._id);
               const isFocused = convIndex === focusedIndex;
@@ -1083,7 +1084,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                       <div className="flex items-start justify-between gap-3 mb-1">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
                           <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4 shrink-0" />
-                          <span className={`font-medium text-base transition-colors truncate ${
+                          <span className={`font-medium text-sm sm:text-base transition-colors truncate ${
                             isOthersRestrictedView
                               ? "text-sol-text-muted"
                               : "text-sol-text"
@@ -1158,7 +1159,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
 
                       {/* Subtitle - shown for full/detailed/summary modes */}
                       {conv.subtitle && conv.visibility_mode !== "minimal" && (
-                        <p className="text-sm text-sol-text-muted mb-2 line-clamp-2 whitespace-pre-line">{conv.subtitle}</p>
+                        <p className="text-xs sm:text-sm text-sol-text-muted mb-1.5 sm:mb-2 line-clamp-2 whitespace-pre-line">{conv.subtitle}</p>
                       )}
 
                       {(() => {
@@ -1207,7 +1208,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         );
 
                         return (
-                          <div className="mb-3 space-y-1.5 text-xs overflow-hidden opacity-70">
+                          <div className="mb-2 sm:mb-3 space-y-1 sm:space-y-1.5 text-[11px] sm:text-xs overflow-hidden opacity-70">
                             {firstMsgs.map((m, idx) => renderMessage(m, `first-${idx}`))}
                             {showEllipsis && (
                               <div className="flex items-center gap-2 pl-6">
@@ -1220,7 +1221,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                       })()}
 
 
-                      <div className="flex items-center gap-2 text-xs flex-wrap text-sol-text-muted0">
+                      <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-muted0">
                         {(filter === "team" || !conv.is_own) && (
                           <span className="flex items-center gap-1.5 font-medium">
                             {conv.author_avatar ? (
@@ -1257,7 +1258,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                           </span>
                         )}
                         {conv.duration_ms > 60000 && (
-                          <span className={`inline-flex items-center gap-1 ${getDurationColor(conv.duration_ms).split(' ')[0]}`}>
+                          <span className={`hidden sm:inline-flex items-center gap-1 ${getDurationColor(conv.duration_ms).split(' ')[0]}`}>
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
