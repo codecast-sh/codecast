@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { computeCumulativeDiff, type CumulativeDiff } from '../lib/cumulativeDiff';
 import { LRUCache } from '../lib/lruCache';
+import { useInboxStore } from './inboxStore';
 
 export interface FileChange {
   id: string;
@@ -34,11 +35,8 @@ export function clearDiffCache() {
   diffCache.clear();
 }
 
-const DIFF_PANEL_OPEN_KEY = "diffPanelOpen";
-
 const getInitialDiffPanelOpen = () => {
-  if (typeof window === 'undefined') return false;
-  return localStorage.getItem(DIFF_PANEL_OPEN_KEY) === "true";
+  return useInboxStore.getState().clientState.ui?.diff_panel_open ?? false;
 };
 
 interface DiffViewerState {
@@ -116,12 +114,12 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
 
   toggleDiffPanel: () => set((state) => {
     const newValue = !state.diffPanelOpen;
-    localStorage.setItem(DIFF_PANEL_OPEN_KEY, String(newValue));
+    useInboxStore.getState().updateClientUI({ diff_panel_open: newValue });
     return { diffPanelOpen: newValue };
   }),
 
   setDiffPanelOpen: (open) => {
-    localStorage.setItem(DIFF_PANEL_OPEN_KEY, String(open));
+    useInboxStore.getState().updateClientUI({ diff_panel_open: open });
     set({ diffPanelOpen: open });
   },
 

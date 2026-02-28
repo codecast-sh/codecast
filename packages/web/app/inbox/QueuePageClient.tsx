@@ -18,6 +18,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { SharePopover } from "../../components/SharePopover";
 import { toast } from "sonner";
+import { useClientPref } from "../../hooks/useClientPref";
 
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -552,29 +553,18 @@ export function QueuePageClient() {
 
   const switcherState = useSessionSwitcher();
 
-  const [showShortcuts, setShowShortcuts] = useState(() => {
-    if (typeof window === "undefined") return true;
-    try { return localStorage.getItem("inbox-shortcuts") !== "hidden"; } catch { return true; }
-  });
+  const [shortcutsHidden, setShortcutsHidden] = useClientPref("ui", "inbox_shortcuts_hidden", false);
+  const showShortcuts = !shortcutsHidden;
   const toggleShortcuts = useCallback(() => {
-    setShowShortcuts((v) => {
-      const next = !v;
-      try { localStorage.setItem("inbox-shortcuts", next ? "visible" : "hidden"); } catch {}
-      return next;
-    });
-  }, []);
+    setShortcutsHidden(!shortcutsHidden);
+  }, [shortcutsHidden, setShortcutsHidden]);
 
-  const [inboxLayout, setInboxLayout] = useState<{ [key: string]: number }>(() => {
-    if (typeof window === "undefined") return { "inbox-main": 76, "inbox-sidebar": 24 };
-    try {
-      const stored = localStorage.getItem("inbox-layout");
-      return stored ? JSON.parse(stored) : { "inbox-main": 76, "inbox-sidebar": 24 };
-    } catch { return { "inbox-main": 76, "inbox-sidebar": 24 }; }
-  });
+  const DEFAULT_INBOX_LAYOUT = { main: 76, sidebar: 24 };
+  const [inboxLayoutPref, setInboxLayoutPref] = useClientPref("layouts", "inbox", DEFAULT_INBOX_LAYOUT);
+  const inboxLayout = { "inbox-main": inboxLayoutPref.main, "inbox-sidebar": inboxLayoutPref.sidebar };
   const handleInboxLayoutChange = useCallback((layout: { [key: string]: number }) => {
-    setInboxLayout(layout);
-    localStorage.setItem("inbox-layout", JSON.stringify(layout));
-  }, []);
+    setInboxLayoutPref({ main: layout["inbox-main"] || 76, sidebar: layout["inbox-sidebar"] || 24 });
+  }, [setInboxLayoutPref]);
 
   const isPopstateRef = useRef(false);
   const lastAppliedParamId = useRef<string | null>(null);

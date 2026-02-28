@@ -10,25 +10,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 import { FileDiffLayout, DiffFile } from "./FileDiffLayout";
 import type { FileChange } from "../store/diffViewerStore";
+import { useClientPref } from "../hooks/useClientPref";
 
-const STORAGE_KEY = "conversation-diff-layout";
 const MOBILE_BREAKPOINT = 768;
+const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
 
 type Layout = { [key: string]: number };
-
-const getInitialLayout = (): Layout => {
-  if (typeof window === 'undefined') return { "content-panel": 40, "diff-panel": 60 };
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      if (typeof parsed === "object" && parsed["content-panel"] && parsed["diff-panel"]) {
-        return parsed;
-      }
-    } catch {}
-  }
-  return { "content-panel": 40, "diff-panel": 60 };
-};
 
 interface ConversationDiffLayoutProps {
   conversation: ConversationData;
@@ -80,7 +67,8 @@ export function ConversationDiffLayout({
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-  const [layout, setLayout] = useState(getInitialLayout);
+  const [layoutPref, setLayoutPref] = useClientPref("layouts", "conversation_diff", DEFAULT_DIFF_LAYOUT);
+  const layout: Layout = { "content-panel": layoutPref.content, "diff-panel": layoutPref.diff };
   const conversationRef = useRef<ConversationViewHandle>(null);
 
   const {
@@ -154,8 +142,7 @@ export function ConversationDiffLayout({
   }, [nextChange, prevChange, toggleDiffMode, toggleFileTree, clearSelection]);
 
   const handleLayoutChange = (newLayout: Layout) => {
-    setLayout(newLayout);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(newLayout));
+    setLayoutPref({ content: newLayout["content-panel"] || 40, diff: newLayout["diff-panel"] || 60 });
   };
 
   const changesOverlay = changes.length > 0 && !diffPanelOpen ? <ChangesBar changes={changes} /> : null;

@@ -3,27 +3,13 @@
 import { useState, useEffect } from "react";
 import { X, Monitor, ArrowRight } from "lucide-react";
 import { isDesktop } from "../lib/desktop";
-
-const DISMISS_KEY = "codecast-desktop-banner-dismissed";
-
-function isDismissed(): boolean {
-  if (typeof window === "undefined") return true;
-  return localStorage.getItem(DISMISS_KEY) === "1";
-}
+import { useClientPref } from "../hooks/useClientPref";
 
 export function DesktopAppBanner() {
-  const [dismissed, setDismissed] = useState(true);
+  const [dismissed, setDismissed] = useClientPref("dismissed", "desktop_app", false);
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => {
-    setMounted(true);
-    setDismissed(isDismissed());
-  }, []);
-
-  const handleDismiss = () => {
-    localStorage.setItem(DISMISS_KEY, "1");
-    setDismissed(true);
-  };
+  useEffect(() => { setMounted(true); }, []);
 
   if (!mounted || dismissed) return null;
   if (isDesktop()) return null;
@@ -47,7 +33,7 @@ export function DesktopAppBanner() {
             <ArrowRight className="w-3 h-3" />
           </a>
           <button
-            onClick={handleDismiss}
+            onClick={() => setDismissed(true)}
             className="p-1 text-sol-text-dim hover:text-sol-text transition-colors"
             aria-label="Dismiss"
           >

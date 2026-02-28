@@ -25,6 +25,7 @@ import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 import { DiffView } from "./DiffView";
 import { parsePatch, getFileStatus } from "../lib/patchParser";
 import { cn, copyToClipboard } from "../lib/utils";
+import { useClientPref } from "../hooks/useClientPref";
 
 export interface DiffFile {
   filename: string;
@@ -46,25 +47,8 @@ export interface FileDiffLayoutProps {
   onCloseDiffPanel?: () => void;
 }
 
-const STORAGE_KEY = "file-diff-layout";
-
 type Layout = { [key: string]: number };
-
-const DEFAULT_LAYOUT = { "file-tree": 25, "diff-content": 75 };
-
-const getInitialLayout = (): Layout => {
-  if (typeof window === "undefined") return DEFAULT_LAYOUT;
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      if (typeof parsed === "object" && parsed["file-tree"] && parsed["diff-content"]) {
-        return parsed;
-      }
-    } catch {}
-  }
-  return DEFAULT_LAYOUT;
-};
+const DEFAULT_FILE_DIFF_LAYOUT = { tree: 25, content: 75 };
 
 function getFileExtension(filePath: string): string | undefined {
   const ext = filePath.split(".").pop()?.toLowerCase();
@@ -687,14 +671,8 @@ function UnifiedDiffView({
 }
 
 const MOBILE_BREAKPOINT = 768;
-const VIEW_MODE_KEY = "file-diff-view-mode";
 
 type ViewMode = "split" | "unified";
-
-const getInitialViewMode = (): ViewMode => {
-  if (typeof window === "undefined") return "unified";
-  return (localStorage.getItem(VIEW_MODE_KEY) as ViewMode) || "unified";
-};
 
 export function FileDiffLayout({
   files,
@@ -712,17 +690,16 @@ export function FileDiffLayout({
 
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
-  const [layout, setLayout] = useState(getInitialLayout);
+  const [layoutPref, setLayoutPref] = useClientPref("layouts", "file_diff", DEFAULT_FILE_DIFF_LAYOUT);
+  const layout: Layout = { "file-tree": layoutPref.tree, "diff-content": layoutPref.content };
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [viewMode, setViewMode] = useState<ViewMode>(getInitialViewMode);
+  const [viewMode, setViewMode] = useClientPref("ui", "file_diff_view_mode", "unified" as const);
   const selectedFileRef = useRef<HTMLButtonElement>(null);
 
   const toggleViewMode = () => {
-    const newMode = viewMode === "split" ? "unified" : "split";
-    setViewMode(newMode);
-    localStorage.setItem(VIEW_MODE_KEY, newMode);
+    setViewMode(viewMode === "split" ? "unified" : "split");
   };
 
   useEffect(() => {
@@ -805,8 +782,7 @@ export function FileDiffLayout({
   }, [currentFileIndex, strippedFiles, toggleViewMode]);
 
   const handleLayoutChange = (newLayout: Layout) => {
-    setLayout(newLayout);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(newLayout));
+    setLayoutPref({ tree: newLayout["file-tree"] || 25, content: newLayout["diff-content"] || 75 });
   };
 
   const handleSelectFile = (filename: string) => {

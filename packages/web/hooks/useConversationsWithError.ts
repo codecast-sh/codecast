@@ -3,7 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useActiveTeamStore } from "../store/activeTeamStore";
+import { useInboxStore } from "../store/inboxStore";
 
 type ConversationResult = ReturnType<typeof useQuery<typeof api.conversations.listConversations>>;
 
@@ -17,7 +17,7 @@ export function useConversationsWithError(
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [allConversations, setAllConversations] = useState<any[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const { activeTeamId } = useActiveTeamStore();
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
 
   const result = useQuery(api.conversations.listConversations, {
     filter,

@@ -13,27 +13,78 @@ function isAction(fn: any): boolean {
   return typeof fn === "function" && fn[ACTION_FLAG] === true;
 }
 
-const TABLE_KEY_MAP: Record<string, string> = {
-  conversations: "conversations",
-  clientState: "client_state",
+type TableKind = "collection" | "singleton";
+
+interface TableMapping {
+  table: string;
+  kind: TableKind;
+}
+
+const TABLE_MAP: Record<string, TableMapping> = {
+  conversations: { table: "conversations", kind: "collection" },
+  clientState: { table: "client_state", kind: "singleton" },
 };
+
+const SINGLETON_KEY = "_";
+
+function setNested(obj: any, path: (string | number)[], value: any): any {
+  if (path.length === 0) return value;
+  const result = typeof obj === "object" && obj !== null ? { ...obj } : {};
+  const [head, ...tail] = path;
+  result[head] = setNested(result[head], tail, value);
+  return result;
+}
 
 function groupPatchesByTable(
   patches: Patch[]
 ): Record<string, Record<string, Record<string, any>>> {
   const result: Record<string, Record<string, Record<string, any>>> = {};
+
   for (const patch of patches) {
     if (patch.op !== "replace" && patch.op !== "add") continue;
     const path = patch.path as (string | number)[];
-    const [storeKey, docId, field, ...rest] = path;
-    if (typeof storeKey !== "string" || !docId || !field || rest.length > 0)
-      continue;
-    const table = TABLE_KEY_MAP[storeKey];
-    if (!table) continue;
+    if (path.length < 2) continue;
+
+    const storeKey = String(path[0]);
+    const mapping = TABLE_MAP[storeKey];
+    if (!mapping) continue;
+
+    const { table, kind } = mapping;
     result[table] ??= {};
-    result[table][String(docId)] ??= {};
-    result[table][String(docId)][String(field)] = patch.value;
+
+    if (kind === "collection") {
+      if (path.length < 3) continue;
+      const docId = String(path[1]);
+      const field = String(path[2]);
+      const nested = path.slice(3);
+
+      result[table][docId] ??= {};
+      if (nested.length === 0) {
+        result[table][docId][field] = patch.value;
+      } else {
+        result[table][docId][field] = setNested(
+          result[table][docId][field] ?? {},
+          nested,
+          patch.value
+        );
+      }
+    } else {
+      const field = String(path[1]);
+      const nested = path.slice(2);
+
+      result[table][SINGLETON_KEY] ??= {};
+      if (nested.length === 0) {
+        result[table][SINGLETON_KEY][field] = patch.value;
+      } else {
+        result[table][SINGLETON_KEY][field] = setNested(
+          result[table][SINGLETON_KEY][field] ?? {},
+          nested,
+          patch.value
+        );
+      }
+    }
   }
+
   return result;
 }
 

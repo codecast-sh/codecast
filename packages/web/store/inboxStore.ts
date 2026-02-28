@@ -1,6 +1,13 @@
 import { create } from "zustand";
 import { mutativeMiddleware, action } from "./mutativeMiddleware";
 
+export interface SessionContext {
+  projectPath?: string;
+  gitRoot?: string;
+  agentType?: string;
+  source?: "inbox" | "sessions";
+}
+
 // -- Types --
 
 export type InboxSession = {
@@ -79,6 +86,12 @@ export type ForkChild = {
   agent_type?: string;
 };
 
+export type QueuedMessage = {
+  content: string;
+  imageStorageIds?: string[];
+  images?: Array<{ media_type: string; storage_id?: string }>;
+};
+
 export type CurrentConversationContext = {
   conversationId?: string;
   projectPath?: string;
@@ -87,10 +100,40 @@ export type CurrentConversationContext = {
   source?: "inbox" | "sessions";
 };
 
+export type ClientUI = {
+  theme?: "light" | "dark";
+  sidebar_collapsed?: boolean;
+  zen_mode?: boolean;
+  sticky_headers_disabled?: boolean;
+  diff_panel_open?: boolean;
+  file_diff_view_mode?: "unified" | "split";
+  active_team_id?: string;
+  active_filter?: "my" | "team";
+  inbox_shortcuts_hidden?: boolean;
+};
+
+export type ClientLayouts = {
+  dashboard?: { sidebar: number; main: number };
+  inbox?: { main: number; sidebar: number };
+  conversation_diff?: { content: number; diff: number };
+  file_diff?: { tree: number; content: number };
+};
+
+export type ClientDismissed = {
+  desktop_app?: boolean;
+  setup_prompt?: number;
+};
+
 export type ClientState = {
   current_conversation_id?: string;
   show_dismissed?: boolean;
   dismissed_ids?: string[];
+
+  ui?: ClientUI;
+  layouts?: ClientLayouts;
+  dismissed?: ClientDismissed;
+
+  // deprecated: backward compat
   sidebar_collapsed?: boolean;
   zen_mode?: boolean;
   layout?: { sidebar: number; main: number };
@@ -122,8 +165,14 @@ interface InboxStoreState {
   drafts: Record<string, Record<string, any>>;
 
   tempIdMap: Record<string, string>;
+  queuedMessages: Record<string, QueuedMessage>;
 
   currentConversation: CurrentConversationContext;
+
+  // -- New session modal --
+  newSession: { isOpen: boolean; context: SessionContext };
+  openNewSession: (ctx?: SessionContext) => void;
+  closeNewSession: () => void;
 
   // -- Fork navigation --
   activeBranches: Record<string, string>;
@@ -190,6 +239,8 @@ interface InboxStoreState {
   // -- Temp ID --
   resolveTempId: (tempId: string, realId: string) => void;
   getRealId: (id: string) => string;
+  queueMessage: (tempId: string, msg: QueuedMessage) => void;
+  dequeueMessage: (convId: string) => QueuedMessage | undefined;
 
   // -- Fork navigation --
   switchBranch: (messageUuid: string, convId: string) => void;
@@ -198,6 +249,11 @@ interface InboxStoreState {
   pruneOptimisticForks: (serverIds: Set<string>) => void;
   resolveForkId: (tempId: string, realId: string) => void;
   resetForkNav: () => void;
+
+  // -- Client prefs (mutative actions -> auto-dispatch) --
+  updateClientUI: (partial: Partial<ClientUI>) => void;
+  updateClientLayout: (key: keyof ClientLayouts, value: any) => void;
+  updateClientDismissed: (key: keyof ClientDismissed, value: any) => void;
 
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
@@ -245,8 +301,19 @@ export const useInboxStore = create<InboxStoreState>(
   drafts: {},
 
   tempIdMap: {},
+  queuedMessages: {},
 
   currentConversation: {},
+
+  newSession: { isOpen: false, context: {} },
+
+  openNewSession: (ctx?: SessionContext) => {
+    set({ newSession: { isOpen: true, context: ctx || {} } });
+  },
+
+  closeNewSession: () => {
+    set({ newSession: { isOpen: false, context: {} } });
+  },
 
   activeBranches: {},
   optimisticForkChildren: [],
@@ -335,6 +402,21 @@ export const useInboxStore = create<InboxStoreState>(
   sendEscape: action(function (_convId: string) {}),
 
   createSession: action(function (_opts: { agent_type: string; project_path?: string; git_root?: string }) {}),
+
+  updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
+    if (!this.clientState.ui) this.clientState.ui = {};
+    Object.assign(this.clientState.ui, partial);
+  }),
+
+  updateClientLayout: action(function (this: Draft, key: string, value: any) {
+    if (!this.clientState.layouts) this.clientState.layouts = {};
+    (this.clientState.layouts as any)[key] = value;
+  }),
+
+  updateClientDismissed: action(function (this: Draft, key: string, value: any) {
+    if (!this.clientState.dismissed) this.clientState.dismissed = {};
+    (this.clientState.dismissed as any)[key] = value;
+  }),
 
   // =====================
   // LOCAL METHODS (plain set/get, NOT wrapped by middleware)
@@ -442,14 +524,20 @@ export const useInboxStore = create<InboxStoreState>(
 
   syncClientState: (serverState: any) => {
     if (!serverState) return;
-    set({ clientState: {
+    const cs: ClientState = {
       current_conversation_id: serverState.current_conversation_id,
       show_dismissed: serverState.show_dismissed,
       dismissed_ids: serverState.dismissed_ids,
-      sidebar_collapsed: serverState.sidebar_collapsed,
-      zen_mode: serverState.zen_mode,
-      layout: serverState.layout,
-    }});
+      ui: serverState.ui ?? {
+        sidebar_collapsed: serverState.sidebar_collapsed,
+        zen_mode: serverState.zen_mode,
+      },
+      layouts: serverState.layouts ?? (serverState.layout ? {
+        dashboard: serverState.layout,
+      } : undefined),
+      dismissed: serverState.dismissed,
+    };
+    set({ clientState: cs });
   },
 
   navigateUp: () => {
@@ -814,6 +902,12 @@ export const useInboxStore = create<InboxStoreState>(
       delete newDrafts[tempId];
     }
 
+    const newQueued = { ...state.queuedMessages };
+    if (newQueued[tempId]) {
+      newQueued[realId] = newQueued[tempId];
+      delete newQueued[tempId];
+    }
+
     set({
       tempIdMap: newTempIdMap,
       messages: newMessages,
@@ -821,11 +915,29 @@ export const useInboxStore = create<InboxStoreState>(
       pagination: newPagination,
       conversations: newConversations,
       drafts: newDrafts,
+      queuedMessages: newQueued,
     });
   },
 
   getRealId: (id: string) => {
     return get().tempIdMap[id] || id;
+  },
+
+  queueMessage: (tempId: string, msg: QueuedMessage) => {
+    set((s: InboxStoreState) => ({
+      queuedMessages: { ...s.queuedMessages, [tempId]: msg },
+    }));
+  },
+
+  dequeueMessage: (convId: string) => {
+    const state = get();
+    const msg = state.queuedMessages[convId];
+    if (msg) {
+      const next = { ...state.queuedMessages };
+      delete next[convId];
+      set({ queuedMessages: next });
+    }
+    return msg;
   },
 
   // =====================

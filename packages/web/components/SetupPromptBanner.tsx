@@ -5,25 +5,12 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { X, Terminal, ArrowRight } from "lucide-react";
+import { useClientPref } from "../hooks/useClientPref";
 
-const DISMISS_KEY = "codecast-setup-banner-dismissed";
-const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-function isDismissed(): boolean {
-  if (typeof window === "undefined") return true;
-  const dismissed = localStorage.getItem(DISMISS_KEY);
-  if (!dismissed) return false;
-  const timestamp = parseInt(dismissed, 10);
-  if (isNaN(timestamp)) return false;
-  return Date.now() - timestamp < DISMISS_DURATION_MS;
-}
-
-function dismiss(): void {
-  localStorage.setItem(DISMISS_KEY, String(Date.now()));
-}
+const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000;
 
 export function SetupPromptBanner() {
-  const [dismissed, setDismissed] = useState(true);
+  const [dismissedTs, setDismissedTs] = useClientPref("dismissed", "setup_prompt", 0);
   const [mounted, setMounted] = useState(false);
 
   const user = useQuery(api.users.getCurrentUser);
@@ -32,17 +19,11 @@ export function SetupPromptBanner() {
     user?._id ? { filter: "my", limit: 1 } : "skip"
   );
 
-  useEffect(() => {
-    setMounted(true);
-    setDismissed(isDismissed());
-  }, []);
+  useEffect(() => { setMounted(true); }, []);
 
-  const handleDismiss = () => {
-    dismiss();
-    setDismissed(true);
-  };
+  const isDismissed = dismissedTs > 0 && Date.now() - dismissedTs < DISMISS_DURATION_MS;
 
-  if (!mounted || dismissed) return null;
+  if (!mounted || isDismissed) return null;
   if (user === undefined || conversationsResult === undefined) return null;
 
   const hasCliInstalled = !!user?.cli_version;
@@ -70,7 +51,7 @@ export function SetupPromptBanner() {
             <ArrowRight className="w-3 h-3" />
           </Link>
           <button
-            onClick={handleDismiss}
+            onClick={() => setDismissedTs(Date.now())}
             className="p-1 text-sol-text-dim hover:text-sol-text transition-colors"
             aria-label="Dismiss"
           >

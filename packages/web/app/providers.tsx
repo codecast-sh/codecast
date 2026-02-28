@@ -6,8 +6,16 @@ import { ThemeProvider } from "../components/ThemeProvider";
 import { NavigationProgress } from "../components/NavigationProgress";
 import { Toaster } from "../components/ui/sonner";
 import { DesktopProvider } from "../components/DesktopProvider";
+import { useLocalStorageMigration } from "../hooks/useLocalStorageMigration";
 
-const convex = new ConvexReactClient(process.env.NEXT_PUBLIC_CONVEX_URL || "https://placeholder.convex.cloud");
+function PrefsMigration() {
+  useLocalStorageMigration();
+  return null;
+}
+
+const convex = new ConvexReactClient(process.env.NEXT_PUBLIC_CONVEX_URL || "https://placeholder.convex.cloud", {
+  unsavedChangesWarning: false,
+});
 
 export function Providers({ children }: { children: ReactNode }) {
   return (
@@ -16,6 +24,7 @@ export function Providers({ children }: { children: ReactNode }) {
         <NavigationProgress />
         {children}
         <DesktopProvider />
+        <PrefsMigration />
         <Toaster position="bottom-right" />
       </ThemeProvider>
     </ConvexAuthProvider>

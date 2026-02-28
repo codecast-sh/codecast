@@ -7,9 +7,8 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { useActiveTeamStore } from "../store/activeTeamStore";
+import { useInboxStore } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { useNewSessionStore } from "../store/newSessionStore";
 import { TeamIcon } from "./TeamIcon";
 
 interface SidebarProps {
@@ -127,7 +126,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.email === "ashot@almostcandid.com";
   const [currentTime, setCurrentTime] = useState(Date.now());
-  const { activeTeamId } = useActiveTeamStore();
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teams = useQuery(api.teams.getUserTeams);
   const activeTeam = teams?.find(t => t?._id === activeTeamId);
   const teamUnreadCount = useQuery(
@@ -138,7 +137,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
   const activeSessions = useQuery(api.conversations.listIdleSessions, {});
   const idleCount = activeSessions?.filter((s: any) => s.is_idle).length ?? 0;
-  const openNewSession = useNewSessionStore((s) => s.open);
+  const openNewSession = useInboxStore((s) => s.openNewSession);
 
   useEffect(() => {
     const interval = setInterval(() => {

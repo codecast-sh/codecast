@@ -3,7 +3,7 @@
 import { useQuery, useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useActiveTeamStore } from "../store/activeTeamStore";
+import { useInboxStore } from "../store/inboxStore";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,7 +24,9 @@ export function TeamSwitcher() {
   const user = useQuery(api.users.getCurrentUser);
   const teams = useQuery(api.teams.getUserTeams);
   const saveActiveTeam = useMutation(api.teams.setActiveTeam);
-  const { activeTeamId, setActiveTeam } = useActiveTeamStore();
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
+  const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  const setActiveTeam = (id: Id<"teams"> | null) => updateClientUI({ active_team_id: id ?? undefined });
   const [inviteOpen, setInviteOpen] = useState(false);
   const isAdmin = user?.role === "admin";
 

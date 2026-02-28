@@ -38,7 +38,6 @@ import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, type ForkChild } from "../store/inboxStore";
-import { useNewSessionStore } from "../store/newSessionStore";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
@@ -47,6 +46,7 @@ import { BranchSelector } from "./BranchSelector";
 import { ForkTreePanel } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
+import { useClientPref } from "../hooks/useClientPref";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -237,7 +237,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const storeSession = useInboxStore((s) =>
     s.sessions.find((sess) => sess._id === conversation._id || sess.stableKey === conversation._id)
   );
-  const openNewSession = useNewSessionStore((s) => s.open);
+  const openNewSession = useInboxStore((s) => s.openNewSession);
 
   const resolvedId = storeSession?._id || conversation._id;
 
@@ -4149,7 +4149,107 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, agentStatus, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void }) {
+type NavUserMessage = { _id: string; message_uuid?: string; content: string; timestamp: number };
+
+function MessageNavigator({ userMessages, onRewind, onFork, onClose }: {
+  userMessages: NavUserMessage[];
+  onRewind: (msg: NavUserMessage, indexFromEnd: number) => void;
+  onFork: (msg: NavUserMessage) => void;
+  onClose: (selectedMsg?: { content: string }) => void;
+}) {
+  const [selectedIdx, setSelectedIdx] = useState(userMessages.length - 1);
+  const listRef = useRef<HTMLDivElement>(null);
+  const escTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => { if (escTimerRef.current) clearTimeout(escTimerRef.current); };
+  }, []);
+
+  useEffect(() => {
+    const el = listRef.current?.children[selectedIdx] as HTMLElement | undefined;
+    el?.scrollIntoView({ block: "nearest" });
+  }, [selectedIdx]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (escTimerRef.current) {
+          clearTimeout(escTimerRef.current);
+          escTimerRef.current = null;
+          onClose(userMessages[selectedIdx]);
+        } else {
+          escTimerRef.current = setTimeout(() => { escTimerRef.current = null; }, 250);
+          onClose();
+        }
+        return;
+      }
+      if (e.key === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedIdx(i => Math.min(i + 1, userMessages.length - 1));
+        return;
+      }
+      if (e.key === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedIdx(i => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const indexFromEnd = userMessages.length - 1 - selectedIdx;
+        onRewind(userMessages[selectedIdx], indexFromEnd);
+        return;
+      }
+      if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        onFork(userMessages[selectedIdx]);
+        return;
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [userMessages, selectedIdx, onRewind, onFork, onClose]);
+
+  return (
+    <div className="absolute bottom-full left-0 right-0 mb-2 z-50" style={{ maxHeight: "calc(100vh - 200px)" }}>
+      <div className="mx-auto max-w-5xl px-4 h-full flex flex-col">
+        <div className="bg-sol-bg-alt border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "calc(100vh - 220px)" }}>
+          <div ref={listRef} className="flex-1 overflow-y-auto py-2" style={{ maxHeight: "calc(100vh - 280px)" }}>
+            {userMessages.map((msg, idx) => (
+              <button
+                key={msg._id}
+                onClick={() => setSelectedIdx(idx)}
+                onDoubleClick={() => { setSelectedIdx(idx); onRewind(msg, userMessages.length - 1 - idx); }}
+                className={`w-full text-left px-4 py-2.5 transition-colors flex items-start gap-3 ${
+                  idx === selectedIdx
+                    ? "bg-sol-blue/20 ring-1 ring-inset ring-sol-blue/50"
+                    : "hover:bg-sol-bg-highlight"
+                }`}
+              >
+                <span className={`text-xs font-mono mt-0.5 shrink-0 w-6 text-right ${idx === selectedIdx ? "text-sol-blue" : "text-sol-blue/40"}`}>{idx + 1}</span>
+                <span className={`text-sm leading-relaxed ${idx === selectedIdx ? "text-sol-text" : "text-sol-text-secondary"}`} style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                  {msg.content}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="px-4 py-2 border-t border-sol-blue/20 flex items-center justify-between">
+            <div className="flex items-center gap-4 text-[11px] text-sol-blue/60">
+              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">j</kbd><span className="mx-0.5">/</span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">k</kbd> navigate</span>
+              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">Enter</kbd> rewind</span>
+              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">F</kbd> fork</span>
+              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">Esc</kbd> close</span>
+            </div>
+            <span className="text-[10px] text-sol-blue/40">{userMessages.length} message{userMessages.length !== 1 ? "s" : ""}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, agentStatus, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -4172,6 +4272,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   );
 
   const realId = getRealId(conversationId);
+  const queuedMsg = useInboxStore((s) => s.queuedMessages[realId]);
+
   const isRealConvId = realId.length > 10 && !realId.startsWith("pending-") && !realId.startsWith("temp_");
   const existingPending = useQuery(
     api.pendingMessages.getConversationPendingMessage,
@@ -4229,9 +4331,41 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     return [];
   });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   pastedImagesRef.current = pastedImages;
+
+  useEffect(() => {
+    if (!queuedMsg || realId.startsWith("temp_")) return;
+    const msg = useInboxStore.getState().dequeueMessage(realId);
+    if (!msg) return;
+    sendMessage({
+      conversation_id: realId as Id<"conversations">,
+      content: msg.content,
+      image_storage_ids: msg.imageStorageIds?.length ? msg.imageStorageIds as Id<"_storage">[] : undefined,
+    }).then((msgId) => {
+      setPendingMessageId(msgId);
+      setSentAt(Date.now());
+      setShowStuckBanner(false);
+    }).catch((error) => {
+      toast.error(error instanceof Error ? error.message : "Failed to send message");
+    });
+  }, [queuedMsg, realId, sendMessage]);
+
+  useEffect(() => {
+    return () => { if (escapeTimerRef.current) clearTimeout(escapeTimerRef.current); };
+  }, []);
+
+  useEffect(() => {
+    if (onPopulateInput) {
+      onPopulateInput.current = (text: string) => {
+        setMessage(text);
+        setTimeout(() => textareaRef.current?.select(), 0);
+      };
+      return () => { if (onPopulateInput) onPopulateInput.current = null; };
+    }
+  }, [onPopulateInput]);
 
   const handleForceResume = useCallback(async () => {
     if (isResuming) return;
@@ -4474,14 +4608,17 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
           const forkId = Object.values(branches)[0];
           if (!forkId) return;
           const realId = useInboxStore.getState().getRealId(forkId);
-          if (realId.startsWith("temp_")) return;
+          addOptimistic(realId, content);
+          if (realId.startsWith("temp_")) {
+            useInboxStore.getState().queueMessage(realId, { content });
+            return;
+          }
           const msgId = await sendMessage({
             conversation_id: realId as Id<"conversations">,
             content,
           });
           setPendingMessageId(msgId);
           setSentAt(Date.now());
-          addOptimistic(realId, content);
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "Failed to send rewrite");
         }
@@ -4490,10 +4627,6 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
 
     const realId = getRealId(conversationId);
-    if (realId.startsWith("temp_")) {
-      toast.error("Session is still being created, please try again in a moment");
-      return;
-    }
     const trimmed = message.trim() || (finalImages.length > 0 ? "[image]" : "");
     const storageIds = finalImages.map(img => img.storageId!);
     const optimisticImages = finalImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
@@ -4506,6 +4639,15 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     clearAllImages();
     updateDraft("", null);
     requestAnimationFrame(() => textareaRef.current?.focus());
+
+    if (realId.startsWith("temp_")) {
+      useInboxStore.getState().queueMessage(realId, {
+        content: trimmed,
+        imageStorageIds: storageIds.length > 0 ? storageIds : undefined,
+        images: optimisticImages.length > 0 ? optimisticImages : undefined,
+      });
+      return;
+    }
 
     try {
       const msgId = await sendMessage({
@@ -4522,6 +4664,23 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      const hasText = messageRef.current.trim().length > 0;
+      if (escapeTimerRef.current) {
+        clearTimeout(escapeTimerRef.current);
+        escapeTimerRef.current = null;
+        if (hasText) { setMessage(""); } else { onOpenNavigator?.(); }
+      } else {
+        if (hasText) {
+          escapeTimerRef.current = setTimeout(() => { escapeTimerRef.current = null; }, 250);
+        } else {
+          escapeTimerRef.current = setTimeout(() => { escapeTimerRef.current = null; onSendEscape?.(); }, 250);
+        }
+      }
+      return;
+    }
     if (e.key === "Enter" && e.altKey && onSendAndAdvance) {
       e.preventDefault();
       handleSubmit(e).then(() => onSendAndAdvance());
@@ -4702,6 +4861,26 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               </div>
             </div>
           </form>
+          {permissionMode && permissionMode !== "default" && (
+            <div className="flex justify-end px-2 mt-0.5">
+              <button
+                onClick={onCycleMode}
+                className={`text-[10px] font-mono transition-colors ${
+                  permissionMode === "plan" ? "text-sol-blue/40 hover:text-sol-blue" :
+                  permissionMode === "acceptEdits" ? "text-emerald-400/40 hover:text-emerald-400" :
+                  permissionMode === "bypassPermissions" ? "text-sol-red/40 hover:text-sol-red" :
+                  "text-sol-yellow/40 hover:text-sol-yellow"
+                }`}
+                title="Click to cycle mode (Shift+Tab)"
+              >
+                {permissionMode === "plan" ? "plan" :
+                 permissionMode === "acceptEdits" ? "auto-edit" :
+                 permissionMode === "bypassPermissions" ? "bypass" :
+                 permissionMode === "dontAsk" ? "don't ask" :
+                 permissionMode}
+              </button>
+            </div>
+          )}
         </div>
       </div>
       {shortcutTooltip && (
@@ -4724,6 +4903,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             <ShortcutHint keys={["Esc"]} label="Escape to session" />
             <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Collapse tool blocks" />
             <ShortcutHint keys={["Ctrl", "."]} label="Zen mode" />
+            <ShortcutHint keys={["Shift", "Tab"]} label="Cycle CC mode" />
             <div className="border-t border-sol-border/20 my-1.5" />
             <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
             <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
@@ -4734,6 +4914,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     </div>
   );
 });
+
+const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
   function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent }, ref) {
@@ -4771,10 +4953,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const stickyGapRef = useRef<{ prevIdx: number } | null>(null);
   const dismissedStickyIdsRef = useRef<Set<string>>(new Set());
   const stickyElRef = useRef<HTMLDivElement>(null);
-  const [stickyDisabled, setStickyDisabled] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('stickyHeadersDisabled') === 'true';
-  });
+  const [stickyDisabled, setStickyDisabled] = useClientPref("ui", "sticky_headers_disabled", false);
   const headerRef = useRef<HTMLElement>(null);
   const [headerHeight, setHeaderHeight] = useState(32);
   const messageInputRef = useRef<HTMLDivElement>(null);
@@ -4813,20 +4992,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
   const isSessionLive = managedSession?.managed === true;
 
-  const forkSelectedIndex = useForkNavigationStore((s) => s.selectedIndex);
-
-  useEffect(() => {
+  const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
+  const optimisticTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const handleCycleMode = useCallback(() => {
     if (!conversation || !isOwner || conversation.status !== "active") return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (forkSelectedIndex !== null) return;
-      e.preventDefault();
-      sendEscape({ conversation_id: conversation._id });
-      toast.info("Escape sent to session");
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [conversation, isOwner, sendEscape, forkSelectedIndex]);
+    sendKeys({ conversation_id: conversation._id, keys: "BTab" });
+    const currentMode = optimisticMode || managedSession?.permission_mode || "default";
+    const nextIdx = (CC_MODE_ORDER.indexOf(currentMode) + 1) % CC_MODE_ORDER.length;
+    setOptimisticMode(CC_MODE_ORDER[nextIdx]);
+    clearTimeout(optimisticTimerRef.current);
+    optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
+  }, [conversation, isOwner, sendKeys, optimisticMode, managedSession?.permission_mode]);
+  useEffect(() => {
+    if (optimisticMode && managedSession?.permission_mode === optimisticMode) {
+      setOptimisticMode(null);
+      clearTimeout(optimisticTimerRef.current);
+    }
+  }, [managedSession?.permission_mode, optimisticMode]);
+  const effectiveMode = optimisticMode || managedSession?.permission_mode || "default";
+
+  const forkSelectedIndex = useForkNavigationStore((s) => s.selectedIndex);
 
   useEffect(() => {
     if (!conversation || !isOwner || conversation.status !== "active") return;
@@ -4835,12 +5020,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
       e.preventDefault();
-      sendKeys({ conversation_id: conversation._id, keys: "BTab" });
-      toast.info("Mode toggled");
+      handleCycleMode();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [conversation, isOwner, sendKeys]);
+  }, [conversation, isOwner, handleCycleMode]);
 
   const messages = conversation?.messages || [];
 
@@ -4962,6 +5146,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
   const resetForkNav = useInboxStore((s) => s.resetForkNav);
 
+  const firstActiveForkId = useMemo(() => {
+    const entries = Object.entries(activeBranches);
+    if (entries.length === 0) return null;
+    const [, convId] = entries[0];
+    const allForks = [...(conversation?.fork_children || []), ...optimisticForkChildren];
+    if (!allForks.some(f => f._id === convId)) return null;
+    return convId;
+  }, [activeBranches, conversation?.fork_children, optimisticForkChildren]);
+
+  const effectiveConversationId = firstActiveForkId || conversation?._id;
+
   const prevConvIdRef = useRef<string | null>(null);
   useEffect(() => {
     const id = conversation?._id ?? null;
@@ -4978,8 +5173,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [conversation?._id, resetForkNav]);
 
-  const handleForkFromMessage = useCallback(async (messageUuid: string) => {
+  const timelineRef = useRef<any[]>([]);
+
+  const doFork = useCallback(async (messageUuid: string) => {
     if (!conversation?._id) return;
+    const sourceConvId = effectiveConversationId || conversation._id;
     const tempId = `temp_fork_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     addOptimisticFork({
       _id: tempId,
@@ -4998,7 +5196,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     toast.success("Forked -- switched to branch");
     try {
       const result = await forkFromMessage({
-        conversation_id: conversation._id.toString(),
+        conversation_id: sourceConvId.toString(),
         message_uuid: messageUuid,
       });
       resolveForkId(tempId, result.conversation_id);
@@ -5009,7 +5207,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       forkClearBranch(messageUuid);
       toast.error(err instanceof Error ? err.message : "Failed to fork");
     }
-  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, forkFromMessage, forkSwitchBranch, forkClearBranch, forkSetMessages, addOptimisticFork, resolveForkId]);
+  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, effectiveConversationId, forkFromMessage, forkSwitchBranch, forkClearBranch, forkSetMessages, addOptimisticFork, resolveForkId]);
+
+  const handleForkFromMessage = useCallback(async (messageUuid: string) => {
+    const tl = timelineRef.current;
+    const idx = tl.findIndex((item: any) => item.type === "message" && item.data?.message_uuid === messageUuid);
+    if (idx !== -1) {
+      const msg = tl[idx].data;
+      if (msg.role === "user") {
+        for (let i = idx - 1; i >= 0; i--) {
+          if (tl[i].type === "message" && tl[i].data?.message_uuid) {
+            await doFork(tl[i].data.message_uuid);
+            if (msg.content && populateInputRef.current) {
+              setTimeout(() => populateInputRef.current?.(msg.content), 100);
+            }
+            return;
+          }
+        }
+      }
+    }
+    await doFork(messageUuid);
+  }, [doFork]);
 
   // Preload branch from URL param
   const urlBranchPreloaded = useRef(false);
@@ -5025,15 +5243,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [conversation?.fork_children, forkSwitchBranch]);
 
-  // Load fork messages for the first active branch (scoped to current conversation)
-  const firstActiveForkId = useMemo(() => {
-    const entries = Object.entries(activeBranches);
-    if (entries.length === 0) return null;
-    const [, convId] = entries[0];
-    const allForks = [...(conversation?.fork_children || []), ...optimisticForkChildren];
-    if (!allForks.some(f => f._id === convId)) return null;
-    return convId;
-  }, [activeBranches, conversation?.fork_children, optimisticForkChildren]);
   const { isLoading: isForkLoading } = useForkMessages(firstActiveForkId);
   const [loadingBranchId, setLoadingBranchId] = useState<string | null>(null);
 
@@ -5052,6 +5261,50 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       inboxMessages,
     ) as TimelineItem[];
   }, [messages, commits, pullRequests, activeBranches, inboxMessages]);
+  timelineRef.current = timeline;
+
+  const [navigatorOpen, setNavigatorOpen] = useState(false);
+  const populateInputRef = useRef<((text: string) => void) | null>(null);
+
+  const navigatorUserMessages = useQuery(
+    api.conversations.getUserMessages,
+    conversation && isOwner && conversation.status === "active" && effectiveConversationId && !effectiveConversationId.startsWith("temp_")
+      ? { conversation_id: effectiveConversationId as Id<"conversations"> }
+      : "skip"
+  );
+
+  const handleSendEscape = useCallback(() => {
+    if (!conversation || !isOwner || conversation.status !== "active") return;
+    sendEscape({ conversation_id: conversation._id });
+    toast.info("Escape sent to session");
+  }, [conversation, isOwner, sendEscape]);
+
+  const handleOpenNavigator = useCallback(() => {
+    if (navigatorUserMessages && navigatorUserMessages.length > 0) {
+      setNavigatorOpen(true);
+    }
+  }, [navigatorUserMessages]);
+
+  const handleNavigatorRewind = useCallback((msg: NavUserMessage, indexFromEnd: number) => {
+    if (!conversation || !isOwner) return;
+    setNavigatorOpen(false);
+    const keys = ["Escape", "Escape", ...Array(indexFromEnd).fill("Up"), "Enter"];
+    sendKeys({ conversation_id: conversation._id, keys: keys.join(" ") });
+    toast.info(`Rewinding ${indexFromEnd} message${indexFromEnd !== 1 ? "s" : ""}`);
+  }, [conversation, isOwner, sendKeys]);
+
+  const handleNavigatorFork = useCallback((msg: NavUserMessage) => {
+    if (!msg.message_uuid) return;
+    setNavigatorOpen(false);
+    handleForkFromMessage(msg.message_uuid);
+  }, [handleForkFromMessage]);
+
+  const handleNavigatorClose = useCallback((selectedMsg?: { content: string }) => {
+    setNavigatorOpen(false);
+    if (selectedMsg?.content && populateInputRef.current) {
+      populateInputRef.current(selectedMsg.content);
+    }
+  }, []);
 
   const userMsgKindMap = useMemo(() => {
     const map = new Map<string, UserMessageKind>();
@@ -6680,7 +6933,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <DropdownMenuItem onClick={() => {
                       const next = !stickyDisabled;
                       setStickyDisabled(next);
-                      localStorage.setItem('stickyHeadersDisabled', String(next));
                       if (next) { setStickyMsgVisible(false); setActiveStickyMsg(null); }
                     }}>
                       {stickyDisabled ? "Enable sticky headers" : "Disable sticky headers"}
@@ -7044,7 +7296,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <AgentSwitcher conversation={conversation} />
             </div>
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status as any} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status as any} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} />
+          {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
+            <MessageNavigator
+              userMessages={navigatorUserMessages}
+              onRewind={handleNavigatorRewind}
+              onFork={handleNavigatorFork}
+              onClose={handleNavigatorClose}
+            />
+          )}
         </div>
       )}
 

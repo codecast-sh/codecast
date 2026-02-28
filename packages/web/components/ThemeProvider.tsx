@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback, lazy, Suspense } from "react";
+import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
+import { useInboxStore } from "../store/inboxStore";
 
 type Theme = "dark" | "light";
 
@@ -17,15 +18,19 @@ function getInitialTheme(): Theme {
   return stored || "light";
 }
 
-const ThemeSyncWithServer = lazy(() => import("./ThemeSyncWithServer"));
-
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [mounted, setMounted] = useState(false);
+  const serverTheme = useInboxStore((s) => s.clientState.ui?.theme);
+  const updateClientUI = useInboxStore((s) => s.updateClientUI);
+
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    if (mounted && serverTheme && serverTheme !== theme) {
+      setTheme(serverTheme);
+    }
+  }, [serverTheme, mounted]);
 
   useEffect(() => {
     if (mounted) {
@@ -36,18 +41,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme, mounted]);
 
   const toggleTheme = useCallback(() => {
-    setTheme(prev => prev === "dark" ? "light" : "dark");
-  }, []);
+    setTheme(prev => {
+      const next = prev === "dark" ? "light" : "dark";
+      updateClientUI({ theme: next });
+      return next;
+    });
+  }, [updateClientUI]);
 
-  if (!mounted) {
-    return null;
-  }
+  if (!mounted) return null;
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <Suspense fallback={null}>
-        <ThemeSyncWithServer theme={theme} setTheme={setTheme} />
-      </Suspense>
       {children}
     </ThemeContext.Provider>
   );

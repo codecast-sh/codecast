@@ -17,10 +17,10 @@ import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose, Plus } 
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
-import { useNewSessionStore } from "../store/newSessionStore";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
 import { desktopHeaderClass, setupDesktopDrag } from "../lib/desktop";
+import { useClientPref } from "../hooks/useClientPref";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -31,46 +31,22 @@ interface DashboardLayoutProps {
   hideSidebar?: boolean;
 }
 
-const LAYOUT_STORAGE_KEY = "dashboard-layout";
 const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
-
-const getInitialLayout = (): { sidebar: number; main: number } => {
-  if (typeof window === 'undefined') return DEFAULT_LAYOUT;
-  const stored = localStorage.getItem(LAYOUT_STORAGE_KEY);
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch {
-      return DEFAULT_LAYOUT;
-    }
-  }
-  return DEFAULT_LAYOUT;
-};
-
-const getInitialCollapsed = () => {
-  if (typeof window === 'undefined') return false;
-  return localStorage.getItem("sidebarCollapsed") === "true";
-};
-
-const getInitialZenMode = () => {
-  if (typeof window === 'undefined') return false;
-  return localStorage.getItem("zenMode") === "true";
-};
 
 export function DashboardLayout({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
-  const [isZenMode, setIsZenMode] = useState(getInitialZenMode);
-  const [layout, setLayout] = useState(getInitialLayout);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useClientPref("ui", "sidebar_collapsed", false);
+  const [isZenMode, setIsZenMode] = useClientPref("ui", "zen_mode", false);
+  const [layout, setLayout] = useClientPref("layouts", "dashboard", DEFAULT_LAYOUT);
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const diffPanelOpen = useDiffViewerStore((state) => state.diffPanelOpen);
   const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
-  const openNewSession = useNewSessionStore((state) => state.open);
-  const newSessionOpen = useNewSessionStore((state) => state.isOpen);
-  const closeNewSession = useNewSessionStore((state) => state.close);
+  const openNewSession = useInboxStore((state) => state.openNewSession);
+  const newSessionOpen = useInboxStore((state) => state.newSession.isOpen);
+  const closeNewSession = useInboxStore((state) => state.closeNewSession);
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   const createQuickSession = useMutation(api.conversations.createQuickSession);
   const injectSession = useInboxStore((s) => s.injectSession);
@@ -106,15 +82,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   }, []);
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
-    const updated = { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 };
-    setLayout(updated);
-    localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(updated));
+    setLayout({ sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
   };
 
   const toggleSidebar = () => {
-    const newValue = !isSidebarCollapsed;
-    setIsSidebarCollapsed(newValue);
-    localStorage.setItem("sidebarCollapsed", String(newValue));
+    setIsSidebarCollapsed(!isSidebarCollapsed);
   };
 
   const handleQuickCreate = useCallback(() => {
@@ -186,11 +158,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       }
       if (e.key === "." && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
-        setIsZenMode((prev) => {
-          const next = !prev;
-          localStorage.setItem("zenMode", String(next));
-          return next;
-        });
+        setIsZenMode(!isZenMode);
       }
       if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
@@ -205,7 +173,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hideSidebar, isSidebarCollapsed, isOnInboxPage, currentConvContext, openNewSession, handleQuickCreate]);
+  }, [hideSidebar, isSidebarCollapsed, isZenMode, isOnInboxPage, currentConvContext, openNewSession, handleQuickCreate, setIsZenMode]);
 
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">

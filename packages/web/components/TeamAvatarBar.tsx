@@ -3,7 +3,7 @@
 import { useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useActiveTeamStore } from "../store/activeTeamStore";
+import { useInboxStore } from "../store/inboxStore";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 interface TeamAvatarBarProps {
@@ -32,7 +32,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const memberFilter = searchParams.get("member");
-  const { activeTeamId } = useActiveTeamStore();
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const effectiveTeamId = propTeamId ?? activeTeamId;
   const teamMembers = useQuery(
     api.teams.getTeamMembers,

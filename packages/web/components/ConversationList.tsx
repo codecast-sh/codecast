@@ -13,8 +13,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
-import { useActiveTeamStore } from "../store/activeTeamStore";
-import { useNewSessionStore } from "../store/newSessionStore";
+import { useInboxStore } from "../store/inboxStore";
 
 function VisibilityDropdown({
   conversationId,
@@ -498,7 +497,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
-  const context = useNewSessionStore((s) => s.context);
+  const context = useInboxStore((s) => s.newSession.context);
 
   const filteredProjects = useMemo(() => {
     if (!recentProjects || recentProjects.length === 0) return [];
@@ -709,16 +708,16 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   const serverTimeFilter = timeFilter === "all" ? null : timeFilter;
   const { conversations, hasMore, loadMore, isLoadingMore, isLoading, hasSubagents } = useConversationsWithError(filter, memberFilter, serverSubagentFilter, directoryFilter, serverTimeFilter);
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const showNewSession = useNewSessionStore((s) => s.isOpen);
-  const openNewSession = useNewSessionStore((s) => s.open);
-  const closeNewSession = useNewSessionStore((s) => s.close);
+  const showNewSession = useInboxStore((s) => s.newSession.isOpen);
+  const openNewSession = useInboxStore((s) => s.openNewSession);
+  const closeNewSession = useInboxStore((s) => s.closeNewSession);
   const listRef = useRef<HTMLDivElement>(null);
   const isHoveredRef = useRef(false);
   const { containerRef: flipContainerRef, beforeReorder } = useFlipAnimation();
   const getConvKey = useCallback((c: Conversation) => c._id, []);
 
   const user = useQuery(api.users.getCurrentUser);
-  const { activeTeamId } = useActiveTeamStore();
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const effectiveTeamId = activeTeamId || user?.team_id;
   const teamMembers = useQuery(
     api.teams.getTeamMembers,

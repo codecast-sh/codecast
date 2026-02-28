@@ -16,12 +16,12 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useActiveTeamStore } from "../../../store/activeTeamStore";
+import { useInboxStore } from "../../../store/inboxStore";
 import { TeamIcon, TEAM_ICONS, TEAM_COLORS, colorBgClassMap } from "../../../components/TeamIcon";
 
 export default function TeamPage() {
   const user = useQuery(api.users.getCurrentUser);
-  const { activeTeamId } = useActiveTeamStore();
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const effectiveTeamId = activeTeamId || user?.team_id;
   const team = useQuery(
     api.teams.getTeam,
