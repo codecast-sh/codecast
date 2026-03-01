@@ -5332,6 +5332,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [timeline, conversation?.agent_type]);
 
+  const userMessagePositions = useMemo(() => {
+    const totalMessages = conversation?.message_count || messages.length;
+    if (totalMessages === 0) return [];
+    const isPaginated = totalMessages > 150;
+    const startOffset = conversation?.loaded_start_index ?? 0;
+    const positions: number[] = [];
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      const msg = item.data as Message;
+      if (msg.role !== 'user') continue;
+      const kind = userMsgKindMap.get(msg._id);
+      if (!kind || kind.kind !== 'normal') continue;
+      const globalIndex = isPaginated ? startOffset + i : i;
+      positions.push(globalIndex / totalMessages);
+    }
+    return positions;
+  }, [timeline, messages.length, conversation?.message_count, conversation?.loaded_start_index, userMsgKindMap]);
+
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
     const last = timeline[timeline.length - 1];
@@ -7372,6 +7391,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 className="w-full bg-sol-cyan/60 absolute inset-x-0 top-0"
                 style={{ height: '0%', transition: 'height 0.15s ease-out' }}
               />
+              {userMessagePositions.map((pos, i) => (
+                <div
+                  key={i}
+                  className="absolute inset-x-0 bg-sol-blue/80 rounded-full"
+                  style={{ top: `${pos * 100}%`, height: 3 }}
+                />
+              ))}
             </div>
           )}
         </div>
