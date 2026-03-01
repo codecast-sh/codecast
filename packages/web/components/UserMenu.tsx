@@ -29,6 +29,17 @@ export function UserMenu() {
 
   const displayName = user?.name || user?.email?.split("@")[0] || "User";
   const initials = displayName.slice(0, 1).toUpperCase();
+  const isAdmin = user?.email === "ashot@almostcandid.com";
+  const isLocal = typeof window !== "undefined" && window.location.hostname.includes("local.");
+  const menuBtnClass = "w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors";
+
+  const handleEnvSwitch = () => {
+    const { pathname, search, hash } = window.location;
+    const target = isLocal
+      ? `https://codecast.sh${pathname}${search}${hash}`
+      : `http://local.codecast.sh${pathname}${search}${hash}`;
+    window.location.href = target;
+  };
 
   return (
     <div className="relative" ref={menuRef}>
@@ -42,33 +53,58 @@ export function UserMenu() {
       {open && (
         <div className="absolute right-0 mt-2 w-56 bg-sol-base02 bg-sol-bg border border-sol-base01 border-sol-border rounded-lg shadow-lg py-1 z-50">
           <div className="px-4 py-3 border-b border-sol-base01 border-sol-border">
-            <p className="text-sm font-medium text-sol-text text-sol-text">{displayName}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-medium text-sol-text">{displayName}</p>
+              {isAdmin && (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-yellow/20 text-sol-yellow">admin</span>
+              )}
+            </div>
             {user?.email && (
               <p className="text-xs text-sol-base0 truncate">{user.email}</p>
             )}
           </div>
           <button
             onClick={() => { setOpen(false); router.push("/timeline"); }}
-            className="w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors"
+            className={menuBtnClass}
           >
             Timeline
           </button>
           <button
             onClick={() => { setOpen(false); router.push("/feed"); }}
-            className="w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors"
+            className={menuBtnClass}
           >
             Feed
           </button>
           <div className="border-t border-sol-border my-1" />
           <button
             onClick={() => { setOpen(false); router.push("/settings"); }}
-            className="w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors"
+            className={menuBtnClass}
           >
             Settings
           </button>
+          {isAdmin && (
+            <>
+              <div className="border-t border-sol-border my-1" />
+              <button onClick={handleEnvSwitch} className={menuBtnClass}>
+                <span className="flex items-center justify-between">
+                  Switch to {isLocal ? "prod" : "local"}
+                  <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${isLocal ? "bg-sol-green/20 text-sol-green" : "bg-sol-red/20 text-sol-red"}`}>
+                    {isLocal ? "local" : "prod"}
+                  </span>
+                </span>
+              </button>
+              <button
+                onClick={() => { setOpen(false); router.push("/admin/daemon-logs"); }}
+                className={menuBtnClass}
+              >
+                Daemon logs
+              </button>
+            </>
+          )}
+          <div className="border-t border-sol-border my-1" />
           <button
             onClick={handleLogout}
-            className="w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors"
+            className={menuBtnClass}
           >
             Sign out
           </button>
