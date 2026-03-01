@@ -155,8 +155,8 @@ function OnboardingEmptyState() {
             {/* Install command */}
             <div className="rounded-xl overflow-hidden border border-sol-border/80 mb-4">
               <div className="flex items-center justify-between gap-3 bg-sol-base02 px-4 py-3">
-                <code className="text-sol-text text-sm font-mono truncate">
-                  <span className="text-sol-text-dim select-none">$ </span>
+                <code className="text-sol-base1 text-sm font-mono truncate">
+                  <span className="text-sol-base01 select-none">$ </span>
                   {INSTALL_COMMAND}
                 </code>
                 <button
