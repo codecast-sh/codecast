@@ -182,7 +182,7 @@ app.whenReady().then(() => {
   });
 
   // Global shortcut: Cmd+Ctrl+Shift+F9 to toggle local/prod
-  globalShortcut.register("CommandOrControl+Shift+Alt+F9", () => {
+  globalShortcut.register("CommandOrControl+Shift+Alt+0", () => {
     if (!mainWindow) return;
     currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
     const env = currentBaseUrl === PROD_URL ? "prod" : "local";
