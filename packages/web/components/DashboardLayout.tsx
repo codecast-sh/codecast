@@ -18,6 +18,7 @@ import { useDiffViewerStore } from "../store/diffViewerStore";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
+import { ElectronUpdateBanner } from "./ElectronUpdateBanner";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
 import { desktopHeaderClass, setupDesktopDrag } from "../lib/desktop";
@@ -263,6 +264,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         </div>
       </header>
 
+      <ElectronUpdateBanner />
       <DesktopAppBanner />
       <SetupPromptBanner />
       <CliOfflineBanner />
