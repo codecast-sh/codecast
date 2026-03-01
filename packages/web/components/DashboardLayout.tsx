@@ -17,6 +17,7 @@ import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose, Plus } 
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
+import { CliOfflineBanner } from "./CliOfflineBanner";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
 import { desktopHeaderClass, setupDesktopDrag } from "../lib/desktop";
@@ -264,6 +265,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
       <DesktopAppBanner />
       <SetupPromptBanner />
+      <CliOfflineBanner />
 
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
