@@ -1066,16 +1066,20 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                   onClick={isOthersRestrictedView ? (e) => e.preventDefault() : undefined}
                   data-flip-key={conv._id}
                 >
-                  <div className={`relative border rounded-lg sm:rounded-xl p-2.5 sm:p-3 md:p-4 transition-all duration-200 shadow-sm dark:shadow-none ${
-                    isOthersRestrictedView
-                      ? "bg-white dark:bg-sol-bg-alt border-sol-border/30 opacity-70"
+                  <div className={`relative border rounded-lg sm:rounded-xl transition-all duration-200 dark:shadow-none ${
+                    conv.is_subagent
+                      ? !conv.is_active
+                        ? "p-2 sm:p-2.5 bg-sol-bg-alt/20 dark:bg-sol-bg-alt/10 border-sol-border/20 opacity-40 hover:opacity-60"
+                        : "p-2 sm:p-2.5 bg-sol-bg-alt/30 dark:bg-sol-bg-alt/20 border-violet-500/20 hover:border-violet-500/40 opacity-60 hover:opacity-80"
+                    : isOthersRestrictedView
+                      ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt border-sol-border/30 opacity-70"
                       : filter === "team" && conv.is_own && !conv.is_private
                         ? isFocused
-                          ? "bg-[#fcfffc] dark:bg-[#0d1f15] ring-2 ring-sol-yellow border-2 border-emerald-400/40 hover:border-emerald-400/60 hover:shadow-md"
-                          : "bg-[#fcfffc] dark:bg-[#0d1f15] border-2 border-emerald-400/35 hover:border-emerald-400/50 hover:shadow-md"
+                          ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-[#fcfffc] dark:bg-[#0d1f15] ring-2 ring-sol-yellow border-2 border-emerald-400/40 hover:border-emerald-400/60 hover:shadow-md"
+                          : "p-2.5 sm:p-3 md:p-4 shadow-sm bg-[#fcfffc] dark:bg-[#0d1f15] border-2 border-emerald-400/35 hover:border-emerald-400/50 hover:shadow-md"
                         : isFocused
-                          ? "bg-white dark:bg-sol-bg-alt ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
-                          : "bg-white dark:bg-sol-bg-alt border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
+                          ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
+                          : "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
                   }`}>
                   <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4">
                     <div className="flex-1 min-w-0">
@@ -1168,7 +1172,11 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         const alternates = conv.message_alternates || [];
                         if (alternates.length === 0) return null;
 
-                        const clean = (c: string) => c?.replace(/<[^>]+>/g, "").replace(/^\s*Caveat:.*$/gm, "").trim() || "";
+                        const cleanTeammate = (c: string) => {
+                          if (!c?.includes('<teammate-message')) return c;
+                          return c.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').trim();
+                        };
+                        const clean = (c: string) => cleanTeammate(c)?.replace(/<[^>]+>/g, "").replace(/^\s*Caveat:.*$/gm, "").trim() || "";
                         const commandLabel = (c: string) => {
                           const m = c.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
                           return m ? `/${m[1].replace(/^\//, "")}` : null;
@@ -1295,8 +1303,12 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                           </span>
                         ))}
                         {(conv.is_subagent || conv.title?.startsWith("Session agent-")) && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-900/40 text-violet-300 border border-violet-600/50 text-[10px] font-medium">
-                            Subagent
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                            !conv.is_active
+                              ? "bg-sol-bg-alt/50 text-sol-text-dim border border-sol-border/30 line-through"
+                              : "bg-violet-900/40 text-violet-300 border border-violet-600/50"
+                          }`}>
+                            {!conv.is_active ? "Terminated" : "Subagent"}
                           </span>
                         )}
                         {conv.parent_conversation_id && !conv.is_subagent && (

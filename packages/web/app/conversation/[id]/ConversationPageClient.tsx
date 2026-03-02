@@ -159,6 +159,7 @@ function OwnerView({
       isPrivate={conversation.is_private !== false}
       teamVisibility={conversation.team_visibility}
       hasShareToken={!!conversation.share_token}
+      hasTeam={!!(conversation as any).auto_shared}
       onSetPrivate={handleSetPrivate}
       onSetTeamVisibility={handleSetTeamVisibility}
       onGenerateShareLink={handleGenerateShareLink}

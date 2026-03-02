@@ -9,6 +9,7 @@ interface SharePopoverProps {
   isPrivate: boolean;
   teamVisibility?: string | null;
   hasShareToken: boolean;
+  hasTeam: boolean;
   onSetPrivate: () => Promise<void>;
   onSetTeamVisibility: (mode: "summary" | "full") => Promise<void>;
   onGenerateShareLink: () => Promise<void>;
@@ -17,22 +18,20 @@ interface SharePopoverProps {
 
 type VisibilityMode = "private" | "summary" | "full";
 
-function getShareStatus(isPrivate: boolean, teamVisibility: string | null | undefined, hasShareToken: boolean): {
+function getShareStatus(isPrivate: boolean, teamVisibility: string | null | undefined, hasShareToken: boolean, hasTeam: boolean): {
   label: string;
   color: string;
 } {
+  const isTeamShared = hasTeam && !isPrivate;
   const mode = isPrivate ? "private" : (teamVisibility || "summary");
 
-  if (mode === "private" && !hasShareToken) {
+  if (!isTeamShared && !hasShareToken) {
     return { label: "Private", color: "text-sol-text-dim" };
   }
-  if (mode === "summary" && !hasShareToken) {
-    return { label: "Team", color: "text-teal-500" };
+  if (isTeamShared && !hasShareToken) {
+    return { label: "Team", color: mode === "full" ? "text-emerald-500" : "text-teal-500" };
   }
-  if (mode === "full" && !hasShareToken) {
-    return { label: "Team", color: "text-emerald-500" };
-  }
-  if (mode === "private" && hasShareToken) {
+  if (!isTeamShared && hasShareToken) {
     return { label: "Link", color: "text-sol-cyan" };
   }
   return { label: "Team + Link", color: "text-sol-cyan" };
@@ -42,6 +41,7 @@ export function SharePopover({
   isPrivate,
   teamVisibility,
   hasShareToken,
+  hasTeam,
   onSetPrivate,
   onSetTeamVisibility,
   onGenerateShareLink,
@@ -51,10 +51,9 @@ export function SharePopover({
   const [isUpdating, setIsUpdating] = useState(false);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [alsoShareWithTeam, setAlsoShareWithTeam] = useState(true);
 
   const currentMode: VisibilityMode = isPrivate ? "private" : (teamVisibility as VisibilityMode || "summary");
-  const status = getShareStatus(isPrivate, teamVisibility, hasShareToken);
+  const status = getShareStatus(isPrivate, teamVisibility, hasShareToken, hasTeam);
 
   const handleSetMode = async (mode: VisibilityMode) => {
     if (mode === currentMode) return;
@@ -91,10 +90,6 @@ export function SharePopover({
     setIsGeneratingLink(true);
     try {
       await onGenerateShareLink();
-      // Also set team visibility to "full" if checkbox is checked and currently private
-      if (alsoShareWithTeam && isPrivate) {
-        await onSetTeamVisibility("full");
-      }
       toast.success("Share link created");
     } finally {
       setIsGeneratingLink(false);
@@ -119,103 +114,90 @@ export function SharePopover({
         className="w-72 bg-sol-bg border-sol-border p-0"
       >
         <div className="p-3 border-b border-sol-border">
-          <h3 className="text-sm font-medium text-sol-text">Share Settings</h3>
+          <h3 className="text-sm font-medium text-sol-text">Sharing</h3>
         </div>
 
-        <div className="p-3 space-y-4">
-          <div className="space-y-3">
-            <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">Team visibility</span>
-            <div className="flex rounded-lg border border-sol-border overflow-hidden">
-              <button
-                onClick={() => handleSetMode("private")}
-                disabled={isUpdating}
-                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
-                  currentMode === "private"
-                    ? "bg-sol-base02/50 text-sol-text"
-                    : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
-                </svg>
-                Private
-              </button>
-              <button
-                onClick={() => handleSetMode("summary")}
-                disabled={isUpdating}
-                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors border-l border-r border-sol-border flex items-center justify-center gap-1.5 ${
-                  currentMode === "summary"
-                    ? "bg-teal-500/15 text-teal-600 dark:text-teal-400"
-                    : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                </svg>
-                Summary
-              </button>
-              <button
-                onClick={() => handleSetMode("full")}
-                disabled={isUpdating}
-                className={`flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
-                  currentMode === "full"
-                    ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                    : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                Full
-              </button>
-            </div>
-            <p className="text-[11px] text-sol-text-dim">
-              {currentMode === "private" && "Only you can see this conversation"}
-              {currentMode === "summary" && "Team sees title and activity summary"}
-              {currentMode === "full" && "Team can view the complete conversation"}
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <svg className="w-4 h-4 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-              </svg>
-              <span className="text-sm text-sol-text">Public link</span>
-            </div>
-            <p className="text-xs text-sol-text-dim pl-6 mb-2">
-              Anyone with the link can view
-            </p>
-
-            {hasShareToken && shareUrl ? (
-              <div className="flex items-center gap-2 pl-6">
-                <input
-                  type="text"
-                  value={shareUrl}
-                  readOnly
-                  className="flex-1 text-xs bg-sol-bg-alt border border-sol-border rounded px-2 py-1.5 text-sol-text-dim truncate"
-                />
+        <div className="p-3 space-y-3">
+          {hasTeam && (
+            <div className="space-y-2">
+              <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">Team</span>
+              <div className="flex rounded-lg border border-sol-border overflow-hidden">
                 <button
-                  onClick={handleCopyLink}
-                  className="shrink-0 px-2 py-1.5 text-xs bg-sol-cyan/20 hover:bg-sol-cyan/30 text-sol-cyan rounded transition-colors"
+                  onClick={() => handleSetMode("private")}
+                  disabled={isUpdating}
+                  className={`flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                    currentMode === "private"
+                      ? "bg-sol-base02/50 text-sol-text"
+                      : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
+                  }`}
                 >
-                  {copied ? "Copied" : "Copy"}
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+                  </svg>
+                  Hidden
+                </button>
+                <button
+                  onClick={() => handleSetMode("summary")}
+                  disabled={isUpdating}
+                  className={`flex-1 px-3 py-2 text-xs font-medium transition-colors border-l border-r border-sol-border flex items-center justify-center gap-1.5 ${
+                    currentMode === "summary"
+                      ? "bg-teal-500/15 text-teal-600 dark:text-teal-400"
+                      : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
+                  }`}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                  </svg>
+                  Summary
+                </button>
+                <button
+                  onClick={() => handleSetMode("full")}
+                  disabled={isUpdating}
+                  className={`flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                    currentMode === "full"
+                      ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                      : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
+                  }`}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  Full
                 </button>
               </div>
+              <p className="text-[11px] text-sol-text-dim">
+                {currentMode === "private" && "Hidden from team members"}
+                {currentMode === "summary" && "Team sees title and activity summary"}
+                {currentMode === "full" && "Team can view the full conversation"}
+              </p>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">Link</span>
+
+            {hasShareToken && shareUrl ? (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={shareUrl}
+                    readOnly
+                    className="flex-1 text-xs bg-sol-bg-alt border border-sol-border rounded px-2 py-1.5 text-sol-text-dim truncate"
+                  />
+                  <button
+                    onClick={handleCopyLink}
+                    className="shrink-0 px-2 py-1.5 text-xs bg-sol-cyan/20 hover:bg-sol-cyan/30 text-sol-cyan rounded transition-colors"
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <p className="text-[11px] text-sol-text-dim">Anyone with this link can view</p>
+              </div>
             ) : (
-              <div className="pl-6 space-y-2">
-                {isPrivate && (
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={alsoShareWithTeam}
-                      onChange={(e) => setAlsoShareWithTeam(e.target.checked)}
-                      className="w-3.5 h-3.5 rounded border-sol-border text-sol-green focus:ring-sol-green"
-                    />
-                    <span className="text-xs text-sol-text-secondary">Also share with team</span>
-                  </label>
-                )}
+              <div className="space-y-1.5">
+                <p className="text-[11px] text-sol-text-dim">Create a link anyone can use to view this conversation</p>
                 <button
                   onClick={handleCreateLink}
                   disabled={isGeneratingLink}

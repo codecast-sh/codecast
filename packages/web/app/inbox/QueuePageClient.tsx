@@ -103,6 +103,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       isPrivate={conversation.is_private !== false}
       teamVisibility={(conversation as any).team_visibility}
       hasShareToken={!!conversation.share_token}
+      hasTeam={!!(conversation as any).auto_shared}
       onSetPrivate={async () => { await setPrivacy({ conversation_id: convId, is_private: true }); toast.success("Made private"); }}
       onSetTeamVisibility={async (mode) => { await setTeamVisibility({ conversation_id: convId, team_visibility: mode }); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
       onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); }}
@@ -165,9 +166,8 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           if (!lastUserMessage) return null;
           const cleaned = lastUserMessage
             .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
-            .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
+            .replace(/\[Image[:\s][^\]]*\]/gi, "")
             .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-            .replace(/\[image\]/gi, "")
             .trim();
           if (!cleaned) return null;
           const noisePrefixes = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>"];
@@ -208,6 +208,7 @@ function SessionCard({
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isDismissed = variant === "dismissed";
+  const isSubagent = !!session.is_subagent;
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
 
@@ -218,9 +219,11 @@ function SessionCard({
           ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
           : isWorking
             ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
-            : isDismissed
-              ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
-              : "hover:bg-sol-bg-alt/80"
+            : isDismissed && isSubagent
+              ? "opacity-40 hover:opacity-60 hover:bg-sol-bg-alt/50 border-l border-l-violet-500/20"
+              : isDismissed
+                ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
+                : "hover:bg-sol-bg-alt/80"
       }`}
     >
       <div
@@ -228,15 +231,22 @@ function SessionCard({
         tabIndex={0}
         onClick={() => onSelect(globalIndex)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
-        className="w-full text-left px-2.5 sm:px-3 py-1.5 sm:py-2 pr-7 sm:pr-8 cursor-pointer"
+        className={`w-full text-left cursor-pointer ${
+          isDismissed && isSubagent ? "px-2 py-1 pr-6" : "px-2.5 sm:px-3 py-1.5 sm:py-2 pr-7 sm:pr-8"
+        }`}
       >
         <div className="flex items-center justify-between gap-2 mb-0.5">
-          <div className={`text-sm truncate leading-tight ${
-            isActive ? "text-sol-text font-semibold" : isWorking ? "text-sol-text font-medium" : "text-sol-text"
+          <div className={`truncate leading-tight ${
+            isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed && isSubagent ? "text-xs text-sol-text-muted" : "text-sm text-sol-text"
           }`}>
             {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
+            {isSubagent && (
+              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/30 text-violet-400/70 border border-violet-600/30">
+                subagent
+              </span>
+            )}
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}
@@ -283,7 +293,7 @@ function SessionCard({
         {session.last_user_message && (
           <div className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug">
             <span className="text-sky-600/60 dark:text-sky-400/50 mr-0.5">&gt;</span>
-            {session.last_user_message.replace(/<[^>]+>/g, "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim() || "[image]"}
+            {session.last_user_message.replace(/<[^>]+>/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim() || "[image]"}
           </div>
         )}
         {(session.idle_summary || session.subtitle) && !session.implementation_session && (
