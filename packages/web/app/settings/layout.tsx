@@ -4,15 +4,18 @@ import { usePathname, useRouter } from "next/navigation";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { Button } from "../../components/ui/button";
+import {
+  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug,
+} from "lucide-react";
 
 const tabs = [
-  { name: "CLI Setup", path: "/settings/cli" },
-  { name: "Agents", path: "/settings/agents" },
-  { name: "Sync", path: "/settings/sync" },
-  { name: "Profile", path: "/settings/profile" },
-  { name: "Accounts", path: "/settings/accounts" },
-  { name: "Team", path: "/settings/team" },
-  { name: "Integrations", path: "/settings/integrations/github-app" },
+  { name: "CLI", path: "/settings/cli", icon: Terminal },
+  { name: "Agents", path: "/settings/agents", icon: Bot },
+  { name: "Sync & Privacy", path: "/settings/sync", icon: RefreshCw },
+  { name: "Profile", path: "/settings/profile", icon: User },
+  { name: "Accounts", path: "/settings/accounts", icon: KeyRound },
+  { name: "Team", path: "/settings/team", icon: Users },
+  { name: "Integrations", path: "/settings/integrations/github-app", icon: Plug },
 ];
 
 export default function SettingsLayout({
@@ -26,8 +29,8 @@ export default function SettingsLayout({
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="max-w-3xl mx-auto space-y-6">
-          <div className="flex items-center justify-between">
+        <div className="max-w-4xl mx-auto">
+          <div className="flex items-center justify-between mb-6">
             <h1 className="text-2xl font-semibold text-sol-text">Settings</h1>
             <Button
               variant="ghost"
@@ -38,27 +41,35 @@ export default function SettingsLayout({
             </Button>
           </div>
 
-          <div className="flex gap-2 border-b border-sol-border">
-            {tabs.map((tab) => {
-              const isActive = pathname === tab.path || pathname?.startsWith(tab.path + "/") ||
-                (tab.path.includes("/integrations") && pathname?.startsWith("/settings/integrations"));
-              return (
-                <button
-                  key={tab.path}
-                  onClick={() => router.push(tab.path)}
-                  className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
-                    isActive
-                      ? "border-sol-cyan text-sol-cyan"
-                      : "border-transparent text-sol-base1 hover:text-sol-text"
-                  }`}
-                >
-                  {tab.name}
-                </button>
-              );
-            })}
-          </div>
+          <div className="flex gap-8">
+            <div className="flex-1 min-w-0">
+              {children}
+            </div>
 
-          {children}
+            <nav className="w-44 flex-shrink-0">
+              <div className="sticky top-6 space-y-1">
+                {tabs.map((tab) => {
+                  const Icon = tab.icon;
+                  const isActive = pathname === tab.path || pathname?.startsWith(tab.path + "/") ||
+                    (tab.path.includes("/integrations") && pathname?.startsWith("/settings/integrations"));
+                  return (
+                    <button
+                      key={tab.path}
+                      onClick={() => router.push(tab.path)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left ${
+                        isActive
+                          ? "bg-sol-cyan/15 text-sol-cyan"
+                          : "text-sol-base1 hover:text-sol-text hover:bg-sol-base02/40"
+                      }`}
+                    >
+                      <Icon className="w-4 h-4 flex-shrink-0" />
+                      {tab.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </nav>
+          </div>
         </div>
       </DashboardLayout>
     </AuthGuard>
