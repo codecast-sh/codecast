@@ -328,8 +328,8 @@ export function DiffView({
   }, [items, needsTruncation, maxLines]);
 
   return (
-    <div className="font-mono text-[13px] leading-[22px]">
-      <div className="overflow-x-auto scrollbar-auto">
+    <div className="code-block-resizable group font-mono text-[13px] leading-[22px]">
+      <div className="code-block-scroll">
         <div className="min-w-fit">
         {displayItems.map((item, i) => {
           if (item.type === 'separator') {

@@ -6,6 +6,13 @@ import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { CodeBlock } from "../CodeBlock";
 
+function extractTextFromHast(node: any): string {
+  if (!node) return '';
+  if (node.type === 'text') return node.value || '';
+  if (node.children) return node.children.map(extractTextFromHast).join('');
+  return '';
+}
+
 interface MarkdownRendererProps {
   content: string;
   filePath?: string;
@@ -125,8 +132,7 @@ export function MarkdownRenderer({ content, filePath = '', className = '' }: Mar
             if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
               const className = codeElement.properties?.className as string[] | undefined;
               const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-              const codeContent = codeElement.children?.[0];
-              const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+              const code = extractTextFromHast(codeElement);
               if (code) {
                 return <CodeBlock code={code} language={language} />;
               }
