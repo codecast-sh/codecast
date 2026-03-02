@@ -126,6 +126,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   switchProject: async (ctx, userId, [convId, path]: [string, string]) => {
     const conv = await ctx.db.get(convId as Id<"conversations">);
     if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    await ctx.db.patch(convId as Id<"conversations">, {
+      project_path: path,
+      git_root: path,
+    });
     const now = Date.now();
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
@@ -214,14 +218,27 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return conversationId;
   },
 
-  sendMessage: async (ctx, userId, [convId, content, imageIds]: [string, string, string[] | undefined]) => {
+  sendMessage: async (ctx, userId, [convId, content, imageIds, clientId]: [string, string, string[] | undefined, string | undefined]) => {
     const conversation = await ctx.db.get(convId as Id<"conversations">);
     if (!conversation || conversation.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+
+    if (clientId) {
+      const existing = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q) =>
+          q.eq("conversation_id", convId as Id<"conversations">)
+        )
+        .filter((q) => q.eq(q.field("client_id"), clientId))
+        .first();
+      if (existing) return existing._id;
+    }
+
     const messageId = await ctx.db.insert("pending_messages", {
       conversation_id: convId as Id<"conversations">,
       from_user_id: userId,
       content,
       image_storage_ids: imageIds as any,
+      client_id: clientId,
       status: "pending" as const,
       created_at: Date.now(),
       retry_count: 0,

@@ -1248,9 +1248,21 @@ export const getConversationWithMeta = query({
       })
     );
 
+    let effective_team_visibility = conversation.team_visibility;
+    if (!effective_team_visibility && conversation.team_id && isOwner) {
+      const membership = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q: any) =>
+          q.eq("user_id", conversation.user_id).eq("team_id", conversation.team_id!)
+        )
+        .first();
+      effective_team_visibility = (membership?.visibility as any) || "summary";
+    }
+
     return {
       ...conversation,
       title,
+      effective_team_visibility,
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
       child_conversations: childConversations,
       child_by_parent_uuid: childByParentUuid,
@@ -5039,6 +5051,31 @@ export const backfillAutoSharedConversations = internalMutation({
   },
 });
 
+export const revertBackfilledTeamVisibility = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    dry_run: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const result = await ctx.db.query("conversations")
+      .order("desc")
+      .paginate({ cursor: args.cursor ?? null, numItems: 50 });
+
+    let fixed = 0;
+    for (const conv of result.page) {
+      if (conv.auto_shared && conv.team_visibility === "full" && conv.is_private === false) {
+        if (!args.dry_run) {
+          await ctx.db.patch(conv._id, { team_visibility: undefined });
+        }
+        fixed++;
+      }
+    }
+
+    const nextCursor = !result.isDone ? result.continueCursor : null;
+    return { scanned: result.page.length, fixed, nextCursor, dry_run: !!args.dry_run };
+  },
+});
+
 export const setParentConversation = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -5917,6 +5954,40 @@ export const killSession = mutation({
       command: "kill_session",
       args: JSON.stringify({ conversation_id: args.conversation_id }),
       created_at: Date.now(),
+    });
+  },
+});
+
+export const restartSession = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    if (!conv.session_id) throw new Error("No session to restart");
+
+    const now = Date.now();
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "kill_session",
+      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      created_at: now,
+    });
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "resume_session",
+      args: JSON.stringify({
+        session_id: conv.session_id,
+        conversation_id: args.conversation_id,
+        project_path: conv.project_path,
+      }),
+      created_at: now + 1,
     });
   },
 });

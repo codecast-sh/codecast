@@ -29,6 +29,7 @@ export const sendMessageToSession = mutation({
     content: v.string(),
     image_storage_id: v.optional(v.id("_storage")),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
+    client_id: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -46,12 +47,24 @@ export const sendMessageToSession = mutation({
       throw new Error("Unauthorized: can only send messages to your own conversations");
     }
 
+    if (args.client_id) {
+      const existing = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q) =>
+          q.eq("conversation_id", args.conversation_id)
+        )
+        .filter((q) => q.eq(q.field("client_id"), args.client_id))
+        .first();
+      if (existing) return existing._id;
+    }
+
     const messageId = await ctx.db.insert("pending_messages", {
       conversation_id: args.conversation_id,
       from_user_id: authUserId,
       content: args.content,
       image_storage_id: args.image_storage_id,
       image_storage_ids: args.image_storage_ids,
+      client_id: args.client_id,
       status: "pending" as const,
       created_at: Date.now(),
       retry_count: 0,
