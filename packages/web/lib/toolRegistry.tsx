@@ -166,6 +166,22 @@ export const toolRegistry: Record<string, ToolConfig> = {
     }
   },
 
+  Agent: {
+    title: "Subagent",
+    icon: Rocket,
+    color: "cyan",
+    component: TaskToolView,
+    extractSummary: (input, output) => {
+      if (input?.description) {
+        return input.description;
+      }
+      if (input?.subagent_type) {
+        return `${input.subagent_type} agent`;
+      }
+      return "Agent task";
+    }
+  },
+
   TodoWrite: {
     title: "Todo List",
     icon: CheckSquare,

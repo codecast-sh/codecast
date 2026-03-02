@@ -230,8 +230,8 @@ export interface ConversationViewHandle {
 }
 
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
-  const switchProject = useMutation(api.conversations.switchSessionProject);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
+  const storeSwitchProject = useInboxStore((s) => s.switchProject);
   const updateSessionProject = useInboxStore((s) => s.updateSessionProject);
   const storeSession = useInboxStore((s) =>
     s.sessions.find((sess) => sess._id === conversation._id)
@@ -251,8 +251,10 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const handleSwitch = useCallback(async (projectPath: string) => {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
-    updateSessionProject(resolvedId, trimmed);
-    if (!isConvexId(resolvedId)) {
+    if (isConvexId(resolvedId)) {
+      storeSwitchProject(resolvedId, trimmed);
+    } else {
+      updateSessionProject(resolvedId, trimmed);
       const realId = await new Promise<string>((resolve, reject) => {
         const timeout = setTimeout(() => { unsub(); reject(new Error("timeout")); }, 15000);
         const check = () => {
@@ -263,12 +265,9 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
         const unsub = useInboxStore.subscribe(check);
       }).catch(() => "");
       if (!realId) return;
-      updateSessionProject(realId, trimmed);
-      switchProject({ conversation_id: realId as Id<"conversations">, project_path: trimmed }).catch(() => {});
-    } else {
-      switchProject({ conversation_id: resolvedId as Id<"conversations">, project_path: trimmed }).catch(() => {});
+      storeSwitchProject(realId, trimmed);
     }
-  }, [switchProject, resolvedId, updateSessionProject]);
+  }, [storeSwitchProject, resolvedId, updateSessionProject]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -623,7 +622,8 @@ type UserMessageKind =
   | { kind: 'plan'; planContent: string }
   | { kind: 'noise' }
   | { kind: 'tool_results_only' }
-  | { kind: 'empty' };
+  | { kind: 'empty' }
+  | { kind: 'teammate_events' };
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "continue", "<task-notification>", "Your task is to create a detailed summary", "Please continue the conversation"];
 
@@ -649,7 +649,7 @@ function classifyUserMessage(
     const stripped = t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
     if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:')) return { kind: 'task_notification' };
   }
-  if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'Task')) {
+  if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'Task' || tc.name === 'Agent')) {
     return { kind: 'task_prompt' };
   }
   if (isCompactionPromptMessage(t)) return { kind: 'compaction_prompt' };
@@ -661,13 +661,16 @@ function classifyUserMessage(
   if (contextPrev?.role === 'system' && contextPrev?.subtype === 'compact_boundary') {
     return { kind: 'compaction_summary' };
   }
+  if (t.includes('<teammate-message') && !t.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim()) {
+    return { kind: 'teammate_events' };
+  }
   const planContent = extractPlanContent(t);
   if (planContent) return { kind: 'plan', planContent };
   const displayable = t
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '')
-    .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, '')
+    .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '')
+    .replace(/\[Image[:\s][^\]]*\]/gi, '')
     .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, '')
-    .replace(/\[image\]/gi, '')
     .trim();
   if (!displayable) {
     if (!immediatePrev && !contextPrev) return { kind: 'normal' };
@@ -1199,7 +1202,7 @@ function formatToolName(name: string): string {
   if (name.startsWith("mcp__")) {
     const parts = name.split("__");
     const method = parts[2] || parts[1] || "MCP";
-    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()).slice(0, 12);
+    return method.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   }
   return name.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 }
@@ -1447,12 +1450,16 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const summary = getToolSummary();
   const resultSummary = getResultSummary();
 
-  const executedTabUrl = useMemo(() => {
-    if (!result?.content || !tool.name.startsWith("mcp__claude-in-chrome__")) return null;
-    const tabIdMatch = result.content.match(/Executed on tabId:\s*(\d+)/);
-    if (!tabIdMatch) return null;
-    return `https://clau.de/chrome/tab/${tabIdMatch[1]}`;
-  }, [result?.content, tool.name]);
+  const executedTabId = useMemo(() => {
+    if (!tool.name.startsWith("mcp__claude-in-chrome__")) return null;
+    const tabId = parsedInput.tabId;
+    if (tabId != null) return String(tabId);
+    if (result?.content) {
+      const tabIdMatch = result.content.match(/Executed on tabId:\s*(\d+)/);
+      if (tabIdMatch) return tabIdMatch[1];
+    }
+    return null;
+  }, [parsedInput.tabId, result?.content, tool.name]);
 
   // Process result content - strip line numbers for Read tool, strip Tab Context from MCP chrome results
   const processedContent = result ? (isRead ? stripLineNumbers(result.content) : tool.name.startsWith("mcp__claude-in-chrome__") ? result.content.replace(/\n?\n?Tab Context:[\s\S]*$/, "").trim() : result.content) : "";
@@ -1609,22 +1616,23 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
         }`}
         onClick={handleClick}
       >
-        <span className={`font-mono ${toolColor}`}>{formatToolName(tool.name)}</span>
+        <span className={`font-mono flex-shrink-0 group-hover:underline ${toolColor}`}>{formatToolName(tool.name)}</span>
         {summary && (
           <span className="text-sol-text-muted font-mono truncate min-w-0">{summary}</span>
         )}
-        {executedTabUrl && (
+        {executedTabId && (
           <a
-            href={executedTabUrl}
+            href={`https://clau.de/chrome/tab/${executedTabId}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sol-cyan/60 hover:text-sol-cyan transition-colors flex-shrink-0"
+            className="text-sol-cyan/70 hover:text-sol-cyan transition-colors flex-shrink-0 font-mono flex items-center gap-0.5"
             onClick={(e) => e.stopPropagation()}
-            title={executedTabUrl}
+            title={`View tab ${executedTabId}`}
           >
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
+            <span>open tab</span>
           </a>
         )}
         {resultSummary && (
@@ -2034,24 +2042,42 @@ function SendMessageBlock({ tool, agentNameToChildMap }: { tool: ToolCall; agent
   const type = parsedInput.type || "message";
   const recipient = parsedInput.recipient;
   const summary = parsedInput.summary;
+  const content = parsedInput.content;
   const childId = recipient && agentNameToChildMap?.[recipient];
+
+  const isShutdown = type === "shutdown_request";
+  const isBroadcast = type === "broadcast";
+
+  const typeConfig = isShutdown
+    ? { icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5.636 5.636a9 9 0 1012.728 0M12 3v9" /></svg>, color: "text-red-400/80", bg: "bg-red-500/8 border-red-500/15", label: "shutdown" }
+    : isBroadcast
+    ? { icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" /></svg>, color: "text-orange-400/80", bg: "bg-orange-500/8 border-orange-500/15", label: "broadcast" }
+    : { icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>, color: "text-amber-400/80", bg: "bg-amber-500/8 border-amber-500/15", label: "message" };
+
+  const displayText = summary || (content && String(content).slice(0, 80)) || "";
 
   return (
     <div className="my-0.5">
-      <div className="flex items-center gap-1.5 text-xs">
-        <span className="font-mono text-amber-500/80">SendMessage</span>
-        {type === "broadcast" ? (
-          <span className="px-1 py-0.5 rounded text-[10px] font-mono bg-red-500/15 text-red-400">broadcast</span>
-        ) : type === "shutdown_request" ? (
-          <span className="px-1 py-0.5 rounded text-[10px] font-mono bg-red-500/15 text-red-400">shutdown</span>
-        ) : recipient ? (
-          childId ? (
-            <Link href={`/conversation/${childId}`} className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono hover:bg-amber-500/25 hover:text-amber-300 transition-colors" onClick={e => e.stopPropagation()}>@{recipient}</Link>
-          ) : (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono">@{recipient}</span>
-          )
-        ) : null}
-        {summary && <span className="text-sol-text-muted">{String(summary).slice(0, 60)}</span>}
+      <div className={`flex items-center gap-1.5 text-xs py-1.5 px-2.5 rounded-md border ${typeConfig.bg}`}>
+        <span className={typeConfig.color}>{typeConfig.icon}</span>
+        {isShutdown ? (
+          <>
+            {recipient && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/20 font-mono">@{recipient}</span>}
+            <span className="text-red-400/80 font-medium text-xs">shutdown request</span>
+          </>
+        ) : (
+          <>
+            {recipient && (
+              childId ? (
+                <Link href={`/conversation/${childId}`} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono hover:bg-amber-500/25 hover:text-amber-300 transition-colors" onClick={e => e.stopPropagation()}>@{recipient}</Link>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono">@{recipient}</span>
+              )
+            )}
+            {isBroadcast && <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-mono">all</span>}
+            {displayText && <span className="text-sol-text-muted truncate">{displayText}</span>}
+          </>
+        )}
       </div>
     </div>
   );
@@ -2061,16 +2087,23 @@ function TeamCreateBlock({ tool }: { tool: ToolCall }) {
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
+  const isDelete = tool.name === "TeamDelete";
+
   return (
     <div className="my-0.5">
-      <div className="flex items-center gap-1.5 text-xs">
-        <span className="font-mono text-sol-cyan/80">{tool.name}</span>
+      <div className={`flex items-center gap-1.5 text-xs py-1.5 px-2.5 rounded-md border ${isDelete ? "bg-red-500/5 border-red-500/15" : "bg-cyan-500/8 border-cyan-500/15"}`}>
+        <svg className={`w-3 h-3 shrink-0 ${isDelete ? "text-red-400/70" : "text-cyan-400/70"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+        </svg>
+        <span className={`font-mono text-xs font-medium ${isDelete ? "text-red-400/80" : "text-cyan-400/80"}`}>
+          {isDelete ? "Team dissolved" : "Team created"}
+        </span>
         {parsedInput.team_name && (
-          <span className="px-1 py-0.5 rounded text-[10px] font-mono bg-cyan-500/15 text-cyan-400 border border-cyan-500/20">
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-cyan-500/15 text-cyan-400 border border-cyan-500/20">
             {parsedInput.team_name}
           </span>
         )}
-        {parsedInput.description && <span className="text-sol-text-dim">{String(parsedInput.description).slice(0, 60)}</span>}
+        {parsedInput.description && <span className="text-sol-text-dim truncate">{String(parsedInput.description).slice(0, 60)}</span>}
       </div>
     </div>
   );
@@ -2755,6 +2788,19 @@ const agentBorderMap: Record<string, string> = {
   pink: "border-pink-500/30",
 };
 
+function TeammateEventsBlock({ content, timestamp }: { content: string; timestamp: number }) {
+  const parts = parseTeammateMessages(content);
+  return (
+    <div className="my-1 space-y-1 pl-8">
+      {parts.map((part, i) => part.type === 'teammate' ? (
+        <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
+      ) : part.content.trim() ? (
+        <span key={i} className="text-xs text-sol-text-dim whitespace-pre-wrap">{part.content}</span>
+      ) : null)}
+    </div>
+  );
+}
+
 function TeammateMessageCard({ teammateId, color, summary, content }: { teammateId: string; color?: string; summary?: string; content: string }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -2766,16 +2812,19 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
     const idleSummary = parsed.summary;
     if (idleSummary) {
       return (
-        <div className="flex items-center gap-2 py-1 text-xs text-sol-text-dim">
+        <div className="flex items-center gap-2 py-1 px-2 text-xs text-sol-text-dim rounded bg-sol-bg-alt/30">
           <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
             {teammateId}
           </span>
-          <span className="italic">{idleSummary}</span>
+          <svg className="w-2.5 h-2.5 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="italic truncate">{idleSummary}</span>
         </div>
       );
     }
     return (
-      <div className="flex items-center gap-2 py-0.5 text-xs text-sol-text-dim opacity-50">
+      <div className="flex items-center gap-2 py-0.5 px-2 text-xs text-sol-text-dim opacity-40">
         <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
           {teammateId}
         </span>
@@ -2785,25 +2834,48 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   }
 
   if (parsed?.type === "task_assignment") {
+    const badgeColor = agentColorMap[color || "blue"] || agentColorMap.blue;
     return (
-      <div className="flex items-center gap-2 py-1 text-xs">
-        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
+      <div className="flex items-center gap-2 py-1.5 px-2.5 rounded-md bg-sol-bg-alt/50 border border-sol-border/20">
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${badgeColor}`}>
           {parsed.assignedBy || teammateId}
         </span>
-        <span className="text-sol-text-muted">
-          assigned <span className="font-mono text-sol-text-dim">#{parsed.taskId}</span> {parsed.subject}
+        <svg className="w-3 h-3 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+        </svg>
+        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-sol-bg-highlight border border-sol-border/30 text-sol-text-secondary shrink-0">
+          #{parsed.taskId}
         </span>
+        <span className="text-xs text-sol-text-secondary truncate">{parsed.subject}</span>
       </div>
     );
   }
 
-  if (parsed?.type === "shutdown_request") {
+  if (parsed?.type === "shutdown_request" || parsed?.type === "shutdown_approved") {
+    const isApproved = parsed.type === "shutdown_approved";
     return (
-      <div className="flex items-center gap-2 py-1 text-xs">
-        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "red"] || agentColorMap.red}`}>
+      <div className="flex items-center gap-2 py-1.5 px-2.5 rounded-md bg-red-500/5 border border-red-500/15">
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "red"] || agentColorMap.red}`}>
+          {parsed.from || teammateId}
+        </span>
+        <svg className="w-3 h-3 text-red-400/60 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5.636 5.636a9 9 0 1012.728 0M12 3v9" />
+        </svg>
+        <span className="text-xs text-red-400/80 font-medium">{isApproved ? "shutdown approved" : "shutdown request"}</span>
+      </div>
+    );
+  }
+
+  if (parsed?.type === "teammate_terminated") {
+    return (
+      <div className="flex items-center gap-2 py-1.5 px-2.5 rounded-md bg-sol-bg-alt/30 border border-sol-border/15">
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
           {teammateId}
         </span>
-        <span className="text-red-400 italic">shutdown request</span>
+        <svg className="w-3 h-3 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+        </svg>
+        <span className="text-xs text-sol-text-dim">{parsed.message || "terminated"}</span>
       </div>
     );
   }
@@ -2846,7 +2918,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   const [fullscreen, setFullscreen] = useState(false);
   const displayContent = content
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
-    .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
+    .replace(/\[Image[:\s][^\]]*\]/gi, "")
     .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
     .replace(/\[image\]/gi, "")
     .trim();
@@ -3007,8 +3079,19 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
         className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : isMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}
         style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
       >
-        {effectivelyCollapsed ? displayContent : (() => {
+        {(() => {
           const hasTeammate = displayContent.includes('<teammate-message');
+          if (effectivelyCollapsed && !hasTeammate) return displayContent;
+          if (effectivelyCollapsed && hasTeammate) {
+            const tmParts = parseTeammateMessages(displayContent);
+            return (
+              <div className="space-y-1">
+                {tmParts.map((part, i) => part.type === 'teammate' ? (
+                  <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
+                ) : <span key={i} className="whitespace-pre-wrap">{part.content}</span>)}
+              </div>
+            );
+          }
           if (hasTeammate) {
             const tmParts = parseTeammateMessages(displayContent);
             return (
@@ -3481,7 +3564,7 @@ function AssistantBlock({
 
         {hasToolCalls && toolCalls?.map((tc) => {
           if (collapsed && !isPlanWriteToolCall(tc)) return null;
-          return tc.name === "Task" ? (
+          return (tc.name === "Task" || tc.name === "Agent") ? (
             <TaskToolBlock
               key={tc.id}
               tool={tc}
@@ -4258,6 +4341,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [sentAt, setSentAt] = useState<number | null>(null);
   const [showStuckBanner, setShowStuckBanner] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const [showModeLabel, setShowModeLabel] = useState(false);
+  const [modeTooltip, setModeTooltip] = useState(false);
+  const modeLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeTriggeredRef = useRef(false);
   const resumeSessionMutation = useMutation(api.users.resumeSession);
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
@@ -4266,8 +4352,6 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     api.pendingMessages.getMessageStatus,
     pendingMessageId ? { message_id: pendingMessageId } : "skip"
   );
-
-  const queuedMsg = useInboxStore((s) => s.queuedMessages[conversationId]);
 
   const canQueryServer = isConvexId(conversationId);
   const existingPending = useQuery(
@@ -4332,22 +4416,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   pastedImagesRef.current = pastedImages;
 
-  useEffect(() => {
-    if (!queuedMsg || !canQueryServer) return;
-    const msg = useInboxStore.getState().dequeueMessage(conversationId);
-    if (!msg) return;
-    sendMessage({
-      conversation_id: conversationId as Id<"conversations">,
-      content: msg.content,
-      image_storage_ids: msg.imageStorageIds?.length ? msg.imageStorageIds as Id<"_storage">[] : undefined,
-    }).then((msgId) => {
-      setPendingMessageId(msgId);
-      setSentAt(Date.now());
-      setShowStuckBanner(false);
-    }).catch((error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to send message");
-    });
-  }, [queuedMsg, canQueryServer, conversationId, sendMessage]);
+  const waitForConvexId = useCallback(async (id: string): Promise<string> => {
+    const resolved = useInboxStore.getState().getConvexId(id);
+    if (resolved) return resolved;
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const r = useInboxStore.getState().getConvexId(id);
+      if (r) return r;
+    }
+    throw new Error("Session not yet created on server");
+  }, []);
 
   useEffect(() => {
     return () => { if (escapeTimerRef.current) clearTimeout(escapeTimerRef.current); };
@@ -4610,12 +4688,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
           const forkId = Object.values(branches)[0];
           if (!forkId) return;
           addOptimistic(forkId, content);
-          if (!isConvexId(forkId)) {
-            useInboxStore.getState().queueMessage(forkId, { content });
-            return;
-          }
+          const resolvedForkId = await waitForConvexId(forkId);
           const msgId = await sendMessage({
-            conversation_id: forkId as Id<"conversations">,
+            conversation_id: resolvedForkId as Id<"conversations">,
             content,
           });
           setPendingMessageId(msgId);
@@ -4640,18 +4715,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     updateDraft("", null);
     requestAnimationFrame(() => textareaRef.current?.focus());
 
-    if (!canQueryServer) {
-      useInboxStore.getState().queueMessage(conversationId, {
-        content: trimmed,
-        imageStorageIds: storageIds.length > 0 ? storageIds : undefined,
-        images: optimisticImages.length > 0 ? optimisticImages : undefined,
-      });
-      return;
-    }
-
     try {
+      const resolvedId = canQueryServer ? conversationId : await waitForConvexId(conversationId);
       const msgId = await sendMessage({
-        conversation_id: conversationId as Id<"conversations">,
+        conversation_id: resolvedId as Id<"conversations">,
         content: trimmed,
         image_storage_ids: storageIds.length > 0 ? storageIds : undefined,
       });
@@ -4663,7 +4730,19 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   };
 
+  const flashModeLabel = useCallback(() => {
+    setShowModeLabel(true);
+    if (modeLabelTimerRef.current) clearTimeout(modeLabelTimerRef.current);
+    modeLabelTimerRef.current = setTimeout(() => setShowModeLabel(false), 1500);
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Tab" && e.shiftKey) {
+      e.preventDefault();
+      onCycleMode?.();
+      flashModeLabel();
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -4792,6 +4871,62 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                 >
                   ?
                 </button>
+                {permissionMode && (
+                  <div className="relative">
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => { onCycleMode?.(); flashModeLabel(); }}
+                      onMouseEnter={() => setModeTooltip(true)}
+                      onMouseLeave={() => setModeTooltip(false)}
+                      className="flex items-center gap-1.5"
+                    >
+                      <div className={`w-2 h-2 rounded-full transition-colors ${
+                        permissionMode === "plan" ? "bg-sol-blue" :
+                        permissionMode === "acceptEdits" ? "bg-emerald-400" :
+                        permissionMode === "bypassPermissions" ? "bg-sol-red" :
+                        permissionMode === "dontAsk" ? "bg-sol-yellow" :
+                        "bg-sol-base00/50"
+                      }`} />
+                      {permissionMode !== "default" && (
+                        <span
+                          className={`text-[10px] font-mono transition-all duration-300 ease-out overflow-hidden whitespace-nowrap ${
+                            showModeLabel ? "max-w-[80px] opacity-100 translate-x-0" : "max-w-0 opacity-0 -translate-x-1"
+                          } ${
+                            permissionMode === "plan" ? "text-sol-blue" :
+                            permissionMode === "acceptEdits" ? "text-emerald-400" :
+                            permissionMode === "bypassPermissions" ? "text-sol-red" :
+                            "text-sol-yellow"
+                          }`}
+                        >
+                          {permissionMode === "plan" ? "plan" :
+                           permissionMode === "acceptEdits" ? "auto-edit" :
+                           permissionMode === "bypassPermissions" ? "bypass" :
+                           permissionMode === "dontAsk" ? "don't ask" :
+                           permissionMode}
+                        </span>
+                      )}
+                    </button>
+                    {modeTooltip && (
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded bg-sol-bg border border-sol-border/60 shadow-lg whitespace-nowrap text-[10px] pointer-events-none flex items-center gap-1.5">
+                        <span className={
+                          permissionMode === "plan" ? "text-sol-blue" :
+                          permissionMode === "acceptEdits" ? "text-emerald-400" :
+                          permissionMode === "bypassPermissions" ? "text-sol-red" :
+                          permissionMode === "dontAsk" ? "text-sol-yellow" :
+                          "text-sol-text-dim"
+                        }>
+                          {permissionMode === "default" ? "default" :
+                           permissionMode === "plan" ? "plan mode" :
+                           permissionMode === "acceptEdits" ? "accept edits" :
+                           permissionMode === "bypassPermissions" ? "bypass permissions" :
+                           permissionMode === "dontAsk" ? "don't ask" :
+                           permissionMode}
+                        </span>
+                        <span className="text-sol-text-dim/50">(Shift+Tab)</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -4863,26 +4998,6 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               </div>
             </div>
           </form>
-          {permissionMode && permissionMode !== "default" && (
-            <div className="flex justify-end px-2 mt-0.5">
-              <button
-                onClick={onCycleMode}
-                className={`text-[10px] font-mono transition-colors ${
-                  permissionMode === "plan" ? "text-sol-blue/40 hover:text-sol-blue" :
-                  permissionMode === "acceptEdits" ? "text-emerald-400/40 hover:text-emerald-400" :
-                  permissionMode === "bypassPermissions" ? "text-sol-red/40 hover:text-sol-red" :
-                  "text-sol-yellow/40 hover:text-sol-yellow"
-                }`}
-                title="Click to cycle mode (Shift+Tab)"
-              >
-                {permissionMode === "plan" ? "plan" :
-                 permissionMode === "acceptEdits" ? "auto-edit" :
-                 permissionMode === "bypassPermissions" ? "bypass" :
-                 permissionMode === "dontAsk" ? "don't ask" :
-                 permissionMode}
-              </button>
-            </div>
-          )}
         </div>
       </div>
       {shortcutTooltip && (
@@ -5132,10 +5247,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [messages]);
 
-  const pendingPermissions = useQuery(
+  const pendingPermissionsRaw = useQuery(
     api.permissions.getPendingPermissions,
     conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip"
   );
+  const PERMISSION_SKIP_TOOLS = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
+  const pendingPermissions = pendingPermissionsRaw?.filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name));
 
   // Fork navigation state (data in inbox store, UI state in forkNavigationStore)
   const activeBranches = useInboxStore((s) => s.activeBranches);
@@ -5348,7 +5465,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const msg = item.data as Message;
       if (msg.role !== 'user') continue;
       const kind = userMsgKindMap.get(msg._id)?.kind;
-      if (!kind || kind === 'tool_results_only' || kind === 'empty' || kind === 'noise' || kind === 'task_notification' || kind === 'task_prompt' || kind === 'compaction_prompt' || kind === 'compaction_summary') continue;
+      if (!kind || kind === 'tool_results_only' || kind === 'empty' || kind === 'noise' || kind === 'task_notification' || kind === 'task_prompt' || kind === 'compaction_prompt' || kind === 'compaction_summary' || kind === 'teammate_events') continue;
       const globalIndex = isPaginated ? startOffset + i : i;
       positions.push(globalIndex / totalMessages);
     }
@@ -5705,6 +5822,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           case 'interrupt': return 30;
           case 'skill_expansion': return 44;
           case 'task_notification': return 40;
+          case 'teammate_events': return 40;
           case 'task_prompt': return 0;
           case 'compaction_prompt': return 0;
           case 'compaction_summary': return 60;
@@ -5712,21 +5830,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           case 'tool_results_only': return 0;
           case 'empty': return 0;
         }
-        const lines = (msg.content || "").split("\n").length;
-        return Math.max(60, lines * 18 + 40);
+        return 100;
       }
       if (msg.role === "assistant") {
         const hasTextContent = msg.content && msg.content.trim().length > 0;
         const toolCount = msg.tool_calls?.length || 0;
         if (!hasTextContent && !msg.thinking && !msg.images?.length) return 8;
-        if (!hasTextContent && toolCount > 0) return toolCount * 30;
-        const hasThinking = showThinking && msg.thinking && msg.thinking.trim().length > 0;
-        const contentLines = (msg.content || "").split("\n").length;
-        return Math.max(60, toolCount * 30 + (hasThinking ? 80 : 0) + contentLines * 18 + 40);
+        if (!hasTextContent && toolCount > 0) return Math.min(toolCount * 30, 200);
+        return 200;
       }
       return 40;
     },
-    overscan: 5,
+    overscan: 10,
     paddingStart: 16,
     paddingEnd: 100,
     isScrollingResetDelay: 150,
@@ -6138,32 +6253,28 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && !hasMoreBelow && !userScrolledRef.current) {
-      const el = containerRef.current;
-      if (el) {
-        el.style.scrollBehavior = "smooth";
-        virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
-        requestAnimationFrame(() => {
-          el.scrollTop = el.scrollHeight;
-          lastScrollTopRef.current = el.scrollTop;
-          setTimeout(() => { el.style.scrollBehavior = ""; }, 500);
-        });
-      }
+      virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
+      requestAnimationFrame(() => {
+        if (containerRef.current) {
+          lastScrollTopRef.current = containerRef.current.scrollTop;
+        }
+      });
       setUserScrolled(false);
     }
   }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow, initialScrollDone]);
 
   useEffect(() => {
     if (isWaitingForResponse && containerRef.current && isNearBottomRef.current && !userScrolledRef.current) {
+      virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
       requestAnimationFrame(() => {
         if (containerRef.current) {
-          containerRef.current.scrollTop = containerRef.current.scrollHeight;
           lastScrollTopRef.current = containerRef.current.scrollTop;
         }
       });
     }
-  }, [isWaitingForResponse]);
+  }, [isWaitingForResponse, virtualizer, timeline.length]);
 
-  // Initial scroll: snap to bottom before paint (chatdoc pattern: scroll(0, 9999999))
+  // Initial scroll: snap to bottom using virtualizer (not raw scrollHeight which desyncs with estimates)
   useLayoutEffect(() => {
     if (timeline.length === 0 || initialScrollDone) return;
     if (window.location.hash || highlightQuery) {
@@ -6173,13 +6284,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const sc = containerRef.current;
     if (sc) {
       paginationCooldownRef.current = true;
-      sc.scrollTop = sc.scrollHeight;
+      virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
       lastScrollTopRef.current = sc.scrollTop;
       // Fallback: clear cooldown after virtualizer has had time to measure
       setTimeout(() => { paginationCooldownRef.current = false; }, 1000);
     }
     setInitialScrollDone(true);
-  }, [timeline.length, highlightQuery, initialScrollDone]);
+  }, [timeline.length, highlightQuery, initialScrollDone, virtualizer]);
 
   // Detect user scroll-up via wheel events (fires synchronously, no race condition
   // with the async scroll event). This ensures userScrolledRef is set before any
@@ -6210,7 +6321,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const newHeight = sc.scrollHeight;
       if (newHeight !== lastHeight) {
         lastHeight = newHeight;
-        sc.scrollTop = newHeight;
+        sc.scrollTop = sc.scrollHeight - sc.clientHeight;
         lastScrollTopRef.current = sc.scrollTop;
       }
       if (paginationCooldownRef.current) {
@@ -6520,6 +6631,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <CompactionSummaryBlock key={msg._id} content={msg.content!} />;
         case 'plan':
           return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} onStartShareSelection={handleStartShareSelection} />;
+        case 'teammate_events':
+          return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} />;
         case 'normal': {
           if (!msg.content?.trim() && !(msg.images && msg.images.length > 0)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
@@ -7125,7 +7238,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <UserIcon />
                 <span className="text-sol-blue text-xs font-medium">{conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
               </div>
-              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8 pr-4">{activeStickyMsg.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "").replace(/\[image\]/gi, "").trim()}</div>
+              <div className="text-sm text-sol-text whitespace-pre-wrap break-words line-clamp-3 pl-8 pr-4">{activeStickyMsg.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "").trim()}</div>
             </div>
           </div>
         </div>
@@ -7181,7 +7294,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           )}
           <div
             style={{
-              minHeight: virtualizer.getTotalSize(),
+              height: virtualizer.getTotalSize(),
               width: "100%",
               position: "relative",
             }}
@@ -7312,7 +7425,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
       </div>
 
-      {showMessageInput && conversation && (
+      {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
           {conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (
             <div className="absolute left-0 right-0 bottom-full">

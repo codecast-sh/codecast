@@ -146,11 +146,12 @@ export function PermissionStack({ permissions }: { permissions: Permission[] }) 
     );
   }
 
-  // Single permission: compact inline layout
+  // Single permission: two-row layout — header + preview
   if (pending.length === 1) {
     const p = pending[0];
     const preview = p.arguments_preview;
     const isExpanded = expandedId === p._id;
+    const isLong = preview && preview.length > 80;
     return (
       <div className="rounded border border-sol-yellow/20 bg-sol-yellow/[0.03] overflow-hidden">
         <div className="flex items-center gap-2 px-2.5 py-1.5">
@@ -158,17 +159,12 @@ export function PermissionStack({ permissions }: { permissions: Permission[] }) 
           <span className="text-[11px] font-mono font-semibold text-sol-text-muted flex-shrink-0">
             {p.tool_name}
           </span>
-          {preview && (
-            <button
-              onClick={() => setExpandedId(isExpanded ? null : p._id)}
-              className="flex-1 min-w-0 text-left"
-            >
-              <span className={`text-[11px] font-mono text-sol-text-dim block ${isExpanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
-                {preview}
-              </span>
-            </button>
+          {preview && !isLong && (
+            <span className="flex-1 min-w-0 text-[11px] font-mono text-sol-text-dim truncate">
+              {preview}
+            </span>
           )}
-          {!preview && <span className="flex-1" />}
+          {(!preview || isLong) && <span className="flex-1" />}
           <div className="flex items-center gap-1 flex-shrink-0">
             <button
               onClick={() => handleApprove(p._id)}
@@ -187,6 +183,13 @@ export function PermissionStack({ permissions }: { permissions: Permission[] }) 
             <kbd className="px-0.5 bg-sol-bg rounded border border-sol-border/50 text-[9px]">y</kbd>/<kbd className="px-0.5 bg-sol-bg rounded border border-sol-border/50 text-[9px]">n</kbd>
           </span>
         </div>
+        {preview && isLong && (
+          <div className="px-2.5 pb-1.5 -mt-0.5">
+            <span className="text-[11px] font-mono text-sol-text-dim block whitespace-pre-wrap break-words">
+              {preview}
+            </span>
+          </div>
+        )}
       </div>
     );
   }
