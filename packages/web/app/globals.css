@@ -271,6 +271,7 @@
 }
 .code-block-scroll::-webkit-scrollbar {
   height: 12px;
+  display: block;
 }
 .code-block-scroll::-webkit-scrollbar-track {
   background: rgba(88, 110, 117, 0.15);
