@@ -1,0 +1,27 @@
+{
+	auto_https off
+}
+
+:80 {
+	# HTTP actions (port 3211): only specific paths that are Convex HTTP actions
+	handle /.well-known/* {
+		reverse_proxy {$CONVEX_SITE_UPSTREAM}
+	}
+	handle /api/auth/* {
+		reverse_proxy {$CONVEX_SITE_UPSTREAM}
+	}
+	handle /api/github-app/* {
+		reverse_proxy {$CONVEX_SITE_UPSTREAM}
+	}
+	handle /api/webhooks/* {
+		reverse_proxy {$CONVEX_SITE_UPSTREAM}
+	}
+	handle /cli/* {
+		reverse_proxy {$CONVEX_SITE_UPSTREAM}
+	}
+
+	# Everything else -> backend (port 3210): queries, mutations, subscriptions, deploy API
+	handle {
+		reverse_proxy {$CONVEX_BACKEND_UPSTREAM}
+	}
+}

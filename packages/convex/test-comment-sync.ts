@@ -1,6 +1,6 @@
 import { webcrypto } from "node:crypto";
 
-const CONVEX_URL = "https://marvelous-meerkat-539.convex.cloud";
+const CONVEX_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 const WEBHOOK_SECRET = "test-secret-123";
 
 async function generateSignature(body: string, secret: string): Promise<string> {

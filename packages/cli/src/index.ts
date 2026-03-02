@@ -225,7 +225,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const WEB_URL = process.env.CODE_CHAT_SYNC_WEB_URL || "https://codecast.sh";
-const CONVEX_URL = process.env.CONVEX_URL || "https://marvelous-meerkat-539.convex.cloud";
+const CONVEX_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 
 interface Config {
   auth_token?: string;

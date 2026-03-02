@@ -7,7 +7,7 @@ import { ConvexHttpClient } from "convex/browser";
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const INBOX_DIR = path.join(CONFIG_DIR, "inbox");
-const CONVEX_URL = process.env.CONVEX_URL || "https://marvelous-meerkat-539.convex.cloud";
+const CONVEX_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 
 interface Config {
   auth_token?: string;
