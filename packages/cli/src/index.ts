@@ -245,6 +245,7 @@ interface Config {
   sync_projects?: string[];
   stable_mode?: "solo" | "team";
   stable_global?: boolean;
+  team_share_mode?: "full" | "summary";
   created_at?: string;
   updated_at?: string;
 }
@@ -603,7 +604,7 @@ STATUS_DIR="$HOME/.codecast/agent-status"
 mkdir -p "$STATUS_DIR"
 PERM_FIELD=""
 [ -n "$PERM_MODE" ] && PERM_FIELD=",\\"permission_mode\\":\\"$PERM_MODE\\""
-echo "{\\"status\\":\\"$STATUS\\",\\"ts\\":$(date +%s)$PERM_FIELD${EXTRA}}" > "$STATUS_DIR/$SESSION_ID.json"
+echo "{\\"status\\":\\"$STATUS\\",\\"ts\\":$(date +%s)$PERM_FIELD$EXTRA}" > "$STATUS_DIR/$SESSION_ID.json"
 exit 0
 `;
 
@@ -1147,6 +1148,10 @@ async function runAuth(): Promise<void> {
 
   await promptTeamSelection(config);
 
+  await promptMemoryEnablement();
+
+  await promptStableEnablement();
+
   if (!isDaemonRunning()) {
     console.log("Starting daemon...");
     startDaemon();
@@ -1156,8 +1161,6 @@ async function runAuth(): Promise<void> {
   if (ensureAutostart()) {
     console.log("Auto-start configured (daemon will restart automatically)");
   }
-
-  await promptMemoryEnablement();
 
   console.log("\nStatus:");
   showStatus();
@@ -1254,8 +1257,20 @@ async function promptTeamSelection(config: Config): Promise<void> {
 
     if (shareWithTeam) {
       config.team_id = teams[0]._id;
+
+      const shareMode = await select({
+        message: "What should teammates see?",
+        choices: [
+          { name: `Full ${fmt.muted("— complete session transcripts")}`, value: "full" as const },
+          { name: `Summary ${fmt.muted("— goals, outcomes, and files changed only")}`, value: "summary" as const },
+        ],
+        default: "full",
+      });
+
+      config.team_share_mode = shareMode;
       writeConfig(config);
-      console.log(`\nSessions will be shared with ${fmt.accent(teams[0].name)} by default.`);
+      const modeLabel = shareMode === "full" ? "full transcripts" : "summaries only";
+      console.log(`\nSessions will be shared with ${fmt.accent(teams[0].name)} (${modeLabel}).`);
       console.log(`${fmt.muted("You can configure per-project sharing with 'codecast sync-settings'")}\n`);
     } else {
       console.log(`\nSessions will be private by default.`);
@@ -1627,37 +1642,59 @@ async function promptMemoryEnablement(): Promise<void> {
     }
   }
 
-  const readline = await import("readline");
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
+  console.log("--- Agent Memory ---");
+  console.log("Lets your agents search and learn from past conversations.");
+  console.log(`${fmt.muted("Adds codecast commands to your agent config so they can recall prior work.")}\n`);
+
+  const enableMemory = await confirm({
+    message: "Enable agent memory?",
+    default: true,
   });
 
-  const answer = await new Promise<string>((resolve) => {
-    console.log("\n--- Agent Memory ---");
-    console.log("Would you like to enable memory for your coding agents?");
-    console.log("This lets your agents search past conversations for context.\n");
-    rl.question("Enable agent memory? [Y/n] ", (ans) => {
-      rl.close();
-      resolve(ans.trim().toLowerCase());
-    });
-  });
-
-  if (answer === "" || answer === "y" || answer === "yes") {
+  if (enableMemory) {
     const result = installMemorySnippet(false);
     if (result.installed) {
       const targets = getSnippetTargets();
       console.log(`\nMemory enabled. Added to:`);
       for (const t of targets) { console.log(`  ${t.label}`); }
-      console.log("Your agents can now use: codecast search \"query\"");
     }
     config.memory_enabled = true;
     config.memory_version = getMemoryVersion();
     writeConfig(config);
+    console.log();
   } else {
-    console.log("\nSkipped. Run 'codecast memory' later to enable.");
+    console.log(`\nSkipped. Run ${fmt.cmd("codecast memory")} later to enable.\n`);
     config.memory_enabled = false;
     writeConfig(config);
+  }
+}
+
+async function promptStableEnablement(): Promise<void> {
+  const config = readConfig() || {};
+
+  if (config.stable_mode !== undefined) {
+    return;
+  }
+
+  console.log("--- Stable Context ---");
+  console.log("Injects recent session summaries into every new conversation,");
+  console.log("so your agent starts each session aware of recent work.");
+  console.log(`${fmt.muted("Adds a hook that runs on session start. Can increase prompt size.")}\n`);
+
+  const enableStable = await confirm({
+    message: "Enable stable context?",
+    default: false,
+  });
+
+  if (enableStable) {
+    (config as any).stable_mode = "solo";
+    (config as any).stable_global = false;
+    writeConfig(config);
+    installStableHook();
+    console.log(`\nStable context enabled (solo, current project).`);
+    console.log(`${fmt.muted("Run")} ${fmt.cmd("codecast stable team")} ${fmt.muted("for team-wide context, or")} ${fmt.cmd("codecast stable off")} ${fmt.muted("to disable.")}\n`);
+  } else {
+    console.log(`\nSkipped. Run ${fmt.cmd("codecast stable solo")} later to enable.\n`);
   }
 }
 
