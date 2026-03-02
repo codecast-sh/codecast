@@ -164,7 +164,8 @@ const WORKING_STATUS_THROTTLE_MS = 10_000;
 
 type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected";
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
-const lastHookStatus = new Map<string, { status: AgentStatus; ts: number; permission_mode?: PermissionMode }>();
+type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
+const lastHookStatus = new Map<string, HookStatusData>();
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
 
 function sendAgentStatus(
@@ -208,6 +209,54 @@ function detectErrorInMessage(content: string): string | null {
   }
   return null;
 }
+
+function extractPendingToolUseFromTranscript(transcriptPath: string): { tool_name: string; arguments_preview: string } | null {
+  try {
+    if (!transcriptPath || !fs.existsSync(transcriptPath)) return null;
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.trim().split("\n");
+    const tail = lines.slice(-20);
+
+    let lastToolUse: { name: string; input: any } | null = null;
+    const completedToolIds = new Set<string>();
+
+    for (const line of tail) {
+      try {
+        const entry = JSON.parse(line);
+        const msg = entry.message || entry;
+        const blocks = Array.isArray(msg.content) ? msg.content : [];
+        for (const block of blocks) {
+          if (block.type === "tool_result") completedToolIds.add(block.tool_use_id);
+          if (block.type === "tool_use") lastToolUse = { name: block.name, input: block.input };
+        }
+      } catch {}
+    }
+
+    if (!lastToolUse) return null;
+
+    let preview = "";
+    if (lastToolUse.input) {
+      if (typeof lastToolUse.input.command === "string") {
+        preview = lastToolUse.input.command;
+      } else if (typeof lastToolUse.input.file_path === "string") {
+        preview = lastToolUse.input.file_path;
+      } else if (typeof lastToolUse.input.pattern === "string") {
+        preview = lastToolUse.input.pattern;
+      } else {
+        preview = JSON.stringify(lastToolUse.input).slice(0, 300);
+      }
+    }
+    if (lastToolUse.input?.description) {
+      preview = `${lastToolUse.input.description}\n${preview}`;
+    }
+
+    return { tool_name: lastToolUse.name, arguments_preview: preview.slice(0, 500) };
+  } catch {
+    return null;
+  }
+}
+
+const permissionRecordPending = new Set<string>();
 
 const syncStats = {
   messagesSynced: 0,
@@ -5163,7 +5212,7 @@ async function main(): Promise<void> {
       if (!basename || !filePath.endsWith(".json")) return;
       const sessionId = basename;
       const raw = fs.readFileSync(filePath, "utf-8");
-      const data = JSON.parse(raw) as { status: AgentStatus; ts: number; permission_mode?: PermissionMode };
+      const data = JSON.parse(raw) as HookStatusData;
       if (!data.status || !data.ts) return;
 
       const convId = conversationCache[sessionId];
@@ -5188,7 +5237,80 @@ async function main(): Promise<void> {
         sendAgentStatus(syncService, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
         log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ''} for session ${sessionId.slice(0, 8)}`);
       }
+
+      if (data.status === "permission_blocked" && statusChanged && !permissionRecordPending.has(sessionId)) {
+        permissionRecordPending.add(sessionId);
+        const transcriptPath = data.transcript_path || findTranscriptForSession(sessionId);
+        const toolInfo = extractPendingToolUseFromTranscript(transcriptPath || "");
+        const toolName = toolInfo?.tool_name || extractToolFromMessage(data.message || "");
+        const preview = toolInfo?.arguments_preview || data.message || "";
+
+        const SKIP_TOOLS = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
+        if (toolName && !SKIP_TOOLS.has(toolName)) {
+          log(`Creating permission record: ${toolName} for session ${sessionId.slice(0, 8)}`);
+          const permPrompt = { tool_name: toolName, arguments_preview: preview };
+
+          syncService.createSessionNotification({
+            conversation_id: convId,
+            type: "permission_request",
+            title: "codecast - Permission needed",
+            message: truncateForNotification(`${toolName}: ${preview}`, 150),
+          }).catch(() => {});
+
+          handlePermissionRequest(syncService, convId, sessionId, permPrompt, log)
+            .then((decision) => {
+              permissionRecordPending.delete(sessionId);
+              if (decision) {
+                const response = decision.approved ? "y" : "n";
+                log(`Permission ${decision.approved ? "approved" : "denied"} for session ${sessionId.slice(0, 8)}, injecting '${response}'`);
+                findSessionProcess(sessionId, detectSessionAgentType(sessionId)).then((proc) => {
+                  if (!proc) { log("No process found for permission injection"); return; }
+                  findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
+                    const inject = tmuxTarget
+                      ? () => injectViaTmux(tmuxTarget, response)
+                      : () => injectViaIterm(proc.tty, response);
+                    inject().then(() => {
+                      log(`Injected '${response}' for session ${sessionId.slice(0, 8)}`);
+                      sendAgentStatus(syncService, convId, sessionId, "working");
+                    }).catch((err) => {
+                      log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
+                    });
+                  });
+                }).catch((err) => {
+                  log(`Failed to find session process: ${err instanceof Error ? err.message : String(err)}`);
+                });
+              }
+            })
+            .catch((err) => {
+              permissionRecordPending.delete(sessionId);
+              log(`Permission handling error: ${err instanceof Error ? err.message : String(err)}`);
+            });
+        } else {
+          permissionRecordPending.delete(sessionId);
+        }
+      }
+
+      if (data.status !== "permission_blocked" && prev?.status === "permission_blocked") {
+        permissionRecordPending.delete(sessionId);
+      }
     } catch {}
+  }
+
+  function extractToolFromMessage(message: string): string {
+    const m = message.match(/permission to use (\w+)/i) || message.match(/allow (\w+)/i);
+    return m?.[1] || "Bash";
+  }
+
+  function findTranscriptForSession(sessionId: string): string | null {
+    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+    try {
+      const dirs = fs.readdirSync(claudeProjectsDir);
+      for (const dir of dirs) {
+        const jsonlPath = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+        if (fs.existsSync(jsonlPath)) return jsonlPath;
+      }
+    } catch {}
+    return null;
   }
 
   // Clean up stale agent-status files every 30 minutes

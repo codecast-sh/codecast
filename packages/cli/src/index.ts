@@ -565,8 +565,10 @@ SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin)
 EVENT=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('hook_event_name',''))" 2>/dev/null)
 NOTIF_TYPE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('notification_type',''))" 2>/dev/null)
 SOURCE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('source',''))" 2>/dev/null)
+PERM_MODE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('permission_mode',''))" 2>/dev/null)
 
 STATUS=""
+EXTRA=""
 case "$EVENT" in
   UserPromptSubmit) STATUS="thinking" ;;
   PreToolUse) STATUS="working" ;;
@@ -574,7 +576,19 @@ case "$EVENT" in
   Stop) STATUS="idle" ;;
   Notification)
     case "$NOTIF_TYPE" in
-      permission_prompt) STATUS="permission_blocked" ;;
+      permission_prompt)
+        STATUS="permission_blocked"
+        EXTRA=$(echo "$INPUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+parts=[]
+m=d.get('message','')
+t=d.get('transcript_path','')
+if m: parts.append(',\"message\":'+json.dumps(m))
+if t: parts.append(',\"transcript_path\":'+json.dumps(t))
+print(''.join(parts))
+" 2>/dev/null)
+        ;;
       idle_prompt) STATUS="idle" ;;
     esac
     ;;
@@ -587,7 +601,9 @@ esac
 
 STATUS_DIR="$HOME/.codecast/agent-status"
 mkdir -p "$STATUS_DIR"
-echo "{\\"status\\":\\"$STATUS\\",\\"ts\\":$(date +%s)}" > "$STATUS_DIR/$SESSION_ID.json"
+PERM_FIELD=""
+[ -n "$PERM_MODE" ] && PERM_FIELD=",\\"permission_mode\\":\\"$PERM_MODE\\""
+echo "{\\"status\\":\\"$STATUS\\",\\"ts\\":$(date +%s)$PERM_FIELD${EXTRA}}" > "$STATUS_DIR/$SESSION_ID.json"
 exit 0
 `;
 
