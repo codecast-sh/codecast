@@ -60,3 +60,4 @@ packages/web/binaries/
 .last-desktop-deploy
 .dmux/
 .wrangler/
+logs/
