@@ -35,7 +35,7 @@ function setNested(obj: any, path: (string | number)[], value: any): any {
   return result;
 }
 
-function groupPatchesByTable(
+export function groupPatchesByTable(
   patches: Patch[]
 ): Record<string, Record<string, Record<string, any>>> {
   const result: Record<string, Record<string, Record<string, any>>> = {};

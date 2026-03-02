@@ -38,6 +38,8 @@ export type InboxSession = {
   last_user_message?: string | null;
   session_error?: string;
   implementation_session?: { _id: string; title?: string };
+  is_subagent?: boolean;
+  parent_conversation_id?: string;
 };
 
 export type Message = {
@@ -82,11 +84,6 @@ export type ForkChild = {
   agent_type?: string;
 };
 
-export type QueuedMessage = {
-  content: string;
-  imageStorageIds?: string[];
-  images?: Array<{ media_type: string; storage_id?: string }>;
-};
 
 export type CurrentConversationContext = {
   conversationId?: string;
@@ -157,8 +154,6 @@ interface InboxStoreState {
 
   drafts: Record<string, Record<string, any>>;
 
-  queuedMessages: Record<string, QueuedMessage>;
-
   currentConversation: CurrentConversationContext;
 
   // -- New session modal --
@@ -225,8 +220,7 @@ interface InboxStoreState {
 
   // -- Session ID resolution --
   resolveSessionId: (sessionId: string, convexId: string) => void;
-  queueMessage: (id: string, msg: QueuedMessage) => void;
-  dequeueMessage: (convId: string) => QueuedMessage | undefined;
+  getConvexId: (id: string) => string | undefined;
 
   // -- Fork navigation --
   switchBranch: (messageUuid: string, convId: string) => void;
@@ -270,7 +264,7 @@ function persistToCache(get: () => InboxStoreState) {
 }
 
 function stripImageRef(s: string): string {
-  return s.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
+  return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
 }
 
 export const useInboxStore = create<InboxStoreState>(
@@ -292,8 +286,6 @@ export const useInboxStore = create<InboxStoreState>(
   clientState: {},
 
   drafts: {},
-
-  queuedMessages: {},
 
   currentConversation: {},
 
@@ -776,7 +768,6 @@ export const useInboxStore = create<InboxStoreState>(
     const m = rekey(state.messages); if (m) updates.messages = m as any;
     const p = rekey(state.pagination); if (p) updates.pagination = p as any;
     const d = rekey(state.drafts); if (d) updates.drafts = d as any;
-    const q = rekey(state.queuedMessages); if (q) updates.queuedMessages = q as any;
 
     if (state.conversations[sessionId]) {
       updates.conversations = { ...state.conversations };
@@ -787,21 +778,10 @@ export const useInboxStore = create<InboxStoreState>(
     if (Object.keys(updates).length > 0) set(updates);
   },
 
-  queueMessage: (id: string, msg: QueuedMessage) => {
-    set((s: InboxStoreState) => ({
-      queuedMessages: { ...s.queuedMessages, [id]: msg },
-    }));
-  },
-
-  dequeueMessage: (convId: string) => {
-    const state = get();
-    const msg = state.queuedMessages[convId];
-    if (msg) {
-      const next = { ...state.queuedMessages };
-      delete next[convId];
-      set({ queuedMessages: next });
-    }
-    return msg;
+  getConvexId: (id: string) => {
+    if (isConvexId(id)) return id;
+    const session = get().sessions.find((s: InboxSession) => s.session_id === id || s._id === id);
+    return session && isConvexId(session._id) ? session._id : undefined;
   },
 
   // =====================

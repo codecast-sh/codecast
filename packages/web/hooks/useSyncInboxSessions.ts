@@ -3,11 +3,34 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
 
+function deepMerge(target: any, source: any): any {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    const sv = source[key];
+    const tv = result[key];
+    if (sv && typeof sv === "object" && !Array.isArray(sv) && tv && typeof tv === "object" && !Array.isArray(tv)) {
+      result[key] = deepMerge(tv, sv);
+    } else {
+      result[key] = sv;
+    }
+  }
+  return result;
+}
+
 export function useSyncInboxSessions(showAll: boolean) {
   const activeSessions = useQuery(api.conversations.listIdleSessions, { show_all: showAll });
   const dismissedQuery = useQuery(api.conversations.listDismissedSessions, {});
   const clientState = useQuery(api.client_state.get, {});
-  const dispatchMutation = useMutation(api.dispatch.dispatch);
+  const dispatchMutation = useMutation(api.dispatch.dispatch).withOptimisticUpdate(
+    (localStore, { patches }) => {
+      if (!patches?.client_state) return;
+      const current = localStore.getQuery(api.client_state.get, {});
+      if (!current) return;
+      const updates = (patches.client_state as any)._;
+      if (!updates) return;
+      localStore.setQuery(api.client_state.get, {}, deepMerge(current, updates));
+    }
+  );
 
   const syncSessionsFromConvex = useInboxStore((s) => s.syncSessionsFromConvex);
   const syncDismissedFromConvex = useInboxStore((s) => s.syncDismissedFromConvex);

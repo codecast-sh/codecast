@@ -134,7 +134,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       session_id: sessionId,
       project_path: path,
       git_root: currentConvContext.gitRoot || path,
-    }).then(() => {
+    }).then((convexId) => {
+      useInboxStore.getState().resolveSessionId(sessionId, convexId);
       creatingRef.current = false;
     }).catch(() => {
       creatingRef.current = false;
