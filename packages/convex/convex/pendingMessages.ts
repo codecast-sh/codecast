@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -75,7 +75,8 @@ export const updateMessageStatus = mutation({
     status: v.union(
       v.literal("pending"),
       v.literal("delivered"),
-      v.literal("failed")
+      v.literal("failed"),
+      v.literal("undeliverable")
     ),
     delivered_at: v.optional(v.number()),
     api_token: v.optional(v.string()),
@@ -189,7 +190,7 @@ export const getConversationPendingMessage = query({
 
     if (!msg) return null;
     if (msg.from_user_id.toString() !== authUserId.toString()) return null;
-    return { created_at: msg.created_at };
+    return { created_at: msg.created_at, retry_count: msg.retry_count };
   },
 });
 
@@ -219,5 +220,51 @@ export const getMessageStatus = query({
       delivered_at: message.delivered_at,
       retry_count: message.retry_count,
     };
+  },
+});
+
+export const retryStuckMessages = internalMutation({
+  handler: async (ctx) => {
+    const now = Date.now();
+
+    const pendingMessages = await ctx.db
+      .query("pending_messages")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), "pending"),
+          q.lt(q.field("created_at"), now - 60_000),
+          q.gt(q.field("created_at"), now - 10 * 60_000),
+          q.lt(q.field("retry_count"), 10)
+        )
+      )
+      .collect();
+
+    for (const msg of pendingMessages) {
+      await ctx.db.patch(msg._id, {
+        retry_count: msg.retry_count + 1,
+      });
+    }
+
+    const failedMessages = await ctx.db
+      .query("pending_messages")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), "failed"),
+          q.gt(q.field("created_at"), now - 10 * 60_000),
+          q.lt(q.field("retry_count"), 10)
+        )
+      )
+      .collect();
+
+    for (const msg of failedMessages) {
+      await ctx.db.patch(msg._id, {
+        status: "pending" as const,
+        retry_count: msg.retry_count + 1,
+      });
+    }
+
+    if (pendingMessages.length > 0 || failedMessages.length > 0) {
+      console.log(`retryStuckMessages: bumped ${pendingMessages.length} pending, recovered ${failedMessages.length} failed`);
+    }
   },
 });

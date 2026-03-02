@@ -53,8 +53,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   const createQuickSession = useMutation(api.conversations.createQuickSession);
   const injectSession = useInboxStore((s) => s.injectSession);
-  const replaceSessionId = useInboxStore((s) => s.replaceSessionId);
-  const resolveTempId = useInboxStore((s) => s.resolveTempId);
   const creatingRef = useRef(false);
   const [desktopClass, setDesktopClass] = useState("");
   const headerRef = useRef<HTMLElement>(null);
@@ -98,11 +96,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     const path = currentConvContext.projectPath || currentConvContext.gitRoot;
     const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const now = Date.now();
-    const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 
     const stubMeta = {
-      _id: tempId, _creationTime: now, user_id: "", agent_type: agentType,
-      session_id: "", project_path: path, git_root: currentConvContext.gitRoot || path,
+      _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
+      session_id: sessionId, project_path: path, git_root: currentConvContext.gitRoot || path,
       started_at: now, updated_at: now, message_count: 0, status: "active",
       title: "New session", messages: [], user: null,
       child_conversations: [], child_conversation_map: {},
@@ -111,12 +109,12 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       fork_children: [], parent_conversation_id: null,
     };
 
-    useInboxStore.getState().setConversationMeta(tempId, stubMeta);
+    useInboxStore.getState().setConversationMeta(sessionId, stubMeta);
 
     if (isOnInboxPage) {
       injectSession({
-        _id: tempId,
-        session_id: "",
+        _id: sessionId,
+        session_id: sessionId,
         title: "New session",
         updated_at: now,
         project_path: path,
@@ -128,26 +126,20 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         last_user_message: null,
       });
     } else {
-      router.push(`/conversation/${tempId}?focus=1`);
+      router.push(`/conversation/${sessionId}?focus=1`);
     }
 
     createQuickSession({
       agent_type: agentType,
+      session_id: sessionId,
       project_path: path,
       git_root: currentConvContext.gitRoot || path,
-    }).then((conversationId) => {
-      const realId = conversationId as unknown as string;
-      useInboxStore.getState().resolveTempId(tempId, realId);
-      if (isOnInboxPage) {
-        replaceSessionId(tempId, realId);
-      } else {
-        router.replace(`/conversation/${realId}?focus=1`);
-      }
+    }).then(() => {
       creatingRef.current = false;
     }).catch(() => {
       creatingRef.current = false;
     });
-  }, [createQuickSession, currentConvContext, router, isOnInboxPage, injectSession, replaceSessionId, resolveTempId]);
+  }, [createQuickSession, currentConvContext, router, isOnInboxPage, injectSession]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

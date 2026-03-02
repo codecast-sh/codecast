@@ -392,15 +392,13 @@ export default function ConversationPage() {
     isUUID ? { session_id: id } : "skip"
   );
 
-  useEffect(() => {
-    if (sessionLookup?._id) {
-      router.replace(`/conversation/${sessionLookup._id}`);
-    }
-  }, [sessionLookup, router]);
+  const resolvedConvexId = sessionLookup?._id?.toString();
 
   const publicData = useQuery(
     api.conversations.getConversationPublic,
-    !isUUID && isValidConvexId ? { conversation_id: id as Id<"conversations"> } : "skip"
+    isUUID
+      ? (resolvedConvexId ? { conversation_id: resolvedConvexId as Id<"conversations"> } : "skip")
+      : (isValidConvexId ? { conversation_id: id as Id<"conversations"> } : "skip")
   );
 
   if (!isUUID && !isValidConvexId) {
@@ -409,12 +407,53 @@ export default function ConversationPage() {
 
   if (isUUID) {
     if (sessionLookup === undefined) {
+      const hasLocalSession = useInboxStore.getState().conversations[id];
+      if (hasLocalSession) {
+        return (
+          <OwnerView
+            id={id}
+            highlightQuery={highlightQuery}
+            onClearHighlight={handleClearHighlight}
+            targetMessageId={targetMessageId}
+            isOwner={true}
+            autoFocusInput={searchParams.get("focus") === "1"}
+          />
+        );
+      }
       return <ConversationLoadingSkeleton />;
     }
     if (sessionLookup === null) {
       return <NotFoundView />;
     }
-    return null;
+    const effectiveId = resolvedConvexId || id;
+    if (publicData === undefined) {
+      return (
+        <OwnerView
+          id={effectiveId}
+          highlightQuery={highlightQuery}
+          onClearHighlight={handleClearHighlight}
+          targetMessageId={targetMessageId}
+          isOwner={true}
+          autoFocusInput={searchParams.get("focus") === "1"}
+        />
+      );
+    }
+    if (publicData.access_level === "owner" || publicData.access_level === "team") {
+      return (
+        <OwnerView
+          id={effectiveId}
+          highlightQuery={highlightQuery}
+          onClearHighlight={handleClearHighlight}
+          targetMessageId={targetMessageId}
+          isOwner={publicData.access_level === "owner"}
+          autoFocusInput={searchParams.get("focus") === "1"}
+        />
+      );
+    }
+    if (publicData.access_level === "shared") {
+      return <SharedView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} />;
+    }
+    return <DeniedView />;
   }
 
   if (publicData === undefined) {

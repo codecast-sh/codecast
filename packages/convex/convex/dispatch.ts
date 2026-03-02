@@ -125,10 +125,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string }]) => {
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
-    const sessionId = crypto.randomUUID();
+    const sessionId = opts.session_id || crypto.randomUUID();
     const agentType = (opts.agent_type || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
     const user = await ctx.db.get(userId);

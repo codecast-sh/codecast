@@ -1,7 +1,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useEffect } from "react";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 
 export function useForkMessages(forkConvId: string | null) {
   const setMessages = useInboxStore((s) => s.setMessages);
@@ -9,7 +9,7 @@ export function useForkMessages(forkConvId: string | null) {
     forkConvId ? s.messages[forkConvId] : undefined
   );
 
-  const shouldSkip = !forkConvId || !!cached || forkConvId.startsWith("temp_");
+  const shouldSkip = !forkConvId || !!cached || !isConvexId(forkConvId);
 
   const result = useQuery(
     api.conversations.getForkBranchMessages,

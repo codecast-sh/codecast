@@ -10,7 +10,7 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, InboxSession } from "../../store/inboxStore";
+import { useInboxStore, InboxSession, isConvexId } from "../../store/inboxStore";
 import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
 import { useSessionSwitcher } from "../../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
@@ -545,7 +545,6 @@ export function QueuePageClient() {
   const stashSession = useInboxStore((s) => s.stashSession);
   const deferSession = useInboxStore((s) => s.deferSession);
   const rawSetCurrentIndex = useInboxStore((s) => s.setCurrentIndex);
-  const pinSession = useInboxStore((s) => s.pinSession);
   const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useInboxStore((s) => s.setViewingDismissedId);
   const touchMru = useInboxStore((s) => s.touchMru);
@@ -577,11 +576,9 @@ export function QueuePageClient() {
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
 
-  // Convex IDs are 32 lowercase alphanumeric chars -- skip query for anything else
-  const isValidConvexId = (id: string) => /^[a-z0-9]{32}$/.test(id);
-  const shouldQueryDirect = pendingInjectId && !pendingInjectId.startsWith("temp_") && isValidConvexId(pendingInjectId);
+  const shouldQueryDirect = pendingInjectId && isConvexId(pendingInjectId);
 
-  // Query conversation for sessions not in the queue (skip temp IDs and invalid IDs)
+  // Query conversation for sessions not in the queue
   const directConv = useQuery(
     api.conversations.getConversation,
     shouldQueryDirect ? { conversation_id: pendingInjectId as Id<"conversations">, limit: 1 } : "skip"
@@ -596,13 +593,12 @@ export function QueuePageClient() {
     const idx = sessions.findIndex((s) => s._id === paramSessionId);
     if (idx >= 0) {
       rawSetCurrentIndex(idx);
-      pinSession(paramSessionId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
     } else {
       setPendingInjectId(paramSessionId);
     }
-  }, [paramSessionId, sessions, rawSetCurrentIndex, activeSessions, pinSession]);
+  }, [paramSessionId, sessions, rawSetCurrentIndex, activeSessions]);
 
   // Once we have the conversation data, inject it into the queue
   useEffect(() => {
@@ -610,13 +606,12 @@ export function QueuePageClient() {
     const already = sessions.findIndex((s) => s._id === pendingInjectId);
     if (already >= 0) {
       rawSetCurrentIndex(already);
-      pinSession(pendingInjectId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       return;
     }
     // Invalid ID format -- query was skipped, redirect immediately
-    if (!isValidConvexId(pendingInjectId)) {
+    if (!isConvexId(pendingInjectId)) {
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       window.location.replace(`/conversation/${pendingInjectId}`);
@@ -644,7 +639,7 @@ export function QueuePageClient() {
     });
     setPendingInjectId(null);
     paramProcessedRef.current = true;
-  }, [pendingInjectId, directConv, sessions, rawSetCurrentIndex, injectSession, pinSession]);
+  }, [pendingInjectId, directConv, sessions, rawSetCurrentIndex, injectSession]);
 
   // Handle store-based navigation (from CommandPalette when already on /inbox)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
@@ -655,11 +650,10 @@ export function QueuePageClient() {
     if (idx >= 0) {
       setPendingInjectId(null);
       rawSetCurrentIndex(idx);
-      pinSession(pendingNavigateId);
     } else {
       setPendingInjectId(pendingNavigateId);
     }
-  }, [pendingNavigateId, sessions, rawSetCurrentIndex, pinSession]);
+  }, [pendingNavigateId, sessions, rawSetCurrentIndex]);
 
   const handleDismiss = useCallback((id: string) => {
     stashSession(id);
@@ -821,7 +815,7 @@ export function QueuePageClient() {
         />
       ) : currentSession ? (
         <InboxConversation
-          key={currentSession.stableKey || currentSession._id}
+          key={currentSession._id}
           sessionId={currentSession._id}
           isIdle={currentSession.is_idle}
           onSendAndAdvance={handleSendAndAdvance}

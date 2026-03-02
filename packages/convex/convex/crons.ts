@@ -16,4 +16,10 @@ crons.interval(
   internal.agentTasks.reclaimStaleTasks
 );
 
+crons.interval(
+  "retry stuck pending messages",
+  { seconds: 30 },
+  internal.pendingMessages.retryStuckMessages
+);
+
 export default crons;

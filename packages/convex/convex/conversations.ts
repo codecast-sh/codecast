@@ -534,6 +534,7 @@ export const createQuickSession = mutation({
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
+    session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -544,7 +545,7 @@ export const createQuickSession = mutation({
     await checkRateLimit(ctx, userId, "createConversation");
 
     const now = Date.now();
-    const sessionId = crypto.randomUUID();
+    const sessionId = args.session_id || crypto.randomUUID();
     const agentType = args.agent_type || "claude_code";
 
     const user = await ctx.db.get(userId);
@@ -3737,6 +3738,7 @@ export const forkFromMessage = mutation({
     conversation_id: v.string(),
     message_uuid: v.optional(v.string()),
     api_token: v.optional(v.string()),
+    session_id: v.optional(v.string()),
     target_agent_type: v.optional(v.union(
       v.literal("claude_code"),
       v.literal("codex"),
@@ -3796,11 +3798,12 @@ export const forkFromMessage = mutation({
     const titlePrefix = isAgentSwitch ? `${agentLabels[args.target_agent_type!] || args.target_agent_type}: ` : "Fork: ";
 
     const now = Date.now();
+    const forkSessionId = args.session_id || `forked-${original.session_id}-${crypto.randomUUID()}`;
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       team_id: original.team_id,
       agent_type: agentType,
-      session_id: `forked-${original.session_id}-${crypto.randomUUID()}`,
+      session_id: forkSessionId,
       slug: original.slug,
       title: original.title ? `${titlePrefix}${original.title}` : undefined,
       subtitle: original.subtitle,
@@ -5225,10 +5228,21 @@ export const listIdleSessions = query({
 
     const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 
-    const user = await ctx.db.get(userId);
-    const userDaemonAlive = !!user?.daemon_last_seen && (now - (user.daemon_last_seen as number)) < 6 * 60 * 1000;
-    const clusterStart = user?.work_cluster_started_at ?? user?.last_message_sent_at ?? 0;
-    const clusterCutoff = clusterStart > 0 ? clusterStart - CLUSTER_WINDOW_MS : 0;
+    const userDaemonAlive = managedSessions.some(
+      (s) => now - s.last_heartbeat < 6 * 60 * 1000
+    );
+
+    let clusterCutoff = 0;
+    if (!args.show_all && conversations.length > 0) {
+      const sorted = [...conversations].sort((a, b) => b.updated_at - a.updated_at);
+      for (let i = 1; i < sorted.length; i++) {
+        const gap = sorted[i - 1].updated_at - sorted[i].updated_at;
+        if (gap > 2 * 60 * 60 * 1000) {
+          clusterCutoff = sorted[i].updated_at;
+          break;
+        }
+      }
+    }
 
     const results = [];
     for (const conv of conversations) {
@@ -5951,7 +5965,7 @@ export const getUserMessages = query({
         q.eq("conversation_id", args.conversation_id).eq("role", "user")
       )
       .order("asc")
-      .collect();
+      .take(500);
     return messages
       .filter((m) => {
         if (!m.content || !m.content.trim()) return false;

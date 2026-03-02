@@ -94,35 +94,119 @@ const toolColors: Record<string, string> = {
   TodoWrite: "text-sol-magenta/80",
 };
 
-function isPlanWriteToolCall(tool: any): boolean {
-  if (tool.name !== "Write") return false;
-  try {
-    const parsed = JSON.parse(tool.input);
-    return String(parsed.file_path || "").includes('.claude/plans/');
-  } catch {
-    return false;
-  }
+function getLanguageFromPath(filePath: string): string | undefined {
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  const extMap: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    py: "python", rs: "rust", go: "go", rb: "ruby", java: "java",
+    css: "css", scss: "scss", html: "html", json: "json", yaml: "yaml",
+    yml: "yaml", toml: "toml", sql: "sql", sh: "bash", bash: "bash",
+    zsh: "bash", swift: "swift", kt: "kotlin", c: "c", cpp: "cpp",
+    h: "c", hpp: "cpp", md: "markdown", mdx: "markdown",
+  };
+  return ext ? extMap[ext] : undefined;
 }
 
-function getPlanContent(tool: any): string | null {
+function isPlanFile(filePath: string, content: string): boolean {
+  const fileName = filePath.split('/').pop()?.toLowerCase() || '';
+  if (fileName.includes('plan') || fileName === 'plan.md') return true;
+  if (filePath.includes('.claude/plans/')) return true;
+  const planPatterns = [
+    /^#\s*(implementation\s+)?plan/im,
+    /^##\s*(goals?|objectives?|overview)/im,
+    /^##\s*(steps?|phases?|tasks?|approach)/im,
+    /^\d+\.\s+\*\*[^*]+\*\*/m,
+    /^-\s+\[[ x]\]/im,
+  ];
+  let matches = 0;
+  for (const pattern of planPatterns) {
+    if (pattern.test(content)) {
+      matches++;
+      if (matches >= 2) return true;
+    }
+  }
+  return false;
+}
+
+function isMarkdownFile(filePath: string): boolean {
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  return ext === 'md' || ext === 'mdx';
+}
+
+function parseWriteToolCall(tool: any): { filePath: string; content: string } | null {
+  if (tool.name !== "Write") return null;
   try {
     const parsed = JSON.parse(tool.input);
-    return parsed.content || null;
+    const filePath = String(parsed.file_path || "");
+    const content = parsed.content || "";
+    if (!content) return null;
+    return { filePath, content };
   } catch {
     return null;
   }
 }
 
-function PlanBlock({ content, timestamp }: { content: string; timestamp?: number }) {
-  const title = content.match(/^#\s+(.+)$/m)?.[1] || "Plan";
+function parseEditToolCall(tool: any): { filePath: string; oldString: string; newString: string } | null {
+  if (tool.name !== "Edit") return null;
+  try {
+    const parsed = JSON.parse(tool.input);
+    return {
+      filePath: String(parsed.file_path || ""),
+      oldString: parsed.old_string || "",
+      newString: parsed.new_string || "",
+    };
+  } catch {
+    return null;
+  }
+}
 
+
+function WriteCodeBlock({ filePath, content }: { filePath: string; content: string }) {
+  const fileName = filePath.split("/").pop() || filePath;
+  const language = getLanguageFromPath(filePath);
+
+  return (
+    <div className="mb-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/40">
+        <svg className="w-3.5 h-3.5 text-sol-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+        </svg>
+        <span className="text-xs font-mono text-sol-text-muted truncate">{fileName}</span>
+      </div>
+      <div className="max-h-[600px] overflow-y-auto">
+        <CodeBlock code={content} language={language} />
+      </div>
+    </div>
+  );
+}
+
+function EditDiffBlock({ filePath, oldString, newString }: { filePath: string; oldString: string; newString: string }) {
+  const fileName = filePath.split("/").pop() || filePath;
+  const language = getLanguageFromPath(filePath);
+
+  return (
+    <div className="mb-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/40">
+        <svg className="w-3.5 h-3.5 text-sol-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+        </svg>
+        <span className="text-xs font-mono text-sol-text-muted truncate">{fileName}</span>
+      </div>
+      <div className="max-h-[600px] overflow-y-auto">
+        <CodeBlock code={newString} language={language} />
+      </div>
+    </div>
+  );
+}
+
+function MarkdownContentBlock({ content, label, timestamp }: { content: string; label: string; timestamp?: number }) {
   return (
     <div className="mb-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/40">
         <svg className="w-3.5 h-3.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
         </svg>
-        <span className="text-xs font-medium text-sol-text-muted">Plan</span>
+        <span className="text-xs font-medium text-sol-text-muted">{label}</span>
         {timestamp && (
           <span className="text-xs text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
         )}
@@ -137,10 +221,10 @@ function PlanBlock({ content, timestamp }: { content: string; timestamp?: number
               const codeElement = node?.children?.[0];
               if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                 const className = codeElement.properties?.className as string[] | undefined;
-                const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                const lang = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
                 const codeContent = codeElement.children?.[0];
                 const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
-                if (code) return <CodeBlock code={code} language={language} />;
+                if (code) return <CodeBlock code={code} language={lang} />;
               }
               return <pre {...props}>{children}</pre>;
             },
@@ -214,11 +298,20 @@ function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean 
             </span>
           </div>
           {hasToolCalls && message.tool_calls.map((tc: any) => {
-            if (isPlanWriteToolCall(tc)) {
-              const planContent = getPlanContent(tc);
-              if (planContent) {
-                return <PlanBlock key={tc.id} content={planContent} timestamp={message.timestamp} />;
+            const writeData = parseWriteToolCall(tc);
+            if (writeData) {
+              if (isPlanFile(writeData.filePath, writeData.content)) {
+                return <MarkdownContentBlock key={tc.id} content={writeData.content} label="Plan" timestamp={message.timestamp} />;
               }
+              if (isMarkdownFile(writeData.filePath)) {
+                const fileName = writeData.filePath.split("/").pop() || writeData.filePath;
+                return <MarkdownContentBlock key={tc.id} content={writeData.content} label={fileName} timestamp={message.timestamp} />;
+              }
+              return <WriteCodeBlock key={tc.id} filePath={writeData.filePath} content={writeData.content} />;
+            }
+            const editData = parseEditToolCall(tc);
+            if (editData && editData.newString) {
+              return <EditDiffBlock key={tc.id} filePath={editData.filePath} oldString={editData.oldString} newString={editData.newString} />;
             }
             return <ToolCallBlock key={tc.id} tool={tc} />;
           })}

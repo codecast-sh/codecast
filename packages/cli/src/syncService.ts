@@ -524,6 +524,20 @@ export class SyncService {
     }
   }
 
+  async retryMessage(messageId: string): Promise<void> {
+    try {
+      await this.client.mutation("pendingMessages:retryMessage" as any, {
+        message_id: messageId,
+        api_token: this.apiToken,
+      });
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
   async setSessionError(conversationId: string, error?: string): Promise<void> {
     if (!this.apiToken) return;
     try {

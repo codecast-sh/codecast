@@ -61,21 +61,6 @@ export const updateProfile = mutation({
   },
 });
 
-export const setTheme = mutation({
-  args: {
-    theme: v.union(v.literal("dark"), v.literal("light")),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Not authenticated");
-    }
-    await ctx.db.patch(userId, {
-      theme: args.theme,
-    });
-  },
-});
-
 export const updateUserActivity = internalMutation({
   args: {
     userId: v.id("users"),

@@ -37,7 +37,7 @@ import { copyToClipboard } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, type ForkChild } from "../store/inboxStore";
+import { useInboxStore, isConvexId, type ForkChild } from "../store/inboxStore";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
@@ -234,7 +234,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
   const updateSessionProject = useInboxStore((s) => s.updateSessionProject);
   const storeSession = useInboxStore((s) =>
-    s.sessions.find((sess) => sess._id === conversation._id || sess.stableKey === conversation._id)
+    s.sessions.find((sess) => sess._id === conversation._id)
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
 
@@ -251,25 +251,22 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const handleSwitch = useCallback(async (projectPath: string) => {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
-    let realId = useInboxStore.getState().getRealId(resolvedId);
-    updateSessionProject(realId, trimmed);
-    if (realId.startsWith("temp_")) {
-      realId = await new Promise<string>((resolve, reject) => {
+    updateSessionProject(resolvedId, trimmed);
+    if (!isConvexId(resolvedId)) {
+      const realId = await new Promise<string>((resolve, reject) => {
         const timeout = setTimeout(() => { unsub(); reject(new Error("timeout")); }, 15000);
         const check = () => {
-          const id = useInboxStore.getState().getRealId(resolvedId);
-          if (!id.startsWith("temp_")) { clearTimeout(timeout); unsub(); resolve(id); }
+          const sess = useInboxStore.getState().sessions.find((s) => s.session_id === resolvedId);
+          if (sess && isConvexId(sess._id)) { clearTimeout(timeout); unsub(); resolve(sess._id); }
         };
         check();
         const unsub = useInboxStore.subscribe(check);
-      }).catch(() => resolvedId);
-      if (!realId.startsWith("temp_")) {
-        updateSessionProject(realId, trimmed);
-      }
-    }
-    if (!realId.startsWith("temp_")) {
-      useInboxStore.getState().patch("conversations", realId, { project_path: trimmed, git_root: trimmed });
+      }).catch(() => "");
+      if (!realId) return;
+      updateSessionProject(realId, trimmed);
       switchProject({ conversation_id: realId as Id<"conversations">, project_path: trimmed }).catch(() => {});
+    } else {
+      switchProject({ conversation_id: resolvedId as Id<"conversations">, project_path: trimmed }).catch(() => {});
     }
   }, [switchProject, resolvedId, updateSessionProject]);
 
@@ -332,7 +329,7 @@ function AgentSwitcher({ conversation }: { conversation: ConversationData }) {
   const switchAgent = useMutation(api.conversations.switchSessionAgent);
   const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
   const storeSession = useInboxStore((s) =>
-    s.sessions.find((sess) => sess._id === conversation._id || sess.stableKey === conversation._id)
+    s.sessions.find((sess) => sess._id === conversation._id)
   );
   const resolvedId = storeSession?._id || conversation._id;
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;
@@ -348,7 +345,7 @@ function AgentSwitcher({ conversation }: { conversation: ConversationData }) {
       agentType,
       source: "inbox",
     });
-    if (!resolvedId.startsWith("temp_")) {
+    if (isConvexId(resolvedId)) {
       switchAgent({ conversation_id: resolvedId as Id<"conversations">, agent_type: agentType }).catch(() => {});
     }
   }, [switchAgent, resolvedId, currentAgent, currentPath, setCurrentConversation]);
@@ -4261,8 +4258,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [sentAt, setSentAt] = useState<number | null>(null);
   const [showStuckBanner, setShowStuckBanner] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const autoResumeTriggeredRef = useRef(false);
   const resumeSessionMutation = useMutation(api.users.resumeSession);
-  const getRealId = useInboxStore((s) => s.getRealId);
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
 
   const messageStatus = useQuery(
@@ -4270,19 +4267,19 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     pendingMessageId ? { message_id: pendingMessageId } : "skip"
   );
 
-  const realId = getRealId(conversationId);
-  const queuedMsg = useInboxStore((s) => s.queuedMessages[realId]);
+  const queuedMsg = useInboxStore((s) => s.queuedMessages[conversationId]);
 
-  const isRealConvId = realId.length > 10 && !realId.startsWith("pending-") && !realId.startsWith("temp_");
+  const canQueryServer = isConvexId(conversationId);
   const existingPending = useQuery(
     api.pendingMessages.getConversationPendingMessage,
-    isRealConvId ? { conversation_id: realId as Id<"conversations"> } : "skip"
+    canQueryServer ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
   );
 
   useEffect(() => {
     if (pendingMessageId) return;
     if (!existingPending) {
       if (!isWaitingForResponse) setShowStuckBanner(false);
+      autoResumeTriggeredRef.current = false;
       return;
     }
     const age = Date.now() - existingPending.created_at;
@@ -4336,11 +4333,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   pastedImagesRef.current = pastedImages;
 
   useEffect(() => {
-    if (!queuedMsg || realId.startsWith("temp_")) return;
-    const msg = useInboxStore.getState().dequeueMessage(realId);
+    if (!queuedMsg || !canQueryServer) return;
+    const msg = useInboxStore.getState().dequeueMessage(conversationId);
     if (!msg) return;
     sendMessage({
-      conversation_id: realId as Id<"conversations">,
+      conversation_id: conversationId as Id<"conversations">,
       content: msg.content,
       image_storage_ids: msg.imageStorageIds?.length ? msg.imageStorageIds as Id<"_storage">[] : undefined,
     }).then((msgId) => {
@@ -4350,7 +4347,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }).catch((error) => {
       toast.error(error instanceof Error ? error.message : "Failed to send message");
     });
-  }, [queuedMsg, realId, sendMessage]);
+  }, [queuedMsg, canQueryServer, conversationId, sendMessage]);
 
   useEffect(() => {
     return () => { if (escapeTimerRef.current) clearTimeout(escapeTimerRef.current); };
@@ -4370,13 +4367,12 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if (isResuming) return;
     setIsResuming(true);
     try {
-      const realId = getRealId(conversationId);
-      await resumeSessionMutation({ conversation_id: realId as Id<"conversations"> });
+      await resumeSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to resume session");
       setIsResuming(false);
     }
-  }, [conversationId, getRealId, resumeSessionMutation, isResuming]);
+  }, [conversationId, resumeSessionMutation, isResuming]);
 
   useEffect(() => {
     if (isResuming && (isConversationLive || isThinking)) {
@@ -4391,6 +4387,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }, 30_000);
     return () => clearTimeout(timeout);
   }, [isResuming, isConversationLive, isThinking]);
+
+  useEffect(() => {
+    if (!showStuckBanner || !sessionId || isResuming || autoResumeTriggeredRef.current) return;
+    if (!existingPending && !pendingMessageId) return;
+    autoResumeTriggeredRef.current = true;
+    handleForceResume();
+  }, [showStuckBanner, sessionId, isResuming, existingPending, pendingMessageId, handleForceResume]);
 
   const updateDraft = useCallback((text: string, images?: Array<{ storageId?: string; previewUrl?: string; name?: string }> | null) => {
     if (!text && (!images || images.length === 0)) {
@@ -4606,14 +4609,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
           const branches = useInboxStore.getState().activeBranches;
           const forkId = Object.values(branches)[0];
           if (!forkId) return;
-          const realId = useInboxStore.getState().getRealId(forkId);
-          addOptimistic(realId, content);
-          if (realId.startsWith("temp_")) {
-            useInboxStore.getState().queueMessage(realId, { content });
+          addOptimistic(forkId, content);
+          if (!isConvexId(forkId)) {
+            useInboxStore.getState().queueMessage(forkId, { content });
             return;
           }
           const msgId = await sendMessage({
-            conversation_id: realId as Id<"conversations">,
+            conversation_id: forkId as Id<"conversations">,
             content,
           });
           setPendingMessageId(msgId);
@@ -4625,7 +4627,6 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       return;
     }
 
-    const realId = getRealId(conversationId);
     const trimmed = message.trim() || (finalImages.length > 0 ? "[image]" : "");
     const storageIds = finalImages.map(img => img.storageId!);
     const optimisticImages = finalImages.map(img => ({ media_type: img.file.type, storage_id: img.storageId as string }));
@@ -4633,14 +4634,14 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
     }
-    addOptimistic(realId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
+    addOptimistic(conversationId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
     setMessage("");
     clearAllImages();
     updateDraft("", null);
     requestAnimationFrame(() => textareaRef.current?.focus());
 
-    if (realId.startsWith("temp_")) {
-      useInboxStore.getState().queueMessage(realId, {
+    if (!canQueryServer) {
+      useInboxStore.getState().queueMessage(conversationId, {
         content: trimmed,
         imageStorageIds: storageIds.length > 0 ? storageIds : undefined,
         images: optimisticImages.length > 0 ? optimisticImages : undefined,
@@ -4650,7 +4651,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
     try {
       const msgId = await sendMessage({
-        conversation_id: realId as Id<"conversations">,
+        conversation_id: conversationId as Id<"conversations">,
         content: trimmed,
         image_storage_ids: storageIds.length > 0 ? storageIds : undefined,
       });
@@ -4710,7 +4711,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   ) : (
                     <span className="flex items-center gap-1.5 text-sol-orange">
                       <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" />
-                      {existingPending || pendingMessageId ? "Message not reaching session" : "Session not responding"}
+                      {existingPending || pendingMessageId
+                        ? `Message not reaching session${messageStatus?.retry_count ? ` (retry ${messageStatus.retry_count})` : ""}`
+                        : "Session not responding"}
                       <button
                         type="button"
                         onClick={handleForceResume}
@@ -4986,7 +4989,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation, sendInlineMessage, addOptimisticMsg]);
   const managedSession = useQuery(
     api.managedSessions.isSessionManaged,
-    conversation && isOwner && conversation.status === "active" && !conversation._id.startsWith("temp_")
+    conversation && isOwner && conversation.status === "active" && isConvexId(conversation._id)
       ? { conversation_id: conversation._id }
       : "skip"
   );
@@ -5131,7 +5134,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const pendingPermissions = useQuery(
     api.permissions.getPendingPermissions,
-    conversation?._id && !conversation._id.startsWith("temp_") ? { conversation_id: conversation._id } : "skip"
+    conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip"
   );
 
   // Fork navigation state (data in inbox store, UI state in forkNavigationStore)
@@ -5140,7 +5143,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const forkSwitchBranch = useInboxStore((s) => s.switchBranch);
   const forkClearBranch = useInboxStore((s) => s.clearBranch);
   const forkSetMessages = useInboxStore((s) => s.setMessages);
-  const resolveForkId = useInboxStore((s) => s.resolveForkId);
+  const resolveForkSessionId = useInboxStore((s) => s.resolveForkSessionId);
   const forkTreePanelOpen = useForkNavigationStore((s) => s.treePanelOpen);
   const toggleTreePanel = useForkNavigationStore((s) => s.toggleTreePanel);
   const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
@@ -5178,9 +5181,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const doFork = useCallback(async (messageUuid: string) => {
     if (!conversation?._id) return;
     const sourceConvId = effectiveConversationId || conversation._id;
-    const tempId = `temp_fork_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const forkSessionId = crypto.randomUUID();
     addOptimisticFork({
-      _id: tempId,
+      _id: forkSessionId,
       title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
       started_at: Date.now(),
       username: conversation.user?.name || conversation.user?.email?.split("@")[0],
@@ -5188,18 +5191,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       message_count: 0,
       agent_type: conversation.agent_type,
     });
-    forkSetMessages(tempId, []);
-    forkSwitchBranch(messageUuid, tempId);
+    forkSetMessages(forkSessionId, []);
+    forkSwitchBranch(messageUuid, forkSessionId);
     const url = new URL(window.location.href);
-    url.searchParams.set('branch', tempId);
+    url.searchParams.set('branch', forkSessionId);
     window.history.replaceState({}, '', url.toString());
     toast.success("Forked -- switched to branch");
     try {
       const result = await forkFromMessage({
         conversation_id: sourceConvId.toString(),
         message_uuid: messageUuid,
+        session_id: forkSessionId,
       });
-      resolveForkId(tempId, result.conversation_id);
+      resolveForkSessionId(forkSessionId, result.conversation_id);
       const resolvedUrl = new URL(window.location.href);
       resolvedUrl.searchParams.set('branch', result.conversation_id);
       window.history.replaceState({}, '', resolvedUrl.toString());
@@ -5207,7 +5211,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       forkClearBranch(messageUuid);
       toast.error(err instanceof Error ? err.message : "Failed to fork");
     }
-  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, effectiveConversationId, forkFromMessage, forkSwitchBranch, forkClearBranch, forkSetMessages, addOptimisticFork, resolveForkId]);
+  }, [conversation?._id, conversation?.title, conversation?.user, conversation?.agent_type, effectiveConversationId, forkFromMessage, forkSwitchBranch, forkClearBranch, forkSetMessages, addOptimisticFork, resolveForkSessionId]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
@@ -5268,7 +5272,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const navigatorUserMessages = useQuery(
     api.conversations.getUserMessages,
-    conversation && isOwner && conversation.status === "active" && effectiveConversationId && !effectiveConversationId.startsWith("temp_")
+    conversation && isOwner && conversation.status === "active" && effectiveConversationId && isConvexId(effectiveConversationId)
       ? { conversation_id: effectiveConversationId as Id<"conversations"> }
       : "skip"
   );
@@ -5343,8 +5347,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (item.type !== 'message') continue;
       const msg = item.data as Message;
       if (msg.role !== 'user') continue;
-      const kind = userMsgKindMap.get(msg._id);
-      if (!kind || kind.kind !== 'normal') continue;
+      const kind = userMsgKindMap.get(msg._id)?.kind;
+      if (!kind || kind === 'tool_results_only' || kind === 'empty' || kind === 'noise' || kind === 'task_notification' || kind === 'task_prompt' || kind === 'compaction_prompt' || kind === 'compaction_summary') continue;
       const globalIndex = isPaginated ? startOffset + i : i;
       positions.push(globalIndex / totalMessages);
     }
@@ -7394,8 +7398,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               {userMessagePositions.map((pos, i) => (
                 <div
                   key={i}
-                  className="absolute inset-x-0 bg-sol-blue/80 rounded-full"
-                  style={{ top: `${pos * 100}%`, height: 3 }}
+                  className="absolute inset-x-0 bg-sol-blue"
+                  style={{ top: `${pos * 100}%`, height: 2 }}
                 />
               ))}
             </div>

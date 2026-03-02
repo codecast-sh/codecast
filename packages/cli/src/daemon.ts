@@ -2891,14 +2891,37 @@ function normalizePromptText(value: string): string {
 export function tmuxPromptStillHasInput(paneContent: string, input: string): boolean {
   const normalizedInput = normalizePromptText(input);
   if (!normalizedInput) return false;
-  const recent = paneContent.split("\n").slice(-30).join("\n");
+  const lines = paneContent.split("\n");
+  const recent = lines.slice(-80).join("\n");
   const lastPromptIndex = recent.lastIndexOf("❯");
   if (lastPromptIndex === -1) return false;
   const fromPrompt = recent.slice(lastPromptIndex);
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
 
+const tmuxTargetLocks = new Map<string, Promise<void>>();
+
+async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T> {
+  const baseTarget = target.split(":")[0];
+  while (tmuxTargetLocks.has(baseTarget)) {
+    await tmuxTargetLocks.get(baseTarget);
+  }
+  let resolve: () => void;
+  const lock = new Promise<void>(r => { resolve = r; });
+  tmuxTargetLocks.set(baseTarget, lock);
+  try {
+    return await fn();
+  } finally {
+    tmuxTargetLocks.delete(baseTarget);
+    resolve!();
+  }
+}
+
 async function injectViaTmux(target: string, content: string): Promise<void> {
+  return withTmuxLock(target, () => injectViaTmuxInner(target, content));
+}
+
+async function injectViaTmuxInner(target: string, content: string): Promise<void> {
   const poll = parsePollMessage(content);
   if (poll) {
     const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
@@ -2948,26 +2971,50 @@ async function injectViaTmux(target: string, content: string): Promise<void> {
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
+
+  // Scale capture range based on message length (long messages wrap many lines)
+  const captureLines = Math.max(30, Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
-  for (let attempt = 0; attempt < 8; attempt++) {
+
+  // Wait for paste to appear in the pane
+  for (let attempt = 0; attempt < 12; attempt++) {
     try {
-      const { stdout: echoCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -20`);
+      const { stdout: echoCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
       if (tmuxPromptStillHasInput(echoCheck, contentPrefix)) break;
     } catch {}
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 150));
   }
-  await new Promise(resolve => setTimeout(resolve, 150));
+
+  // Scale delay before Enter based on message length
+  const enterDelay = Math.max(200, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
+  await new Promise(resolve => setTimeout(resolve, enterDelay));
   await execAsync(`tmux send-keys -t '${target}' Enter`);
 
   // Verify the message was submitted - if text is still in the input, retry Enter
-  for (let retry = 0; retry < 3; retry++) {
-    await new Promise(resolve => setTimeout(resolve, 500));
+  // For long messages, check if the agent started processing (prompt changes from input to working)
+  for (let retry = 0; retry < 5; retry++) {
+    await new Promise(resolve => setTimeout(resolve, 600));
     try {
-      const { stdout: postCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -20`);
+      const { stdout: postCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
+      // Check if the input text is still there (message not yet submitted)
       if (tmuxPromptStillHasInput(postCheck, contentPrefix)) {
         log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
         await execAsync(`tmux send-keys -t '${target}' Enter`);
       } else {
+        // Also check if we can see any sign of activity (prompt gone or spinner visible)
+        const lastLines = postCheck.split("\n").slice(-5).join("\n");
+        const hasPrompt = /❯/.test(lastLines);
+        const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
+        if (hasActivity || !hasPrompt) {
+          break;
+        }
+        // Prompt visible but no text - could mean submitted or could mean text scrolled off
+        // If the prompt is clean (no text after ❯), likely submitted
+        const promptLine = lastLines.split("\n").find(l => l.includes("❯"));
+        if (promptLine) {
+          const afterPrompt = promptLine.slice(promptLine.indexOf("❯") + 1).trim();
+          if (!afterPrompt) break;
+        }
         break;
       }
     } catch { break; }
@@ -3660,10 +3707,10 @@ async function postDeliveryHealthCheck(
       log(`Health check: repaired and re-delivered message for ${sessionId.slice(0, 8)}`);
       try { await syncService.setSessionError(conversationId); } catch {}
     } else {
-      log(`Health check: repair failed for ${sessionId.slice(0, 8)}, marking message as failed`);
+      log(`Health check: repair failed for ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
-        await syncService.updateMessageStatus({ messageId, status: "failed" as any, deliveredAt: undefined });
-        await syncService.setSessionError(conversationId, "Session crashed — message delivery failed");
+        await syncService.retryMessage(messageId);
+        await syncService.setSessionError(conversationId, "Session crashed — retrying message delivery");
       } catch {}
     }
     return;
@@ -3684,10 +3731,10 @@ async function postDeliveryHealthCheck(
       log(`Health check: repaired crashed session ${sessionId.slice(0, 8)}`);
       try { await syncService.setSessionError(conversationId); } catch {}
     } else {
-      log(`Health check: repair failed for crashed session ${sessionId.slice(0, 8)}, marking as error`);
+      log(`Health check: repair failed for crashed session ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
-        await syncService.updateMessageStatus({ messageId, status: "failed" as any, deliveredAt: undefined });
-        await syncService.setSessionError(conversationId, "Session crashed — message delivery failed");
+        await syncService.retryMessage(messageId);
+        await syncService.setSessionError(conversationId, "Session crashed — retrying message delivery");
       } catch {}
     }
   } else {
@@ -3799,29 +3846,33 @@ async function deliverMessage(
   let sessionId = reverseCache[conversationId];
 
   if (!sessionId) {
-    const started = startedSessionTmux.get(conversationId);
-    if (started) {
+    // Try delivering via a recently started tmux session (from start_session command)
+    const tryStartedTmux = async (entry: { tmuxSession: string }): Promise<boolean> => {
       try {
-        await execAsync(`tmux has-session -t '${started.tmuxSession}' 2>/dev/null`);
+        await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
         let agentAlive = false;
         for (let i = 0; i < 40; i++) {
-          if (await isTmuxAgentAlive(started.tmuxSession)) { agentAlive = true; break; }
+          if (await isTmuxAgentAlive(entry.tmuxSession)) { agentAlive = true; break; }
           await new Promise(resolve => setTimeout(resolve, 250));
         }
         if (!agentAlive) {
-          log(`Started session tmux ${started.tmuxSession} exists but agent is dead, falling through`);
+          log(`Started session tmux ${entry.tmuxSession} exists but agent is dead, falling through`);
           startedSessionTmux.delete(conversationId);
-        } else {
-          await injectViaTmux(started.tmuxSession + ":0.0", content);
-          await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-          log(`Delivered message to started session tmux ${started.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-          return true;
+          return false;
         }
+        await injectViaTmux(entry.tmuxSession + ":0.0", content);
+        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        log(`Delivered message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+        return true;
       } catch (err) {
-        log(`Started session tmux ${started.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
+        log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
         startedSessionTmux.delete(conversationId);
+        return false;
       }
-    }
+    };
+
+    const started = startedSessionTmux.get(conversationId);
+    if (started && await tryStartedTmux(started)) return true;
 
     const freshCache = readConversationCache();
     const freshReverse = buildReverseConversationCache(freshCache);
@@ -3829,6 +3880,25 @@ async function deliverMessage(
     if (sessionId) {
       conversationCache[sessionId] = conversationId;
       log(`Found session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} via disk cache refresh`);
+    } else if (!started) {
+      // No session in any cache - wait for start_session command to populate startedSessionTmux
+      for (let i = 0; i < 8; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        const justStarted = startedSessionTmux.get(conversationId);
+        if (justStarted) {
+          log(`Found startedSessionTmux for ${conversationId.slice(0, 12)} after ${(i + 1) * 500}ms wait`);
+          if (await tryStartedTmux(justStarted)) return true;
+          break;
+        }
+      }
+      if (!sessionId) {
+        log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
+        sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
+        if (!sessionId) {
+          log(`Cannot deliver: no local session and materialization failed for ${conversationId}`);
+          return false;
+        }
+      }
     } else {
       log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
       sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
@@ -5526,6 +5596,36 @@ async function main(): Promise<void> {
   let commandUnsubscribe: (() => void) | null = null;
   const processedPermissionIds = new Set<string>();
   const processedCommandIds = new Set<string>();
+  const messageRetryTimers = new Set<string>();
+
+  function scheduleMessageRetry(
+    messageId: string,
+    retryCount: number,
+    conversationId: string,
+    messageContent: string,
+  ) {
+    if (messageRetryTimers.has(messageId)) return;
+    if (retryCount >= 10) {
+      log(`Message ${messageId.slice(0, 8)} exceeded max retries, marking undeliverable`);
+      syncService.updateMessageStatus({ messageId, status: "undeliverable" as any }).catch(() => {});
+      return;
+    }
+    const delays = [1000, 5000, 15000, 30000, 60000];
+    const delay = delays[Math.min(retryCount, delays.length - 1)];
+    log(`Scheduling retry ${retryCount + 1} for message ${messageId.slice(0, 8)} in ${delay / 1000}s`);
+    messageRetryTimers.add(messageId);
+    setTimeout(async () => {
+      messageRetryTimers.delete(messageId);
+      try {
+        await syncService.retryMessage(messageId);
+        log(`Retry triggered for message ${messageId.slice(0, 8)} (count: ${retryCount + 1})`);
+      } catch (err) {
+        log(`Failed to trigger retry for ${messageId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }, delay);
+  }
+
+  const messagesInFlight = new Set<string>();
 
   const setupSubscription = () => {
     try {
@@ -5544,6 +5644,12 @@ async function main(): Promise<void> {
           if (Array.isArray(messages)) {
             log(`Received array with ${messages.length} pending message(s)`);
             for (const msg of messages) {
+              if (messagesInFlight.has(msg._id)) {
+                log(`Skipping message ${msg._id} - delivery already in flight`);
+                continue;
+              }
+              messagesInFlight.add(msg._id);
+
               const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
               log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}" images=${imageIds.length}`);
 
@@ -5582,11 +5688,15 @@ async function main(): Promise<void> {
                 if (delivered) {
                   log(`Message delivered successfully`);
                 } else {
-                  log(`Message delivery failed, will retry on next update`);
+                  log(`Message delivery failed, scheduling retry`);
+                  scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
                 }
               } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 log(`Error handling pending message: ${errMsg}`);
+                scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
+              } finally {
+                messagesInFlight.delete(msg._id);
               }
             }
           } else {

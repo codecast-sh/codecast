@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore } from "../store/inboxStore";
-import type { OptimisticMessage } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 
 type Message = {
   _id: string;
@@ -19,24 +18,18 @@ type Message = {
   _isOptimistic?: true;
 };
 
-const EMPTY_OPTIMISTIC: never[] = [];
-
-function stripImageRef(s: string): string {
-  return s.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
-}
-
 export function useConversationMessages(
   conversationId: string,
   targetMessageId?: string,
   highlightQuery?: string
 ) {
-  const isTempId = conversationId.startsWith("temp_");
+  const canQuery = isConvexId(conversationId);
   const convId = conversationId as Id<"conversations">;
 
   // --- Target resolution ---
   const targetMessageTimestamp = useQuery(
     api.messages.getMessageTimestamp,
-    !isTempId && targetMessageId
+    canQuery && targetMessageId
       ? { conversation_id: convId, message_id: targetMessageId as Id<"messages"> }
       : "skip"
   );
@@ -44,7 +37,7 @@ export function useConversationMessages(
   const cleanedHighlightQuery = highlightQuery?.replace(/^"|"$/g, "").trim();
   const highlightMessageResult = useQuery(
     api.messages.findMessageByContent,
-    !isTempId && cleanedHighlightQuery
+    canQuery && cleanedHighlightQuery
       ? { conversation_id: convId, search_term: cleanedHighlightQuery }
       : "skip"
   );
@@ -74,7 +67,7 @@ export function useConversationMessages(
   // =============================================
   // NORMAL MODE: Convex paginated subscription (background sync)
   // =============================================
-  const useNormalMode = !targetMode && !isTempId;
+  const useNormalMode = !targetMode && canQuery;
 
   const { results: descResults, status: paginationStatus, loadMore } = usePaginatedQuery(
     api.conversations.listMessages,
@@ -98,7 +91,7 @@ export function useConversationMessages(
   // =============================================
   const remoteMeta = useQuery(
     api.conversations.getConversationWithMeta,
-    !isTempId ? { conversation_id: convId } : "skip"
+    canQuery ? { conversation_id: convId } : "skip"
   );
 
   useEffect(() => {
@@ -128,7 +121,7 @@ export function useConversationMessages(
 
   const aroundData = useQuery(
     api.conversations.getMessagesAroundTimestamp,
-    !isTempId && targetMode && targetTimestampReady && !targetInitializedRef.current
+    canQuery && targetMode && targetTimestampReady && !targetInitializedRef.current
       ? { conversation_id: convId, center_timestamp: effectiveTargetTimestamp!, limit_before: 50, limit_after: 50 }
       : "skip"
   );
@@ -149,14 +142,14 @@ export function useConversationMessages(
 
   const olderInTarget = useQuery(
     api.conversations.getAllMessages,
-    !isTempId && targetMode && targetLoadOlderTs !== undefined
+    canQuery && targetMode && targetLoadOlderTs !== undefined
       ? { conversation_id: convId, limit: 50, before_timestamp: targetLoadOlderTs }
       : "skip"
   );
 
   const newerInTarget = useQuery(
     api.conversations.getMessagesAroundTimestamp,
-    !isTempId && targetMode && targetLoadNewerTs !== undefined
+    canQuery && targetMode && targetLoadNewerTs !== undefined
       ? { conversation_id: convId, center_timestamp: targetLoadNewerTs, limit_before: 0, limit_after: 50 }
       : "skip"
   );
@@ -223,37 +216,6 @@ export function useConversationMessages(
   }, [storeMeta?.child_by_parent_uuid, rawMessages]);
 
   // =============================================
-  // Optimistic messages
-  // =============================================
-  useEffect(() => {
-    if (rawMessages.length === 0) return;
-    const removeMatching = useInboxStore.getState().removeMatchingOptimistic;
-    for (const msg of rawMessages) {
-      if (msg.role === "user" && msg.content?.trim()) {
-        removeMatching(conversationId, stripImageRef(msg.content).trim() || msg.content);
-      }
-    }
-  }, [rawMessages, conversationId]);
-
-  const optimisticMsgs = useInboxStore(
-    (s) => s.optimisticMessages[conversationId] ?? EMPTY_OPTIMISTIC
-  ) as OptimisticMessage[];
-
-  const mergedMessages = useMemo(() => {
-    if (optimisticMsgs.length === 0) return rawMessages;
-    const existingContents = new Set(
-      rawMessages
-        .filter((m) => m.role === "user" && m.content)
-        .map((m) => stripImageRef(m.content!))
-    );
-    const fresh = optimisticMsgs.filter(
-      (m) => !existingContents.has(stripImageRef(m.content))
-    );
-    if (fresh.length === 0) return rawMessages;
-    return [...rawMessages, ...fresh].sort((a, b) => a.timestamp - b.timestamp);
-  }, [rawMessages, optimisticMsgs]);
-
-  // =============================================
   // Pagination state + actions
   // =============================================
   const hasMoreAbove = targetMode
@@ -318,13 +280,13 @@ export function useConversationMessages(
   const loadedStartIndex = useMemo(() => {
     if (targetMode) {
       if (!targetHasMoreAbove) return 0;
-      const total = storeMeta?.message_count || mergedMessages.length;
-      return Math.max(0, total - mergedMessages.length);
+      const total = storeMeta?.message_count || rawMessages.length;
+      return Math.max(0, total - rawMessages.length);
     }
     if (!hasMoreAbove) return 0;
-    const total = storeMeta?.message_count || mergedMessages.length;
-    return Math.max(0, total - mergedMessages.length);
-  }, [targetMode, targetHasMoreAbove, hasMoreAbove, storeMeta?.message_count, mergedMessages.length]);
+    const total = storeMeta?.message_count || rawMessages.length;
+    return Math.max(0, total - rawMessages.length);
+  }, [targetMode, targetHasMoreAbove, hasMoreAbove, storeMeta?.message_count, rawMessages.length]);
 
   // =============================================
   // Build conversation object FROM STORE (never null if store has meta)
@@ -333,12 +295,12 @@ export function useConversationMessages(
     if (!storeMeta) return null;
     return {
       ...storeMeta,
-      messages: mergedMessages,
+      messages: rawMessages,
       loaded_start_index: loadedStartIndex,
       compaction_count: compactionCount,
       child_conversation_map: childConversationMap,
     };
-  }, [storeMeta, mergedMessages, loadedStartIndex, compactionCount, childConversationMap]);
+  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap]);
 
   // =============================================
   // Target search (auto-load older to find target)

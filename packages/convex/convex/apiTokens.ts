@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 
-const CONVEX_URL = process.env.CONVEX_CLOUD_URL || process.env.VITE_CONVEX_URL || "";
+const CONVEX_URL = process.env.CONVEX_CLOUD_ORIGIN || process.env.CONVEX_CLOUD_URL || process.env.VITE_CONVEX_URL || "";
 
 async function hashToken(token: string): Promise<string> {
   const encoder = new TextEncoder();
