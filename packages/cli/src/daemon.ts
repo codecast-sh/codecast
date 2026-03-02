@@ -257,6 +257,7 @@ function extractPendingToolUseFromTranscript(transcriptPath: string): { tool_nam
 }
 
 const permissionRecordPending = new Set<string>();
+const permissionJustResolved = new Set<string>();
 
 const syncStats = {
   messagesSynced: 0,
@@ -1239,7 +1240,16 @@ async function processSessionFile(
     fs.closeSync(fd);
 
     const newContent = buffer.toString("utf-8");
-    const messages = parseSessionFile(newContent);
+    let messages = parseSessionFile(newContent);
+
+    if (permissionJustResolved.has(sessionId)) {
+      const before = messages.length;
+      messages = messages.filter(m => !(m.role === "user" && /^[yn]$/i.test(m.content?.trim())));
+      if (messages.length < before) {
+        log(`Filtered ${before - messages.length} permission response message(s) for session ${sessionId.slice(0, 8)}`);
+      }
+      permissionJustResolved.delete(sessionId);
+    }
 
     let conversationId = conversationCache[sessionId];
 
@@ -1612,6 +1622,7 @@ async function processSessionFile(
       const permissionPrompt = detectPermissionPrompt(lastAssistantMessage.content);
       if (permissionPrompt) {
         log(`Permission prompt detected for tool: ${permissionPrompt.tool_name}`);
+        permissionJustResolved.add(sessionId);
         sendAgentStatus(syncService, conversationId, sessionId, "permission_blocked");
 
         const permArgPreview = truncateForNotification(
@@ -5240,6 +5251,7 @@ async function main(): Promise<void> {
 
       if (data.status === "permission_blocked" && statusChanged && !permissionRecordPending.has(sessionId)) {
         permissionRecordPending.add(sessionId);
+        permissionJustResolved.add(sessionId);
         const transcriptPath = data.transcript_path || findTranscriptForSession(sessionId);
         const toolInfo = extractPendingToolUseFromTranscript(transcriptPath || "");
         const toolName = toolInfo?.tool_name || extractToolFromMessage(data.message || "");
