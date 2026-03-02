@@ -5269,9 +5269,8 @@ export const listIdleSessions = query({
           lastMsgRole = lastMsg.role;
           if (lastMsg.role === "user" && lastMsg.content?.trim()) {
             lastUserMessage = lastMsg.content
-              .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
+              .replace(/\[Image[:\s][^\]]*\]/gi, "")
               .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-              .replace(/\[image\]/gi, "")
               .trim()
               .slice(0, 200);
           }
@@ -5642,6 +5641,7 @@ export const listDismissedSessions = query({
     if (!userId) return [];
 
     const now = Date.now();
+    const HEARTBEAT_ALIVE_MS = 90 * 1000;
     const WINDOW_MS = 48 * 60 * 60 * 1000;
     const cutoff = now - WINDOW_MS;
 
@@ -5659,11 +5659,45 @@ export const listDismissedSessions = query({
       )
       .take(100);
 
+    const managedSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const liveConvIds = new Set(
+      managedSessions
+        .filter((s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
+        .map((s) => s.conversation_id!.toString())
+    );
+
     const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
     const results = [];
 
     for (const conv of conversations) {
-      if (conv.is_subagent || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
+      const isSubagent = !!(conv.is_subagent || (conv.parent_conversation_id && !conv.parent_message_uuid));
+
+      if (isSubagent) {
+        const isAlive = conv.status === "active" && (conv.updated_at > now - 5 * 60 * 1000 || liveConvIds.has(conv._id.toString()));
+        if (isAlive) continue;
+
+        results.push({
+          _id: conv._id,
+          session_id: conv.session_id,
+          title: conv.title,
+          subtitle: conv.subtitle,
+          updated_at: conv.updated_at,
+          project_path: conv.project_path,
+          git_root: conv.git_root,
+          git_branch: conv.git_branch,
+          agent_type: conv.agent_type,
+          message_count: conv.message_count,
+          idle_summary: conv.idle_summary,
+          is_idle: true,
+          has_pending: false,
+          is_subagent: true,
+          parent_conversation_id: conv.parent_conversation_id?.toString(),
+        });
+        continue;
+      }
 
       const title = conv.title?.trim() || "";
       if (title.toLowerCase() === "warmup") continue;
@@ -5803,9 +5837,8 @@ export const backfillDenormalizedFields = internalMutation({
         .first();
       if (lastUserMsg?.content?.trim()) {
         patch.last_message_preview = lastUserMsg.content
-          .replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "")
+          .replace(/\[Image[:\s][^\]]*\]/gi, "")
           .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-          .replace(/\[image\]/gi, "")
           .trim()
           .slice(0, 200);
       }

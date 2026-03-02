@@ -123,6 +123,24 @@ export const addMessage = mutation({
       }
     }
 
+    if (args.role === "user" && args.content?.trim()) {
+      const recent = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) =>
+          q.eq("conversation_id", args.conversation_id)
+        )
+        .order("desc")
+        .first();
+      if (
+        recent &&
+        recent.role === "user" &&
+        recent.content?.trim() === args.content.trim() &&
+        Math.abs(msgTimestamp - recent.timestamp) < 5 * 60 * 1000
+      ) {
+        return recent._id;
+      }
+    }
+
     let images = args.images;
     if (args.role === "user" && (!images || images.length === 0)) {
       const pendingWithImage = await ctx.db
@@ -135,7 +153,7 @@ export const addMessage = mutation({
         .order("desc")
         .first();
       if (pendingWithImage) {
-        const c = (args.content || "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
+        const c = (args.content || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
         const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
         const contentMatch = c === pc;
         if (contentMatch) {
@@ -166,7 +184,7 @@ export const addMessage = mutation({
       last_message_role: args.role,
     };
     if (args.role === "user" && args.content?.trim()) {
-      convPatch.last_message_preview = args.content.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200);
+      convPatch.last_message_preview = args.content.replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
     } else if (args.role === "user") {
       convPatch.last_user_message_at = msgTimestamp;
@@ -279,6 +297,25 @@ export const addMessages = mutation({
         }
       }
 
+      if (msg.role === "user" && msg.content?.trim()) {
+        const recent = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q) =>
+            q.eq("conversation_id", args.conversation_id)
+          )
+          .order("desc")
+          .first();
+        if (
+          recent &&
+          recent.role === "user" &&
+          recent.content?.trim() === msg.content.trim() &&
+          Math.abs(msgTimestamp - recent.timestamp) < 5 * 60 * 1000
+        ) {
+          ids.push(recent._id);
+          continue;
+        }
+      }
+
       let images = msg.images;
       if (msg.role === "user" && (!images || images.length === 0)) {
         const pendingWithImage = await ctx.db
@@ -291,7 +328,7 @@ export const addMessages = mutation({
           .order("desc")
           .first();
         if (pendingWithImage) {
-          const c = (msg.content || "").replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").replace(/\[image\]/gi, "").trim();
+          const c = (msg.content || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
           const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
           const contentMatch = c === pc;
           if (contentMatch) {
@@ -334,7 +371,7 @@ export const addMessages = mutation({
         if (lastUserTs > 0) {
           convPatch.last_user_message_at = lastUserTs;
         }
-        const preview = lastUserMsg.content?.replace(/\[Image\s+\/tmp\/codecast\/images\/[^\]]*\]/gi, "").trim().slice(0, 200);
+        const preview = lastUserMsg.content?.replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
         if (preview) {
           convPatch.last_message_preview = preview;
         }
@@ -605,3 +642,4 @@ export const getSharedMessageMeta = query({
     };
   },
 });
+

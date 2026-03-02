@@ -62,6 +62,20 @@ export const dispatch = mutation({
 type HandlerCtx = { db: any; storage?: any };
 type HandlerFn = (ctx: HandlerCtx, userId: Id<"users">, args: any) => Promise<any>;
 
+function deepMergeField(existing: any, incoming: any): any {
+  if (
+    incoming && typeof incoming === "object" && !Array.isArray(incoming) &&
+    existing && typeof existing === "object" && !Array.isArray(existing)
+  ) {
+    const result = { ...existing };
+    for (const [k, v] of Object.entries(incoming)) {
+      result[k] = v;
+    }
+    return result;
+  }
+  return incoming;
+}
+
 async function applyPatches(
   ctx: HandlerCtx,
   userId: Id<"users">,
@@ -91,7 +105,11 @@ async function applyPatches(
           )
           .first();
         if (existing) {
-          await ctx.db.patch(existing._id, { ...safe, updated_at: Date.now() });
+          const merged: Record<string, any> = {};
+          for (const [k, v] of Object.entries(safe)) {
+            merged[k] = deepMergeField((existing as any)[k], v);
+          }
+          await ctx.db.patch(existing._id, { ...merged, updated_at: Date.now() });
         } else {
           await ctx.db.insert(table as any, {
             [config.ownerField]: userId,
