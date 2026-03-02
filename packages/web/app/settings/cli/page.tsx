@@ -64,7 +64,7 @@ export default function CliSettingsPage() {
         ) : (
           <div className="space-y-3">
             <p className="text-sol-text-dim text-xs">
-              Token expires in 5 minutes:
+              Token expires in 15 minutes:
             </p>
             <div className="relative">
               <code className="block bg-sol-bg rounded-lg p-4 text-sm text-green-400 overflow-x-auto pr-20 break-all">

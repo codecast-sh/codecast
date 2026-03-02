@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { copyToClipboard } from "../lib/utils";
 
 interface EmptyStateProps {
@@ -11,6 +13,7 @@ interface EmptyStateProps {
     href: string;
   };
   variant?: "default" | "onboarding";
+  hasOtherSessions?: boolean;
 }
 
 const FAKE_SESSIONS = [
@@ -71,8 +74,6 @@ const FAKE_SESSIONS = [
   },
 ];
 
-const INSTALL_COMMAND = "curl -fsSL codecast.sh/install | sh";
-
 function FakeSessionCard({ session, className = "" }: { session: typeof FAKE_SESSIONS[0]; className?: string }) {
   return (
     <div className={`relative border rounded-xl p-3 md:p-4 bg-white dark:bg-sol-bg-alt border-sol-border/40 ${className}`}>
@@ -120,28 +121,121 @@ function FakeSessionCard({ session, className = "" }: { session: typeof FAKE_SES
   );
 }
 
-function OnboardingEmptyState() {
+function SetupTokenCommand() {
   const [copied, setCopied] = useState(false);
+  const [setupToken, setSetupToken] = useState<string | null>(null);
+  const [tokenExpiry, setTokenExpiry] = useState<number | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
-  const handleCopy = async () => {
-    await copyToClipboard(INSTALL_COMMAND);
+  const createSetupToken = useMutation(api.apiTokens.createSetupToken);
+
+  const handleCopy = async (text: string) => {
+    await copyToClipboard(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const generateSetupToken = async () => {
+    setIsGenerating(true);
+    try {
+      const result = await createSetupToken({});
+      setSetupToken(result.token);
+      setTokenExpiry(result.expiresAt);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const isTokenExpired = tokenExpiry ? Date.now() > tokenExpiry : false;
+  const hasValidToken = setupToken && !isTokenExpired;
+  const installCommand = hasValidToken
+    ? `curl -fsSL codecast.sh/install | sh -s -- ${setupToken}`
+    : null;
+
+  if (!hasValidToken) {
+    return (
+      <button
+        onClick={generateSetupToken}
+        disabled={isGenerating}
+        className="w-full px-4 py-3 bg-sol-yellow/20 hover:bg-sol-yellow/30 text-sol-yellow text-sm font-medium rounded-xl border border-sol-yellow/30 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+      >
+        {isGenerating ? (
+          <>
+            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            Generating...
+          </>
+        ) : (
+          "Generate install command"
+        )}
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="rounded-xl overflow-hidden border border-sol-border/80">
+        <div className="flex items-center justify-between gap-3 bg-sol-base02 px-4 py-3">
+          <code className="text-sol-base1 text-sm font-mono truncate">
+            <span className="text-sol-base01 select-none">$ </span>
+            curl -fsSL codecast.sh/install | sh -s -- <span className="text-sol-green">{setupToken?.slice(0, 8)}...</span>
+          </code>
+          <button
+            onClick={() => handleCopy(installCommand!)}
+            className="p-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-base01 rounded-md transition-colors shrink-0"
+            title="Copy to clipboard"
+          >
+            {copied ? (
+              <svg className="w-4 h-4 text-sol-green" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            )}
+          </button>
+        </div>
+      </div>
+      <p className="text-xs text-sol-text-dim text-center">
+        Token expires in 15 minutes
+      </p>
+    </div>
+  );
+}
+
+function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean }) {
+  if (hasOtherSessions) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-center px-4">
+        <div className="max-w-sm w-full">
+          <p className="text-sm text-sol-text-muted mb-4">
+            No personal sessions yet. Install the CLI to start syncing your own sessions.
+          </p>
+          <SetupTokenCommand />
+          <p className="text-xs text-sol-text-dim mt-3">
+            Works with Claude Code, Cursor, Windsurf, and more.{" "}
+            <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80 transition-colors">
+              Setup guide
+            </a>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative overflow-hidden">
-      {/* Fake sessions background */}
       <div className="space-y-3 opacity-[0.12] pointer-events-none select-none" aria-hidden="true">
         {FAKE_SESSIONS.map((session, i) => (
           <FakeSessionCard key={i} session={session} />
         ))}
       </div>
 
-      {/* CTA overlay */}
       <div className="absolute inset-0 flex items-start justify-center pt-16 sm:pt-24">
         <div className="relative max-w-lg w-full mx-4">
-          {/* Backdrop blur card */}
           <div className="rounded-2xl border border-sol-border/60 bg-sol-bg/90 dark:bg-sol-bg/95 backdrop-blur-xl shadow-2xl p-6 sm:p-8">
             <div className="text-center mb-6">
               <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
@@ -152,32 +246,9 @@ function OnboardingEmptyState() {
               </p>
             </div>
 
-            {/* Install command */}
-            <div className="rounded-xl overflow-hidden border border-sol-border/80 mb-4">
-              <div className="flex items-center justify-between gap-3 bg-sol-base02 px-4 py-3">
-                <code className="text-sol-base1 text-sm font-mono truncate">
-                  <span className="text-sol-base01 select-none">$ </span>
-                  {INSTALL_COMMAND}
-                </code>
-                <button
-                  onClick={handleCopy}
-                  className="p-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-base01 rounded-md transition-colors shrink-0"
-                  title="Copy to clipboard"
-                >
-                  {copied ? (
-                    <svg className="w-4 h-4 text-sol-green" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                  )}
-                </button>
-              </div>
-            </div>
+            <SetupTokenCommand />
 
-            <p className="text-xs text-sol-text-dim text-center">
+            <p className="text-xs text-sol-text-dim text-center mt-4">
               Works with Claude Code, Cursor, Windsurf, and more.{" "}
               <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80 transition-colors">
                 Setup guide
@@ -190,9 +261,9 @@ function OnboardingEmptyState() {
   );
 }
 
-export function EmptyState({ title, description, action, variant }: EmptyStateProps) {
+export function EmptyState({ title, description, action, variant, hasOtherSessions }: EmptyStateProps) {
   if (variant === "onboarding") {
-    return <OnboardingEmptyState />;
+    return <OnboardingEmptyState hasOtherSessions={hasOtherSessions} />;
   }
 
   return (

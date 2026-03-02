@@ -31,6 +31,8 @@ export function SetupPromptBanner() {
   const hasSessions = conversationsResult?.conversations && conversationsResult.conversations.length > 0;
 
   if (hasCliInstalled && hasSessions) return null;
+  // If no personal sessions, the empty state handles onboarding -- don't double-prompt
+  if (!hasSessions) return null;
 
   const message = !hasCliInstalled
     ? "Install the CLI to start syncing your Claude Code sessions"

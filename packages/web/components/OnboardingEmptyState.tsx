@@ -79,7 +79,7 @@ export function OnboardingEmptyState() {
         ) : (
           <div className="space-y-4">
             <p className="text-sol-text-dim text-sm text-center">
-              Token expires in 5 minutes
+              Token expires in 15 minutes
             </p>
             <div className="relative">
               <code className="block bg-sol-bg rounded-xl p-5 text-sm text-green-400 overflow-x-auto pr-24 break-all font-mono">

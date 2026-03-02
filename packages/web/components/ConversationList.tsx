@@ -849,6 +849,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
           href: "/cli",
         }}
         variant="onboarding"
+        hasOtherSessions={hasTeam}
       />
     );
   }
