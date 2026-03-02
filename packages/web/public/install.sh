@@ -83,6 +83,14 @@ if ! echo "${PATH}" | grep -q "${INSTALL_DIR}"; then
   export PATH="${INSTALL_DIR}:${PATH}"
 fi
 
+# Check for stale installs that might shadow the new binary
+RESOLVED="$(command -v codecast 2>/dev/null || true)"
+if [ -n "${RESOLVED}" ] && [ "${RESOLVED}" != "${INSTALL_DIR}/codecast" ]; then
+  echo "Warning: found another codecast at ${RESOLVED}"
+  echo "Removing stale install to avoid conflicts..."
+  rm -f "${RESOLVED}" 2>/dev/null || echo "  Could not remove ${RESOLVED} (permission denied). Please remove it manually."
+fi
+
 if ! command -v codecast >/dev/null 2>&1; then
   echo "Error: codecast command not found after installation"
   echo "Try running: export PATH=\"\${HOME}/.local/bin:\${PATH}\""
