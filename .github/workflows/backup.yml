@@ -1,0 +1,33 @@
+name: Daily Convex Backup
+
+on:
+  schedule:
+    - cron: '0 10 * * *' # 3 AM PT / 10 AM UTC
+  workflow_dispatch: # manual trigger
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        working-directory: packages/convex
+        run: bun install
+
+      - name: Export Convex data
+        working-directory: packages/convex
+        env:
+          CONVEX_SELF_HOSTED_URL: ${{ secrets.CONVEX_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ secrets.CONVEX_ADMIN_KEY }}
+        run: npx convex export --path /tmp/convex-backup.zip
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: convex-backup-${{ github.run_id }}
+          path: /tmp/convex-backup.zip
+          retention-days: 30
