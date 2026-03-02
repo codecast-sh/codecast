@@ -12,7 +12,7 @@ interface SharePopoverProps {
   hasTeam: boolean;
   onSetPrivate: () => Promise<void>;
   onSetTeamVisibility: (mode: "summary" | "full") => Promise<void>;
-  onGenerateShareLink: () => Promise<void>;
+  onGenerateShareLink: () => Promise<string>;
   shareUrl: string | null;
 }
 
@@ -70,16 +70,17 @@ export function SharePopover({
   };
 
   const handleCopyLink = async () => {
-    if (!shareUrl) {
+    let url = shareUrl;
+    if (!url) {
       setIsGeneratingLink(true);
       try {
-        await onGenerateShareLink();
+        url = await onGenerateShareLink();
       } finally {
         setIsGeneratingLink(false);
       }
     }
-    if (shareUrl) {
-      await copyToClipboard(shareUrl);
+    if (url) {
+      await copyToClipboard(url);
       setCopied(true);
       toast.success("Link copied");
       setTimeout(() => setCopied(false), 2000);
@@ -89,8 +90,9 @@ export function SharePopover({
   const handleCreateLink = async () => {
     setIsGeneratingLink(true);
     try {
-      await onGenerateShareLink();
-      toast.success("Share link created");
+      const url = await onGenerateShareLink();
+      await copyToClipboard(url);
+      toast.success("Link copied");
     } finally {
       setIsGeneratingLink(false);
     }
@@ -203,7 +205,7 @@ export function SharePopover({
                   disabled={isGeneratingLink}
                   className="px-3 py-1.5 text-xs bg-sol-bg-alt hover:bg-sol-border text-sol-text-secondary rounded transition-colors disabled:opacity-50"
                 >
-                  {isGeneratingLink ? "Creating..." : "Create link"}
+                  {isGeneratingLink ? "Creating..." : "Create & copy link"}
                 </button>
               </div>
             )}

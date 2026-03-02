@@ -13,6 +13,13 @@ import { UsageDisplay } from "./UsageDisplay";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useDiffViewerStore } from "../store/diffViewerStore";
+
+function extractTextFromHast(node: any): string {
+  if (!node) return '';
+  if (node.type === 'text') return node.value || '';
+  if (node.children) return node.children.map(extractTextFromHast).join('');
+  return '';
+}
 import { extractFileChanges } from "../lib/fileChangeExtractor";
 import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
@@ -27,7 +34,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from "./ui/dropdown-menu";
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "./ui/tooltip";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -89,6 +96,7 @@ type Message = {
   images?: ImageData[];
   subtype?: string;
   _isOptimistic?: true;
+  _isQueued?: true;
   usage?: {
     input_tokens: number;
     output_tokens: number;
@@ -248,6 +256,8 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     return recentProjects.filter((p) => p.path !== currentPath);
   }, [recentProjects, currentPath]);
 
+  const visibleProjects = otherProjects.slice(0, 6);
+
   const handleSwitch = useCallback(async (projectPath: string) => {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
@@ -272,40 +282,28 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   return (
     <TooltipProvider delayDuration={200}>
     <div className="flex flex-col items-center gap-3 mt-16">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-              </svg>
-              <span className="font-medium text-sol-text">{currentName}</span>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs font-mono">
-            {currentPath}
-          </TooltipContent>
-        </Tooltip>
+        <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath}>
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+          </svg>
+          <span className="font-medium text-sol-text">{currentName}</span>
+        </div>
 
       <div className="flex flex-wrap justify-center gap-1.5">
-        {otherProjects.slice(0, 6).map((p) => {
+        {visibleProjects.map((p) => {
           const name = p.path.split("/").filter(Boolean).pop();
           return (
-            <Tooltip key={p.path}>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => handleSwitch(p.path)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
-                >
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                  </svg>
-                  <span>{name}</span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="text-xs font-mono">
-                {p.path}
-              </TooltipContent>
-            </Tooltip>
+            <button
+              key={p.path}
+              onClick={() => handleSwitch(p.path)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
+              title={p.path}
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+              </svg>
+              <span>{name}</span>
+            </button>
           );
         })}
         <button
@@ -998,7 +996,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
 
   if (isCompleted) {
     return (
-      <div className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : `${colors.bg} ${colors.border}`} border overflow-hidden`}>
+      <div className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : `${colors.bg} ${colors.border}`} border`}>
         <div
           className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
           onClick={() => setExpanded(!expanded)}
@@ -1068,7 +1066,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
   const truncatedPrompt = prompt.length > 300 && !expanded ? prompt.slice(0, 300) + "..." : prompt;
 
   return (
-    <div className={`my-3 rounded-lg ${colors.bg} border ${colors.border} overflow-hidden`}>
+    <div className={`my-3 rounded-lg ${colors.bg} border ${colors.border}`}>
       <div
         className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
         onClick={() => setExpanded(!expanded)}
@@ -1636,7 +1634,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
           </a>
         )}
         {resultSummary && (
-          <span className={`font-mono ${result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"}`}>
+          <span className={`font-mono flex-shrink-0 whitespace-nowrap ${result?.is_error ? "text-sol-red/80" : "text-sol-text-dim"}`}>
             {resultSummary}
           </span>
         )}
@@ -1648,7 +1646,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
       })()}
 
       {expanded && (
-        <div className="mt-1 rounded overflow-hidden border border-sol-border/30 bg-sol-bg-alt">
+        <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-alt">
           {/* Markdown toggle header */}
           {isMarkdown && (isRead || (tool.name === "Write" && Boolean(parsedInput.content))) && (
             <div className="flex items-center justify-between px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/30">
@@ -2141,12 +2139,18 @@ function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result
         </span>
       </div>
       {isWaitingForApproval && !sent && (
-        <div className="flex items-center gap-1.5 mt-1.5 ml-0.5">
+        <div className="flex items-center gap-1.5 mt-1.5 ml-0.5 flex-wrap">
           <button
-            onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Start implementing" })); }}
+            onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Start (clear context)" })); }}
             className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
           >
-            Start implementing
+            Start (clear context)
+          </button>
+          <button
+            onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["3"], display: "Start (keep context)" })); }}
+            className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
+          >
+            Start (keep context)
           </button>
           <button
             onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["4"], text: "adjust the plan", display: "Adjust plan" })); }}
@@ -2581,8 +2585,7 @@ function SkillExpansionBlock({ content, timestamp, cmdName }: { content: string;
                 if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                   const className = codeElement.properties?.className as string[] | undefined;
                   const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                  const codeContent = codeElement.children?.[0];
-                  const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                  const code = extractTextFromHast(codeElement);
                   if (code) return <CodeBlock code={code} language={language} />;
                 }
                 return <pre {...props}>{children}</pre>;
@@ -2675,10 +2678,10 @@ function TaskNotificationLine({ content, timestamp }: { content: string; timesta
   const cfg = taskStatusConfig[parsed.status] || taskStatusConfig.killed;
   return (
     <div className={`mb-2 px-3 py-2 flex items-center gap-2.5 text-xs border rounded ${cfg.bg}`}>
-      <span className={`font-mono text-sm leading-none ${cfg.color}`}>{cfg.icon}</span>
-      <span className="text-sol-text-muted">{parsed.summary}</span>
+      <span className={`font-mono text-sm leading-none shrink-0 ${cfg.color}`}>{cfg.icon}</span>
+      <span className="text-sol-text-muted min-w-0 truncate">{parsed.summary}</span>
       <span className="text-sol-text-dim font-mono text-[10px] ml-auto shrink-0">{parsed.taskId}</span>
-      <span className="text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
     </div>
   );
 }
@@ -2909,7 +2912,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; mainMessageCount?: number }) {
+function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, userName, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; onOpenComments?: () => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: () => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: Array<{ _id: string; title: string; short_id?: string; started_at?: number; username?: string; message_count?: number; agent_type?: string }>; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -2987,7 +2990,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
   };
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 ${effectivelyCollapsed ? "mb-2" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""} ${isPending ? "opacity-80 pending-stripes" : isQueued ? "opacity-90 queued-pulse" : ""}`} style={{ '--image-fade-bg': 'color-mix(in srgb, var(--sol-blue) 10%, var(--sol-bg))' } as React.CSSProperties} onClick={shareSelectionMode ? onToggleShareSelection : undefined}>
       <div className={`absolute -top-2 right-0 transition-opacity flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
         {onStartShareSelection && (
           <button
@@ -3105,8 +3108,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                       if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                         const className = codeElement.properties?.className as string[] | undefined;
                         const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                        const codeContent = codeElement.children?.[0];
-                        const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                        const code = extractTextFromHast(codeElement);
                         if (code) return <CodeBlock code={code} language={language} />;
                       }
                       return <pre {...props}>{children}</pre>;
@@ -3130,8 +3132,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                       if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                         const className = codeElement.properties?.className as string[] | undefined;
                         const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                        const codeContent = codeElement.children?.[0];
-                        const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                        const code = extractTextFromHast(codeElement);
                         if (code) return <CodeBlock code={code} language={language} />;
                       }
                       return <pre {...props}>{children}</pre>;
@@ -3152,8 +3153,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                   if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                     const className = codeElement.properties?.className as string[] | undefined;
                     const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                    const codeContent = codeElement.children?.[0];
-                    const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                    const code = extractTextFromHast(codeElement);
                     if (code) return <CodeBlock code={code} language={language} />;
                   }
                   return <pre {...props}>{children}</pre>;
@@ -3238,8 +3238,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
                       if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                         const className = codeElement.properties?.className as string[] | undefined;
                         const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                        const codeContent = codeElement.children?.[0];
-                        const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                        const code = extractTextFromHast(codeElement);
                         if (code) {
                           return <CodeBlock code={code} language={language} />;
                         }
@@ -3633,8 +3632,7 @@ function AssistantBlock({
                         if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                           const className = codeElement.properties?.className as string[] | undefined;
                           const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                          const codeContent = codeElement.children?.[0];
-                          const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                          const code = extractTextFromHast(codeElement);
 
                           if (code) {
                             return <CodeBlock code={code} language={language} />;
@@ -3708,8 +3706,7 @@ function AssistantBlock({
                         if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                           const className = codeElement.properties?.className as string[] | undefined;
                           const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                          const codeContent = codeElement.children?.[0];
-                          const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                          const code = extractTextFromHast(codeElement);
                           if (code) {
                             return <CodeBlock code={code} language={language} />;
                           }
@@ -4016,8 +4013,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
                 if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                   const className = codeElement.properties?.className as string[] | undefined;
                   const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                  const codeContent = codeElement.children?.[0];
-                  const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                  const code = extractTextFromHast(codeElement);
                   if (code) {
                     return <CodeBlock code={code} language={language} />;
                   }
@@ -4078,8 +4074,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
                     if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
                       const className = codeElement.properties?.className as string[] | undefined;
                       const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                      const codeContent = codeElement.children?.[0];
-                      const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
+                      const code = extractTextFromHast(codeElement);
                       if (code) {
                         return <CodeBlock code={code} language={language} />;
                       }
@@ -4328,7 +4323,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose }: {
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, agentStatus, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -4347,6 +4342,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const autoResumeTriggeredRef = useRef(false);
   const resumeSessionMutation = useMutation(api.users.resumeSession);
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
+  const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
+  const sentContentRef = useRef<string | null>(null);
 
   const messageStatus = useQuery(
     api.pendingMessages.getMessageStatus,
@@ -4378,6 +4375,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   useEffect(() => {
     if (!sentAt || !pendingMessageId) return;
     if (messageStatus?.status === "delivered") {
+      if (sentContentRef.current) {
+        markAsQueued(conversationId, sentContentRef.current);
+        sentContentRef.current = null;
+      }
       setPendingMessageId(null);
       setSentAt(null);
       setShowStuckBanner(false);
@@ -4389,7 +4390,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       }
     }, 15_000);
     return () => clearTimeout(timer);
-  }, [sentAt, pendingMessageId, messageStatus?.status]);
+  }, [sentAt, pendingMessageId, messageStatus?.status, conversationId, markAsQueued]);
 
   // Removed: generic 60s timeout was showing "not responding" even when no message was sent.
   // The banner should only show when we sent a message and it wasn't delivered (handled by the effects above).
@@ -4687,14 +4688,17 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
           const branches = useInboxStore.getState().activeBranches;
           const forkId = Object.values(branches)[0];
           if (!forkId) return;
-          addOptimistic(forkId, content);
+          const clientId = addOptimistic(forkId, content);
+          onMessageSent?.();
           const resolvedForkId = await waitForConvexId(forkId);
           const msgId = await sendMessage({
             conversation_id: resolvedForkId as Id<"conversations">,
             content,
+            client_id: clientId,
           });
           setPendingMessageId(msgId);
           setSentAt(Date.now());
+          sentContentRef.current = content;
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "Failed to send rewrite");
         }
@@ -4709,11 +4713,12 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       clearTimeout(draftTimerRef.current);
       draftTimerRef.current = null;
     }
-    addOptimistic(conversationId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
+    const clientId = addOptimistic(conversationId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
     setMessage("");
     clearAllImages();
     updateDraft("", null);
     requestAnimationFrame(() => textareaRef.current?.focus());
+    onMessageSent?.();
 
     try {
       const resolvedId = canQueryServer ? conversationId : await waitForConvexId(conversationId);
@@ -4721,9 +4726,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         conversation_id: resolvedId as Id<"conversations">,
         content: trimmed,
         image_storage_ids: storageIds.length > 0 ? storageIds : undefined,
+        client_id: clientId,
       });
       setPendingMessageId(msgId);
       setSentAt(Date.now());
+      sentContentRef.current = trimmed;
       setShowStuckBanner(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to send message");
@@ -4780,16 +4787,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         <div className="relative">
           {(isFocused || shortcutTooltip || showStuckBanner || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
-              <p className="text-[11px] text-sol-text-dim/70">
+              <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {showStuckBanner && sessionId ? (
                   isResuming ? (
                     <span className="flex items-center gap-1.5 text-sol-orange">
-                      <span className="w-1.5 h-1.5 rounded-full bg-sol-orange animate-pulse" />
+                      <span className="w-2 h-2 rounded-full bg-sol-orange animate-pulse" />
                       Resuming session — waiting for daemon to reconnect...
                     </span>
                   ) : (
                     <span className="flex items-center gap-1.5 text-sol-orange">
-                      <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" />
+                      <span className="w-2 h-2 rounded-full bg-sol-orange" />
                       {existingPending || pendingMessageId
                         ? `Message not reaching session${messageStatus?.retry_count ? ` (retry ${messageStatus.retry_count})` : ""}`
                         : "Session not responding"}
@@ -4804,44 +4811,44 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   )
                 ) : agentStatus === "thinking" ? (
                   <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-sol-violet/50 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-sol-violet/50 animate-pulse" />
                     Thinking...
                   </span>
                 ) : agentStatus === "compacting" ? (
                   <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400/60 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-amber-400/60 animate-pulse" />
                     Compacting...
                   </span>
                 ) : agentStatus === "permission_blocked" ? (
                   <span className="flex items-center gap-1.5 text-sol-orange">
-                    <span className="w-1.5 h-1.5 rounded-full bg-sol-orange animate-pulse" />
-                    Permission needed
+                    <span className="w-2 h-2 rounded-full bg-sol-orange animate-pulse" />
+                    {(pendingPermissionsCount ?? 0) > 0 ? "Permission needed" : "Answer needed"}
                   </span>
                 ) : agentStatus === "connected" ? (
                   <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/50 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Connected
                   </span>
                 ) : agentStatus === "working" ? (
                   <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                     Working
                   </span>
                 ) : agentStatus === "idle" ? (
                   "\u00A0"
                 ) : isThinking ? (
                   <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-sol-violet/50 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-sol-violet/50 animate-pulse" />
                     Thinking...
                   </span>
                 ) : isWaitingForResponse ? (
                   <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/50 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Connecting...
                   </span>
                 ) : isConversationLive ? (
                   <span className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                     Working
                   </span>
                 ) : isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
@@ -4883,7 +4890,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                       <div className={`w-2 h-2 rounded-full transition-colors ${
                         permissionMode === "plan" ? "bg-sol-blue" :
                         permissionMode === "acceptEdits" ? "bg-emerald-400" :
-                        permissionMode === "bypassPermissions" ? "bg-sol-red" :
+                        permissionMode === "bypassPermissions" ? "bg-orange-500" :
                         permissionMode === "dontAsk" ? "bg-sol-yellow" :
                         "bg-sol-base00/50"
                       }`} />
@@ -4894,7 +4901,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                           } ${
                             permissionMode === "plan" ? "text-sol-blue" :
                             permissionMode === "acceptEdits" ? "text-emerald-400" :
-                            permissionMode === "bypassPermissions" ? "text-sol-red" :
+                            permissionMode === "bypassPermissions" ? "text-orange-500" :
                             "text-sol-yellow"
                           }`}
                         >
@@ -4911,7 +4918,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                         <span className={
                           permissionMode === "plan" ? "text-sol-blue" :
                           permissionMode === "acceptEdits" ? "text-emerald-400" :
-                          permissionMode === "bypassPermissions" ? "text-sol-red" :
+                          permissionMode === "bypassPermissions" ? "text-orange-500" :
                           permissionMode === "dontAsk" ? "text-sol-yellow" :
                           "text-sol-text-dim"
                         }>
@@ -4973,7 +4980,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   onFocus={() => setIsFocused(true)}
                   onBlur={() => setIsFocused(false)}
                   disabled={isWaitingForUpload}
-                  placeholder={agentStatus === "permission_blocked" ? "Approve or deny permission to continue..." : "Send a message..."}
+                  placeholder={agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : "Answer the question to continue...") : "Send a message..."}
                   rows={1}
                   className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                 />
@@ -5053,6 +5060,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const scrollAnchorRef = useRef<{ messageId: string; pixelOffset: number } | null>(null);
   const prevTimelineLengthRef = useRef<number>(0);
   const isNearBottomRef = useRef(true);
+  const scrollToBottomFnRef = useRef<() => void>(() => {});
   const lastScrollTopRef = useRef(0);
   const scrollProgressRef = useRef<HTMLDivElement>(null);
   const hasScrolledToTarget = useRef(false);
@@ -5086,6 +5094,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const sendKeys = useMutation(api.conversations.sendKeysToSession);
   const sendInlineMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
+  const restartSession = useMutation(api.conversations.restartSession);
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
@@ -5095,13 +5104,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const parsed = JSON.parse(content);
       if (parsed.__cc_poll && parsed.display) displayContent = parsed.display;
     } catch {}
-    addOptimisticMsg(conversation._id, displayContent);
+    const clientId = addOptimisticMsg(conversation._id, displayContent);
+    setUserScrolled(false);
+    requestAnimationFrame(() => scrollToBottomFnRef.current());
     try {
-      await sendInlineMessage({ conversation_id: conversation._id, content });
+      await sendInlineMessage({ conversation_id: conversation._id, content, client_id: clientId });
     } catch {
       toast.error("Failed to send message");
     }
-  }, [conversation, sendInlineMessage, addOptimisticMsg]);
+  }, [conversation, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
   const managedSession = useQuery(
     api.managedSessions.isSessionManaged,
     conversation && isOwner && conversation.status === "active" && isConvexId(conversation._id)
@@ -5400,6 +5411,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     toast.info("Escape sent to session");
   }, [conversation, isOwner, sendEscape]);
 
+  const handleMessageSent = useCallback(() => {
+    setUserScrolled(false);
+    requestAnimationFrame(() => scrollToBottomFnRef.current());
+  }, [setUserScrolled]);
+
   const handleOpenNavigator = useCallback(() => {
     if (navigatorUserMessages && navigatorUserMessages.length > 0) {
       setNavigatorOpen(true);
@@ -5507,7 +5523,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return indices;
   }, [timeline, userMsgKindMap]);
 
-  const [activeStickyMsg, setActiveStickyMsg] = useState<{ index: number; content: string; id: string } | null>(null);
+  const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string } | null>(null);
+  const setActiveStickyMsg = useCallback((val: { index: number; content: string; id: string } | null) => {
+    setActiveStickyMsgRaw(prev => {
+      if (prev === val) return prev;
+      if (prev === null || val === null) return val;
+      if (prev.index === val.index && prev.id === val.id && prev.content === val.content) return prev;
+      return val;
+    });
+  }, []);
 
   useEffect(() => {
     const currentIds = new Set(timeline.map(item => {
@@ -5846,6 +5870,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     paddingEnd: 100,
     isScrollingResetDelay: 150,
   });
+
+  scrollToBottomFnRef.current = () => {
+    if (timeline.length > 0) virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+  };
 
   // Fork navigation: message selection (Option+j/k to navigate, Option+f to fork)
   const [selectedMessageContent, setSelectedMessageContent] = useState<string | null>(null);
@@ -6636,7 +6664,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'normal': {
           if (!msg.content?.trim() && !(msg.images && msg.images.length > 0)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} onOpenComments={() => setCommentMessageId(msg._id as Id<"messages">)} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={() => handleToggleMessageSelection(msg._id)} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={msg.message_uuid ? (convId) => handleBranchSwitch(msg.message_uuid!, convId) : undefined} activeBranchId={msg.message_uuid ? activeBranches[msg.message_uuid] : undefined} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -6804,21 +6832,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             >
               &larr;
             </Link>
-            <TooltipProvider delayDuration={500}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1 cursor-default">{truncatedTitle}</h1>
-                </TooltipTrigger>
-                {conversation?.messages?.[0]?.content && (() => {
-                  const cleaned = cleanContent(conversation.messages[0].content);
-                  return cleaned ? (
-                    <TooltipContent side="bottom" className="max-w-sm bg-white text-gray-800 border border-gray-200 shadow-lg text-xs leading-relaxed">
-                      {cleaned.length > 200 ? cleaned.slice(0, 200) + "..." : cleaned}
-                    </TooltipContent>
-                  ) : null;
-                })()}
-              </Tooltip>
-            </TooltipProvider>
+            <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1 cursor-default" title={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}>{truncatedTitle}</h1>
 
             {(managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || (!managedSession?.agent_status && isConversationLive)) && (
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${
@@ -6861,58 +6875,46 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 />
 
                 {conversation.parent_conversation_id && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Link
-                        href={convLink(conversation.parent_conversation_id)}
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
-                      >
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                        </svg>
-                        Parent
-                      </Link>
-                    </TooltipTrigger>
-                    <TooltipContent>View parent conversation</TooltipContent>
-                  </Tooltip>
+                  <Link
+                    href={convLink(conversation.parent_conversation_id)}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+                    title="View parent conversation"
+                  >
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                    </svg>
+                    Parent
+                  </Link>
                 )}
 
                 {conversation.git_branch && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span
-                        className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
-                        onClick={() => {
-                          if (conversation.git_remote_url) {
-                            const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
-                            if (match) {
-                              window.open(`https://github.com/${match[1]}/tree/${conversation.git_branch}`, '_blank');
-                            }
-                          }
-                        }}
-                        style={conversation.git_remote_url ? { cursor: 'pointer' } : undefined}
-                      >
-                        <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-                        </svg>
-                        <span className="truncate">{conversation.git_branch}</span>
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>{conversation.git_branch}</TooltipContent>
-                  </Tooltip>
+                  <span
+                    className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/20 max-w-[150px] cursor-default"
+                    title={conversation.git_branch}
+                    onClick={() => {
+                      if (conversation.git_remote_url) {
+                        const match = conversation.git_remote_url.match(/github\.com[:/](.+?)(?:\.git)?$/);
+                        if (match) {
+                          window.open(`https://github.com/${match[1]}/tree/${conversation.git_branch}`, '_blank');
+                        }
+                      }
+                    }}
+                    style={conversation.git_remote_url ? { cursor: 'pointer' } : undefined}
+                  >
+                    <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                    </svg>
+                    <span className="truncate">{conversation.git_branch}</span>
+                  </span>
                 )}
 
                 {!isOwner && conversation.user?.avatar_url && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <img
-                        src={conversation.user.avatar_url}
-                        alt={conversation.user.name || "User"}
-                        className="w-5 h-5 rounded-full ring-1 ring-sol-border/50"
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent>{conversation.user.name || conversation.user.email || "User"}</TooltipContent>
-                  </Tooltip>
+                  <img
+                    src={conversation.user.avatar_url}
+                    alt={conversation.user.name || "User"}
+                    className="w-5 h-5 rounded-full ring-1 ring-sol-border/50"
+                    title={conversation.user.name || conversation.user.email || "User"}
+                  />
                 )}
 
                 {headerExtra}
@@ -6928,83 +6930,62 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         <span className="text-[10px] opacity-70 ml-1">
                           {currentMatchIndex + 1}/{allMatchingMessageIds.length}
                         </span>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              onClick={goToPrevMatch}
-                              className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
-                            >
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                              </svg>
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent>Previous match</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              onClick={goToNextMatch}
-                              className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
-                            >
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                              </svg>
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent>Next match</TooltipContent>
-                        </Tooltip>
+                        <button
+                          onClick={goToPrevMatch}
+                          className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
+                          title="Previous match"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={goToNextMatch}
+                          className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors"
+                          title="Next match"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
                       </>
                     )}
                     {allMatchingMessageIds.length === 0 && (
                       <span className="text-[10px] opacity-70 ml-1">0 matches</span>
                     )}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={onClearHighlight}
-                          className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors ml-1"
-                        >
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>Clear search</TooltipContent>
-                    </Tooltip>
+                    <button
+                      onClick={onClearHighlight}
+                      className="p-0.5 hover:bg-amber-300/50 dark:hover:bg-amber-700/40 rounded transition-colors ml-1"
+                      title="Clear search"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
                   </div>
                 )}
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={() => { setCollapsed((c) => !c); setExpandedSequences(new Set()); }}
-                      className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${collapsed ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                        {collapsed
-                          ? <><path d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1" /></>
-                          : <><path d="M4 14h6v6M3 21l6.1-6.1M20 10h-6V4M21 3l-6.1 6.1" /></>
-                        }
-                      </svg>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>{collapsed ? "Expand messages" : "Collapse messages"}</TooltipContent>
-                </Tooltip>
+                <button
+                  onClick={() => { setCollapsed((c) => !c); setExpandedSequences(new Set()); }}
+                  className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${collapsed ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
+                  title={collapsed ? "Expand messages" : "Collapse messages"}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    {collapsed
+                      ? <><path d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1" /></>
+                      : <><path d="M4 14h6v6M3 21l6.1-6.1M20 10h-6V4M21 3l-6.1 6.1" /></>
+                    }
+                  </svg>
+                </button>
 
                 <DropdownMenu>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <DropdownMenuTrigger asChild>
-                        <button className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors">
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-                          </svg>
-                        </button>
-                      </DropdownMenuTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent>More options</TooltipContent>
-                  </Tooltip>
+                  <DropdownMenuTrigger asChild>
+                    <button className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors" title="More options">
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                      </svg>
+                    </button>
+                  </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {managedSession?.tmux_session && (
                       <>
@@ -7016,6 +6997,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                       </>
+                    )}
+                    {isOwner && conversation?.session_id && (
+                      <DropdownMenuItem onSelect={() => {
+                        setTimeout(async () => {
+                          try {
+                            await restartSession({ conversation_id: conversation._id });
+                            toast.success("Session restarting...");
+                          } catch { toast.error("Failed to restart session"); }
+                        });
+                      }}>
+                        <svg className="w-3 h-3 mr-1.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Kill & restart
+                      </DropdownMenuItem>
                     )}
                     {conversation?.short_id && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
@@ -7432,7 +7428,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <AgentSwitcher conversation={conversation} />
             </div>
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status as any} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}

@@ -39,7 +39,7 @@ function SignUpForm() {
     setLoading(true);
     setError("");
     try {
-      await signIn("github");
+      await signIn("github", { redirectTo });
     } catch (err) {
       setError("GitHub sign in failed. Please try again.");
       setLoading(false);
@@ -50,7 +50,7 @@ function SignUpForm() {
     setLoading(true);
     setError("");
     try {
-      await signIn("apple");
+      await signIn("apple", { redirectTo });
     } catch (err) {
       setError("Apple sign in failed. Please try again.");
       setLoading(false);
@@ -210,7 +210,7 @@ function SignUpForm() {
           <p className="mt-6 text-center text-sm text-sol-text-muted">
             Already have an account?{" "}
             <Link
-              href="/login"
+              href={returnTo ? `/login?return_to=${encodeURIComponent(returnTo)}` : "/login"}
               className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
             >
               Sign In

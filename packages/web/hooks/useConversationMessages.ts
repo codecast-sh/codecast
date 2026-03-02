@@ -16,6 +16,7 @@ type Message = {
   images?: any[];
   subtype?: string;
   _isOptimistic?: true;
+  _isQueued?: true;
 };
 
 export function useConversationMessages(

@@ -192,7 +192,7 @@ function LoginForm() {
           <p className="mt-6 text-center text-sm text-sol-text-muted">
             Don&apos;t have an account?{" "}
             <Link
-              href="/signup"
+              href={returnTo ? `/signup?return_to=${encodeURIComponent(returnTo)}` : "/signup"}
               className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
             >
               Sign Up

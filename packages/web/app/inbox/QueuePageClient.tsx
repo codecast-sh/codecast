@@ -19,6 +19,21 @@ import { cleanTitle } from "../../lib/conversationProcessor";
 import { SharePopover } from "../../components/SharePopover";
 import { toast } from "sonner";
 
+const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
+
+function cleanUserMessage(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw
+    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+    .replace(/\[Image[:\s][^\]]*\]/gi, "")
+    .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+  if (!cleaned) return null;
+  if (NOISE_PREFIXES.some(p => cleaned.startsWith(p))) return null;
+  return cleaned;
+}
+
 function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
   const minutes = Math.floor(diff / 60000);
@@ -101,12 +116,12 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   const shareControls = (
     <SharePopover
       isPrivate={conversation.is_private !== false}
-      teamVisibility={(conversation as any).team_visibility}
+      teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
       hasShareToken={!!conversation.share_token}
       hasTeam={!!(conversation as any).auto_shared}
       onSetPrivate={async () => { await setPrivacy({ conversation_id: convId, is_private: true }); toast.success("Made private"); }}
       onSetTeamVisibility={async (mode) => { await setTeamVisibility({ conversation_id: convId, team_visibility: mode }); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
-      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); }}
+      onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${window.location.origin}/conversation/${convId}`; }}
       shareUrl={shareUrl}
     />
   );
@@ -162,18 +177,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
         onSendAndAdvance={onSendAndAdvance}
         autoFocusInput
         backHref="/inbox"
-        fallbackStickyContent={(() => {
-          if (!lastUserMessage) return null;
-          const cleaned = lastUserMessage
-            .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
-            .replace(/\[Image[:\s][^\]]*\]/gi, "")
-            .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-            .trim();
-          if (!cleaned) return null;
-          const noisePrefixes = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>"];
-          if (noisePrefixes.some(p => cleaned.startsWith(p))) return null;
-          return cleaned;
-        })()}
+        fallbackStickyContent={cleanUserMessage(lastUserMessage)}
       />
     </div>
   );
@@ -211,6 +215,7 @@ function SessionCard({
   const isSubagent = !!session.is_subagent;
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
+  const cleanedUserMsg = cleanUserMessage(session.last_user_message);
 
   return (
     <div
@@ -267,9 +272,16 @@ function SessionCard({
             </span>
           </div>
         </div>
-        <span className={`text-[11px] truncate block ${
-          isWorking ? "font-semibold text-sol-green" : "font-medium text-sol-cyan"
-        }`}>{project}</span>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-[11px] truncate ${
+            isWorking ? "font-semibold text-sol-green" : "font-medium text-sol-cyan"
+          }`}>{project}</span>
+          {session.message_count > 0 && (
+            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
+              {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
         {session.message_count === 0 && !session.last_user_message && (
           session.is_connected ? (
             <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-green/70">
@@ -290,10 +302,10 @@ function SessionCard({
             </div>
           )
         )}
-        {session.last_user_message && (
-          <div className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug">
+        {cleanedUserMsg && (
+          <div className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug font-semibold">
             <span className="text-sky-600/60 dark:text-sky-400/50 mr-0.5">&gt;</span>
-            {session.last_user_message.replace(/<[^>]+>/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim() || "[image]"}
+            {cleanedUserMsg}
           </div>
         )}
         {(session.idle_summary || session.subtitle) && !session.implementation_session && (

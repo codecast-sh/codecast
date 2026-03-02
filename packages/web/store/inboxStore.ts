@@ -54,6 +54,7 @@ export type Message = {
   images?: any[];
   subtype?: string;
   _isOptimistic?: true;
+  _isQueued?: true;
 };
 
 export type PaginationState = {
@@ -204,6 +205,7 @@ interface InboxStoreState {
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => void;
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => void;
   addOptimisticMessage: (convId: string, content: string, images?: Array<{ media_type: string; storage_id?: string }>) => string;
+  markOptimisticAsQueued: (convId: string, content: string) => void;
   setPagination: (convId: string, update: Partial<PaginationState>) => void;
   initPagination: (convId: string) => void;
 
@@ -376,10 +378,11 @@ export const useInboxStore = create<InboxStoreState>(
       this.sessions[idx].project_path = path;
       this.sessions[idx].git_root = path;
     }
-    if (this.conversations[convId]) {
-      this.conversations[convId].project_path = path;
-      this.conversations[convId].git_root = path;
+    if (!this.conversations[convId]) {
+      this.conversations[convId] = { _id: convId } as any;
     }
+    this.conversations[convId].project_path = path;
+    this.conversations[convId].git_root = path;
   }),
 
   sendMessage: action(function (this: Draft, convId: string, content: string, _imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) {
@@ -621,14 +624,14 @@ export const useInboxStore = create<InboxStoreState>(
 
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => {
     const existing = get().messages[convId] || [];
-    const optimistic = existing.filter((m: Message) => m._isOptimistic);
+    const localMsgs = existing.filter((m: Message) => m._isOptimistic || m._isQueued);
     let finalMsgs = msgs;
-    if (optimistic.length > 0) {
+    if (localMsgs.length > 0) {
       const serverContents = new Set(
         msgs.filter((m: Message) => m.role === "user" && m.content)
           .map((m: Message) => stripImageRef(m.content!))
       );
-      const surviving = optimistic.filter(
+      const surviving = localMsgs.filter(
         (m: Message) => !serverContents.has(stripImageRef(m.content || ""))
       );
       if (surviving.length > 0) {
@@ -679,6 +682,22 @@ export const useInboxStore = create<InboxStoreState>(
       messages: { ...s.messages, [convId]: [...(s.messages[convId] || []), msg] },
     }));
     return id;
+  },
+
+  markOptimisticAsQueued: (convId: string, content: string) => {
+    set((s: InboxStoreState) => {
+      const msgs = s.messages[convId];
+      if (!msgs) return s;
+      const stripped = stripImageRef(content);
+      const updated = msgs.map((m: Message) => {
+        if (m._isOptimistic && m.role === "user" && stripImageRef(m.content || "") === stripped) {
+          const { _isOptimistic, ...rest } = m;
+          return { ...rest, _isQueued: true as const };
+        }
+        return m;
+      });
+      return { messages: { ...s.messages, [convId]: updated } };
+    });
   },
 
   setPagination: (convId: string, update: Partial<PaginationState>) => {

@@ -260,6 +260,32 @@
   .scrollbar-auto:hover::-webkit-scrollbar-thumb {
     background: var(--sol-border);
   }
+
+}
+
+/* Code block scrollbar - always visible, obvious */
+.code-block-scroll {
+  overflow-x: scroll;
+  scrollbar-width: auto;
+  scrollbar-color: #586e75 transparent;
+}
+.code-block-scroll::-webkit-scrollbar {
+  height: 12px;
+}
+.code-block-scroll::-webkit-scrollbar-track {
+  background: rgba(88, 110, 117, 0.15);
+  border-radius: 6px;
+}
+.code-block-scroll::-webkit-scrollbar-thumb {
+  background: #586e75;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.code-block-scroll::-webkit-scrollbar-thumb:hover {
+  background: #93a1a1;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -639,6 +665,31 @@ pre[class*="language-"] {
 
 .message-highlight {
   animation: highlightPulse 1.5s ease-out;
+}
+
+/* Pending message diagonal stripes */
+.pending-stripes {
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sol-blue) 5%, transparent),
+    color-mix(in srgb, var(--sol-blue) 5%, transparent) 6px,
+    color-mix(in srgb, var(--sol-blue) 8%, transparent) 6px,
+    color-mix(in srgb, var(--sol-blue) 8%, transparent) 12px
+  );
+}
+.dark .pending-stripes {
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sol-blue) 6%, transparent),
+    color-mix(in srgb, var(--sol-blue) 6%, transparent) 6px,
+    color-mix(in srgb, var(--sol-blue) 10%, transparent) 6px,
+    color-mix(in srgb, var(--sol-blue) 10%, transparent) 12px
+  );
+}
+
+/* Queued message: confirmed sent, waiting for sync */
+.queued-pulse {
+  border-style: dashed;
 }
 
 /* WKWebView fix: force resize cursor on panel handles */

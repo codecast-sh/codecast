@@ -120,22 +120,42 @@ function OwnerView({
   const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
 
+  const [optimisticShare, setOptimisticShare] = useState<{ isPrivate?: boolean; teamVisibility?: string | null } | null>(null);
+
+  useEffect(() => {
+    if (optimisticShare && conversation) {
+      const serverVis = conversation.team_visibility || conversation.effective_team_visibility;
+      const serverMatches =
+        (optimisticShare.isPrivate === undefined || (conversation.is_private !== false) === optimisticShare.isPrivate) &&
+        (optimisticShare.teamVisibility === undefined || serverVis === optimisticShare.teamVisibility);
+      if (serverMatches) setOptimisticShare(null);
+    }
+  }, [conversation?.is_private, conversation?.team_visibility, conversation?.effective_team_visibility, optimisticShare]);
+
+  const effectiveIsPrivate = optimisticShare?.isPrivate !== undefined ? optimisticShare.isPrivate : (conversation?.is_private !== false);
+  const effectiveTeamVisibility = optimisticShare?.teamVisibility !== undefined
+    ? optimisticShare.teamVisibility
+    : (conversation?.team_visibility || conversation?.effective_team_visibility);
+
   const shareUrl = conversation?.share_token
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/conversation/${id}`
     : null;
 
   const handleSetPrivate = async () => {
+    setOptimisticShare({ isPrivate: true, teamVisibility: "private" });
     await setPrivacy({ conversation_id: id as Id<"conversations">, is_private: true });
     toast.success("Made private");
   };
 
   const handleSetTeamVisibility = async (mode: "summary" | "full") => {
+    setOptimisticShare({ isPrivate: false, teamVisibility: mode });
     await setTeamVisibility({ conversation_id: id as Id<"conversations">, team_visibility: mode });
     toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team");
   };
 
   const handleGenerateShareLink = async () => {
     await generateShareLink({ conversation_id: id as Id<"conversations"> });
+    return `${window.location.origin}/conversation/${id}`;
   };
 
   useEffect(() => {
@@ -156,8 +176,8 @@ function OwnerView({
 
   const shareControls = conversation && isOwner ? (
     <SharePopover
-      isPrivate={conversation.is_private !== false}
-      teamVisibility={conversation.team_visibility}
+      isPrivate={effectiveIsPrivate}
+      teamVisibility={effectiveTeamVisibility}
       hasShareToken={!!conversation.share_token}
       hasTeam={!!(conversation as any).auto_shared}
       onSetPrivate={handleSetPrivate}

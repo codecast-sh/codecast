@@ -136,7 +136,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const markTeamSeen = useMutation(api.conversations.markTeamConversationsSeen);
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
   const activeSessions = useQuery(api.conversations.listIdleSessions, {});
-  const idleCount = activeSessions?.filter((s: any) => s.is_idle).length ?? 0;
+  const needsInputCount = activeSessions?.filter((s: any) => s.is_idle && s.message_count > 0).length ?? 0;
   const openNewSession = useInboxStore((s) => s.openNewSession);
 
   useEffect(() => {
@@ -265,9 +265,9 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
             {!isNarrow && (
               <>
                 <span>Inbox</span>
-                {idleCount > 0 && (
-                  <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-xs font-semibold bg-sol-orange text-sol-bg rounded-full">
-                    {idleCount}
+                {needsInputCount > 0 && (
+                  <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
+                    {needsInputCount}
                   </span>
                 )}
               </>
