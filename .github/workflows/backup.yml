@@ -5,6 +5,10 @@ on:
     - cron: '0 10 * * *' # 3 AM PT / 10 AM UTC
   workflow_dispatch: # manual trigger
 
+env:
+  R2_BUCKET: codecast
+  R2_ENDPOINT: https://518bafbd08199d43fe9080a12a7ac1b7.r2.cloudflarestorage.com
+
 jobs:
   backup:
     runs-on: ubuntu-latest
@@ -25,9 +29,33 @@ jobs:
           CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ secrets.CONVEX_ADMIN_KEY }}
         run: npx convex export --path /tmp/convex-backup.zip
 
-      - name: Upload backup artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: convex-backup-${{ github.run_id }}
-          path: /tmp/convex-backup.zip
-          retention-days: 30
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          aws s3 cp /tmp/convex-backup.zip \
+            "s3://$R2_BUCKET/backups/convex-$DATE.zip" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --quiet
+          echo "Uploaded: backups/convex-$DATE.zip ($(du -h /tmp/convex-backup.zip | cut -f1))"
+
+      - name: Rotate old backups
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          CUTOFF=$(date -u -d '30 days ago' +%Y-%m-%d)
+          aws s3 ls "s3://$R2_BUCKET/backups/" --endpoint-url "$R2_ENDPOINT" | while read -r line; do
+            FILE=$(echo "$line" | awk '{print $4}')
+            FILE_DATE=$(echo "$FILE" | grep -oP '\d{4}-\d{2}-\d{2}')
+            if [[ -n "$FILE_DATE" && "$FILE_DATE" < "$CUTOFF" ]]; then
+              echo "Deleting old backup: $FILE"
+              aws s3 rm "s3://$R2_BUCKET/backups/$FILE" --endpoint-url "$R2_ENDPOINT" --quiet
+            fi
+          done
+          echo "Current backups:"
+          aws s3 ls "s3://$R2_BUCKET/backups/" --endpoint-url "$R2_ENDPOINT"
