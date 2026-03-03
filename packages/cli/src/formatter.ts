@@ -590,9 +590,14 @@ export function formatListResults(result: ListResult, options: ListOptions = {})
     const date = formatDate(conv.updated_at);
     const link = `https://codecast.sh/conversation/${conv.id}`;
 
-    lines.push(`${c.cyan}${id}${c.reset}  ${c.bold}${conv.title}${c.reset}`);
-    lines.push(`${c.dim}${date}${c.reset}   ${conv.subtitle ? conv.subtitle : ""}`);
-    lines.push(`        ${c.blue}${c.underline}${link}${c.reset}`);
+    const time = formatRelativeTime(conv.updated_at);
+    const col = 12;
+    const indent = " ".repeat(col);
+    const timePad = " ".repeat(Math.max(1, col - time.length));
+    const idPad = " ".repeat(Math.max(1, col - id.length));
+    lines.push(`${c.dim}${time}${c.reset}${timePad}${c.bold}${conv.title}${c.reset}`);
+    lines.push(`${c.cyan}${id}${c.reset}${idPad}${conv.subtitle ? `${c.dim}${conv.subtitle}${c.reset}` : ""}`);
+    lines.push(`${indent}${c.blue}${c.underline}${link}${c.reset}`);
     lines.push("");
   }
 
