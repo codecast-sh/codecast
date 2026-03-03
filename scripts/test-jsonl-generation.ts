@@ -164,7 +164,7 @@ function generateClaudeCodeJsonl(data: ExportResult): string {
         version: "2.1.29",
         gitBranch: "main",
         message: {
-          model: data.conversation.model || "claude-opus-4-5-20251101",
+          model: data.conversation.model || "claude-opus-4-6-20260205",
           id: msgId,
           type: "message",
           role: "assistant",

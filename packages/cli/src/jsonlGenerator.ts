@@ -453,7 +453,7 @@ export function generateClaudeCodeJsonl(
         parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
         version: "2.1.29", gitBranch: "main",
         message: {
-          model: data.conversation.model || "claude-opus-4-5-20251101",
+          model: data.conversation.model || "claude-opus-4-6-20260205",
           id: msgId, type: "message", role: "assistant", content: contentBlocks,
           stop_reason: "end_turn", stop_sequence: null,
           usage: { input_tokens: 1000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 500, service_tier: "standard" },

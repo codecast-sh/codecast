@@ -2629,6 +2629,12 @@ function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "cod
           }).catch(() => {
             syncServiceRef!.registerManagedSession(sessionId, result.pid, undefined, conversationId).catch(() => {});
           });
+          if (!resumeHeartbeatIntervals.has(sessionId)) {
+            const interval = setInterval(() => {
+              syncServiceRef!.heartbeatManagedSession(sessionId).catch(() => {});
+            }, 30000);
+            resumeHeartbeatIntervals.set(sessionId, interval);
+          }
         }
       }
     }).catch(() => {});

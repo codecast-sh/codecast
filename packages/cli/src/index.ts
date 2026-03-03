@@ -6343,7 +6343,7 @@ program
     let llmSearchTerms: string[] = [];
     try {
       const expansion = await anthropic.messages.create({
-        model: "claude-3-5-haiku-latest",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 128,
         temperature: 0.2,
         messages: [
@@ -6542,7 +6542,7 @@ Question: ${query}`,
 
       // Call Haiku for RAG
       const response = await anthropic.messages.create({
-        model: "claude-3-5-haiku-latest",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 1024,
         messages: [
           {
