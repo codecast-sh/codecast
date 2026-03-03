@@ -329,7 +329,7 @@ export function DiffView({
 
   return (
     <div className="code-block-resizable group font-mono text-[13px] leading-[22px]">
-      <div className="code-block-scroll">
+      <div className="cb-hscroll">
         <div className="min-w-fit">
         {displayItems.map((item, i) => {
           if (item.type === 'separator') {

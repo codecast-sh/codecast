@@ -427,7 +427,7 @@ function InboxSessionPanel({
     sessions.findIndex((s) => s._id === session._id);
 
   return (
-    <div className="h-full w-full flex flex-col bg-sol-bg-alt border-l border-sol-border/50 overflow-hidden">
+    <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       <div className="px-3 py-3 border-b border-sol-border/50 flex-shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
@@ -914,7 +914,7 @@ export function QueuePageClient() {
           <Panel id="inbox-main" defaultSize="76%" minSize="30%">
             {inboxContent}
           </Panel>
-          <Separator className="relative w-1 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
+          <Separator className="relative w-px bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
           <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
             <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={dismissedSessions} />
           </Panel>

@@ -263,30 +263,22 @@
 
 }
 
-/* Code block scrollbar - always visible, obvious */
-.code-block-scroll {
+/* Code block horizontal scrollbar - always visible, solarized */
+.cb-hscroll {
   overflow-x: scroll;
-  scrollbar-width: auto;
-  scrollbar-color: #586e75 transparent;
 }
-.code-block-scroll::-webkit-scrollbar {
-  height: 12px;
+.cb-hscroll::-webkit-scrollbar {
+  height: 8px;
   display: block;
 }
-.code-block-scroll::-webkit-scrollbar-track {
-  background: rgba(88, 110, 117, 0.15);
-  border-radius: 6px;
+.cb-hscroll::-webkit-scrollbar-track {
+  background: var(--sol-bg-highlight);
 }
-.code-block-scroll::-webkit-scrollbar-thumb {
-  background: #586e75;
-  border-radius: 6px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+.cb-hscroll::-webkit-scrollbar-thumb {
+  background: var(--sol-border);
 }
-.code-block-scroll::-webkit-scrollbar-thumb:hover {
-  background: #93a1a1;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+.cb-hscroll::-webkit-scrollbar-thumb:hover {
+  background: var(--sol-text-muted0);
 }
 
 @media (prefers-reduced-motion: reduce) {

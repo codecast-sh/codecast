@@ -555,6 +555,55 @@ export function formatSummary(result: SummaryResult): string {
   return lines.join("\n");
 }
 
+interface ListConversation {
+  id: string;
+  title: string;
+  subtitle: string | null;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+}
+
+interface ListResult {
+  conversations: ListConversation[];
+  scope: string;
+}
+
+interface ListOptions {
+  projectPath?: string;
+  page?: number;
+}
+
+export function formatListResults(result: ListResult, options: ListOptions = {}): string {
+  const lines: string[] = [];
+
+  if (result.conversations.length === 0) {
+    lines.push("No sessions found.");
+    if (options.projectPath) {
+      lines.push(`Use -g to view all sessions globally.`);
+    }
+    return lines.join("\n");
+  }
+
+  for (const conv of result.conversations) {
+    const id = truncateId(conv.id);
+    const date = formatDate(conv.updated_at);
+    const link = `https://codecast.sh/conversation/${conv.id}`;
+
+    lines.push(`${c.cyan}${id}${c.reset}  ${date}  ${conv.title}`);
+    if (conv.subtitle) {
+      lines.push(`        ${c.dim}${conv.subtitle}${c.reset}`);
+    }
+    lines.push(`        ${c.dim}${link}${c.reset}`);
+    lines.push("");
+  }
+
+  const page = options.page ?? 1;
+  lines.push(`${c.dim}Page ${page}. Next: codecast list -p ${page + 1}${c.reset}`);
+
+  return lines.join("\n");
+}
+
 export function formatFeedResults(result: FeedResult, options: FeedOptions = {}): string {
   const lines: string[] = [];
 

@@ -3121,6 +3121,81 @@ program
     }
   });
 
+program
+  .command("list")
+  .description(
+    "Chronological list of sessions with title, summary, and link\n\n" +
+    "Examples:\n" +
+    "  codecast list                    # recent sessions\n" +
+    "  codecast list -g                 # all projects\n" +
+    "  codecast list -n 20              # show 20 sessions\n" +
+    "  codecast list -s 7d              # last 7 days"
+  )
+  .option("-g, --global", "Show all sessions (not just current project)")
+  .option("-n, --limit <n>", "Number of sessions to show", "10")
+  .option("-p, --page <n>", "Page number", "1")
+  .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
+  .option("-e, --end <date>", "End date/time")
+  .action(async (options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: codecast auth");
+      process.exit(1);
+    }
+
+    const limit = parseInt(options.limit);
+    const page = parseInt(options.page);
+    const offset = (page - 1) * limit;
+    const projectPath = options.global ? undefined : getRealCwd();
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    let startTime: number | undefined;
+    let endTime: number | undefined;
+
+    if (options.start) {
+      startTime = parseRelativeDate(options.start) ?? undefined;
+      if (!startTime) {
+        console.error(`Invalid start date: ${options.start}`);
+        process.exit(1);
+      }
+    }
+    if (options.end) {
+      endTime = parseRelativeDate(options.end) ?? undefined;
+      if (!endTime) {
+        console.error(`Invalid end date: ${options.end}`);
+        process.exit(1);
+      }
+    }
+
+    try {
+      const response = await fetch(`${siteUrl}/cli/feed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          limit,
+          offset,
+          start_time: startTime,
+          end_time: endTime,
+          project_path: projectPath,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error(`Error: ${result.error}`);
+        process.exit(1);
+      }
+
+      const { formatListResults } = await import("./formatter.js");
+      console.log(formatListResults(result, { projectPath, page }));
+    } catch (error) {
+      console.error("List failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
 interface LiveProcess {
   pid: number;
   tty: string;
