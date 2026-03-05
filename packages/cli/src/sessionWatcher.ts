@@ -136,6 +136,12 @@ export class SessionWatcher extends EventEmitter {
     }
   }
 
+  restart(): void {
+    this.stop();
+    this.watcher = null;
+    this.start();
+  }
+
   private handleFileEvent(filePath: string, eventType: "add" | "change"): void {
     const sessionId = this.extractSessionId(filePath);
     const projectPath = this.extractProjectPath(filePath);

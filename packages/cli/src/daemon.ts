@@ -31,6 +31,7 @@ import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate } from "./update.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { TaskScheduler } from "./taskScheduler.js";
+import { hasTmux } from "./tmux.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -43,6 +44,7 @@ import {
 const _execAsync = promisify(exec);
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const execAsync: typeof _execAsync = (cmd, opts?) => _execAsync(cmd, { ...opts as any, env: { ...process.env, PATH: ENRICHED_PATH, ...(opts as any)?.env } });
+
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -121,6 +123,7 @@ interface DaemonState {
   lastWatchdogCheck?: number;
   watchdogRestarts?: number;
   lastHeartbeatTick?: number;
+  runtimeVersion?: string;
 }
 
 const AUTH_FAILURE_THRESHOLD = 5;
@@ -269,7 +272,6 @@ const syncStats = {
 };
 
 let lastWatcherEventTime = Date.now();
-let lastWatcherIdleLogTime = 0;
 
 const HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -303,6 +305,19 @@ function logError(message: string, error?: Error, sessionId?: string): void {
 
 function logWarn(message: string, sessionId?: string): void {
   log(message, "warn", { session_id: sessionId });
+}
+
+function logDelivery(message: string, metadata?: RemoteLog["metadata"]): void {
+  log(message, "info", metadata);
+  remoteLogQueue.push({
+    level: "info",
+    message: `[DELIVERY] ${message.slice(0, 2000)}`,
+    metadata,
+    timestamp: Date.now(),
+  });
+  if (remoteLogQueue.length > MAX_LOG_QUEUE_SIZE) {
+    remoteLogQueue.shift();
+  }
 }
 
 function logLifecycle(event: string, details?: string): void {
@@ -374,6 +389,7 @@ async function sendHeartbeat(): Promise<void> {
         platform,
         pid: process.pid,
         autostart_enabled: isAutostartEnabled(),
+        has_tmux: hasTmux(),
       }),
     });
 
@@ -518,13 +534,7 @@ async function executeRemoteCommand(
         setTimeout(async () => {
           const success = await performUpdate();
           if (success) {
-            const newVersion = getVersion();
-            if (compareVersions(newVersion, currentVersion) <= 0) {
-              logLifecycle("update_noop", `v${currentVersion} -> v${newVersion}, requested version not available`);
-              await flushRemoteLogs();
-              return;
-            }
-            logLifecycle("update_complete", `Updated from v${currentVersion} to v${newVersion}`);
+            logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
             await flushRemoteLogs();
             log("Update successful, restarting...");
             const spawned = spawnReplacement();
@@ -601,6 +611,11 @@ async function executeRemoteCommand(
         const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; ${shellCmd}`;
         const execPath = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
         const execOpts = { timeout: 5000, env: { ...process.env, PATH: execPath } };
+
+        if (!hasTmux()) {
+          error = "tmux is not installed";
+          break;
+        }
 
         try {
           execSync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
@@ -2612,22 +2627,18 @@ interface ActiveSession {
   projectPath: string;
 }
 
+let reconnectAttempt = 0;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
 
-class ReconnectBackoff {
-  private attempt = 0;
-  getDelay(): number {
-    const delay = Math.min(BASE_DELAY_MS * Math.pow(2, this.attempt), MAX_DELAY_MS);
-    this.attempt++;
-    return delay;
-  }
-  reset(): void {
-    this.attempt = 0;
-  }
-  get attempts(): number {
-    return this.attempt;
-  }
+function getReconnectDelay(): number {
+  const delay = Math.min(BASE_DELAY_MS * Math.pow(2, reconnectAttempt), MAX_DELAY_MS);
+  reconnectAttempt++;
+  return delay;
+}
+
+function resetReconnectDelay(): void {
+  reconnectAttempt = 0;
 }
 
 interface ClaudeSessionInfo {
@@ -2979,6 +2990,7 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
 }
 
 async function findTmuxPaneForTty(tty: string): Promise<string | null> {
+  if (!hasTmux()) return null;
   try {
     const { stdout } = await execAsync("tmux list-panes -a -F '#{pane_tty} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null");
     const normalizedTty = normalizeTty(tty);
@@ -3520,9 +3532,13 @@ function slugify(text: string, maxLen = 30): string {
 }
 
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, nonInteractive = false, cwdOverride?: string, conversationId?: string): Promise<boolean> {
+  if (!hasTmux()) {
+    logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
+    return false;
+  }
   const sessionFile = findSessionFile(sessionId);
   if (!sessionFile) {
-    log(`Cannot auto-resume: session file not found for ${sessionId.slice(0, 8)}`);
+    logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found`);
     return false;
   }
 
@@ -3580,7 +3596,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       fs.writeFileSync(tmpFile, content);
       const nonInteractiveCmd = `env -u CLAUDECODE ${resumeCmd} -p "$(cat '${tmpFile}')" --output-format stream-json --verbose; rm -f '${tmpFile}'`;
       await execAsync(`tmux send-keys -t '${tmuxSession}' '${nonInteractiveCmd.replace(/'/g, "'\\''")}'  Enter`);
-      log(`Auto-resumed ${agentType} session ${shortId} in tmux ${tmuxSession} (non-interactive), cwd=${cwd}`);
+      logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} (non-interactive) cwd=${cwd}`);
       resumeSessionCache.set(sessionId, tmuxSession);
       if (syncServiceRef) {
         syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {});
@@ -3593,7 +3609,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
     const safeResumeCmd = `env -u CLAUDECODE ${resumeCmd}`;
     await execAsync(`tmux send-keys -t '${tmuxSession}' '${safeResumeCmd.replace(/'/g, "'\\''")}'  Enter`);
 
-    log(`Auto-resumed ${agentType} session ${shortId} in tmux ${tmuxSession}, cwd=${cwd}, cmd=${resumeCmd}`);
+    logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
 
     // Register managed session early so the web UI can show "Connected" status
     resumeSessionCache.set(sessionId, tmuxSession);
@@ -3633,19 +3649,19 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       try {
         const { stdout: paneContent } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
         if (fatalErrors.some(e => paneContent.includes(e))) {
-          log(`Auto-resume verification failed for ${shortId}: agent did not start. Pane: ${paneContent.slice(0, 300)}`);
+          logDelivery(`Auto-resume FATAL for ${shortId}: agent crashed. Pane: ${paneContent.slice(0, 300)}`);
           try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
           return false;
         }
         if (promptPattern.test(paneContent) && await isTmuxAgentAlive(tmuxSession)) {
-          log(`Agent ${shortId} ready (prompt visible) after ${Date.now() - startTime}ms`);
+          logDelivery(`Agent ${shortId} ready (prompt visible) after ${Date.now() - startTime}ms`);
           ready = true;
           break;
         }
       } catch {}
     }
     if (!ready) {
-      log(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
+      logDelivery(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
     }
 
     // Inject the message (skip if empty — resume-only mode)
@@ -3658,7 +3674,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
 
     return true;
   } catch (err) {
-    log(`Auto-resume failed for ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
+    logDelivery(`Auto-resume EXCEPTION ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }
@@ -3885,7 +3901,7 @@ async function materializeSession(
 
   const config = readConfig();
   if (!config?.convex_url || !config?.auth_token) {
-    log(`Cannot materialize session: missing convex_url or auth_token`);
+    logDelivery(`Cannot materialize: missing convex_url or auth_token`);
     return null;
   }
 
@@ -3893,10 +3909,10 @@ async function materializeSession(
 
   const promise = (async (): Promise<string | null> => {
     try {
-      log(`Materializing session for conversation ${conversationId.slice(0, 12)}...`);
+      logDelivery(`Materializing session for conv=${conversationId.slice(0, 12)}...`);
       const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
       if (exportData.messages.length === 0) {
-        log(`Materialization skipped for ${conversationId.slice(0, 12)}: conversation has 0 messages`);
+        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages`);
         return null;
       }
 
@@ -3918,10 +3934,10 @@ async function materializeSession(
         syncService.updateSessionId(conversationId, sessionId).catch(() => {});
       }
 
-      log(`Materialized session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} (${exportData.messages.length} messages, tail=${tailMessages})`);
+      logDelivery(`Materialized session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
       return sessionId;
     } catch (err) {
-      log(`Failed to materialize session for ${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+      logDelivery(`Materialization FAILED for ${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
       materializeFailures.set(conversationId, Date.now());
       return null;
     } finally {
@@ -3957,9 +3973,11 @@ async function deliverMessage(
   messageId: string,
   titleCache: TitleCache
 ): Promise<boolean> {
+  logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
+
   const childConvId = planHandoffChildren.get(conversationId);
   if (childConvId) {
-    log(`Redirecting message from plan parent ${conversationId.slice(0, 12)} to child ${childConvId.slice(0, 12)}`);
+    logDelivery(`Redirecting message from plan parent ${conversationId.slice(0, 12)} to child ${childConvId.slice(0, 12)}`);
     return deliverMessage(childConvId, content, conversationCache, syncService, messageId, titleCache);
   }
 
@@ -3967,6 +3985,7 @@ async function deliverMessage(
   let sessionId = reverseCache[conversationId];
 
   if (!sessionId) {
+    logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, trying fallback strategies`);
     // Try delivering via a recently started tmux session (from start_session command)
     const tryStartedTmux = async (entry: { tmuxSession: string }): Promise<boolean> => {
       try {
@@ -4024,7 +4043,7 @@ async function deliverMessage(
       log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
       sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
       if (!sessionId) {
-        log(`Cannot deliver: no local session and materialization failed for ${conversationId}`);
+        logDelivery(`Cannot deliver: no local session and materialization failed for conv=${conversationId.slice(0, 12)}`);
         return false;
       }
     }
@@ -4036,7 +4055,7 @@ async function deliverMessage(
 
   // Cursor is an IDE, not a terminal process - can't inject
   if (isCursorSession) {
-    log(`Session ${sessionId.slice(0, 20)} is a Cursor session, skipping delivery`);
+    logDelivery(`Session ${sessionId.slice(0, 20)} is Cursor IDE, cannot inject - skipping`);
     return false;
   }
 
@@ -4047,15 +4066,16 @@ async function deliverMessage(
     if (sessionFile) detectedType = sessionFile.agentType;
   }
 
-  log(`Delivering message to session ${sessionId.slice(0, 12)} (conversation ${conversationId.slice(0, 12)}, type=${detectedType})`);
+  logDelivery(`Delivering to session=${sessionId.slice(0, 12)} conv=${conversationId.slice(0, 12)} type=${detectedType}`);
 
   // Check if we have a cached tmux target from a previous auto-resume
   const cachedTmux = resumeSessionCache.get(sessionId);
   if (cachedTmux) {
+    logDelivery(`Found cached tmux=${cachedTmux} for session=${sessionId.slice(0, 12)}`);
     try {
       await execAsync(`tmux has-session -t '${cachedTmux}' 2>/dev/null`);
       if (!(await isTmuxAgentAlive(cachedTmux))) {
-        log(`Cached tmux ${cachedTmux} has no live agent process, clearing cache`);
+        logDelivery(`Cached tmux ${cachedTmux} has no live agent, clearing cache`);
         resumeSessionCache.delete(sessionId);
         stopCodexPermissionPoller(sessionId);
         const hbInterval = resumeHeartbeatIntervals.get(sessionId);
@@ -4078,49 +4098,58 @@ async function deliverMessage(
   // Skip process matching for materialized sessions - they have no running process
   // and CWD+timing heuristics can false-positive match other sessions
   const isMaterialized = materializedSessions.has(sessionId);
+  logDelivery(`Finding process: materialized=${isMaterialized} session=${sessionId.slice(0, 12)}`);
   const proc = isMaterialized ? null : await findSessionProcess(sessionId, detectedType);
 
   if (proc) {
+    logDelivery(`Found process pid=${proc.pid} tty=${proc.tty} for session=${sessionId.slice(0, 12)}`);
     // Verify the process is still an agent (not a leftover shell)
     if (!isAgentProcess(proc.pid)) {
-      log(`Process ${proc.pid} for session ${sessionId.slice(0, 8)} is no longer an agent, clearing cache`);
+      logDelivery(`Process ${proc.pid} is no longer an agent process, clearing cache`);
       sessionProcessCache.delete(sessionId);
     } else {
       // Try tmux first (most reliable)
       const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+      logDelivery(`tmux pane for tty=${proc.tty}: ${tmuxTarget ?? "not found"}`);
       if (tmuxTarget) {
         try {
           await injectViaTmux(tmuxTarget, content);
           await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+          logDelivery(`Delivered via tmux ${tmuxTarget}`);
           return true;
         } catch (err) {
-          log(`tmux injection failed: ${err instanceof Error ? err.message : String(err)}`);
+          logDelivery(`tmux injection failed for ${tmuxTarget}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
       // Try iTerm2 AppleScript
+      logDelivery(`Trying iTerm2 injection for tty=${proc.tty}`);
       try {
         await injectViaIterm(proc.tty, content);
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+        logDelivery(`Delivered via iTerm2 tty=${proc.tty}`);
         return true;
       } catch (err) {
-        log(`iTerm2 injection failed: ${err instanceof Error ? err.message : String(err)}`);
+        logDelivery(`iTerm2 injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
       }
 
-      // All injection methods failed on a live process - fall back to auto-resume
-      log(`All injection methods failed for active session ${sessionId.slice(0, 12)}, falling back to auto-resume`);
+      logDelivery(`All injection methods failed for live process pid=${proc.pid}, falling back to auto-resume`);
     }
   } else {
-    log(`No running process for session ${sessionId.slice(0, 12)}`);
+    logDelivery(`No running process found for session=${sessionId.slice(0, 12)} type=${detectedType}`);
   }
 
   // Last resort: auto-resume in a new tmux session
-  log(`Attempting auto-resume for session ${sessionId.slice(0, 8)}`);
+  const tmuxAvailable = hasTmux();
+  logDelivery(`Attempting auto-resume: session=${sessionId.slice(0, 8)} tmux=${tmuxAvailable}`);
+  if (!tmuxAvailable) {
+    logDelivery(`CANNOT auto-resume: tmux is not installed. Install with: brew install tmux`);
+  }
   const resumed = await autoResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
   if (resumed) {
     materializedSessions.delete(sessionId);
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-    // Schedule non-blocking health check
+    logDelivery(`Delivered via auto-resume for session=${sessionId.slice(0, 8)}`);
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -4128,17 +4157,19 @@ async function deliverMessage(
   }
 
   // Auto-resume failed - try repair (regenerate JSONL from Convex)
-  log(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
+  logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
   const repaired = await repairAndResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
   if (repaired) {
     materializedSessions.delete(sessionId);
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+    logDelivery(`Delivered via repair+resume for session=${sessionId.slice(0, 8)}`);
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
     return true;
   }
 
+  logDelivery(`DELIVERY FAILED: all methods exhausted for session=${sessionId.slice(0, 8)} conv=${conversationId.slice(0, 12)}`);
   return false;
 }
 
@@ -4224,6 +4255,7 @@ function isProcessRunning(pid: number): boolean {
 }
 
 async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
+  if (!hasTmux()) return false;
   try {
     const { stdout } = await execAsync(
       `tmux list-panes -t '${tmuxSession}' -F '#{pane_pid}' 2>/dev/null`
@@ -4665,6 +4697,7 @@ interface WatchdogDependencies {
   pendingMessages: PendingMessages;
   titleCache: TitleCache;
   updateState: () => void;
+  watcher: SessionWatcher;
 }
 
 function compareVersions(a: string, b: string): number {
@@ -4690,13 +4723,7 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
       await flushRemoteLogs();
       const success = await performUpdate();
       if (success) {
-        const newVersion = getVersion();
-        if (compareVersions(newVersion, currentVersion) <= 0) {
-          logLifecycle("forced_update_noop", `${currentVersion} -> ${newVersion}, target ${minVersion} not available yet`);
-          await flushRemoteLogs();
-          return false;
-        }
-        logLifecycle("forced_update_complete", `${currentVersion} -> ${newVersion}`);
+        logLifecycle("forced_update_complete", `Binary replaced from v${currentVersion}, target>=${minVersion}`);
         await flushRemoteLogs();
         spawnReplacement();
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -4754,9 +4781,8 @@ function startEventLoopMonitor(): NodeJS.Timeout {
     saveDaemonState({ lastHeartbeatTick: now });
 
     if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
-      logLifecycle("event_loop_freeze", `Event loop was unresponsive for ${Math.round(elapsed / 1000)}s, exiting for restart`);
-      try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [CRITICAL] Event loop lag ${elapsed}ms exceeded threshold, self-terminating\n`); } catch {}
-      process.exit(78);
+      logLifecycle("wake_detected", `System was suspended for ${Math.round(elapsed / 1000)}s, recovering`);
+      lastWatcherEventTime = 0;
     }
   }, EVENT_LOOP_CHECK_INTERVAL_MS);
 }
@@ -4866,12 +4892,17 @@ function startWatchdog(
       }
     }
 
-    // Check for watcher staleness - only log once per hour to avoid noise
+    // Check for watcher staleness and restart if idle too long
     const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);
-    const minutesSinceLastIdleLog = Math.floor((now - lastWatcherIdleLogTime) / 60000);
-    if (watcherIdleMinutes >= 30 && minutesSinceLastIdleLog >= 60) {
-      logWarn(`Watcher idle for ${watcherIdleMinutes}min`);
-      lastWatcherIdleLogTime = now;
+    if (watcherIdleMinutes >= 5) {
+      log(`Watcher idle for ${watcherIdleMinutes}min, restarting`);
+      try {
+        deps.watcher.restart();
+        lastWatcherEventTime = now;
+        log(`Watcher restarted successfully`);
+      } catch (err) {
+        logError("Failed to restart watcher", err instanceof Error ? err : new Error(String(err)));
+      }
     }
 
     const staleClaudeFiles = findStaleSessionFiles();
@@ -5093,7 +5124,7 @@ async function main(): Promise<void> {
     log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
   }
 
-  saveDaemonState({ connected: false });
+  saveDaemonState({ connected: false, runtimeVersion: getVersion() });
 
   const { config, convexUrl } = await waitForConfig();
   activeConfig = config;
@@ -5113,6 +5144,15 @@ async function main(): Promise<void> {
     userId: config.user_id,
   });
   syncServiceRef = syncService;
+
+  // Check for forced updates immediately on startup before anything else
+  // This allows recovery from broken versions by downloading a fix early
+  try {
+    const didUpdate = await checkForForcedUpdate(syncService);
+    if (didUpdate) return; // process.exit already called inside
+  } catch (err) {
+    log(`Startup update check failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Repair any project paths that were stored incorrectly (one-time on startup)
   repairProjectPaths(syncService).catch(err => {
@@ -5560,6 +5600,7 @@ async function main(): Promise<void> {
     pendingMessages,
     titleCache,
     updateState,
+    watcher,
   });
 
   const versionCheckInterval = startVersionChecker(syncService);
@@ -5801,21 +5842,21 @@ async function main(): Promise<void> {
   ) {
     if (messageRetryTimers.has(messageId)) return;
     if (retryCount >= 10) {
-      log(`Message ${messageId.slice(0, 8)} exceeded max retries, marking undeliverable`);
+      logDelivery(`msg=${messageId.slice(0, 8)} exceeded max retries (10), marking undeliverable`);
       syncService.updateMessageStatus({ messageId, status: "undeliverable" as any }).catch(() => {});
       return;
     }
     const delays = [1000, 5000, 15000, 30000, 60000];
     const delay = delays[Math.min(retryCount, delays.length - 1)];
-    log(`Scheduling retry ${retryCount + 1} for message ${messageId.slice(0, 8)} in ${delay / 1000}s`);
+    logDelivery(`Scheduling retry ${retryCount + 1}/10 for msg=${messageId.slice(0, 8)} in ${delay / 1000}s`);
     messageRetryTimers.add(messageId);
     setTimeout(async () => {
       messageRetryTimers.delete(messageId);
       try {
         await syncService.retryMessage(messageId);
-        log(`Retry triggered for message ${messageId.slice(0, 8)} (count: ${retryCount + 1})`);
+        logDelivery(`Retry ${retryCount + 1} triggered for msg=${messageId.slice(0, 8)}`);
       } catch (err) {
-        log(`Failed to trigger retry for ${messageId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+        logDelivery(`Retry trigger failed for msg=${messageId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }, delay);
   }
@@ -5824,29 +5865,28 @@ async function main(): Promise<void> {
 
   const setupSubscription = () => {
     try {
-      log("Setting up pending messages subscription");
+      logDelivery("Setting up pending messages subscription");
       unsubscribe = subscriptionClient.onUpdate(
         "pendingMessages:getPendingMessages" as any,
         { user_id: config.user_id, api_token: config.auth_token },
         async (messages: any) => {
-          log(`Subscription update received: ${JSON.stringify(messages)?.slice(0, 500)}`);
-
           if (!messages) {
-            log("No messages in update");
             return;
           }
 
           if (Array.isArray(messages)) {
-            log(`Received array with ${messages.length} pending message(s)`);
+            if (messages.length > 0) {
+              logDelivery(`Subscription: ${messages.length} pending message(s) received`);
+            }
             for (const msg of messages) {
               if (messagesInFlight.has(msg._id)) {
-                log(`Skipping message ${msg._id} - delivery already in flight`);
+                logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight`);
                 continue;
               }
               messagesInFlight.add(msg._id);
 
               const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
-              log(`Pending message: conversation_id=${msg.conversation_id} content="${msg.content.slice(0, 100)}" images=${imageIds.length}`);
+              logDelivery(`Processing: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} content="${msg.content.slice(0, 80)}" images=${imageIds.length} retry=${msg.retry_count ?? 0}`);
 
               let messageContent = msg.content;
               if (imageIds.length > 0) {
@@ -5881,14 +5921,14 @@ async function main(): Promise<void> {
                   titleCache
                 );
                 if (delivered) {
-                  log(`Message delivered successfully`);
+                  logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} delivered`);
                 } else {
-                  log(`Message delivery failed, scheduling retry`);
+                  logDelivery(`FAILED: msg=${msg._id.slice(0, 8)} delivery returned false, scheduling retry ${(msg.retry_count ?? 0) + 1}`);
                   scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
                 }
               } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
-                log(`Error handling pending message: ${errMsg}`);
+                logDelivery(`ERROR: msg=${msg._id.slice(0, 8)} exception: ${errMsg}`);
                 scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
               } finally {
                 messagesInFlight.delete(msg._id);
@@ -5901,7 +5941,7 @@ async function main(): Promise<void> {
           resetReconnectDelay();
         }
       );
-      log("Subscription established successfully");
+      logDelivery("Pending messages subscription established");
       saveDaemonState({ connected: true });
       resetReconnectDelay();
     } catch (err) {
@@ -6260,6 +6300,25 @@ export async function runWatchdog(): Promise<void> {
       logLine("Watchdog update failed");
       await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion}`);
     }
+  }
+
+  // 3c. If daemon is alive but running an older version than the binary, kill it
+  if (daemonAlive && daemonPid > 0) {
+    try {
+      const state = readDaemonState();
+      const daemonVersion = state.runtimeVersion;
+      // If runtimeVersion is missing, daemon predates this field -- assume outdated if min_cli_version is set
+      const needsKill = daemonVersion
+        ? compareVersions(daemonVersion, version) < 0
+        : !!(minCliVersion && compareVersions(version, minCliVersion) >= 0);
+      if (needsKill) {
+        logLine(`Daemon running v${daemonVersion || "unknown"} but binary is v${version}, killing to upgrade`);
+        await sendWatchdogLog("info", `[LIFECYCLE] watchdog_version_mismatch: daemon=${daemonVersion || "unknown"} binary=${version}, killing`);
+        try { process.kill(daemonPid, 15); } catch {}
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        daemonAlive = false;
+      }
+    } catch {}
   }
 
   // 4. If daemon is dead, restart it
