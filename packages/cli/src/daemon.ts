@@ -162,7 +162,7 @@ const lastErrorNotification = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
 
-type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected";
+type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped";
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
 type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
 const lastHookStatus = new Map<string, HookStatusData>();
@@ -213,8 +213,8 @@ function detectErrorInMessage(content: string): string | null {
 function extractPendingToolUseFromTranscript(transcriptPath: string): { tool_name: string; arguments_preview: string } | null {
   try {
     if (!transcriptPath || !fs.existsSync(transcriptPath)) return null;
-    const content = fs.readFileSync(transcriptPath, "utf-8");
-    const lines = content.trim().split("\n");
+    const tailContent = readFileTail(transcriptPath, 32768);
+    const lines = tailContent.trim().split("\n");
     const tail = lines.slice(-20);
 
     let lastToolUse: { name: string; input: any } | null = null;
@@ -691,9 +691,22 @@ async function executeRemoteCommand(
         }
         const tmuxTarget = await findTmuxPaneForTty(proc.tty);
         if (tmuxTarget) {
-          await execAsync(`tmux send-keys -t '${tmuxTarget}' ${keys}`);
+          const groups: string[][] = [];
+          for (const k of keyList) {
+            if (k === "Escape" || (groups.length > 0 && k !== groups[groups.length - 1][0])) {
+              groups.push([k]);
+            } else if (groups.length === 0) {
+              groups.push([k]);
+            } else {
+              groups[groups.length - 1].push(k);
+            }
+          }
+          for (let i = 0; i < groups.length; i++) {
+            if (i > 0) await new Promise((r) => setTimeout(r, 150));
+            await execAsync(`tmux send-keys -t '${tmuxTarget}' ${groups[i].join(" ")}`);
+          }
           result = "keys_sent";
-          log(`[REMOTE] Sent ${keys} to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
+          log(`[REMOTE] Sent ${keys} (${groups.length} groups) to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
         } else {
           error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
         }
@@ -1192,6 +1205,40 @@ async function syncMessagesBatch(
   }
 }
 
+function readFileHead(filePath: string, maxBytes: number = 8192): string {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const buf = Buffer.alloc(maxBytes);
+    const bytesRead = fs.readSync(fd, buf, 0, maxBytes, 0);
+    return buf.slice(0, bytesRead).toString("utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readFileTail(filePath: string, maxBytes: number = 8192): string {
+  const stat = fs.statSync(filePath);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const offset = Math.max(0, stat.size - maxBytes);
+    const buf = Buffer.alloc(Math.min(maxBytes, stat.size));
+    const bytesRead = fs.readSync(fd, buf, 0, buf.length, offset);
+    return buf.slice(0, bytesRead).toString("utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readFileHeadAndTail(filePath: string, headBytes: number = 8192, tailBytes: number = 8192): string {
+  const stat = fs.statSync(filePath);
+  if (stat.size <= headBytes + tailBytes) {
+    return fs.readFileSync(filePath, "utf-8");
+  }
+  const head = readFileHead(filePath, headBytes);
+  const tail = readFileTail(filePath, tailBytes);
+  return head + "\n" + tail;
+}
+
 async function processSessionFile(
   filePath: string,
   sessionId: string,
@@ -1253,11 +1300,11 @@ async function processSessionFile(
 
     let conversationId = conversationCache[sessionId];
 
-    // Check for summary title even if no new messages
+    // Check for summary title using the already-read new chunk + small tail read
     if (conversationId) {
-      let fullContent;
+      let titleContent: string;
       try {
-        fullContent = fs.readFileSync(filePath, "utf-8");
+        titleContent = newContent + "\n" + readFileTail(filePath, 4096);
       } catch (err: any) {
         if (err.code === 'EACCES' || err.code === 'EPERM') {
           log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
@@ -1266,7 +1313,7 @@ async function processSessionFile(
         }
         throw err;
       }
-      const summaryTitle = extractSummaryTitle(fullContent);
+      const summaryTitle = extractSummaryTitle(titleContent);
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
           await syncService.updateTitle(conversationId, summaryTitle);
@@ -1281,8 +1328,12 @@ async function processSessionFile(
 
       if (!planHandoffChecked.has(sessionId)) {
         planHandoffChecked.add(sessionId);
-        const allMessages = parseSessionFile(fullContent);
-        const userMsgs = allMessages.filter(m => m.role === "user").slice(0, 3);
+        let headContent: string;
+        try {
+          headContent = readFileHead(filePath, 16384);
+        } catch { headContent = ""; }
+        const headMessages = parseSessionFile(headContent);
+        const userMsgs = headMessages.filter(m => m.role === "user").slice(0, 3);
         for (const msg of userMsgs) {
           if (!msg.content) continue;
           const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
@@ -1314,9 +1365,9 @@ async function processSessionFile(
   }
 
   if (!conversationId) {
-    let fullContent;
+    let headContent: string;
     try {
-      fullContent = fs.readFileSync(filePath, "utf-8");
+      headContent = readFileHead(filePath, 16384);
     } catch (err: any) {
       if (err.code === 'EACCES' || err.code === 'EPERM') {
         log(`Warning: Permission denied reading ${filePath} for conversation creation. Skipping.`);
@@ -1326,12 +1377,12 @@ async function processSessionFile(
     }
 
     try {
-      const slug = extractSlug(fullContent);
-      const parentMessageUuid = extractParentUuid(fullContent);
+      const slug = extractSlug(headContent);
+      const parentMessageUuid = extractParentUuid(headContent);
       const firstMessageTimestamp = messages[0]?.timestamp;
       const dirName = path.basename(path.dirname(filePath));
       const decodedPath = dirName ? decodeProjectDirName(dirName) : undefined;
-      const actualProjectPath = (decodedPath && fs.existsSync(decodedPath) ? decodedPath : null) || extractCwd(fullContent) || projectPath;
+      const actualProjectPath = (decodedPath && fs.existsSync(decodedPath) ? decodedPath : null) || extractCwd(headContent) || projectPath;
       const gitInfo = actualProjectPath ? getGitInfo(actualProjectPath) : undefined;
 
       const firstUserMessage = messages.find(msg => msg.role === "user");
@@ -1414,7 +1465,7 @@ async function processSessionFile(
         startedSessionTmux.delete(matchedStartedConversation);
         log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
       } else {
-        const cliFlags = detectCliFlags(fullContent);
+        const cliFlags = detectCliFlags(headContent + "\n" + newContent);
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -1512,9 +1563,9 @@ async function processSessionFile(
         });
       }
 
-      let retryFullContent;
+      let retryHeadContent: string;
       try {
-        retryFullContent = fs.readFileSync(filePath, "utf-8");
+        retryHeadContent = readFileHead(filePath, 16384);
       } catch (readErr: any) {
         if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
           log(`Warning: Permission denied reading ${filePath} for retry queue. Skipping.`);
@@ -1524,11 +1575,11 @@ async function processSessionFile(
         throw readErr;
       }
 
-      const slug = extractSlug(retryFullContent);
+      const slug = extractSlug(retryHeadContent);
       const firstMsgTimestamp = messages[0]?.timestamp;
       const retryDirName = path.basename(path.dirname(filePath));
       const retryDecoded = retryDirName ? decodeProjectDirName(retryDirName) : undefined;
-      const retryProjectPath = (retryDecoded && fs.existsSync(retryDecoded) ? retryDecoded : null) || extractCwd(retryFullContent) || projectPath;
+      const retryProjectPath = (retryDecoded && fs.existsSync(retryDecoded) ? retryDecoded : null) || extractCwd(retryHeadContent) || projectPath;
       const gitInfo = retryProjectPath ? getGitInfo(retryProjectPath) : undefined;
 
       retryQueue.add("createConversation", {
@@ -1557,9 +1608,9 @@ async function processSessionFile(
     delete conversationCache[sessionId];
     saveConversationCache(conversationCache);
 
-    let recreateFullContent;
+    let recreateHeadContent: string;
     try {
-      recreateFullContent = fs.readFileSync(filePath, "utf-8");
+      recreateHeadContent = readFileHead(filePath, 16384);
     } catch (readErr: any) {
       if (readErr.code === 'EACCES' || readErr.code === 'EPERM') {
         log(`Warning: Permission denied reading ${filePath} for conversation recreation. Skipping.`);
@@ -1569,11 +1620,11 @@ async function processSessionFile(
       throw readErr;
     }
 
-    const slug = extractSlug(recreateFullContent);
+    const slug = extractSlug(recreateHeadContent);
     const firstMessageTimestamp = messages[0]?.timestamp;
     const recreateDirName = path.basename(path.dirname(filePath));
     const recreateDecoded = recreateDirName ? decodeProjectDirName(recreateDirName) : undefined;
-    const recreateProjectPath = (recreateDecoded && fs.existsSync(recreateDecoded) ? recreateDecoded : null) || extractCwd(recreateFullContent) || projectPath;
+    const recreateProjectPath = (recreateDecoded && fs.existsSync(recreateDecoded) ? recreateDecoded : null) || extractCwd(recreateHeadContent) || projectPath;
     const gitInfo = recreateProjectPath ? getGitInfo(recreateProjectPath) : undefined;
 
     try {
@@ -2154,9 +2205,9 @@ async function processCodexSession(
     let conversationId = conversationCache[sessionId];
 
     if (conversationId) {
-      let fullContent;
+      let titleContent: string;
       try {
-        fullContent = fs.readFileSync(filePath, "utf-8");
+        titleContent = newContent + "\n" + readFileTail(filePath, 4096);
       } catch (err: any) {
         if (err.code === 'EACCES' || err.code === 'EPERM') {
           log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
@@ -2165,7 +2216,7 @@ async function processCodexSession(
         }
         throw err;
       }
-      const summaryTitle = extractSummaryTitle(fullContent);
+      const summaryTitle = extractSummaryTitle(titleContent);
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
           await syncService.updateTitle(conversationId, summaryTitle);
@@ -2185,9 +2236,9 @@ async function processCodexSession(
     }
 
     if (!conversationId) {
-      let fullContent;
+      let headContent: string;
       try {
-        fullContent = fs.readFileSync(filePath, "utf-8");
+        headContent = readFileHead(filePath, 16384);
       } catch (err: any) {
         if (err.code === 'EACCES' || err.code === 'EPERM') {
           log(`Warning: Permission denied reading ${filePath} for conversation creation. Skipping.`);
@@ -2197,7 +2248,7 @@ async function processCodexSession(
       }
 
       try {
-        const projectPath = extractCodexCwd(fullContent);
+        const projectPath = extractCodexCwd(headContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
         let matchedStartedConversation: string | null = null;
 
@@ -2839,7 +2890,7 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
 
       if (recentlyModified) {
         // Determine the project directory from the JSONL content
-        const jsonlContent = fs.readFileSync(jsonlPath, "utf-8").slice(0, 5000);
+        const jsonlContent = readFileHead(jsonlPath, 5000);
         const projectCwd = extractCwd(jsonlContent) || (agentType === "codex" ? extractCodexCwd(jsonlContent) : null);
 
         if (projectCwd) {
@@ -3448,7 +3499,7 @@ function resolveSessionId(filePath: string): string {
   const name = path.basename(filePath, ".jsonl");
   if (UUID_RE.test(name)) return name;
   try {
-    const head = fs.readFileSync(filePath, "utf-8").slice(0, 4096);
+    const head = readFileHead(filePath, 4096);
     const m = head.match(/"sessionId"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i);
     if (m) return m[1];
   } catch {}
@@ -3472,7 +3523,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
 
   const { path: jsonlPath, agentType } = sessionFile;
-  const jsonlContent = fs.readFileSync(jsonlPath, "utf-8").slice(0, 5000);
+  const jsonlContent = readFileHead(jsonlPath, 5000);
   const config = readConfig();
 
   let cwd: string;
@@ -4121,7 +4172,7 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
 
         let projectPath: string | null = resolvedDir;
         if (!projectPath) {
-          const content = fs.readFileSync(filePath, "utf-8").slice(0, 5000);
+          const content = readFileHead(filePath, 5000);
           projectPath = extractCwd(content) || null;
         }
         if (!projectPath) continue;
@@ -5242,7 +5293,7 @@ async function main(): Promise<void> {
       const modeChanged = data.permission_mode && (!prev || prev.permission_mode !== data.permission_mode);
       lastHookStatus.set(sessionId, data);
 
-      if (data.status === "compacting" || data.status === "idle" || data.status === "thinking") {
+      if (data.status === "compacting" || data.status === "idle" || data.status === "thinking" || data.status === "stopped") {
         const existingTimer = idleTimers.get(sessionId);
         if (existingTimer) {
           clearTimeout(existingTimer);
@@ -5462,8 +5513,8 @@ async function main(): Promise<void> {
       for (const fp of possiblePaths) {
         if (!fs.existsSync(fp)) continue;
         try {
-          const content = fs.readFileSync(fp, "utf-8");
-          const msgs = parseSessionFile(content);
+          const headContent = readFileHead(fp, 16384);
+          const msgs = parseSessionFile(headContent);
           const userMsgs = msgs.filter(m => m.role === "user").slice(0, 3);
           for (const msg of userMsgs) {
             if (!msg.content) continue;
