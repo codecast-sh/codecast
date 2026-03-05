@@ -22,6 +22,9 @@ export interface ClaudeSessionEntry {
   };
   summary?: string;
   operation?: "enqueue" | "remove";
+  isMeta?: boolean;
+  isCompactSummary?: boolean;
+  isVisibleInTranscriptOnly?: boolean;
 }
 
 export interface ToolCall {
@@ -94,6 +97,8 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
       });
       continue;
     }
+
+    if (entry.isMeta || entry.isCompactSummary || entry.isVisibleInTranscriptOnly) continue;
 
     // Handle old format: type is "human" instead of "user"
     const normalizedType = entry.type === "human" ? "user" : entry.type;
