@@ -253,10 +253,9 @@ function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: 
 
 type AgentType = "claude" | "codex" | "gemini";
 
-function NewSessionModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+function NewSessionModal({ visible, onClose, onSessionStarted }: { visible: boolean; onClose: () => void; onSessionStarted: () => void }) {
   const [agentType, setAgentType] = useState<AgentType>("claude");
   const [projectPath, setProjectPath] = useState("");
-  const [prompt, setPrompt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const startSession = useMutation(api.users.startSession);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 6 });
@@ -267,11 +266,9 @@ function NewSessionModal({ visible, onClose }: { visible: boolean; onClose: () =
       await startSession({
         agent_type: agentType,
         project_path: projectPath || undefined,
-        prompt: prompt || undefined,
       });
-      Alert.alert("Session started", `${agentType} session is launching on your machine.`);
       onClose();
-      setPrompt("");
+      onSessionStarted();
       setProjectPath("");
     } catch (err) {
       Alert.alert("Error", err instanceof Error ? err.message : "Failed to start session");
@@ -340,16 +337,6 @@ function NewSessionModal({ visible, onClose }: { visible: boolean; onClose: () =
             </RNView>
           )}
 
-          <RNText style={modalStyles.label}>Initial prompt (optional)</RNText>
-          <TextInput
-            style={[modalStyles.input, { height: 80, textAlignVertical: "top" }]}
-            value={prompt}
-            onChangeText={setPrompt}
-            placeholder="What should the agent work on?"
-            placeholderTextColor={Theme.textMuted0}
-            multiline
-            autoCorrect={false}
-          />
         </ScrollView>
 
         <RNView style={modalStyles.footer}>
@@ -447,6 +434,7 @@ export default function SessionsScreen() {
   const [allConversations, setAllConversations] = useState<Conversation[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const waitingForSessionRef = useRef<{ ids: Set<string>; ts: number } | null>(null);
   const router = useRouter();
 
   const isSearching = debouncedQuery.length >= 2;
@@ -471,6 +459,20 @@ export default function SessionsScreen() {
     }
     setLoadingMore(false);
   }, [result, cursor]);
+
+  useEffect(() => {
+    const w = waitingForSessionRef.current;
+    if (!w || !allConversations.length) return;
+    if (Date.now() - w.ts > 30000) {
+      waitingForSessionRef.current = null;
+      return;
+    }
+    const newConv = allConversations.find(c => !w.ids.has(c._id));
+    if (newConv) {
+      waitingForSessionRef.current = null;
+      router.push(`/session/${newConv._id}`);
+    }
+  }, [allConversations]);
 
   useEffect(() => {
     setCursor(undefined);
@@ -686,7 +688,13 @@ export default function SessionsScreen() {
         </>
       )}
 
-      <NewSessionModal visible={showNewSession} onClose={() => setShowNewSession(false)} />
+      <NewSessionModal
+        visible={showNewSession}
+        onClose={() => setShowNewSession(false)}
+        onSessionStarted={() => {
+          waitingForSessionRef.current = { ids: new Set(allConversations.map(c => c._id)), ts: Date.now() };
+        }}
+      />
 
       <TouchableOpacity
         style={styles.fab}

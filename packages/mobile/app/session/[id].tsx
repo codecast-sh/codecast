@@ -3500,7 +3500,7 @@ export default function SessionDetailScreen() {
                 contentContainerStyle={styles.sessionMeta}
               >
                 {conversation.agent_type && (
-                  <RNView style={[styles.metaBadgeIcon, { borderColor: agentTypeColor(conversation.agent_type) + '40' }]}>
+                  <RNView style={[styles.metaBadgeIcon, { borderColor: agentTypeColor(conversation.agent_type) + '80' }]}>
                     <FontAwesome name={agentTypeIcon(conversation.agent_type) as any} size={9} color={agentTypeColor(conversation.agent_type)} />
                   <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
                     {formatAgentType(conversation.agent_type)}
@@ -3994,17 +3994,19 @@ const styles = StyleSheet.create({
     paddingTop: 0,
   },
   floatingSessionCard: {
-    backgroundColor: Theme.bgAlt,
+    backgroundColor: Theme.bg,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
+    borderColor: Theme.border,
     borderRadius: 0,
     borderBottomLeftRadius: 12,
     borderBottomRightRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    shadowOpacity: 0,
-    shadowRadius: 0,
-    elevation: 0,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   sessionMeta: {
     flexDirection: 'row',
@@ -4043,14 +4045,13 @@ const styles = StyleSheet.create({
   },
   metaBadgeModel: {
     fontSize: 9,
-    color: Theme.textDim,
-    fontWeight: '500',
+    color: Theme.textMuted,
+    fontWeight: '600',
     fontFamily: 'SpaceMono',
     paddingHorizontal: 7,
     paddingVertical: 2,
-    backgroundColor: Theme.bgHighlight,
+    backgroundColor: Theme.bgAlt,
     borderRadius: 5,
-    opacity: 0.9,
   },
   messageCountText: {
     fontSize: 10,
@@ -5400,7 +5401,7 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingHorizontal: 6,
     paddingVertical: 2,
-    backgroundColor: Theme.bgHighlight,
+    backgroundColor: Theme.bgAlt,
     borderRadius: 4,
     borderWidth: StyleSheet.hairlineWidth,
   },
