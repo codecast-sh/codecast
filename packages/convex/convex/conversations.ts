@@ -492,6 +492,27 @@ export const createConversation = mutation({
           inbox_dismissed_at: Date.now(),
           status: "completed",
         });
+
+        if (parent.team_id && await isConversationTeamVisible(ctx, parent)) {
+          await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
+            team_id: parent.team_id,
+            actor_user_id: parent.user_id,
+            event_type: "session_completed" as const,
+            title: parent.title || (parent.slug ? formatSlugAsTitle(parent.slug) : "Session completed"),
+            description: parent.project_path,
+            related_conversation_id: parentConversationId,
+            metadata: {
+              duration_ms: parent.updated_at - parent.started_at,
+              message_count: parent.message_count,
+              git_branch: parent.git_branch,
+            },
+          });
+
+          await ctx.scheduler.runAfter(0, internal.sessionInsights.generateSessionInsight, {
+            conversation_id: parentConversationId,
+            reason: "periodic",
+          });
+        }
       }
     }
 

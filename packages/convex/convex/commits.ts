@@ -69,6 +69,11 @@ export const addCommit = mutation({
             deletions: args.deletions,
           },
         });
+
+        await ctx.scheduler.runAfter(0, internal.sessionInsights.generateSessionInsight, {
+          conversation_id: args.conversation_id,
+          reason: "commit",
+        });
       }
     }
 

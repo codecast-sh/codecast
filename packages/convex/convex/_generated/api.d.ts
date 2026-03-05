@@ -42,6 +42,7 @@ import type * as publicComments from "../publicComments.js";
 import type * as pull_requests from "../pull_requests.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as reviews from "../reviews.js";
+import type * as sessionInsights from "../sessionInsights.js";
 import type * as syncCursors from "../syncCursors.js";
 import type * as systemConfig from "../systemConfig.js";
 import type * as teamActivity from "../teamActivity.js";
@@ -90,6 +91,7 @@ declare const fullApi: ApiFromModules<{
   pull_requests: typeof pull_requests;
   rateLimit: typeof rateLimit;
   reviews: typeof reviews;
+  sessionInsights: typeof sessionInsights;
   syncCursors: typeof syncCursors;
   systemConfig: typeof systemConfig;
   teamActivity: typeof teamActivity;

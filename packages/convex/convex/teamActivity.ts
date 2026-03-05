@@ -1,7 +1,6 @@
 import { internalMutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
 import { isTeamMember } from "./privacy";
 
 export const recordTeamActivity = internalMutation({
@@ -75,31 +74,50 @@ export const getTeamActivityFeed = query({
       throw new Error("Not a member of this team");
     }
 
-    let query = ctx.db
-      .query("team_activity_events")
-      .withIndex("by_team_timestamp", (q) => q.eq("team_id", args.team_id));
+    const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
+    const targetSize = limit + 1;
+    const batchSize = Math.max(100, targetSize * 2);
+    const maxScans = 8;
 
-    let events = await query.order("desc").collect();
+    const events: Array<any> = [];
+    let scanCursor = args.cursor;
+    let exhausted = false;
 
-    if (args.event_type_filter) {
-      events = events.filter((e) => e.event_type === args.event_type_filter);
+    for (let i = 0; i < maxScans && events.length < targetSize && !exhausted; i++) {
+      const batch = await ctx.db
+        .query("team_activity_events")
+        .withIndex("by_team_timestamp", (q) =>
+          scanCursor !== undefined
+            ? q.eq("team_id", args.team_id).lt("timestamp", scanCursor)
+            : q.eq("team_id", args.team_id)
+        )
+        .order("desc")
+        .take(batchSize);
+
+      if (batch.length === 0) {
+        exhausted = true;
+        break;
+      }
+
+      for (const event of batch) {
+        if (args.event_type_filter && event.event_type !== args.event_type_filter) continue;
+        if (args.actor_filter && event.actor_user_id.toString() !== args.actor_filter.toString()) continue;
+        events.push(event);
+        if (events.length >= targetSize) break;
+      }
+
+      scanCursor = batch[batch.length - 1].timestamp;
+      if (batch.length < batchSize) {
+        exhausted = true;
+      }
     }
 
-    if (args.actor_filter) {
-      events = events.filter((e) => e.actor_user_id.toString() === args.actor_filter!.toString());
-    }
-
-    if (args.cursor !== undefined) {
-      events = events.filter((e) => e.timestamp < args.cursor!);
-    }
-
-    const limit = args.limit ?? 50;
     const hasMore = events.length > limit;
-    const paginatedEvents = events.slice(0, limit);
+    const paginatedEvents = hasMore ? events.slice(0, limit) : events;
 
     const eventsWithActors = await Promise.all(
       paginatedEvents.map(async (event) => {
-        const actor = await ctx.db.get(event.actor_user_id);
+        const actor = (await ctx.db.get(event.actor_user_id)) as any;
         return {
           ...event,
           actor: actor ? {
@@ -114,7 +132,9 @@ export const getTeamActivityFeed = query({
     return {
       events: eventsWithActors,
       hasMore,
-      nextCursor: hasMore ? paginatedEvents[paginatedEvents.length - 1].timestamp : undefined,
+      nextCursor: hasMore && paginatedEvents.length > 0
+        ? paginatedEvents[paginatedEvents.length - 1].timestamp
+        : undefined,
     };
   },
 });

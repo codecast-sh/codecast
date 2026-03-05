@@ -28,9 +28,9 @@ export const getMessagesForSummary = internalQuery({
       .take(10);
 
     return messages
-      .filter((m) => (m.role === "user" || m.role === "assistant") && m.content)
+      .filter((m: any) => (m.role === "user" || m.role === "assistant") && m.content)
       .reverse()
-      .map((m) => ({
+      .map((m: any) => ({
         role: m.role,
         content: (m.content || "").slice(0, 500),
       }));
@@ -52,7 +52,7 @@ export const generateIdleSummary = internalAction({
     if (messages.length === 0) return;
 
     const messageText = messages
-      .map((m) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
+      .map((m: any) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
       .join("\n\n");
 
     const prompt = `This agent session is idle. Based on the recent conversation below, write ONE short sentence.
@@ -100,6 +100,11 @@ ${messageText}`;
         await ctx.runMutation(internal.idleSummary.setIdleSummary, {
           conversation_id: args.conversation_id,
           idle_summary: text,
+        });
+
+        await ctx.runAction(internal.sessionInsights.generateSessionInsight, {
+          conversation_id: args.conversation_id,
+          reason: "idle",
         });
       }
     } catch (error) {

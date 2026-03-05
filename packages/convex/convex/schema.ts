@@ -438,7 +438,7 @@ export default defineSchema({
     tmux_session: v.optional(v.string()),
     started_at: v.number(),
     last_heartbeat: v.number(),
-    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"))),
+    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"))),
     agent_status_updated_at: v.optional(v.number()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"))),
   })
@@ -577,6 +577,40 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_team_timestamp", ["team_id", "timestamp"])
     .index("by_actor", ["actor_user_id"]),
+
+  session_insights: defineTable({
+    conversation_id: v.id("conversations"),
+    team_id: v.id("teams"),
+    actor_user_id: v.id("users"),
+    source: v.union(
+      v.literal("idle"),
+      v.literal("commit"),
+      v.literal("manual"),
+      v.literal("periodic")
+    ),
+    generated_at: v.number(),
+    summary: v.string(),
+    goal: v.optional(v.string()),
+    what_changed: v.optional(v.string()),
+    outcome_type: v.union(
+      v.literal("shipped"),
+      v.literal("progress"),
+      v.literal("blocked"),
+      v.literal("unknown")
+    ),
+    blockers: v.optional(v.array(v.string())),
+    next_action: v.optional(v.string()),
+    themes: v.array(v.string()),
+    confidence: v.optional(v.number()),
+    metadata: v.optional(v.object({
+      commit_shas: v.optional(v.array(v.string())),
+      pr_numbers: v.optional(v.array(v.number())),
+      files_touched: v.optional(v.array(v.string())),
+    })),
+  })
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_team_generated_at", ["team_id", "generated_at"])
+    .index("by_actor_generated_at", ["actor_user_id", "generated_at"]),
 
   notifications: defineTable({
     recipient_user_id: v.id("users"),

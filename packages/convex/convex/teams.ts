@@ -1,6 +1,6 @@
 import { mutation, query, action, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
 function generateInviteCode(): string {
@@ -168,6 +168,16 @@ export const joinTeam = mutation({
         active_team_id: team._id,
       });
     }
+
+    const actorName = user?.name || user?.email || "A member";
+    await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
+      team_id: team._id,
+      actor_user_id: args.user_id,
+      event_type: "member_joined" as const,
+      title: `${actorName} joined ${team.name}`,
+      description: "Joined via invite code",
+    });
+
     return team._id;
   },
 });
@@ -285,6 +295,16 @@ export const removeMember = mutation({
     }
     await ctx.db.delete(memberMembership._id);
     const memberUser = await ctx.db.get(args.member_user_id);
+    const team = await ctx.db.get(teamId);
+    const memberName = memberUser?.name || memberUser?.email || "A member";
+    await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
+      team_id: teamId,
+      actor_user_id: args.member_user_id,
+      event_type: "member_left" as const,
+      title: `${memberName} left ${team?.name || "the team"}`,
+      description: args.requesting_user_id === args.member_user_id ? "Left team" : "Removed by admin",
+    });
+
     if (memberUser?.team_id?.toString() === teamId.toString()) {
       const otherMemberships = await ctx.db
         .query("team_memberships")
@@ -452,6 +472,16 @@ export const removeFromTeam = mutation({
     }
     await ctx.db.delete(memberMembership._id);
     const userToRemove = await ctx.db.get(args.user_id);
+    const team = await ctx.db.get(args.team_id);
+    const memberName = userToRemove?.name || userToRemove?.email || "A member";
+    await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
+      team_id: args.team_id,
+      actor_user_id: args.user_id,
+      event_type: "member_left" as const,
+      title: `${memberName} left ${team?.name || "the team"}`,
+      description: args.requesting_user_id === args.user_id ? "Left team" : "Removed by admin",
+    });
+
     if (userToRemove?.team_id?.toString() === args.team_id.toString()) {
       const otherMemberships = await ctx.db
         .query("team_memberships")
@@ -824,4 +854,3 @@ export const updateTeamIcon = mutation({
     return { success: true };
   },
 });
-
