@@ -450,7 +450,19 @@ export const useInboxStore = create<InboxStoreState>(
 
     const incomingById = new Map(incoming.map((s) => [s._id, s]));
     const incomingBySessionId = new Map(incoming.map((s) => [s.session_id, s]));
-    const visibleIncoming = incoming.filter((s) => !dismissedIds.has(s._id));
+
+    // Reconcile dismissedIds with server truth: if the server returns a session
+    // in the active list, it's not dismissed anymore. Only keep dismissedIds for
+    // sessions the server hasn't returned yet (optimistic dismiss in flight).
+    const reconciledDismissed = new Set<string>();
+    for (const id of dismissedIds) {
+      if (!incomingById.has(id)) reconciledDismissed.add(id);
+    }
+    if (reconciledDismissed.size !== dismissedIds.size) {
+      set({ dismissedIds: reconciledDismissed });
+    }
+
+    const visibleIncoming = incoming.filter((s) => !reconciledDismissed.has(s._id));
 
     const newConversations = { ...get().conversations };
     for (const s of incoming) {
@@ -484,10 +496,10 @@ export const useInboxStore = create<InboxStoreState>(
         continue;
       }
       const fresh = incomingById.get(old._id);
-      if (fresh && !dismissedIds.has(old._id)) {
+      if (fresh && !reconciledDismissed.has(old._id)) {
         merged.push(fresh);
         seen.add(old._id);
-      } else if (old._id === currentSession?._id && !dismissedIds.has(old._id)) {
+      } else if (old._id === currentSession?._id && !reconciledDismissed.has(old._id)) {
         merged.push(old);
         seen.add(old._id);
       }
