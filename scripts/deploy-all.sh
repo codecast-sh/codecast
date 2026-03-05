@@ -71,7 +71,7 @@ cd packages/cli
 CURRENT_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
 echo "   Current CLI version: $CURRENT_VERSION"
 
-REMOTE_VERSION=$(curl -s https://dl.codecast.sh/latest.json | grep -o '"version":"[^"]*"' | cut -d'"' -f4 2>/dev/null || echo "")
+REMOTE_VERSION=$(curl -s https://dl.codecast.sh/latest.json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' 2>/dev/null || echo "")
 echo "   Deployed CLI version: ${REMOTE_VERSION:-unknown}"
 
 LAST_CLI_MARKER="../../.last-cli-deploy"
@@ -80,8 +80,8 @@ PREV_CLI_HASH=""
 [[ -f "$LAST_CLI_MARKER" ]] && PREV_CLI_HASH=$(cat "$LAST_CLI_MARKER")
 
 CLI_NEEDS_DEPLOY=false
-if [[ "$CURRENT_VERSION" != "$REMOTE_VERSION" ]]; then
-  echo "   Version mismatch - deploying..."
+if [[ -n "$REMOTE_VERSION" && "$CURRENT_VERSION" != "$REMOTE_VERSION" ]]; then
+  echo "   Version mismatch ($CURRENT_VERSION local vs $REMOTE_VERSION remote) - deploying..."
   CLI_NEEDS_DEPLOY=true
 elif [[ "$LAST_CLI_HASH" != "$PREV_CLI_HASH" ]]; then
   echo "   Code changed since last deploy but version not bumped."
