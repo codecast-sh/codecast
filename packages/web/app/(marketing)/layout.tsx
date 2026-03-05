@@ -8,7 +8,7 @@ export default function MarketingLayout({
   return (
     <>
       <ForceLightMode />
-      <div className="light min-h-screen bg-stone-50 w-full fixed inset-0 overflow-auto">
+      <div className="light min-h-screen w-full fixed inset-0 overflow-auto" style={{ backgroundColor: '#fdf6e3' }}>
         {children}
       </div>
     </>
