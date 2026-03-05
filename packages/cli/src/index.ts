@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
+import { ensureTmux, tryInstallTmux } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -958,6 +959,10 @@ function stopDaemon(): void {
 function startDaemon(): void {
   ensureConfigDir();
 
+  if (!ensureTmux()) {
+    console.log("Session management features (attach, remote control) will be unavailable.\n");
+  }
+
   if (isDaemonRunning()) {
     const pid = fs.readFileSync(PID_FILE, "utf-8").trim();
     console.log(`Daemon is already running (PID: ${pid})`);
@@ -1059,6 +1064,15 @@ async function runLogin(setupToken: string): Promise<void> {
     console.log(`API Token: ${maskToken(config.auth_token || "")}`);
     console.log(`Config: ${CONFIG_FILE}\n`);
 
+    if (!ensureTmux()) {
+      try {
+        const shouldInstall = await confirm({ message: "Install tmux now?", default: true });
+        if (shouldInstall) {
+          tryInstallTmux();
+        }
+      } catch {}
+    }
+
     if (!isDaemonRunning()) {
       console.log("Starting daemon...");
       startDaemon();
@@ -1151,6 +1165,15 @@ async function runAuth(): Promise<void> {
   await promptMemoryEnablement();
 
   await promptStableEnablement();
+
+  if (!ensureTmux()) {
+    try {
+      const shouldInstall = await confirm({ message: "Install tmux now?", default: true });
+      if (shouldInstall) {
+        tryInstallTmux();
+      }
+    } catch {}
+  }
 
   if (!isDaemonRunning()) {
     console.log("Starting daemon...");
@@ -1997,6 +2020,8 @@ program
   .option("--gc", "Kill sessions idle for more than 1 hour, then open TUI")
   .option("--gc-mins <minutes>", "Idle threshold in minutes (default: 60)")
   .action(async (options) => {
+    if (!ensureTmux()) return;
+
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: codecast auth");
@@ -2032,6 +2057,8 @@ program
   .option("-m, --mins <minutes>", "Idle threshold in minutes (default: 60)")
   .option("--dry-run", "Show what would be killed without actually killing")
   .action(async (options) => {
+    if (!ensureTmux()) return;
+
     const mins = Number.parseInt(options.mins || "60", 10) || 60;
     const { gcStaleSessions, discoverWithIdleTimes } = await import("./attachTui.js");
 
@@ -6256,10 +6283,11 @@ program
 
     const available = await checkForUpdates(true);
     if (!available) {
-      console.log(`codecast v${getVersion()} is already the latest version`);
-      return;
+      // Even if version matches, force reinstall to fix corrupted binaries
+      console.log(`codecast v${getVersion()} matches latest. Reinstalling to ensure integrity...`);
+    } else {
+      console.log(`Updating from v${getVersion()} to v${available}...`);
     }
-    console.log(`Updating from v${getVersion()} to v${available}...`);
 
     // Check if daemon is running before update
     const daemonWasRunning = getDaemonPid() !== null;

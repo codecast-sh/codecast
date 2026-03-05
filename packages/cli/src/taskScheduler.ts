@@ -3,6 +3,7 @@ import { promisify } from "util";
 import * as fs from "fs";
 import * as crypto from "crypto";
 import { SyncService } from "./syncService.js";
+import { hasTmux } from "./tmux.js";
 
 const execAsync = promisify(exec);
 
@@ -120,6 +121,12 @@ export class TaskScheduler {
     }
 
     const shellCmd = `unset CLAUDECODE; ${args.join(" ")}; rm -f ${promptFile}`;
+
+    if (!hasTmux()) {
+      this.log(`tmux not installed, cannot run task "${task.title}"`, "error");
+      await this.syncService.failTaskRun(task._id, this.daemonId, "tmux is not installed");
+      return;
+    }
 
     try {
       try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}

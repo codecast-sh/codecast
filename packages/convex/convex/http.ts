@@ -1959,7 +1959,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -1974,6 +1974,7 @@ http.route({
         platform,
         pid: pid || 0,
         autostart_enabled,
+        has_tmux,
       });
 
       if (result.error) {

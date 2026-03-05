@@ -54,6 +54,7 @@ export default defineSchema({
     cli_version: v.optional(v.string()),
     cli_platform: v.optional(v.string()),
     autostart_enabled: v.optional(v.boolean()),
+    has_tmux: v.optional(v.boolean()),
     daemon_pid: v.optional(v.number()),
     last_heartbeat: v.optional(v.number()),
     agent_permission_modes: v.optional(v.object({
@@ -790,6 +791,8 @@ export default defineSchema({
     dismissed: v.optional(v.object({
       desktop_app: v.optional(v.boolean()),
       setup_prompt: v.optional(v.number()),
+      cli_offline: v.optional(v.number()),
+      tmux_missing: v.optional(v.number()),
     })),
 
     // deprecated: kept for backward compat during migration

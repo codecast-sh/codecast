@@ -109,6 +109,7 @@ export const daemonHeartbeat = mutation({
     platform: v.string(),
     pid: v.number(),
     autostart_enabled: v.optional(v.boolean()),
+    has_tmux: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -124,6 +125,7 @@ export const daemonHeartbeat = mutation({
       cli_platform: args.platform,
       daemon_pid: args.pid,
       autostart_enabled: args.autostart_enabled,
+      has_tmux: args.has_tmux,
     });
 
     const pendingCommands = await ctx.db

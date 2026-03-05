@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { ConvexHttpClient } from "convex/browser";
+import { hasTmux } from "./tmux.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -138,7 +139,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
   tmuxSessionName = null;
 
   // If not in tmux, create a tmux session for reliable message injection
-  if (!existingTmuxPane && process.stdin.isTTY) {
+  if (!existingTmuxPane && process.stdin.isTTY && hasTmux()) {
     tmuxSessionName = `codecast-${sessionId.slice(0, 8)}`;
     log(`Not in tmux, creating session: ${tmuxSessionName}`);
 

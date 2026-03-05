@@ -4,6 +4,7 @@ import { exec, execSync, spawn as spawnAsync, spawnSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { hasTmux } from "./tmux.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 
@@ -131,6 +132,7 @@ function loadSessionRegistryLookups(): SessionRegistryLookups {
 }
 
 function discoverLiveTmuxSessionsFast(): LiveTmuxSession[] {
+  if (!hasTmux()) return [];
   const tmuxPaneOut = shellOut("tmux list-panes -a -F '#{session_name}\t#{pane_tty}\t#{pane_pid}\t#{?pane_active,1,0}' 2>/dev/null");
   const paneBySession = new Map<string, { tty: string; panePid: number; isActive: boolean }>();
   for (const line of tmuxPaneOut.split("\n").filter(Boolean)) {

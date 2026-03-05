@@ -18,6 +18,7 @@ import { useDiffViewerStore } from "../store/diffViewerStore";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
+import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { ElectronUpdateBanner } from "./ElectronUpdateBanner";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
@@ -265,6 +266,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       <DesktopAppBanner />
       <SetupPromptBanner />
       <CliOfflineBanner />
+      <TmuxMissingBanner />
 
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
