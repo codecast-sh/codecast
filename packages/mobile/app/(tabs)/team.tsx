@@ -108,7 +108,7 @@ function ActivityEventItem({ event, onPress }: { event: ActivityEvent; onPress?:
 
 const EVENT_TYPE_FILTERS = [
   { label: "All", value: undefined },
-  { label: "Sessions", value: "session_completed" },
+  { label: "Sessions", value: "session_started" },
   { label: "Commits", value: "commit_pushed" },
   { label: "PRs", value: "pr_created" },
 ];
