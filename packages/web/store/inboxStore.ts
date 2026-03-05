@@ -304,10 +304,17 @@ export const useInboxStore = create<InboxStoreState>(
   _hydratedFromCache: false,
 
   hydrateFromCache: async () => {
-    const cached = await readInboxCache();
-    if (!cached) return false;
     const state = get();
-    if (state.sessions.length > 0 || state._hydratedFromCache) return false;
+    if (state._hydratedFromCache) return false;
+    const cached = await readInboxCache();
+    if (!cached) {
+      set({ _hydratedFromCache: true });
+      return false;
+    }
+    if (state.sessions.length > 0) {
+      set({ clientState: cached.clientState, _hydratedFromCache: true });
+      return false;
+    }
     set({
       sessions: cached.sessions,
       dismissedSessions: cached.dismissedSessions,
@@ -522,6 +529,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   syncClientState: (serverState: any) => {
     if (!serverState) return;
+    const prev = get().clientState;
     const cs: ClientState = {
       current_conversation_id: serverState.current_conversation_id,
       show_dismissed: serverState.show_dismissed,
@@ -533,7 +541,7 @@ export const useInboxStore = create<InboxStoreState>(
       layouts: serverState.layouts ?? (serverState.layout ? {
         dashboard: serverState.layout,
       } : undefined),
-      dismissed: serverState.dismissed,
+      dismissed: { ...prev.dismissed, ...serverState.dismissed },
     };
     set({ clientState: cs });
     persistToCache(get);

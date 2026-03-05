@@ -19,43 +19,44 @@ export function InstallTabs() {
   };
 
   return (
-    <div className="rounded-xl overflow-hidden border border-stone-300">
-      <div className="flex items-center bg-stone-200">
+    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #586e75' }}>
+      <div className="flex items-center" style={{ backgroundColor: '#eee8d5' }}>
         <button
           onClick={() => setPlatform("unix")}
-          className={`px-5 py-2.5 text-sm font-medium transition-all ${
-            platform === "unix"
-              ? "bg-stone-800 text-white"
-              : "text-stone-500 hover:text-stone-700 hover:bg-stone-300"
-          }`}
+          className="px-5 py-2.5 text-sm font-medium transition-all"
+          style={platform === "unix"
+            ? { backgroundColor: '#002b36', color: '#fdf6e3' }
+            : { color: '#657b83' }
+          }
         >
           Linux & macOS
         </button>
         <button
           onClick={() => setPlatform("windows")}
-          className={`px-5 py-2.5 text-sm font-medium transition-all ${
-            platform === "windows"
-              ? "bg-stone-800 text-white"
-              : "text-stone-500 hover:text-stone-700 hover:bg-stone-300"
-          }`}
+          className="px-5 py-2.5 text-sm font-medium transition-all"
+          style={platform === "windows"
+            ? { backgroundColor: '#002b36', color: '#fdf6e3' }
+            : { color: '#657b83' }
+          }
         >
           Windows
         </button>
       </div>
-      <div className="p-4 flex items-center justify-between gap-4 bg-stone-800">
-        <code className="text-stone-100 text-sm font-mono">
+      <div className="p-4 flex items-center justify-between gap-4" style={{ backgroundColor: '#002b36' }}>
+        <code className="text-sm font-mono" style={{ color: '#eee8d5' }}>
           {platform === "unix" ? (
             INSTALL_COMMANDS.unix
           ) : (
             <>
-              <span className="text-stone-500">&gt; </span>
+              <span style={{ color: '#586e75' }}>&gt; </span>
               {INSTALL_COMMANDS.windows}
             </>
           )}
         </code>
         <button
           onClick={handleCopy}
-          className="p-2 text-stone-400 hover:text-white hover:bg-stone-700 rounded transition-colors"
+          className="p-2 rounded transition-colors"
+          style={{ color: '#586e75' }}
           title="Copy to clipboard"
         >
           {copied ? (

@@ -15,7 +15,7 @@ export function DesktopAppBanner() {
   if (!mounted || dismissed) return null;
   if (isDesktop()) return null;
 
-  const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent);
+  const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) && !("ontouchend" in document);
   if (!isMac) return null;
 
   return (

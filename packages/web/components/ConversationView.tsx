@@ -3576,7 +3576,7 @@ function AssistantBlock({
           ) : tc.name === "TodoWrite" ? (
             <TodoWriteBlock key={tc.id} tool={tc} />
           ) : tc.name === "AskUserQuestion" ? (
-            <AskUserQuestionBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={isConversationActive ? onSendInlineMessage : undefined} />
+            <AskUserQuestionBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={onSendInlineMessage} />
           ) : tc.name === "TaskList" ? (
             <TaskListBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "TaskCreate" || tc.name === "TaskUpdate" || tc.name === "TaskGet" ? (
@@ -3588,7 +3588,7 @@ function AssistantBlock({
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
           ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
-            <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={isConversationActive ? onSendInlineMessage : undefined} />
+            <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={onSendInlineMessage} />
           ) : (
             <ToolBlock
               key={tc.id}
@@ -4225,6 +4225,54 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
+const CYCLING_SHORTCUTS = [
+  { keys: ["Cmd", "K"], label: "command palette" },
+  { keys: ["Ctrl", "I"], label: "jump to needs input" },
+  { keys: ["Ctrl", "J"], label: "next session" },
+  { keys: ["Ctrl", "K"], label: "previous session" },
+  { keys: ["Ctrl", "Tab"], label: "MRU next" },
+  { keys: ["Shift", "←"], label: "defer session" },
+  { keys: ["Ctrl", "←"], label: "dismiss session" },
+  { keys: ["Esc"], label: "escape to session" },
+  { keys: ["Esc", "Esc"], label: "send escape" },
+  { keys: ["Cmd", "⇧", "C"], label: "collapse tool blocks" },
+  { keys: ["Ctrl", "."], label: "zen mode" },
+  { keys: ["⇧", "Tab"], label: "cycle CC mode" },
+  { keys: ["Cmd", "⇧", "L"], label: "copy link" },
+];
+
+function CyclingShortcutHint() {
+  const [index, setIndex] = useState(0);
+  const [animating, setAnimating] = useState(false);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setAnimating(true);
+      setTimeout(() => {
+        setIndex(i => (i + 1) % CYCLING_SHORTCUTS.length);
+        setAnimating(false);
+      }, 200);
+    }, 180000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const { keys, label } = CYCLING_SHORTCUTS[index];
+  return (
+    <p className="text-[11px] opacity-[0.55] hidden sm:flex items-center gap-1 overflow-hidden h-[18px]">
+      <span
+        className={`flex items-center gap-1 transition-all duration-200 ${
+          animating ? "-translate-y-full opacity-0" : "translate-y-0 opacity-100"
+        }`}
+      >
+        {keys.map((k, i) => (
+          <kbd key={i} className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">{k}</kbd>
+        ))}
+        <span className="ml-1.5 text-[10px] opacity-80">{label}</span>
+      </span>
+    </p>
+  );
+}
+
 type NavUserMessage = { _id: string; message_uuid?: string; content: string; timestamp: number };
 
 function MessageNavigator({ userMessages, onRewind, onFork, onClose }: {
@@ -4856,12 +4904,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                 ) : isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
               </p>
               <div className="flex items-center gap-2">
-                <p className="text-[11px] opacity-[0.55] hidden sm:flex items-center gap-1">
-                  <kbd className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">Alt</kbd>
-                  <span className="text-[9px]">+</span>
-                  <kbd className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">↵</kbd>
-                  <span className="ml-1.5 text-[10px] opacity-80">reply and advance</span>
-                </p>
+                <CyclingShortcutHint />
                 <button
                   type="button"
                   onClick={() => {
@@ -5022,14 +5065,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             <ShortcutHint keys={["Ctrl", "I"]} label="Jump to needs input" />
             <ShortcutHint keys={["Ctrl", "J"]} label="Next session" />
             <ShortcutHint keys={["Ctrl", "K"]} label="Previous session" />
-            <ShortcutHint keys={["Ctrl", "Tab"]} label="Next session" />
-            <ShortcutHint keys={["Shift", "Ctrl", "Tab"]} label="Previous session" />
+            <ShortcutHint keys={["Ctrl", "Tab"]} label="MRU next" />
+            <ShortcutHint keys={["Shift", "Ctrl", "Tab"]} label="MRU previous" />
             <ShortcutHint keys={["Shift", "←"]} label="Defer session" />
             <ShortcutHint keys={["Ctrl", "←"]} label="Dismiss session" />
             <ShortcutHint keys={["Esc"]} label="Escape to session" />
+            <ShortcutHint keys={["Esc", "Esc"]} label="Send escape" />
             <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Collapse tool blocks" />
             <ShortcutHint keys={["Ctrl", "."]} label="Zen mode" />
             <ShortcutHint keys={["Shift", "Tab"]} label="Cycle CC mode" />
+            <ShortcutHint keys={["Cmd", "Shift", "L"]} label="Copy link" />
             <div className="border-t border-sol-border/20 my-1.5" />
             <ShortcutHint keys={["Shift", "Enter"]} label="New line" />
             <ShortcutHint keys={["Alt", "Enter"]} label="Reply and advance" />
@@ -5969,6 +6014,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [isOwner, forkSelectionIdx, toggleTreePanel, conversation?.fork_children, conversation?.forked_from]);
 
   useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.code === 'KeyL' && e.shiftKey && e.metaKey && !e.altKey && !e.ctrlKey) {
+        e.preventDefault();
+        copyToClipboard(window.location.href).then(() => toast.success("Link copied!"));
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => setHeaderHeight(el.offsetHeight));
@@ -6283,12 +6339,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (hasNewMessages && timeline.length > 0 && !highlightQuery && !targetMessageId && !window.location.hash && !hasMoreBelow && !userScrolledRef.current) {
-      virtualizer.scrollToIndex(timeline.length - 1, { align: "end", behavior: "smooth" });
-      requestAnimationFrame(() => {
-        if (containerRef.current) {
-          lastScrollTopRef.current = containerRef.current.scrollTop;
-        }
-      });
+      const el = containerRef.current;
+      if (el) {
+        el.style.scrollBehavior = "smooth";
+        virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight;
+          lastScrollTopRef.current = el.scrollTop;
+          setTimeout(() => { el.style.scrollBehavior = ""; }, 500);
+        });
+      }
       setUserScrolled(false);
     }
   }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow, initialScrollDone]);
