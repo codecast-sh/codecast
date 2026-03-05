@@ -118,6 +118,22 @@ function truncatePath(path: string | null, maxLen: number = 38): string {
   return path;
 }
 
+function wrapLines(text: string, width: number): string[] {
+  const words = text.split(/\s+/);
+  const result: string[] = [];
+  let line = "";
+  for (const word of words) {
+    if (line && line.length + 1 + word.length > width) {
+      result.push(line);
+      line = word;
+    } else {
+      line = line ? line + " " + word : word;
+    }
+  }
+  if (line) result.push(line);
+  return result;
+}
+
 function truncateId(id: string): string {
   return id.slice(0, 7);
 }
@@ -595,8 +611,23 @@ export function formatListResults(result: ListResult, options: ListOptions = {})
     const indent = " ".repeat(col);
     const timePad = " ".repeat(Math.max(1, col - time.length));
     const idPad = " ".repeat(Math.max(1, col - id.length));
-    lines.push(`${c.dim}${time}${c.reset}${timePad}${c.bold}${conv.title}${c.reset}`);
-    lines.push(`${c.cyan}${id}${c.reset}${idPad}${conv.subtitle ? `${c.dim}${conv.subtitle}${c.reset}` : ""}`);
+    const termWidth = process.stdout.columns || 80;
+    const textWidth = Math.max(20, termWidth - col);
+
+    const titleWrapped = wrapLines(conv.title, textWidth);
+    lines.push(`${c.dim}${time}${c.reset}${timePad}${c.bold}${titleWrapped[0]}${c.reset}`);
+    for (let i = 1; i < titleWrapped.length; i++) {
+      lines.push(`${indent}${c.bold}${titleWrapped[i]}${c.reset}`);
+    }
+    if (conv.subtitle) {
+      const subWrapped = wrapLines(conv.subtitle, textWidth);
+      lines.push(`${c.cyan}${id}${c.reset}${idPad}${c.dim}${subWrapped[0]}${c.reset}`);
+      for (let i = 1; i < subWrapped.length; i++) {
+        lines.push(`${indent}${c.dim}${subWrapped[i]}${c.reset}`);
+      }
+    } else {
+      lines.push(`${c.cyan}${id}${c.reset}`);
+    }
     lines.push(`${indent}${c.blue}${c.underline}${link}${c.reset}`);
     lines.push("");
   }
