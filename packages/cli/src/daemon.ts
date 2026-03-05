@@ -2612,18 +2612,22 @@ interface ActiveSession {
   projectPath: string;
 }
 
-let reconnectAttempt = 0;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
 
-function getReconnectDelay(): number {
-  const delay = Math.min(BASE_DELAY_MS * Math.pow(2, reconnectAttempt), MAX_DELAY_MS);
-  reconnectAttempt++;
-  return delay;
-}
-
-function resetReconnectDelay(): void {
-  reconnectAttempt = 0;
+class ReconnectBackoff {
+  private attempt = 0;
+  getDelay(): number {
+    const delay = Math.min(BASE_DELAY_MS * Math.pow(2, this.attempt), MAX_DELAY_MS);
+    this.attempt++;
+    return delay;
+  }
+  reset(): void {
+    this.attempt = 0;
+  }
+  get attempts(): number {
+    return this.attempt;
+  }
 }
 
 interface ClaudeSessionInfo {
