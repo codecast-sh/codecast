@@ -115,7 +115,10 @@ export type ClientLayouts = {
 
 export type ClientDismissed = {
   desktop_app?: boolean;
+  has_used_desktop?: boolean;
   setup_prompt?: number;
+  cli_offline?: number;
+  tmux_missing?: number;
 };
 
 export type ClientState = {

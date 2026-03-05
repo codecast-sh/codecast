@@ -34,9 +34,13 @@ export function DesktopProvider() {
     prevCountRef.current = pending;
   }, [sessions]);
 
+  const updateDismissed = useInboxStore(s => s.updateClientDismissed);
+
   useEffect(() => {
     if (!isDesktop() || initRef.current) return;
     initRef.current = true;
+
+    updateDismissed("has_used_desktop", true);
 
     onDeepLink((urls) => {
       for (const url of urls) {

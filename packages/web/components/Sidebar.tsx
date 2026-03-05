@@ -10,6 +10,7 @@ import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
+import { isDesktop } from "../lib/desktop";
 
 interface SidebarProps {
   filter?: "my" | "team";
@@ -139,6 +140,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const activeSessions = useQuery(api.conversations.listIdleSessions, {});
   const needsInputCount = activeSessions?.filter((s: any) => s.is_idle && s.message_count > 0).length ?? 0;
   const openNewSession = useInboxStore((s) => s.openNewSession);
+  const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -451,11 +453,24 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   return (
     <nav
       className={`
-        h-full w-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt overflow-y-auto scrollbar-auto
+        h-full w-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt
         ${isMobileOpen ? 'shadow-xl' : 'hidden md:flex'}
       `}
     >
-      {sidebarContent}
+      <div className="flex-1 overflow-y-auto scrollbar-auto">
+        {sidebarContent}
+      </div>
+      {!isDesktop() && !isNarrow && !hasUsedDesktop && (
+        <a
+          href="https://codecast.sh/download/mac"
+          className="flex items-center gap-2 px-3 py-2 mt-2 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors border-t border-sol-border/30 pt-3"
+        >
+          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+          </svg>
+          <span>Get Desktop App</span>
+        </a>
+      )}
     </nav>
   );
 }
