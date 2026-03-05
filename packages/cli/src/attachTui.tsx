@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, render, useApp, useInput, useStdout } from "ink";
-import { execSync, spawnSync } from "child_process";
+import { exec, execSync, spawn as spawnAsync, spawnSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -93,6 +93,14 @@ function shellOut(cmd: string): string {
   } catch {
     return "";
   }
+}
+
+function shellOutAsync(cmd: string): Promise<string> {
+  return new Promise((resolve) => {
+    exec(cmd, { encoding: "utf-8", env: { ...process.env, PATH: ENRICHED_PATH }, timeout: 2000 }, (err, stdout) => {
+      resolve(err ? "" : (stdout || ""));
+    });
+  });
 }
 
 function loadSessionRegistryLookups(): SessionRegistryLookups {
@@ -331,6 +339,21 @@ function captureTmuxPane(sessionName: string, maxLines = 220, preserveAnsi = fal
   return raw.split("\n").map((line) => preserveAnsi ? sanitizeAnsi(line) : stripAnsi(line));
 }
 
+async function captureTmuxPaneAsync(sessionName: string, cachedTarget?: string | null, maxLines = 220): Promise<string[]> {
+  let target = cachedTarget;
+  if (!target) {
+    const out = await shellOutAsync(`tmux list-panes -t '${sessionName.replace(/'/g, "'\\''")}' -F '#{?pane_active,1,0} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null`);
+    const panes = out.split("\n").filter(Boolean);
+    if (panes.length === 0) return ["Session has no visible panes."];
+    const active = panes.find((l) => l.startsWith("1 ")) || panes[0];
+    target = active.slice(2).trim();
+  }
+  if (!target) return ["Unable to resolve active pane target."];
+  const raw = await shellOutAsync(`tmux capture-pane -e -p -J -t '${target.replace(/'/g, "'\\''")}' -S -${maxLines} 2>/dev/null`);
+  if (!raw.trim()) return ["Pane is empty."];
+  return raw.split("\n").map((line) => sanitizeAnsi(line));
+}
+
 function resolveActivePaneTarget(sessionName: string): string | null {
   const out = shellOut(`tmux list-panes -t '${sessionName.replace(/'/g, "'\\''")}' -F '#{?pane_active,1,0}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null`);
   const panes = out.split("\n").filter(Boolean);
@@ -356,6 +379,63 @@ function sendTmuxInput(sessionName: string, input: string, options: { literal?: 
   else args.push(input);
   const result = spawnSync("tmux", args, { stdio: "ignore", env: { ...process.env, PATH: ENRICHED_PATH } });
   return (result.status ?? 1) === 0;
+}
+
+function sendTmuxInputFire(sessionName: string, input: string, options: { literal?: boolean } = {}, cachedTarget?: string | null): void {
+  const target = cachedTarget ?? resolveActivePaneTarget(sessionName);
+  if (!target) return;
+  const args = ["send-keys", "-t", target];
+  if (options.literal) args.push("-l", input);
+  else args.push(input);
+  const child = spawnAsync("tmux", args, { stdio: "ignore", env: { ...process.env, PATH: ENRICHED_PATH }, detached: false });
+  child.unref();
+}
+
+type RawInsertCleanup = () => void;
+
+function startRawInsertMode(
+  target: string,
+  onEscape: () => void,
+): RawInsertCleanup {
+  const stdin = process.stdin;
+
+  const savedListeners = stdin.listeners("data").slice();
+  stdin.removeAllListeners("data");
+
+  const handler = (data: Buffer) => {
+    if (data.length === 1 && data[0] === 0x1b) {
+      onEscape();
+      return;
+    }
+
+    const hex = data.toString("hex");
+    if (hex === "0d") { sendTmuxInputFire("", "Enter", {}, target); return; }
+    if (hex === "7f" || hex === "08") { sendTmuxInputFire("", "BSpace", {}, target); return; }
+    if (hex === "09") { sendTmuxInputFire("", "Tab", {}, target); return; }
+    if (hex === "03") { sendTmuxInputFire("", "C-c", {}, target); return; }
+    if (hex === "1b5b41") { sendTmuxInputFire("", "Up", {}, target); return; }
+    if (hex === "1b5b42") { sendTmuxInputFire("", "Down", {}, target); return; }
+    if (hex === "1b5b43") { sendTmuxInputFire("", "Right", {}, target); return; }
+    if (hex === "1b5b44") { sendTmuxInputFire("", "Left", {}, target); return; }
+
+    if (data.length === 1 && data[0] >= 1 && data[0] <= 26) {
+      const letter = String.fromCharCode(data[0] + 96);
+      sendTmuxInputFire("", `C-${letter}`, {}, target);
+      return;
+    }
+
+    const text = data.toString("utf-8");
+    if (text) sendTmuxInputFire("", text, { literal: true }, target);
+  };
+
+  stdin.on("data", handler);
+
+  return () => {
+    stdin.removeListener("data", handler);
+    for (const listener of savedListeners) {
+      stdin.on("data", listener as (...args: unknown[]) => void);
+    }
+  };
 }
 
 function killTmuxSession(sessionName: string): boolean {
@@ -438,6 +518,8 @@ function AttachTuiApp({
   const [showHelp, setShowHelp] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string>("Loading live tmux sessions...");
   const refreshInFlight = useRef(false);
+  const insertTargetRef = useRef<string | null>(null);
+  const rawInsertCleanup = useRef<RawInsertCleanup | null>(null);
   const metadataCache = useRef(new Map<string, { title?: string; updatedAt?: string; messageCount?: number; projectPath?: string | null; convexAgentType?: string | null }>());
 
   const refreshSessions = useCallback(async (manual = false) => {
@@ -532,17 +614,27 @@ function AttachTuiApp({
       setPreviewLines([]);
       return;
     }
-    resizeTmuxWindow(selected.tmuxSession, tmuxCols, rows);
+    if (mode !== "insert") resizeTmuxWindow(selected.tmuxSession, tmuxCols, rows);
     let canceled = false;
-    const updatePreview = () => {
-      const lines = captureTmuxPane(selected.tmuxSession, 220, true);
-      if (!canceled) setPreviewLines((prev) => {
-        if (prev.length === lines.length && prev.every((l, i) => l === lines[i])) return prev;
-        return lines;
-      });
-    };
+    const cachedTarget = insertTargetRef.current;
+    const updatePreview = mode === "insert"
+      ? () => {
+          captureTmuxPaneAsync(selected.tmuxSession, cachedTarget).then((lines) => {
+            if (!canceled) setPreviewLines((prev) => {
+              if (prev.length === lines.length && prev.every((l, i) => l === lines[i])) return prev;
+              return lines;
+            });
+          });
+        }
+      : () => {
+          const lines = captureTmuxPane(selected.tmuxSession, 220, true);
+          if (!canceled) setPreviewLines((prev) => {
+            if (prev.length === lines.length && prev.every((l, i) => l === lines[i])) return prev;
+            return lines;
+          });
+        };
     const firstCapture = setTimeout(updatePreview, 80);
-    const interval = mode === "insert" ? 150 : 1200;
+    const interval = mode === "insert" ? 400 : 1200;
     const timer = setInterval(updatePreview, interval);
     return () => {
       canceled = true;
@@ -567,30 +659,37 @@ function AttachTuiApp({
       return;
     }
 
-    // ── Insert mode ──
+    // ── Insert mode: raw stdin handler takes over, just swallow any Ink events ──
     if (mode === "insert") {
-      if (key.escape) { setMode("normal"); setStatusMessage(""); return; }
-      if (!selected?.tmuxSession) { setMode("normal"); return; }
-      let sent = false;
-      if (key.return) sent = sendTmuxInput(selected.tmuxSession, "Enter");
-      else if (key.backspace || key.delete) sent = sendTmuxInput(selected.tmuxSession, "BSpace");
-      else if (key.tab) sent = sendTmuxInput(selected.tmuxSession, "Tab");
-      else if (key.upArrow) sent = sendTmuxInput(selected.tmuxSession, "Up");
-      else if (key.downArrow) sent = sendTmuxInput(selected.tmuxSession, "Down");
-      else if (key.leftArrow) sent = sendTmuxInput(selected.tmuxSession, "Left");
-      else if (key.rightArrow) sent = sendTmuxInput(selected.tmuxSession, "Right");
-      else if (key.ctrl && input === "c") sent = sendTmuxInput(selected.tmuxSession, "C-c");
-      else if (key.ctrl && input) sent = sendTmuxInput(selected.tmuxSession, `C-${input.toLowerCase()}`);
-      else if (!key.ctrl && !key.meta && input) sent = sendTmuxInput(selected.tmuxSession, input, { literal: true });
+      if (key.escape) {
+        if (rawInsertCleanup.current) {
+          rawInsertCleanup.current();
+          rawInsertCleanup.current = null;
+        }
+        setMode("normal");
+        setStatusMessage("");
+      }
       return;
     }
 
     // ── Normal mode ──
-    if (key.ctrl && input === "c") { exit(); return; }
-    if (input === "q") { exit(); return; }
+    if (key.ctrl && input === "c") { if (rawInsertCleanup.current) { rawInsertCleanup.current(); rawInsertCleanup.current = null; } exit(); return; }
+    if (input === "q") { if (rawInsertCleanup.current) { rawInsertCleanup.current(); rawInsertCleanup.current = null; } exit(); return; }
 
     if (input === "i") {
       if (!selected?.tmuxSession) return;
+      const target = resolveActivePaneTarget(selected.tmuxSession);
+      insertTargetRef.current = target;
+      if (target) {
+        rawInsertCleanup.current = startRawInsertMode(target, () => {
+          if (rawInsertCleanup.current) {
+            rawInsertCleanup.current();
+            rawInsertCleanup.current = null;
+          }
+          setMode("normal");
+          setStatusMessage("");
+        });
+      }
       setMode("insert");
       setStatusMessage("-- INSERT --");
       return;
@@ -753,6 +852,44 @@ function AttachTuiApp({
   );
 }
 
+export function discoverWithIdleTimes(): Array<{ tmuxSession: string; idleSec: number }> {
+  const base = discoverLiveTmuxSessionsFast();
+  const nowSec = Math.floor(Date.now() / 1000);
+  return base.map((session) => {
+    const activityOut = shellOut(
+      `tmux display-message -t '${session.tmuxSession.replace(/'/g, "'\\''")}' -p '#{window_activity}' 2>/dev/null`,
+    ).trim();
+    const lastActivity = Number.parseInt(activityOut, 10);
+    const idleSec = Number.isFinite(lastActivity) && lastActivity > 0 ? nowSec - lastActivity : 0;
+    return { tmuxSession: session.tmuxSession, idleSec };
+  });
+}
+
+export function gcStaleSessions(maxIdleSec = 3600): { killed: string[]; skipped: string[] } {
+  const base = discoverLiveTmuxSessionsFast();
+  const killed: string[] = [];
+  const skipped: string[] = [];
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  for (const session of base) {
+    const activityOut = shellOut(
+      `tmux display-message -t '${session.tmuxSession.replace(/'/g, "'\\''")}' -p '#{window_activity}' 2>/dev/null`,
+    ).trim();
+    const lastActivity = Number.parseInt(activityOut, 10);
+    if (!Number.isFinite(lastActivity) || lastActivity <= 0) {
+      skipped.push(session.tmuxSession);
+      continue;
+    }
+    const idleSec = nowSec - lastActivity;
+    if (idleSec >= maxIdleSec) {
+      const ok = killTmuxSession(session.tmuxSession);
+      if (ok) killed.push(session.tmuxSession);
+      else skipped.push(session.tmuxSession);
+    }
+  }
+  return { killed, skipped };
+}
+
 export async function runAttachTui(config: AttachTuiConfig): Promise<void> {
   let attachTarget: string | null = null;
   const app = render(
@@ -768,6 +905,18 @@ export async function runAttachTui(config: AttachTuiConfig): Promise<void> {
   await app.waitUntilExit();
 
   if (attachTarget) {
+    process.stdout.write("\x1b[?1049l\x1b[?25h\x1bc");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const alive = spawnSync("tmux", ["has-session", "-t", attachTarget], {
+      stdio: "ignore",
+      env: { ...process.env, PATH: ENRICHED_PATH },
+    });
+    if ((alive.status ?? 1) !== 0) {
+      console.error(`Session "${attachTarget}" is no longer running.`);
+      return;
+    }
+
     console.log(`Attaching to tmux session: ${attachTarget}`);
     console.log("Detach and return here with: Ctrl+b then d");
     spawnSync("tmux", ["attach-session", "-t", attachTarget], { stdio: "inherit" });

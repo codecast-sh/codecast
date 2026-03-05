@@ -1994,11 +1994,24 @@ program
   .command("attach")
   .description("Open live tmux session TUI and attach/switch quickly")
   .option("--plain", "Use plain list mode (no TUI)")
+  .option("--gc", "Kill sessions idle for more than 1 hour, then open TUI")
+  .option("--gc-mins <minutes>", "Idle threshold in minutes (default: 60)")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: codecast auth");
       process.exit(1);
+    }
+
+    if (options.gc) {
+      const mins = Number.parseInt(options.gcMins || "60", 10) || 60;
+      const { gcStaleSessions } = await import("./attachTui.js");
+      const { killed } = gcStaleSessions(mins * 60);
+      if (killed.length > 0) {
+        console.log(`Killed ${killed.length} stale session${killed.length === 1 ? "" : "s"}: ${killed.join(", ")}`);
+      } else {
+        console.log("No stale sessions to clean up.");
+      }
     }
 
     if (options.plain || !process.stdout.isTTY || !process.stdin.isTTY) {
@@ -2011,6 +2024,39 @@ program
       authToken: config.auth_token,
       convexUrl: config.convex_url,
     });
+  });
+
+program
+  .command("gc")
+  .description("Kill tmux sessions idle for more than the specified threshold")
+  .option("-m, --mins <minutes>", "Idle threshold in minutes (default: 60)")
+  .option("--dry-run", "Show what would be killed without actually killing")
+  .action(async (options) => {
+    const mins = Number.parseInt(options.mins || "60", 10) || 60;
+    const { gcStaleSessions, discoverWithIdleTimes } = await import("./attachTui.js");
+
+    if (options.dryRun) {
+      const sessions = discoverWithIdleTimes();
+      const nowSec = Math.floor(Date.now() / 1000);
+      const stale = sessions.filter((s) => s.idleSec >= mins * 60);
+      if (stale.length === 0) {
+        console.log(`No sessions idle for >${mins}m.`);
+        return;
+      }
+      console.log(`Would kill ${stale.length} session${stale.length === 1 ? "" : "s"}:`);
+      for (const s of stale) {
+        const idleMins = Math.floor(s.idleSec / 60);
+        console.log(`  ${s.tmuxSession}  (idle ${idleMins}m)`);
+      }
+      return;
+    }
+
+    const { killed } = gcStaleSessions(mins * 60);
+    if (killed.length > 0) {
+      console.log(`Killed ${killed.length} stale session${killed.length === 1 ? "" : "s"}: ${killed.join(", ")}`);
+    } else {
+      console.log(`No sessions idle for >${mins}m.`);
+    }
   });
 
 program
