@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, SectionList, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -7,243 +7,48 @@ import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import {
+  SessionData, SwipeableSessionItem, cleanTitle, agentLabel, agentColor,
+  formatRelativeTime, projectName, styles as sessionStyles,
+} from '@/components/SessionItem';
 
-type Conversation = {
-  _id: string;
-  title?: string;
-  subtitle?: string | null;
-  started_at: number;
-  updated_at: number;
-  duration_ms?: number;
-  message_count?: number;
-  is_active: boolean;
-  author_name: string;
-  is_own: boolean;
-  agent_type?: string;
-  project_path?: string | null;
-  git_root?: string | null;
-};
+type InboxSession = SessionData & { session_id: string };
 
-function deriveGitRoot(c: Conversation): string | null {
-  if (c.git_root) return c.git_root;
-  if (!c.project_path) return null;
-  const parts = c.project_path.split('/');
-  const srcIndex = parts.findIndex(p => p === 'src' || p === 'projects' || p === 'repos' || p === 'code');
-  if (srcIndex >= 0 && srcIndex < parts.length - 1) {
-    return parts.slice(0, srcIndex + 2).join('/');
-  }
-  return c.project_path;
-}
+type DismissedSession = SessionData & { is_subagent?: boolean };
 
-type SearchResult = {
-  conversationId: string;
-  title: string;
-  matches: Array<{
-    messageId: string;
-    content: string;
-    role: string;
-    timestamp: number;
-  }>;
-  updatedAt: number;
-  authorName: string;
-  isOwn: boolean;
-  messageCount: number;
-};
-
-type FavoriteConversation = {
-  _id: string;
-  title?: string;
-  updated_at: number;
-  message_count: number;
-  agent_type: string;
-};
-
-function formatRelativeTime(timestamp: number): string {
-  const now = Date.now();
-  const diffMs = now - timestamp;
-  const diffMinutes = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMinutes < 1) return "just now";
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-
-  const date = new Date(timestamp);
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 60000) return "<1m";
-  const minutes = Math.floor(ms / 60000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  if (hours < 24) return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${days}d`;
-}
-
-function cleanTitle(raw?: string): string {
-  if (!raw) return 'Untitled';
-  let t = raw.trim();
-  const jsonMatch = t.match(/```(?:json)?\s*\{[\s\S]*?"title"\s*:\s*"([^"]+)"[\s\S]*?```/);
-  if (jsonMatch) return jsonMatch[1];
-  t = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  try {
-    const parsed = JSON.parse(t);
-    if (parsed.title) return parsed.title;
-  } catch {}
-  return t || 'Untitled';
-}
-
-function agentLabel(agentType: string): string {
-  switch (agentType) {
-    case "claude_code": return "Claude";
-    case "codex": return "Codex";
-    case "cursor": return "Cursor";
-    case "gemini": return "Gemini";
-    default: return "";
-  }
-}
-
-function agentColor(agentType: string): string {
-  switch (agentType) {
-    case "claude_code": return Theme.orange;
-    case "codex": return Theme.green;
-    case "cursor": return Theme.violet;
-    case "gemini": return Theme.blue;
-    default: return Theme.textMuted0;
-  }
-}
-
-function durationColor(ms: number): string {
-  const minutes = ms / 60000;
-  if (minutes < 5) return Theme.textMuted0;
-  if (minutes < 20) return Theme.textMuted;
-  if (minutes < 60) return Theme.orange;
-  if (minutes < 120) return Theme.accent;
-  return Theme.red;
-}
-
-function projectName(conv: { git_root?: string | null; project_path?: string | null }): string | null {
-  const path = conv.git_root || conv.project_path;
-  if (!path) return null;
-  return path.split('/').pop() || null;
-}
-
-function ConversationItem({ conversation, onPress, onLongPress }: {
-  conversation: Conversation;
-  onPress: () => void;
-  onLongPress?: () => void;
-}) {
-  const project = projectName(conversation);
-  const agent = agentLabel(conversation.agent_type ?? "");
-  const durationMs = conversation.duration_ms ?? (conversation.updated_at - conversation.started_at);
-  const dColor = durationColor(durationMs);
+function DismissedItem({ session, onPress }: { session: DismissedSession; onPress: () => void }) {
+  const project = projectName(session);
+  const agent = agentLabel(session.agent_type ?? "");
 
   return (
     <TouchableOpacity
       onPress={onPress}
-      onLongPress={onLongPress}
-      style={styles.conversationItem}
+      style={styles.dismissedItem}
       activeOpacity={0.6}
     >
-      <RNView style={styles.conversationContent}>
-        <RNView style={styles.conversationHeader}>
-          <RNView style={styles.titleRow}>
-            <RNView style={conversation.is_active ? styles.activeDot : styles.inactiveDot} />
-            <RNText style={styles.conversationTitle} numberOfLines={1}>
-              {cleanTitle(conversation.title)}
-            </RNText>
-          </RNView>
-          <RNView style={styles.rightMeta}>
-            <RNText style={styles.messageCount}>
-              {conversation.message_count ?? 0}
-            </RNText>
-          </RNView>
-        </RNView>
-
-        {conversation.subtitle && (
-          <RNText style={styles.conversationSubtitle} numberOfLines={2}>
-            {conversation.subtitle}
+      <RNView style={sessionStyles.conversationHeader}>
+        <RNView style={sessionStyles.titleRow}>
+          <FontAwesome name="archive" size={10} color={Theme.textMuted0} style={{ marginRight: 6 }} />
+          <RNText style={styles.dismissedTitle} numberOfLines={1}>
+            {cleanTitle(session.title)}
           </RNText>
-        )}
-
-        <RNView style={styles.conversationMeta}>
-          {agent ? (
-            <>
-              <RNText style={[styles.agentBadge, { color: agentColor(conversation.agent_type ?? "") }]}>
-                {agent}
-              </RNText>
-              <RNText style={styles.metaSeparator}>·</RNText>
-            </>
-          ) : null}
-          <RNText style={styles.metaText}>
-            {formatRelativeTime(conversation.updated_at)}
-          </RNText>
-          {durationMs > 60000 && (
-            <>
-              <RNText style={styles.metaSeparator}>·</RNText>
-              <RNView style={styles.durationInline}>
-                <FontAwesome name="clock-o" size={11} color={dColor} />
-                <RNText style={[styles.durationInlineText, { color: dColor }]}>
-                  {formatDuration(durationMs)}
-                </RNText>
-              </RNView>
-            </>
-          )}
-          {project && (
-            <>
-              <RNText style={styles.metaSeparator}>·</RNText>
-              <RNText style={styles.projectText} numberOfLines={1}>{project}</RNText>
-            </>
-          )}
-          {!conversation.is_own && (
-            <>
-              <RNText style={styles.metaSeparator}>·</RNText>
-              <RNText style={styles.authorText}>{conversation.author_name}</RNText>
-            </>
-          )}
         </RNView>
+        <RNText style={sessionStyles.messageCount}>{session.message_count}</RNText>
       </RNView>
-    </TouchableOpacity>
-  );
-}
-
-function FavoriteItem({ item, onPress }: { item: FavoriteConversation; onPress: () => void }) {
-  return (
-    <TouchableOpacity onPress={onPress} style={styles.favoriteChip} activeOpacity={0.7}>
-      <FontAwesome name="star" size={10} color={Theme.accent} style={{ marginRight: 5 }} />
-      <RNText style={styles.favoriteChipText} numberOfLines={1}>
-        {cleanTitle(item.title)}
-      </RNText>
-    </TouchableOpacity>
-  );
-}
-
-function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: () => void }) {
-  const firstMatch = result.matches[0];
-  return (
-    <TouchableOpacity onPress={onPress} style={styles.searchResultItem} activeOpacity={0.6}>
-      <RNView style={styles.searchResultHeader}>
-        <RNText style={styles.searchResultTitle} numberOfLines={1}>{result.title}</RNText>
-        <RNText style={styles.searchResultCount}>{result.matches.length} match{result.matches.length !== 1 ? 'es' : ''}</RNText>
-      </RNView>
-      {firstMatch && (
-        <RNText style={styles.searchResultSnippet} numberOfLines={2}>
-          {firstMatch.content}
-        </RNText>
-      )}
-      <RNView style={styles.searchResultMeta}>
-        <RNText style={styles.metaText}>{formatRelativeTime(result.updatedAt)}</RNText>
-        <RNText style={styles.metaSeparator}>·</RNText>
-        <RNText style={styles.metaText}>{result.messageCount} msgs</RNText>
-        {!result.isOwn && (
+      <RNView style={sessionStyles.conversationMeta}>
+        {agent ? (
           <>
-            <RNText style={styles.metaSeparator}>·</RNText>
-            <RNText style={styles.authorText}>{result.authorName}</RNText>
+            <RNText style={[sessionStyles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>
+              {agent}
+            </RNText>
+            <RNText style={sessionStyles.metaSeparator}>·</RNText>
+          </>
+        ) : null}
+        <RNText style={sessionStyles.metaText}>{formatRelativeTime(session.updated_at)}</RNText>
+        {project && (
+          <>
+            <RNText style={sessionStyles.metaSeparator}>·</RNText>
+            <RNText style={sessionStyles.projectText} numberOfLines={1}>{project}</RNText>
           </>
         )}
       </RNView>
@@ -253,23 +58,44 @@ function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: 
 
 type AgentType = "claude" | "codex" | "gemini";
 
-function NewSessionModal({ visible, onClose, onSessionStarted }: { visible: boolean; onClose: () => void; onSessionStarted: () => void }) {
+const agentLogoSources = {
+  claude: require('@/assets/images/agents/claude.png'),
+  codex: require('@/assets/images/agents/codex.png'),
+  gemini: require('@/assets/images/agents/gemini.png'),
+};
+
+function AgentLogo({ type, size = 20, bgColor }: { type: AgentType; size?: number; bgColor: string }) {
+  const iconSize = size * 0.85;
+  return (
+    <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bgColor, alignItems: 'center', justifyContent: 'center' }}>
+      <Image source={agentLogoSources[type]} style={{ width: iconSize, height: iconSize }} resizeMode="contain" />
+    </RNView>
+  );
+}
+
+function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: boolean; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
   const [agentType, setAgentType] = useState<AgentType>("claude");
   const [projectPath, setProjectPath] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const startSession = useMutation(api.users.startSession);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 6 });
 
+  useEffect(() => {
+    if (visible && !projectPath && recentProjects?.length) {
+      setProjectPath(recentProjects[0].path);
+    }
+  }, [visible, recentProjects]);
+
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
-      await startSession({
+      const result = await startSession({
         agent_type: agentType,
         project_path: projectPath || undefined,
       });
       onClose();
-      onSessionStarted();
       setProjectPath("");
+      onSessionCreated(result.conversation_id);
     } catch (err) {
       Alert.alert("Error", err instanceof Error ? err.message : "Failed to start session");
     } finally {
@@ -277,10 +103,10 @@ function NewSessionModal({ visible, onClose, onSessionStarted }: { visible: bool
     }
   };
 
-  const agents: { type: AgentType; label: string; color: string }[] = [
-    { type: "claude", label: "Claude", color: Theme.orange },
-    { type: "codex", label: "Codex", color: Theme.green },
-    { type: "gemini", label: "Gemini", color: Theme.blue },
+  const agents: { type: AgentType; label: string; color: string; bgColor: string }[] = [
+    { type: "claude", label: "Claude", color: Theme.orange, bgColor: "#b58900" },
+    { type: "codex", label: "Codex", color: Theme.green, bgColor: "#0f0f0f" },
+    { type: "gemini", label: "Gemini", color: Theme.blue, bgColor: "#1a73e8" },
   ];
 
   return (
@@ -303,6 +129,7 @@ function NewSessionModal({ visible, onClose, onSessionStarted }: { visible: bool
                 onPress={() => setAgentType(a.type)}
                 activeOpacity={0.7}
               >
+                <AgentLogo type={a.type} size={20} bgColor={agentType === a.type ? a.bgColor : Theme.textMuted0} />
                 <RNText style={[modalStyles.agentBtnText, agentType === a.type && { color: a.color }]}>
                   {a.label}
                 </RNText>
@@ -320,23 +147,22 @@ function NewSessionModal({ visible, onClose, onSessionStarted }: { visible: bool
             autoCorrect={false}
             autoCapitalize="none"
           />
-          {recentProjects && recentProjects.length > 0 && !projectPath && (
+          {recentProjects && recentProjects.length > 0 && (
             <RNView style={modalStyles.recentRow}>
               {recentProjects.slice(0, 4).map((p) => (
                 <TouchableOpacity
                   key={p.path}
-                  style={modalStyles.recentChip}
+                  style={[modalStyles.recentChip, projectPath === p.path && { borderColor: Theme.accent, backgroundColor: Theme.accent + "20" }]}
                   onPress={() => setProjectPath(p.path)}
                   activeOpacity={0.7}
                 >
-                  <RNText style={modalStyles.recentChipText} numberOfLines={1}>
+                  <RNText style={[modalStyles.recentChipText, projectPath === p.path && { color: Theme.accent }]} numberOfLines={1}>
                     {p.path.split("/").pop()}
                   </RNText>
                 </TouchableOpacity>
               ))}
             </RNView>
           )}
-
         </ScrollView>
 
         <RNView style={modalStyles.footer}>
@@ -375,6 +201,9 @@ const modalStyles = StyleSheet.create({
   agentRow: { flexDirection: "row", gap: 10 },
   agentBtn: {
     flex: 1,
+    flexDirection: "row",
+    gap: 6,
+    justifyContent: "center",
     paddingVertical: 10,
     borderRadius: 10,
     borderWidth: 1.5,
@@ -423,94 +252,64 @@ const modalStyles = StyleSheet.create({
   submitBtnText: { fontSize: 15, fontWeight: "600", color: Theme.bg },
 });
 
-export default function SessionsScreen() {
-  const [filter, setFilter] = useState<"my" | "team">("my");
+type SearchResult = {
+  conversationId: string;
+  title: string;
+  matches: Array<{
+    messageId: string;
+    content: string;
+    role: string;
+    timestamp: number;
+  }>;
+  updatedAt: number;
+  authorName: string;
+  isOwn: boolean;
+  messageCount: number;
+};
+
+function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: () => void }) {
+  const firstMatch = result.matches[0];
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.searchResultItem} activeOpacity={0.6}>
+      <RNView style={styles.searchResultHeader}>
+        <RNText style={styles.searchResultTitle} numberOfLines={1}>{result.title}</RNText>
+        <RNText style={styles.searchResultCount}>{result.matches.length} match{result.matches.length !== 1 ? 'es' : ''}</RNText>
+      </RNView>
+      {firstMatch && (
+        <RNText style={styles.searchResultSnippet} numberOfLines={2}>
+          {firstMatch.content}
+        </RNText>
+      )}
+      <RNView style={styles.conversationMeta}>
+        <RNText style={styles.metaText}>{formatRelativeTime(result.updatedAt)}</RNText>
+        <RNText style={styles.metaSeparator}>·</RNText>
+        <RNText style={styles.metaText}>{result.messageCount} msgs</RNText>
+        {!result.isOwn && (
+          <>
+            <RNText style={styles.metaSeparator}>·</RNText>
+            <RNText style={styles.metaText}>{result.authorName}</RNText>
+          </>
+        )}
+      </RNView>
+    </TouchableOpacity>
+  );
+}
+
+export default function InboxScreen() {
+  const [showNewSession, setShowNewSession] = useState(false);
+  const [showDismissed, setShowDismissed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [showNewSession, setShowNewSession] = useState(false);
-  const [projectFilter, setProjectFilter] = useState<string | null>(null);
-  const [cursor, setCursor] = useState<string | undefined>(undefined);
-  const [allConversations, setAllConversations] = useState<Conversation[]>([]);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [userOnly, setUserOnly] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const waitingForSessionRef = useRef<{ ids: Set<string>; ts: number } | null>(null);
   const router = useRouter();
-
   const isSearching = debouncedQuery.length >= 2;
-
-  const result = useQuery(api.conversations.listConversations, {
-    filter,
-    limit: 20,
-    cursor,
-    include_message_previews: false,
-  });
-
-  useEffect(() => {
-    if (!result?.conversations) return;
-    if (!cursor) {
-      setAllConversations(result.conversations as Conversation[]);
-    } else {
-      setAllConversations(prev => {
-        const ids = new Set(prev.map(c => c._id));
-        const fresh = (result.conversations as Conversation[]).filter(c => !ids.has(c._id));
-        return [...prev, ...fresh];
-      });
-    }
-    setLoadingMore(false);
-  }, [result, cursor]);
-
-  useEffect(() => {
-    const w = waitingForSessionRef.current;
-    if (!w || !allConversations.length) return;
-    if (Date.now() - w.ts > 30000) {
-      waitingForSessionRef.current = null;
-      return;
-    }
-    const newConv = allConversations.find(c => !w.ids.has(c._id));
-    if (newConv) {
-      waitingForSessionRef.current = null;
-      router.push(`/session/${newConv._id}`);
-    }
-  }, [allConversations]);
-
-  useEffect(() => {
-    setCursor(undefined);
-    setAllConversations([]);
-    setProjectFilter(null);
-  }, [filter]);
 
   const searchResults = useQuery(
     api.conversations.searchConversations,
-    isSearching ? { query: debouncedQuery, limit: 20 } : "skip"
+    isSearching ? { query: debouncedQuery, limit: 30, userOnly } : "skip"
   );
-
-  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
-
-  const projects = useMemo(() => {
-    const dirLastUpdated = new Map<string, number>();
-    for (const c of allConversations) {
-      const dir = deriveGitRoot(c);
-      if (!dir) continue;
-      const existing = dirLastUpdated.get(dir) || 0;
-      if (c.updated_at > existing) dirLastUpdated.set(dir, c.updated_at);
-    }
-    return Array.from(dirLastUpdated.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([path]) => ({ path, name: path.split('/').pop() || path }));
-  }, [allConversations]);
-
-  const filteredConversations = useMemo(() => {
-    if (!projectFilter) return allConversations;
-    return allConversations.filter(c => deriveGitRoot(c) === projectFilter);
-  }, [allConversations, projectFilter]);
-
-  const handleLoadMore = useCallback(() => {
-    if (result?.nextCursor && !loadingMore) {
-      setLoadingMore(true);
-      setCursor(result.nextCursor);
-    }
-  }, [result?.nextCursor, loadingMore]);
 
   const handleSearchChange = useCallback((text: string) => {
     setSearchQuery(text);
@@ -525,75 +324,148 @@ export default function SessionsScreen() {
     setDebouncedQuery('');
   }, []);
 
-  const handleLongPress = useCallback(async (conversationId: string) => {
+  const inboxSessions = useQuery(api.conversations.listIdleSessions, { show_all: true });
+  const dismissedSessions = useQuery(
+    api.conversations.listDismissedSessions,
+    showDismissed ? {} : "skip"
+  );
+
+  const dismissFromInbox = useMutation(api.conversations.dismissFromInbox);
+  const patchConversation = useMutation(api.conversations.patchConversation);
+
+  const handleDismiss = useCallback(async (conversationId: string) => {
     try {
-      await toggleFavorite({ conversation_id: conversationId as Id<"conversations"> });
+      await dismissFromInbox({ conversation_id: conversationId as Id<"conversations"> });
     } catch {}
-  }, [toggleFavorite]);
+  }, [dismissFromInbox]);
+
+  const handleUndismiss = useCallback(async (conversationId: string) => {
+    try {
+      await patchConversation({
+        id: conversationId as Id<"conversations">,
+        fields: { inbox_dismissed_at: null },
+      });
+    } catch {}
+  }, [patchConversation]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    setCursor(undefined);
-    setAllConversations([]);
-    setProjectFilter(null);
     setTimeout(() => setRefreshing(false), 1000);
   }, []);
 
-  const renderSearchResults = () => {
-    if (!searchResults) return null;
-    const results = 'results' in searchResults ? searchResults.results : [];
-    if (results.length === 0) {
+  const activeSessions = useMemo(() => {
+    if (!inboxSessions) return [];
+    return inboxSessions.filter(s => !s.is_deferred);
+  }, [inboxSessions]);
+
+  const deferredSessions = useMemo(() => {
+    if (!inboxSessions) return [];
+    return inboxSessions.filter(s => s.is_deferred);
+  }, [inboxSessions]);
+
+  const renderInboxItem = useCallback(({ item }: { item: InboxSession }) => (
+    <SwipeableSessionItem
+      session={item}
+      onPress={() => router.push(`/session/${item._id}`)}
+      onDismiss={() => handleDismiss(item._id)}
+    />
+  ), [router, handleDismiss]);
+
+  const renderDismissedItem = useCallback(({ item }: { item: DismissedSession }) => (
+    <DismissedItem
+      session={item}
+      onPress={() => {
+        handleUndismiss(item._id);
+      }}
+    />
+  ), [handleUndismiss]);
+
+  const ListHeader = useMemo(() => {
+    if (!activeSessions.length && inboxSessions !== undefined) {
       return (
-        <RNView style={styles.emptyContainer}>
-          <RNText style={styles.emptyText}>No results for "{debouncedQuery}"</RNText>
+        <RNView style={styles.emptyInbox}>
+          <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
+          <RNText style={styles.emptyText}>Inbox zero</RNText>
+          <RNText style={styles.emptySubtext}>All sessions dismissed or idle</RNText>
         </RNView>
       );
     }
-    return (
-      <FlatList
-        data={results}
-        renderItem={({ item }) => (
-          <SearchResultItem
-            result={item}
-            onPress={() => router.push(`/session/${item.conversationId}`)}
-          />
-        )}
-        keyExtractor={(item) => item.conversationId}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-      />
-    );
-  };
+    return null;
+  }, [activeSessions.length, inboxSessions]);
 
-  const renderEmpty = () => (
-    <RNView style={styles.emptyContainer}>
-      <RNText style={styles.emptyText}>
-        {filter === "my"
-          ? "No conversations yet.\nYour synced sessions will appear here."
-          : "No team conversations yet.\nInvite team members to start sharing."}
-      </RNText>
+  const ListFooter = useMemo(() => (
+    <RNView>
+      {deferredSessions.length > 0 && (
+        <RNView style={styles.sectionContainer}>
+          <RNView style={styles.sectionHeader}>
+            <FontAwesome name="clock-o" size={12} color={Theme.textMuted0} />
+            <RNText style={styles.sectionTitle}>Deferred ({deferredSessions.length})</RNText>
+          </RNView>
+          {deferredSessions.map(s => (
+            <SwipeableSessionItem
+              key={s._id}
+              session={s}
+              onPress={() => router.push(`/session/${s._id}`)}
+              onDismiss={() => handleDismiss(s._id)}
+            />
+          ))}
+        </RNView>
+      )}
+
+      <TouchableOpacity
+        style={styles.dismissedToggle}
+        onPress={() => setShowDismissed(prev => !prev)}
+        activeOpacity={0.7}
+      >
+        <FontAwesome name={showDismissed ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
+        <RNText style={styles.dismissedToggleText}>
+          {showDismissed ? "Hide dismissed" : "Show dismissed"}
+        </RNText>
+      </TouchableOpacity>
+
+      {showDismissed && dismissedSessions && (
+        <RNView style={styles.dismissedSection}>
+          {dismissedSessions.length === 0 ? (
+            <RNText style={styles.dismissedEmpty}>No dismissed sessions</RNText>
+          ) : (
+            dismissedSessions.map(s => (
+              <DismissedItem
+                key={s._id}
+                session={s as DismissedSession}
+                onPress={() => handleUndismiss(s._id)}
+              />
+            ))
+          )}
+        </RNView>
+      )}
+      <RNView style={{ height: 80 }} />
     </RNView>
-  );
+  ), [deferredSessions, showDismissed, dismissedSessions, router, handleDismiss, handleUndismiss]);
 
-  const renderFooter = () => {
-    if (!loadingMore || !result?.nextCursor) return null;
-    return (
-      <RNView style={{ paddingVertical: 16, alignItems: 'center' }}>
-        <ActivityIndicator size="small" color={Theme.textMuted} />
-      </RNView>
-    );
-  };
+  const searchResultsList = useMemo(() => {
+    if (!searchResults) return [];
+    return 'results' in searchResults ? searchResults.results : (searchResults as SearchResult[]);
+  }, [searchResults]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <RNView style={styles.header}>
+        <RNText style={styles.headerTitle}>Inbox</RNText>
+        {activeSessions.length > 0 && !isSearching && (
+          <RNView style={styles.countBadge}>
+            <RNText style={styles.countBadgeText}>{activeSessions.length}</RNText>
+          </RNView>
+        )}
+      </RNView>
+
       <RNView style={styles.searchContainer}>
         <RNView style={styles.searchInputRow}>
-          <FontAwesome name="search" size={14} color={Theme.textMuted0} style={styles.searchIcon} />
+          <FontAwesome name="search" size={14} color={Theme.textMuted0} style={{ marginRight: 8 }} />
           <TextInput
             style={styles.searchInput}
             value={searchQuery}
             onChangeText={handleSearchChange}
-            placeholder="Search sessions..."
+            placeholder="Search all conversations..."
             placeholderTextColor={Theme.textMuted0}
             returnKeyType="search"
             autoCorrect={false}
@@ -605,104 +477,80 @@ export default function SessionsScreen() {
             </TouchableOpacity>
           )}
         </RNView>
+        {isSearching && (
+          <TouchableOpacity
+            style={[styles.userOnlyToggle, userOnly && styles.userOnlyToggleActive]}
+            onPress={() => setUserOnly(prev => !prev)}
+            activeOpacity={0.7}
+          >
+            <RNText style={[styles.userOnlyText, userOnly && styles.userOnlyTextActive]}>
+              User messages only
+            </RNText>
+          </TouchableOpacity>
+        )}
       </RNView>
 
       {isSearching ? (
-        renderSearchResults()
-      ) : (
-        <>
-          <RNView style={styles.tabs}>
-            <TouchableOpacity
-              style={[styles.tab, filter === "my" && styles.tabActive]}
-              onPress={() => setFilter("my")}
-              activeOpacity={0.7}
-            >
-              <RNText style={[styles.tabText, filter === "my" && styles.tabTextActive]}>
-                Sessions
-              </RNText>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.tab, filter === "team" && styles.tabActive]}
-              onPress={() => setFilter("team")}
-              activeOpacity={0.7}
-            >
-              <RNText style={[styles.tabText, filter === "team" && styles.tabTextActive]}>
-                Team
-              </RNText>
-            </TouchableOpacity>
-          </RNView>
-
-          {projects.length >= 2 && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.projectFilterRow}
-              contentContainerStyle={styles.projectFilterContent}
-            >
-              <TouchableOpacity
-                style={[styles.projectChip, !projectFilter && styles.projectChipActive]}
-                onPress={() => setProjectFilter(null)}
-                activeOpacity={0.7}
-              >
-                <RNText style={[styles.projectChipText, !projectFilter && styles.projectChipTextActive]}>All</RNText>
-              </TouchableOpacity>
-              {projects.map(p => (
-                <TouchableOpacity
-                  key={p.path}
-                  style={[styles.projectChip, projectFilter === p.path && styles.projectChipActive]}
-                  onPress={() => setProjectFilter(prev => prev === p.path ? null : p.path)}
-                  activeOpacity={0.7}
-                >
-                  <RNText style={[styles.projectChipText, projectFilter === p.path && styles.projectChipTextActive]} numberOfLines={1}>
-                    {p.name}
-                  </RNText>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+        <FlatList
+          data={searchResultsList}
+          renderItem={({ item }) => (
+            <SearchResultItem
+              result={item}
+              onPress={() => router.push(`/session/${item.conversationId}`)}
+            />
           )}
-
-          <FlatList
-            data={filteredConversations}
-            renderItem={({ item }) => (
-              <ConversationItem
-                conversation={item}
-                onPress={() => router.push(`/session/${item._id}`)}
-                onLongPress={() => handleLongPress(item._id)}
-              />
-            )}
-            keyExtractor={(item) => item._id}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                tintColor={Theme.textMuted}
-              />
-            }
-            onEndReached={handleLoadMore}
-            onEndReachedThreshold={0.3}
-            ListEmptyComponent={result === undefined ? null : renderEmpty}
-            ListFooterComponent={renderFooter}
-            contentContainerStyle={filteredConversations.length === 0 ? styles.emptyList : styles.listContent}
-            showsVerticalScrollIndicator={false}
-          />
-        </>
+          keyExtractor={(item) => item.conversationId}
+          contentContainerStyle={searchResultsList.length === 0 ? styles.emptyList : styles.listContent}
+          ListEmptyComponent={
+            searchResults === undefined ? (
+              <RNView style={styles.emptyInbox}>
+                <ActivityIndicator size="small" color={Theme.textMuted} />
+              </RNView>
+            ) : (
+              <RNView style={styles.emptyInbox}>
+                <RNText style={styles.emptyText}>No results for "{debouncedQuery}"</RNText>
+              </RNView>
+            )
+          }
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        />
+      ) : (
+        <FlatList
+          data={activeSessions}
+          renderItem={renderInboxItem}
+          keyExtractor={(item) => item._id}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Theme.textMuted}
+            />
+          }
+          ListHeaderComponent={ListHeader}
+          ListFooterComponent={ListFooter}
+          contentContainerStyle={activeSessions.length === 0 ? styles.emptyList : styles.listContent}
+          showsVerticalScrollIndicator={false}
+        />
       )}
 
       <NewSessionModal
         visible={showNewSession}
         onClose={() => setShowNewSession(false)}
-        onSessionStarted={() => {
-          waitingForSessionRef.current = { ids: new Set(allConversations.map(c => c._id)), ts: Date.now() };
+        onSessionCreated={(conversationId) => {
+          router.push(`/session/${conversationId}`);
         }}
       />
 
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setShowNewSession(true)}
-        activeOpacity={0.8}
-      >
-        <FontAwesome name="plus" size={16} color={Theme.textMuted} />
-      </TouchableOpacity>
+      <RNView style={styles.fabContainer} pointerEvents="box-none">
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => setShowNewSession(true)}
+          activeOpacity={0.8}
+        >
+          <FontAwesome name="plus" size={16} color={Theme.textMuted} />
+        </TouchableOpacity>
+      </RNView>
     </SafeAreaView>
   );
 }
@@ -711,6 +559,111 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    backgroundColor: Theme.bgAlt,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+    gap: 8,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: Theme.text,
+  },
+  countBadge: {
+    backgroundColor: Theme.accent,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    minWidth: 22,
+    alignItems: 'center',
+  },
+  countBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Theme.bg,
+  },
+  listContent: {
+    paddingBottom: Spacing.xl,
+  },
+  emptyList: {
+    flexGrow: 1,
+  },
+  emptyInbox: {
+    alignItems: 'center',
+    paddingVertical: 60,
+    gap: 8,
+  },
+  emptyText: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: Theme.textMuted,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: Theme.textMuted0,
+  },
+  sectionContainer: {
+    borderTopWidth: 1,
+    borderTopColor: Theme.bgHighlight,
+    marginTop: Spacing.sm,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Theme.bgAlt,
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.textMuted0,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  dismissedToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: Theme.bgHighlight,
+    marginTop: Spacing.sm,
+  },
+  dismissedToggleText: {
+    fontSize: 13,
+    color: Theme.textMuted0,
+    fontWeight: '500',
+  },
+  dismissedSection: {
+    backgroundColor: Theme.bgAlt,
+  },
+  dismissedEmpty: {
+    fontSize: 13,
+    color: Theme.textMuted0,
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  dismissedItem: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
+    opacity: 0.7,
+  },
+  dismissedTitle: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: Theme.textMuted,
+    flex: 1,
   },
   searchContainer: {
     backgroundColor: Theme.bgAlt,
@@ -730,194 +683,36 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
-  searchIcon: {
-    marginRight: Spacing.sm,
-  },
   searchInput: {
     flex: 1,
     fontSize: 15,
     color: Theme.text,
     paddingVertical: 0,
   },
-  tabs: {
-    flexDirection: 'row',
-    backgroundColor: Theme.bgAlt,
-    borderBottomWidth: 1,
-    borderBottomColor: Theme.borderLight,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-  },
-  tabActive: {
-    borderBottomColor: Theme.text,
-  },
-  tabText: {
-    fontSize: 15,
-    color: Theme.textMuted,
-    fontWeight: '500',
-  },
-  tabTextActive: {
-    color: Theme.text,
-    fontWeight: '600',
-  },
-  favoritesSection: {
-    backgroundColor: Theme.bgAlt,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.bgHighlight,
-  },
-  favoritesHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: Spacing.sm,
-    gap: 6,
-  },
-  favoritesTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Theme.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  favoritesRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  favoriteChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Theme.bg,
+  userOnlyToggle: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
     paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
     borderColor: Theme.borderLight,
-    maxWidth: 180,
   },
-  favoriteChipText: {
-    fontSize: 13,
-    color: Theme.text,
+  userOnlyToggleActive: {
+    backgroundColor: Theme.accent + '20',
+    borderColor: Theme.accent,
+  },
+  userOnlyText: {
+    fontSize: 12,
+    color: Theme.textMuted,
     fontWeight: '500',
-    flexShrink: 1,
   },
-  listContent: {
-    paddingBottom: Spacing.xl,
-  },
-  conversationItem: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.bgHighlight,
-    backgroundColor: Theme.bg,
-  },
-  conversationContent: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: 10,
-  },
-  conversationHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    marginRight: Spacing.md,
-  },
-  activeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: Theme.greenBright,
-    marginRight: Spacing.sm,
-  },
-  inactiveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'transparent',
-    marginRight: Spacing.sm,
-  },
-  conversationTitle: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: Theme.text,
-    flex: 1,
-    letterSpacing: -0.2,
-  },
-  conversationSubtitle: {
-    fontSize: 13,
-    color: Theme.textMuted,
-    marginLeft: 14,
-    marginBottom: 4,
-    lineHeight: 18,
-  },
-  messageCount: {
-    fontSize: 11,
-    color: Theme.textMuted0,
-    fontVariant: ['tabular-nums'],
-    fontWeight: '400',
-  },
-  rightMeta: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    gap: 2,
-    marginLeft: Spacing.sm,
-  },
-  durationText: {
-    fontSize: 10,
-    color: Theme.textMuted0,
-    fontVariant: ['tabular-nums'],
-    fontWeight: '400',
-  },
-  durationInline: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-  durationInlineText: {
-    fontSize: 13,
-    fontFamily: "SpaceMono",
-    fontWeight: "600",
-    fontVariant: ["tabular-nums"],
-  },
-  conversationMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 14,
-  },
-  agentBadge: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.2,
-  },
-  metaText: {
-    fontSize: 13,
-    color: Theme.textDim,
-  },
-  projectText: {
-    fontSize: 13,
-    color: Theme.textMuted,
-    maxWidth: 100,
-  },
-  authorText: {
-    fontSize: 13,
-    color: Theme.textMuted,
-  },
-  metaSeparator: {
-    color: Theme.textMuted0,
-    marginHorizontal: 5,
-    fontSize: 13,
+  userOnlyTextActive: {
+    color: Theme.accent,
   },
   searchResultItem: {
     paddingHorizontal: Spacing.lg,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.bgHighlight,
     backgroundColor: Theme.bg,
@@ -944,65 +739,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Theme.textMuted,
     lineHeight: 18,
-    marginBottom: 6,
+    marginBottom: 4,
   },
-  searchResultMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.xxxl,
-  },
-  emptyText: {
-    fontSize: 15,
-    color: Theme.textMuted,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  emptyList: {
-    flex: 1,
-  },
-  projectFilterRow: {
-    flexGrow: 0,
-    flexShrink: 0,
-    backgroundColor: Theme.bgAlt,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
-  },
-  projectFilterContent: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-    gap: 8,
-    alignItems: 'center',
-  },
-  projectChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 16,
-    backgroundColor: Theme.bg,
-    borderWidth: 1,
-    borderColor: Theme.border,
-  },
-  projectChipActive: {
-    backgroundColor: Theme.accent,
-    borderColor: Theme.accent,
-  },
-  projectChipText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Theme.textMuted,
-    lineHeight: 16,
-  },
-  projectChipTextActive: {
-    color: Theme.bg,
-  },
-  fab: {
+  fabContainer: {
     position: 'absolute',
     bottom: 24,
     right: 20,
+    zIndex: 100,
+    elevation: 100,
+  },
+  fab: {
     width: 40,
     height: 40,
     borderRadius: 20,

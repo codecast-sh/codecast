@@ -2614,8 +2614,8 @@ type PendingMessage = {
   retry_count: number;
 };
 
-function MessageInput({ conversationId, isActive }: { conversationId: Id<"conversations">; isActive: boolean }) {
-  const [message, setMessage] = useState('');
+function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<"conversations">; isActive: boolean; draft?: string | null }) {
+  const [message, setMessage] = useState(draft || '');
   const [isSending, setIsSending] = useState(false);
   const [lastStatus, setLastStatus] = useState<'delivered' | 'failed' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -2623,6 +2623,18 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
 
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const retryMessage = useMutation(api.pendingMessages.retryMessage);
+  const patchConversation = useMutation(api.conversations.patchConversation);
+
+  const draftRef = useRef(draft || '');
+  useEffect(() => {
+    if (!message && !draftRef.current) return;
+    if (message === draftRef.current) return;
+    draftRef.current = message;
+    const t = setTimeout(() => {
+      patchConversation({ id: conversationId, fields: { draft_message: message || null } }).catch(() => {});
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [message]);
 
   const pendingMessages = useQuery(api.pendingMessages.getPendingMessages, {}) as PendingMessage[] | undefined;
 
@@ -2676,6 +2688,8 @@ function MessageInput({ conversationId, isActive }: { conversationId: Id<"conver
       // TODO: Update sendMessage to support images
       await sendMessage({ conversation_id: conversationId, content: trimmedMessage || '📷' });
       setMessage('');
+      draftRef.current = '';
+      patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
       setSelectedImages([]);
       setLastStatus('delivered');
       setTimeout(() => setLastStatus(null), 2000);
@@ -3850,6 +3864,7 @@ export default function SessionDetailScreen() {
           <MessageInput
             conversationId={id as Id<"conversations">}
             isActive={isActive}
+            draft={conversation?.draft_message}
           />
         </RNView>
 
