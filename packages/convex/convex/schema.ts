@@ -763,6 +763,178 @@ export default defineSchema({
     .index("by_status_run_at", ["status", "run_at"])
     .index("by_event_filter", ["status"]),
 
+  // --- Task Layer: Projects, Tasks, Docs ---
+
+  projects: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    title: v.string(),
+    description: v.optional(v.string()),
+    status: v.union(
+      v.literal("planning"),
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("done")
+    ),
+    project_path: v.optional(v.string()),
+    target_date: v.optional(v.number()),
+    labels: v.optional(v.array(v.string())),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_status", ["user_id", "status"])
+    .index("by_team_id", ["team_id"]),
+
+  tasks: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    project_id: v.optional(v.id("projects")),
+    parent_id: v.optional(v.id("tasks")),
+    short_id: v.string(),
+
+    title: v.string(),
+    description: v.optional(v.string()),
+    task_type: v.union(
+      v.literal("feature"),
+      v.literal("bug"),
+      v.literal("task"),
+      v.literal("chore")
+    ),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("open"),
+      v.literal("in_progress"),
+      v.literal("in_review"),
+      v.literal("done"),
+      v.literal("dropped")
+    ),
+    priority: v.union(
+      v.literal("urgent"),
+      v.literal("high"),
+      v.literal("medium"),
+      v.literal("low"),
+      v.literal("none")
+    ),
+
+    assignee: v.optional(v.string()),
+    labels: v.optional(v.array(v.string())),
+
+    // Dependencies
+    blocked_by: v.optional(v.array(v.string())),
+    blocks: v.optional(v.array(v.string())),
+
+    // Session linkage
+    conversation_ids: v.optional(v.array(v.id("conversations"))),
+    created_from_conversation: v.optional(v.id("conversations")),
+    created_from_insight: v.optional(v.id("session_insights")),
+    last_session_summary: v.optional(v.string()),
+    attempt_count: v.optional(v.number()),
+
+    // Origin tracking
+    source: v.union(
+      v.literal("human"),
+      v.literal("agent"),
+      v.literal("insight"),
+      v.literal("import")
+    ),
+    confidence: v.optional(v.number()),
+
+    // Drive state (iterative polish)
+    drive: v.optional(v.object({
+      current_round: v.number(),
+      total_rounds: v.number(),
+      rounds: v.array(v.object({
+        round: v.number(),
+        findings: v.array(v.string()),
+        fixed: v.array(v.string()),
+        deferred: v.optional(v.array(v.string())),
+      })),
+    })),
+
+    created_at: v.number(),
+    updated_at: v.number(),
+    closed_at: v.optional(v.number()),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_status", ["user_id", "status"])
+    .index("by_project_id", ["project_id"])
+    .index("by_project_status", ["project_id", "status"])
+    .index("by_parent_id", ["parent_id"])
+    .index("by_short_id", ["short_id"])
+    .index("by_team_id", ["team_id"])
+    .searchIndex("search_tasks", {
+      searchField: "title",
+      filterFields: ["user_id", "project_id", "status"],
+    }),
+
+  task_comments: defineTable({
+    task_id: v.id("tasks"),
+    author: v.string(),
+    text: v.string(),
+    conversation_id: v.optional(v.id("conversations")),
+    comment_type: v.union(
+      v.literal("progress"),
+      v.literal("blocker"),
+      v.literal("review"),
+      v.literal("note")
+    ),
+    created_at: v.number(),
+  })
+    .index("by_task_id", ["task_id"]),
+
+  docs: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    title: v.string(),
+    content: v.string(),
+    doc_type: v.union(
+      v.literal("plan"),
+      v.literal("design"),
+      v.literal("spec"),
+      v.literal("investigation"),
+      v.literal("handoff"),
+      v.literal("note")
+    ),
+
+    project_id: v.optional(v.id("projects")),
+    task_ids: v.optional(v.array(v.id("tasks"))),
+    conversation_id: v.optional(v.id("conversations")),
+
+    source: v.union(
+      v.literal("agent"),
+      v.literal("human"),
+      v.literal("plan_mode"),
+      v.literal("file_sync"),
+      v.literal("import")
+    ),
+    source_file: v.optional(v.string()),
+
+    project_path: v.optional(v.string()),
+    labels: v.optional(v.array(v.string())),
+    pinned: v.optional(v.boolean()),
+
+    embedding: v.optional(v.array(v.float64())),
+
+    created_at: v.number(),
+    updated_at: v.number(),
+    archived_at: v.optional(v.number()),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_type", ["user_id", "doc_type"])
+    .index("by_project_id", ["project_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_source_file", ["source_file"])
+    .searchIndex("search_docs", {
+      searchField: "title",
+      filterFields: ["user_id", "doc_type", "project_id"],
+    })
+    .vectorIndex("by_doc_embedding", {
+      vectorField: "embedding",
+      dimensions: 1024,
+      filterFields: ["user_id"],
+    }),
+
   client_state: defineTable({
     user_id: v.id("users"),
     current_conversation_id: v.optional(v.string()),

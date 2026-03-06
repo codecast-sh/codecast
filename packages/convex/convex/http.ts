@@ -2632,4 +2632,98 @@ http.route({
   }),
 });
 
+// --- Task Layer Routes ---
+
+function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) {
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+  http.route({
+    path,
+    method: "POST",
+    handler: httpAction(async (ctx, request) => {
+      try {
+        const body = await request.json();
+        const result = await handler(ctx, body);
+        return new Response(JSON.stringify(result), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return new Response(JSON.stringify({ error: msg }), {
+          status: msg.includes("Unauthorized") ? 401 : 500,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+    }),
+  });
+  http.route({
+    path,
+    method: "OPTIONS",
+    handler: httpAction(async () => {
+      return new Response(null, {
+        status: 204,
+        headers: { ...corsHeaders },
+      });
+    }),
+  });
+}
+
+// Projects
+cliRoute("/cli/projects/create", async (ctx, body) => {
+  return await ctx.runMutation(api.projects.create, body);
+});
+cliRoute("/cli/projects/list", async (ctx, body) => {
+  return await ctx.runQuery(api.projects.list, body);
+});
+cliRoute("/cli/projects/get", async (ctx, body) => {
+  return await ctx.runQuery(api.projects.get, body);
+});
+cliRoute("/cli/projects/update", async (ctx, body) => {
+  return await ctx.runMutation(api.projects.update, body);
+});
+
+// Tasks
+cliRoute("/cli/work/create", async (ctx, body) => {
+  return await ctx.runMutation(api.tasks.create, body);
+});
+cliRoute("/cli/work/list", async (ctx, body) => {
+  return await ctx.runQuery(api.tasks.list, body);
+});
+cliRoute("/cli/work/get", async (ctx, body) => {
+  return await ctx.runQuery(api.tasks.get, body);
+});
+cliRoute("/cli/work/update", async (ctx, body) => {
+  return await ctx.runMutation(api.tasks.update, body);
+});
+cliRoute("/cli/work/comment", async (ctx, body) => {
+  return await ctx.runMutation(api.tasks.addComment, body);
+});
+cliRoute("/cli/work/dep", async (ctx, body) => {
+  return await ctx.runMutation(api.tasks.addDep, body);
+});
+cliRoute("/cli/work/context", async (ctx, body) => {
+  return await ctx.runQuery(api.tasks.context, body);
+});
+
+// Docs
+cliRoute("/cli/docs/create", async (ctx, body) => {
+  return await ctx.runMutation(api.docs.create, body);
+});
+cliRoute("/cli/docs/list", async (ctx, body) => {
+  return await ctx.runQuery(api.docs.list, body);
+});
+cliRoute("/cli/docs/get", async (ctx, body) => {
+  return await ctx.runQuery(api.docs.get, body);
+});
+cliRoute("/cli/docs/update", async (ctx, body) => {
+  return await ctx.runMutation(api.docs.update, body);
+});
+cliRoute("/cli/docs/search", async (ctx, body) => {
+  return await ctx.runQuery(api.docs.search, body);
+});
+
 export default http;
