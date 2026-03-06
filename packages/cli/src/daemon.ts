@@ -43,7 +43,8 @@ import {
 
 const _execAsync = promisify(exec);
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
-const execAsync: typeof _execAsync = (cmd, opts?) => _execAsync(cmd, { ...opts as any, env: { ...process.env, PATH: ENRICHED_PATH, ...(opts as any)?.env } });
+const EXEC_TIMEOUT_MS = 10_000;
+const execAsync: typeof _execAsync = (cmd, opts?) => _execAsync(cmd, { timeout: EXEC_TIMEOUT_MS, ...opts as any, env: { ...process.env, PATH: ENRICHED_PATH, ...(opts as any)?.env } });
 
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";

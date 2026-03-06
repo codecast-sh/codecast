@@ -5,7 +5,8 @@ import * as crypto from "crypto";
 import { SyncService } from "./syncService.js";
 import { hasTmux } from "./tmux.js";
 
-const execAsync = promisify(exec);
+const _execAsync = promisify(exec);
+const execAsync: typeof _execAsync = (cmd, opts?) => _execAsync(cmd, { timeout: 10_000, ...opts as any });
 
 const POLL_INTERVAL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 60_000;

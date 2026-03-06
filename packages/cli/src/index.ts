@@ -3326,7 +3326,7 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
 
   const tmuxPanes: Record<string, string> = {};
   try {
-    const out = execSync("tmux list-panes -a -F '#{pane_tty} #{session_name}' 2>/dev/null", { encoding: "utf-8" });
+    const out = execSync("tmux list-panes -a -F '#{pane_tty} #{session_name}' 2>/dev/null", { encoding: "utf-8", timeout: 10_000 });
     for (const line of out.trim().split("\n").filter(Boolean)) {
       const i = line.indexOf(" ");
       if (i > 0) tmuxPanes[line.slice(0, i)] = line.slice(i + 1);
