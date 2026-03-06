@@ -15,36 +15,30 @@ else
 fi
 
 CONVEX_PID=""
-WEB_PID=""
 CONVEX_RESTARTS=0
-WEB_RESTARTS=0
 CONVEX_LAST_START=0
-WEB_LAST_START=0
 MAX_RAPID_RESTARTS=5
 RAPID_WINDOW=60
+WEB_FAIL_COUNT=0
+WEB_FAIL_THRESHOLD=3
 
 log() { printf "\033[90m[%s]\033[0m %s\n" "$(date +%H:%M:%S)" "$*"; }
 log_warn() { printf "\033[90m[%s]\033[0m \033[33m%s\033[0m\n" "$(date +%H:%M:%S)" "$*"; }
 log_err() { printf "\033[90m[%s]\033[0m \033[31m%s\033[0m\n" "$(date +%H:%M:%S)" "$*"; }
 
-cleanup() {
-    SHUTTING_DOWN=true
-    echo ""
-    log "Shutting down..."
-    [ -n "$CONVEX_PID" ] && kill $CONVEX_PID 2>/dev/null
-    [ -n "$WEB_PID" ] && kill $WEB_PID 2>/dev/null
-    sleep 1
-    [ -n "$CONVEX_PID" ] && kill -9 $CONVEX_PID 2>/dev/null
-    [ -n "$WEB_PID" ] && kill -9 $WEB_PID 2>/dev/null
-    wait 2>/dev/null
-    exit 0
+kill_tree() {
+    local pid=$1 sig=${2:-TERM}
+    local children
+    children=$(pgrep -P $pid 2>/dev/null)
+    for child in $children; do
+        kill_tree $child $sig
+    done
+    kill -$sig $pid 2>/dev/null
 }
-
-trap cleanup SIGINT SIGTERM
 
 kill_port() {
     local port=$1
-    local pids
+    local pids attempts=0
     pids=$(lsof -ti :$port 2>/dev/null)
     if [ -n "$pids" ]; then
         log "Clearing port $port (pids: $pids)"
@@ -53,17 +47,45 @@ kill_port() {
         pids=$(lsof -ti :$port 2>/dev/null)
         [ -n "$pids" ] && echo "$pids" | xargs kill -9 2>/dev/null || true
     fi
+    while lsof -ti :$port >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        if [ $attempts -ge 10 ]; then
+            log_err "Port $port still in use after ${attempts}s, force killing"
+            lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null || true
+            sleep 1
+            break
+        fi
+        sleep 1
+    done
 }
 
-check_rapid_restarts() {
-    local name=$1 count=$2 last_start=$3
-    local now=$(date +%s)
-    local elapsed=$((now - last_start))
+kill_web() {
+    pkill -f "next dev -p $PORT" 2>/dev/null || true
+    pkill -f "next-server" 2>/dev/null || true
+    kill_port $PORT
+}
 
-    if [ $elapsed -lt $RAPID_WINDOW ] && [ $count -ge $MAX_RAPID_RESTARTS ]; then
+cleanup() {
+    SHUTTING_DOWN=true
+    echo ""
+    log "Shutting down..."
+    [ -n "$CONVEX_PID" ] && kill_tree $CONVEX_PID
+    kill_web
+    sleep 1
+    [ -n "$CONVEX_PID" ] && kill_tree $CONVEX_PID 9
+    kill_port $PORT
+    wait 2>/dev/null
+    exit 0
+}
+
+trap cleanup SIGINT SIGTERM
+
+check_rapid_restarts() {
+    local name=$1 count=$2
+    if [ $count -ge $MAX_RAPID_RESTARTS ]; then
         local backoff=$((count * 5))
         [ $backoff -gt 60 ] && backoff=60
-        log_warn "$name crash-looping ($count restarts in ${elapsed}s), backing off ${backoff}s..."
+        log_warn "$name crash-looping ($count restarts in ${RAPID_WINDOW}s window), backing off ${backoff}s..."
         sleep $backoff
     fi
 }
@@ -73,12 +95,13 @@ start_convex() {
     if [ $((now - CONVEX_LAST_START)) -gt $RAPID_WINDOW ]; then
         CONVEX_RESTARTS=0
     fi
-    CONVEX_RESTARTS=$((CONVEX_RESTARTS + 1))
     CONVEX_LAST_START=$now
+    CONVEX_RESTARTS=$((CONVEX_RESTARTS + 1))
 
-    check_rapid_restarts "convex" $CONVEX_RESTARTS $CONVEX_LAST_START
+    check_rapid_restarts "convex" $CONVEX_RESTARTS
     $SHUTTING_DOWN && return
 
+    [ -n "$CONVEX_PID" ] && kill_tree $CONVEX_PID
     cd "$ROOT_DIR/packages/convex"
     bun run dev &
     CONVEX_PID=$!
@@ -87,22 +110,28 @@ start_convex() {
 }
 
 start_web() {
-    local now=$(date +%s)
-    if [ $((now - WEB_LAST_START)) -gt $RAPID_WINDOW ]; then
-        WEB_RESTARTS=0
-    fi
-    WEB_RESTARTS=$((WEB_RESTARTS + 1))
-    WEB_LAST_START=$now
-
-    check_rapid_restarts "web" $WEB_RESTARTS $WEB_LAST_START
     $SHUTTING_DOWN && return
 
-    kill_port $PORT
+    kill_web
     cd "$ROOT_DIR/packages/web"
-    bun run dev -- -p $PORT -H 0.0.0.0 &
-    WEB_PID=$!
+    "$ROOT_DIR/node_modules/.bin/next" dev -p $PORT -H 0.0.0.0 &
     cd "$ROOT_DIR"
-    log "Web started on port $PORT (pid $WEB_PID)"
+
+    local attempts=0
+    while [ $attempts -lt 30 ]; do
+        sleep 1
+        attempts=$((attempts + 1))
+        if lsof -ti :$PORT -sTCP:LISTEN >/dev/null 2>&1; then
+            log "Web ready on port $PORT"
+            WEB_FAIL_COUNT=0
+            return
+        fi
+    done
+    log_warn "Web started but port $PORT not yet bound after ${attempts}s"
+}
+
+port_is_listening() {
+    lsof -ti :$PORT -sTCP:LISTEN >/dev/null 2>&1
 }
 
 # --- startup ---
@@ -145,8 +174,13 @@ while true; do
         start_convex
     fi
 
-    if [ -n "$WEB_PID" ] && ! kill -0 $WEB_PID 2>/dev/null; then
-        log_err "Web died (was pid $WEB_PID), restarting..."
-        start_web
+    if ! port_is_listening; then
+        WEB_FAIL_COUNT=$((WEB_FAIL_COUNT + 1))
+        if [ $WEB_FAIL_COUNT -ge $WEB_FAIL_THRESHOLD ]; then
+            log_err "Web not responding on port $PORT (${WEB_FAIL_COUNT} consecutive checks), restarting..."
+            start_web
+        fi
+    else
+        WEB_FAIL_COUNT=0
     fi
 done
