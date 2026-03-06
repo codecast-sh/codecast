@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { mutativeMiddleware, action } from "./mutativeMiddleware";
-import { readInboxCache, writeInboxCache, type InboxCacheData } from "../lib/inboxCache";
 
 export interface SessionContext {
   projectPath?: string;
@@ -165,10 +164,6 @@ interface InboxStoreState {
   openNewSession: (ctx?: SessionContext) => void;
   closeNewSession: () => void;
 
-  // -- Cache hydration --
-  _hydratedFromCache: boolean;
-  hydrateFromCache: () => Promise<boolean>;
-
   // -- Fork navigation --
   activeBranches: Record<string, string>;
   optimisticForkChildren: ForkChild[];
@@ -257,17 +252,6 @@ const DEFAULT_PAGINATION: PaginationState = {
   initialized: false,
 };
 
-function persistToCache(get: () => InboxStoreState) {
-  const { sessions, dismissedSessions, dismissedIds, mruStack, clientState } = get();
-  writeInboxCache({
-    sessions,
-    dismissedSessions,
-    dismissedIds: Array.from(dismissedIds),
-    mruStack,
-    clientState,
-  });
-}
-
 function stripImageRef(s: string): string {
   return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
 }
@@ -302,31 +286,6 @@ export const useInboxStore = create<InboxStoreState>(
 
   closeNewSession: () => {
     set({ newSession: { isOpen: false, context: {} } });
-  },
-
-  _hydratedFromCache: false,
-
-  hydrateFromCache: async () => {
-    const state = get();
-    if (state._hydratedFromCache) return false;
-    const cached = await readInboxCache();
-    if (!cached) {
-      set({ _hydratedFromCache: true });
-      return false;
-    }
-    if (state.sessions.length > 0) {
-      set({ clientState: cached.clientState, _hydratedFromCache: true });
-      return false;
-    }
-    set({
-      sessions: cached.sessions,
-      dismissedSessions: cached.dismissedSessions,
-      dismissedIds: new Set(cached.dismissedIds),
-      mruStack: cached.mruStack,
-      clientState: cached.clientState,
-      _hydratedFromCache: true,
-    });
-    return true;
   },
 
   activeBranches: {},
@@ -451,18 +410,17 @@ export const useInboxStore = create<InboxStoreState>(
     const incomingById = new Map(incoming.map((s) => [s._id, s]));
     const incomingBySessionId = new Map(incoming.map((s) => [s.session_id, s]));
 
-    // Reconcile dismissedIds with server truth: if the server returns a session
-    // in the active list, it's not dismissed anymore. Only keep dismissedIds for
-    // sessions the server hasn't returned yet (optimistic dismiss in flight).
-    const reconciledDismissed = new Set<string>();
+    // dismissedIds is purely optimistic — clear any ID the server returned as active.
+    let dismissedChanged = false;
     for (const id of dismissedIds) {
-      if (!incomingById.has(id)) reconciledDismissed.add(id);
+      if (incomingById.has(id)) {
+        dismissedIds.delete(id);
+        dismissedChanged = true;
+      }
     }
-    if (reconciledDismissed.size !== dismissedIds.size) {
-      set({ dismissedIds: reconciledDismissed });
-    }
+    if (dismissedChanged) set({ dismissedIds: new Set(dismissedIds) });
 
-    const visibleIncoming = incoming.filter((s) => !reconciledDismissed.has(s._id));
+    const visibleIncoming = incoming.filter((s) => !dismissedIds.has(s._id));
 
     const newConversations = { ...get().conversations };
     for (const s of incoming) {
@@ -474,7 +432,6 @@ export const useInboxStore = create<InboxStoreState>(
     if (prev.length === 0) {
       const clampedIndex = Math.min(currentIndex, Math.max(0, visibleIncoming.length - 1));
       set({ sessions: visibleIncoming, currentIndex: clampedIndex, conversations: newConversations });
-      persistToCache(get);
       return;
     }
 
@@ -496,10 +453,10 @@ export const useInboxStore = create<InboxStoreState>(
         continue;
       }
       const fresh = incomingById.get(old._id);
-      if (fresh && !reconciledDismissed.has(old._id)) {
+      if (fresh && !dismissedIds.has(old._id)) {
         merged.push(fresh);
         seen.add(old._id);
-      } else if (old._id === currentSession?._id && !reconciledDismissed.has(old._id)) {
+      } else if (old._id === currentSession?._id && !dismissedIds.has(old._id)) {
         merged.push(old);
         seen.add(old._id);
       }
@@ -534,12 +491,10 @@ export const useInboxStore = create<InboxStoreState>(
     }
 
     set({ sessions: merged, currentIndex: newIndex, conversations: newConversations });
-    persistToCache(get);
   },
 
   syncDismissedFromConvex: (incoming: InboxSession[]) => {
     set({ dismissedSessions: incoming });
-    persistToCache(get);
   },
 
   syncClientState: (serverState: any) => {
@@ -559,7 +514,6 @@ export const useInboxStore = create<InboxStoreState>(
       dismissed: { ...prev.dismissed, ...serverState.dismissed },
     };
     set({ clientState: cs });
-    persistToCache(get);
   },
 
   navigateUp: () => {

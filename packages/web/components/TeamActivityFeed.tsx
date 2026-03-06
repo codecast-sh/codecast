@@ -8,37 +8,6 @@ import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
-type ActivityEvent = {
-  _id: Id<"team_activity_events">;
-  event_type:
-    | "session_started"
-    | "session_completed"
-    | "commit_pushed"
-    | "member_joined"
-    | "member_left"
-    | "pr_created"
-    | "pr_merged";
-  title: string;
-  description?: string;
-  timestamp: number;
-  related_conversation_id?: Id<"conversations">;
-  related_commit_sha?: string;
-  related_pr_id?: Id<"pull_requests">;
-  metadata?: {
-    duration_ms?: number;
-    message_count?: number;
-    git_branch?: string;
-    files_changed?: number;
-    insertions?: number;
-    deletions?: number;
-  };
-  actor: {
-    _id: Id<"users">;
-    name?: string;
-    email?: string;
-  } | null;
-};
-
 function getRelativeTime(timestamp: number): string {
   const now = Date.now();
   const diffMs = now - timestamp;
@@ -61,21 +30,6 @@ function getRelativeTime(timestamp: number): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function outcomeLabel(type: string) {
-  switch (type) {
-    case "shipped": return { label: "shipped", cls: "text-sol-green bg-sol-green/15 border-sol-green/30" };
-    case "progress": return { label: "in progress", cls: "text-sol-cyan bg-sol-cyan/10 border-sol-cyan/20" };
-    case "blocked": return { label: "blocked", cls: "text-sol-red bg-sol-red/10 border-sol-red/20" };
-    default: return { label: "unknown", cls: "text-sol-text-muted bg-sol-bg-alt border-sol-border/40" };
-  }
-}
-
-function getShortProject(path?: string): string | null {
-  if (!path) return null;
-  const parts = path.split("/").filter(Boolean);
-  return parts[parts.length - 1] || null;
-}
-
 const AVATAR_COLORS = [
   "bg-sol-yellow/20 text-sol-yellow",
   "bg-sol-cyan/20 text-sol-cyan",
@@ -92,14 +46,39 @@ function avatarColor(name: string): string {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
-function ActorAvatar({ name, size = "sm", outcomeType }: { name: string; size?: "sm" | "md"; outcomeType?: string }) {
+function ActorAvatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
   const initial = (name || "?")[0].toUpperCase();
-  const cls = size === "md" ? "w-6 h-6 text-xs" : "w-4 h-4 text-[9px]";
-  const ring = outcomeType === "blocked" ? "ring-1 ring-sol-red/40" : outcomeType === "progress" ? "ring-1 ring-sol-cyan/30" : outcomeType === "shipped" ? "ring-1 ring-sol-green/30" : "";
+  const cls = size === "md" ? "w-7 h-7 text-xs" : "w-5 h-5 text-[10px]";
   return (
-    <span className={`${cls} rounded-full flex items-center justify-center font-semibold shrink-0 ${avatarColor(name)} ${ring}`}>
+    <span className={`${cls} rounded-full flex items-center justify-center font-semibold shrink-0 ${avatarColor(name)}`}>
       {initial}
     </span>
+  );
+}
+
+function OutcomeBadge({ type }: { type: string }) {
+  const config: Record<string, { label: string; cls: string }> = {
+    shipped: { label: "shipped", cls: "text-sol-green bg-sol-green/10 border-sol-green/25" },
+    progress: { label: "in progress", cls: "text-sol-cyan bg-sol-cyan/8 border-sol-cyan/20" },
+    blocked: { label: "blocked", cls: "text-sol-red bg-sol-red/10 border-sol-red/25" },
+  };
+  const c = config[type] || { label: type, cls: "text-sol-text-dim bg-sol-bg-alt border-sol-border/30" };
+  return (
+    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded border shrink-0 ${c.cls}`}>
+      {c.label}
+    </span>
+  );
+}
+
+function OutcomeBar({ outcomes }: { outcomes: { shipped: number; progress: number; blocked: number } }) {
+  const total = outcomes.shipped + outcomes.progress + outcomes.blocked;
+  if (total === 0) return null;
+  return (
+    <div className="flex h-1 rounded-full overflow-hidden bg-sol-bg-alt/60">
+      {outcomes.shipped > 0 && <div className="bg-sol-green/70" style={{ width: `${(outcomes.shipped / total) * 100}%` }} />}
+      {outcomes.progress > 0 && <div className="bg-sol-cyan/60" style={{ width: `${(outcomes.progress / total) * 100}%` }} />}
+      {outcomes.blocked > 0 && <div className="bg-sol-red/60" style={{ width: `${(outcomes.blocked / total) * 100}%` }} />}
+    </div>
   );
 }
 
@@ -112,281 +91,313 @@ function getTimeGroup(timestamp: number): string {
   return "Earlier";
 }
 
-function OutcomeBar({ outcomes }: { outcomes: { shipped: number; progress: number; blocked: number } }) {
-  const total = outcomes.shipped + outcomes.progress + outcomes.blocked;
-  if (total === 0) return null;
-  return (
-    <div className="flex h-1.5 rounded-full overflow-hidden bg-sol-bg-alt/60">
-      {outcomes.shipped > 0 && <div className="bg-sol-green/70 transition-all duration-500 ease-out" style={{ width: `${(outcomes.shipped / total) * 100}%` }} />}
-      {outcomes.progress > 0 && <div className="bg-sol-cyan/60 transition-all duration-500 ease-out" style={{ width: `${(outcomes.progress / total) * 100}%` }} />}
-      {outcomes.blocked > 0 && <div className="bg-sol-red/60 transition-all duration-500 ease-out" style={{ width: `${(outcomes.blocked / total) * 100}%` }} />}
-    </div>
-  );
-}
-
-function HighlightCard({ item }: { item: any }) {
-  const outcome = outcomeLabel(item.outcome_type);
-  const project = getShortProject(item.project_path);
-  const actorName = item.rolled_up && item.actor_names?.length > 0
-    ? item.actor_names.join(", ")
-    : item.actor?.name || "Unknown";
-
-  const borderColor = item.outcome_type === "blocked" ? "border-sol-red/40"
-    : item.outcome_type === "progress" ? "border-sol-cyan/25"
-    : item.outcome_type === "shipped" ? "border-sol-green/25"
-    : "border-transparent";
-
-  const bgTint = item.outcome_type === "blocked" ? "bg-sol-red/[0.03]" : "";
+function SessionCard({ item }: { item: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const actorName = item.actor?.name || "Unknown";
+  const isBlocked = item.outcome_type === "blocked";
   const isShipped = item.outcome_type === "shipped";
 
   return (
-    <Link
-      href={`/conversation/${item.conversation_id}`}
-      className={`group block border-l-2 ${borderColor} hover:bg-sol-bg-alt/30 ${bgTint} pl-3 pr-2 py-2 transition-all duration-100 rounded-r`}
-    >
-      <div className="flex items-start gap-2.5">
-        <ActorAvatar name={actorName} size="md" outcomeType={item.outcome_type} />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className={`text-[10px] font-medium w-[72px] text-center py-0.5 rounded border shrink-0 ${outcome.cls}`}>
-              {outcome.label}
-            </span>
-            <span className={`text-sm font-medium ${isShipped ? "text-sol-text-muted" : "text-sol-text"} group-hover:text-sol-yellow transition-colors truncate leading-snug`}>
-              {item.title}
-            </span>
-            {item.rolled_up && (
-              <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-sol-violet/10 text-sol-violet">
-                x{item.rollup_count}
-              </span>
-            )}
-            {item.confidence !== undefined && item.confidence < 0.5 && (
-              <span className="shrink-0 text-[10px] text-sol-orange/60" title="Low confidence insight">~</span>
-            )}
-          </div>
+    <div className={`group border-l-2 rounded-r-lg ${
+      isBlocked ? "border-sol-red/40 bg-sol-red/[0.02]" : isShipped ? "border-sol-green/25 bg-sol-bg/60" : "border-sol-cyan/20 bg-sol-bg/60"
+    }`}>
+      <div className="pl-3 pr-2 py-3">
+        {/* Header: avatar, name, outcome, time */}
+        <div className="flex items-center gap-2 mb-2">
+          <ActorAvatar name={actorName} />
+          <span className="text-[11px] font-medium text-sol-text">{actorName}</span>
+          <OutcomeBadge type={item.outcome_type} />
+          <span className="ml-auto text-[10px] text-sol-text-dim tabular-nums">{getRelativeTime(item.generated_at)}</span>
+        </div>
 
-          {isShipped ? (
-            item.what_changed && (
-              <p className="text-[11px] text-sol-green/70 leading-relaxed truncate mb-0.5">
-                {item.what_changed}
-              </p>
-            )
-          ) : (
-            <p className="text-xs text-sol-text-muted leading-relaxed truncate mb-0.5">
-              {item.summary}
-            </p>
-          )}
+        {/* Title + project */}
+        <Link
+          href={`/conversation/${item.conversation_id}`}
+          className="block mb-1.5 hover:text-sol-yellow transition-colors"
+        >
+          <span className="text-sm font-medium text-sol-text leading-snug group-hover:text-sol-yellow">
+            {item.title}
+          </span>
+        </Link>
 
-          {item.blockers?.length > 0 && (
-            <div className="text-[11px] leading-tight truncate mb-0.5">
-              <span className="font-semibold text-sol-red">Blocked</span>
-              <span className="text-sol-text-dim ml-1">{item.blockers[0]}</span>
-            </div>
-          )}
-
-          <div className="flex items-center gap-1.5 text-[10px] text-sol-text-dim">
-            <span className="font-medium">{actorName}</span>
-            {project && (
-              <>
-                <span className="opacity-40">in</span>
-                <span className="font-mono">{project}</span>
-              </>
-            )}
+        {item.project_path && (
+          <div className="flex items-center gap-1.5 text-[10px] text-sol-text-dim mb-2">
+            <span className="font-mono">{item.project_path.split("/").pop()}</span>
             {item.git_branch && (
               <>
                 <span className="opacity-40">/</span>
                 <span className="font-mono">{item.git_branch}</span>
               </>
             )}
-            <span className="ml-auto opacity-50 tabular-nums">{getRelativeTime(item.generated_at)}</span>
+            {item.message_count && (
+              <span className="opacity-50">{item.message_count} msgs</span>
+            )}
           </div>
-        </div>
-      </div>
-    </Link>
-  );
-}
+        )}
 
-function getEventColor(eventType: string) {
-  switch (eventType) {
-    case "session_started":
-    case "session_completed": return "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/30";
-    case "commit_pushed": return "bg-sol-violet/20 text-sol-violet border-sol-violet/30";
-    case "member_joined": return "bg-sol-green/20 text-sol-green border-sol-green/30";
-    case "member_left": return "bg-sol-red/20 text-sol-red border-sol-red/30";
-    case "pr_created":
-    case "pr_merged": return "bg-sol-blue/20 text-sol-blue border-sol-blue/30";
-    default: return "bg-sol-bg-alt text-sol-text-muted border-sol-border/30";
-  }
-}
+        {/* Goal */}
+        {item.goal && (
+          <p className="text-xs text-sol-text-muted leading-relaxed mb-1.5">
+            <span className="text-sol-text-dim font-medium">Goal:</span> {item.goal}
+          </p>
+        )}
 
-function getEventIcon(eventType: string) {
-  switch (eventType) {
-    case "session_started":
-    case "session_completed":
-      return (
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
-        </svg>
-      );
-    case "commit_pushed":
-      return (
-        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
-        </svg>
-      );
-    case "pr_created":
-    case "pr_merged":
-      return (
-        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-        </svg>
-      );
-    default:
-      return (
-        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-        </svg>
-      );
-  }
-}
+        {/* Summary - the main content */}
+        <p className="text-xs text-sol-text leading-relaxed mb-1.5">
+          {item.summary}
+        </p>
 
-function ActivityEventCard({ event }: { event: ActivityEvent }) {
-  const actorName = event.actor?.name || event.actor?.email || "Unknown";
-  const colorCls = getEventColor(event.event_type);
-  const content = (
-    <div className="flex items-start gap-3 py-2.5 px-1 group hover:bg-sol-bg-alt/30 rounded-lg transition-colors">
-      <div className={`shrink-0 w-7 h-7 rounded border flex items-center justify-center mt-0.5 ${colorCls}`}>
-        {getEventIcon(event.event_type)}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-sm text-sol-text truncate leading-snug">{event.title}</span>
-          <span className="text-[10px] text-sol-text-dim shrink-0 tabular-nums">{getRelativeTime(event.timestamp)}</span>
-        </div>
-        <div className="flex items-center gap-2 text-[11px] text-sol-text-dim mt-0.5 flex-wrap">
-          <span className="font-medium">{actorName}</span>
-          {event.metadata?.git_branch && <span className="font-mono">{event.metadata.git_branch}</span>}
-          {event.metadata?.insertions !== undefined && (
-            <span className="text-sol-green">+{event.metadata.insertions}</span>
-          )}
-          {event.metadata?.deletions !== undefined && (
-            <span className="text-sol-red">-{event.metadata.deletions}</span>
-          )}
-          {event.metadata?.files_changed !== undefined && (
-            <span>{event.metadata.files_changed}f</span>
-          )}
-          {event.metadata?.message_count !== undefined && (
-            <span>{event.metadata.message_count} msgs</span>
-          )}
-        </div>
-        {event.description && (
-          <p className="text-[11px] text-sol-text-dim mt-0.5 truncate">{event.description}</p>
+        {/* What changed */}
+        {item.what_changed && (
+          <p className="text-xs leading-relaxed mb-1.5">
+            <span className="text-sol-green font-medium">Changed:</span>{" "}
+            <span className="text-sol-text-muted">{item.what_changed}</span>
+          </p>
+        )}
+
+        {/* Blockers */}
+        {item.blockers?.length > 0 && (
+          <div className="mb-1.5">
+            {item.blockers.map((b: string, i: number) => (
+              <div key={i} className="flex items-start gap-1.5 text-xs text-sol-red/80 leading-relaxed">
+                <span className="shrink-0 mt-0.5">!</span>
+                <span>{b}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Next action */}
+        {item.next_action && (
+          <p className="text-[11px] text-sol-text-dim leading-relaxed mb-1.5">
+            <span className="text-sol-yellow/70">Next:</span> {item.next_action}
+          </p>
+        )}
+
+        {/* Expandable details: commits, files, themes */}
+        {(item.metadata?.commit_shas?.length > 0 || item.metadata?.files_touched?.length > 0 || item.themes?.length > 0) && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="text-[10px] text-sol-text-dim hover:text-sol-text transition-colors mt-1"
+          >
+            {expanded ? "less" : "details"}
+            <span className="ml-1 opacity-40">{expanded ? "\u25B4" : "\u25BE"}</span>
+          </button>
+        )}
+
+        {expanded && (
+          <div className="mt-2 pt-2 border-t border-sol-border/20 space-y-1.5">
+            {item.metadata?.files_touched?.length > 0 && (
+              <div className="text-[11px] text-sol-text-dim">
+                <span className="font-medium text-sol-text-dim">Commits:</span>
+                {item.metadata.files_touched.map((f: string, i: number) => (
+                  <div key={i} className="font-mono text-[10px] text-sol-violet/70 pl-2 truncate">{f}</div>
+                ))}
+              </div>
+            )}
+            {item.themes?.length > 0 && (
+              <div className="flex flex-wrap gap-1 pt-1">
+                {item.themes.map((t: string) => (
+                  <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-sol-yellow/8 border border-sol-yellow/15 text-sol-yellow/60">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
   );
+}
 
-  if (event.related_conversation_id) {
-    return <Link href={`/conversation/${event.related_conversation_id}`}>{content}</Link>;
-  }
-  return content;
+function PeopleRow({ people, onSelect, selectedId }: { people: any[]; onSelect: (id: Id<"users"> | undefined) => void; selectedId?: Id<"users"> }) {
+  if (!people?.length) return null;
+  return (
+    <div className="flex items-center gap-2 overflow-x-auto pb-1">
+      {people.map((person: any) => {
+        const isSelected = selectedId?.toString() === person.actor._id.toString();
+        return (
+          <button
+            key={person.actor._id}
+            onClick={() => onSelect(isSelected ? undefined : person.actor._id)}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-md border transition-colors shrink-0 ${
+              isSelected
+                ? "border-sol-yellow/40 bg-sol-yellow/8 text-sol-text"
+                : "border-sol-border/30 bg-sol-bg hover:border-sol-border/50 text-sol-text-muted hover:text-sol-text"
+            }`}
+          >
+            <ActorAvatar name={person.actor.name} size="sm" />
+            <span className="text-[11px] font-medium">{person.actor.name.split(" ")[0]}</span>
+            <span className="text-[10px] opacity-50">{person.sessions}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 interface TeamActivityFeedProps {
   teamId: Id<"teams">;
 }
 
+type ViewMode = "insights" | "raw";
+
+const EVENT_ICONS: Record<string, string> = {
+  session_started: "\u25B6",
+  session_completed: "\u2713",
+  commit_pushed: "\u2022",
+  pr_created: "\u2191",
+  pr_merged: "\u2714",
+  member_joined: "+",
+  member_left: "\u2212",
+};
+
+const EVENT_COLORS: Record<string, string> = {
+  session_started: "text-sol-cyan",
+  session_completed: "text-sol-green",
+  commit_pushed: "text-sol-violet",
+  pr_created: "text-sol-yellow",
+  pr_merged: "text-sol-green",
+  member_joined: "text-sol-cyan",
+  member_left: "text-sol-text-dim",
+};
+
+function RawEventRow({ event }: { event: any }) {
+  const actorName = event.actor?.name || event.actor?.email || "Unknown";
+  const icon = EVENT_ICONS[event.event_type] || "\u2022";
+  const color = EVENT_COLORS[event.event_type] || "text-sol-text-dim";
+
+  return (
+    <div className="flex items-start gap-2 py-1.5 px-2 text-xs hover:bg-sol-bg-alt/30 rounded transition-colors">
+      <span className={`${color} w-4 text-center shrink-0 font-mono`}>{icon}</span>
+      <span className="text-sol-text-muted shrink-0 w-16 tabular-nums text-[10px]">{getRelativeTime(event.timestamp)}</span>
+      <span className="text-sol-text-dim shrink-0 w-20 truncate">{actorName.split(" ")[0]}</span>
+      <span className="text-sol-text flex-1 truncate">{event.title}</span>
+      {event.description && (
+        <span className="text-sol-text-dim truncate max-w-[200px] hidden lg:inline">{event.description}</span>
+      )}
+      {event.metadata?.git_branch && (
+        <span className="text-sol-violet/50 font-mono text-[10px] hidden lg:inline">{event.metadata.git_branch}</span>
+      )}
+    </div>
+  );
+}
+
+function RawFeed({ teamId }: { teamId: Id<"teams"> }) {
+  const [cursor, setCursor] = useState<number | undefined>(undefined);
+  const rawFeed = useQuery(api.teamActivity.getTeamActivityFeed, { team_id: teamId, limit: 50, cursor });
+
+  if (rawFeed === undefined) return <LoadingSkeleton />;
+  if (!rawFeed.events.length) return <EmptyState title="No events" description="No raw activity events recorded yet." />;
+
+  return (
+    <div className="space-y-0.5">
+      {rawFeed.events.map((event: any) => (
+        <RawEventRow key={event._id} event={event} />
+      ))}
+      {rawFeed.hasMore && (
+        <button
+          onClick={() => setCursor(rawFeed.nextCursor)}
+          className="w-full text-center text-[11px] text-sol-text-dim hover:text-sol-text py-2 transition-colors"
+        >
+          Load more
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function TeamActivityFeed({ teamId }: TeamActivityFeedProps) {
-  const [viewMode, setViewMode] = useState<"digest" | "people" | "feed">("digest");
   const [windowHours, setWindowHours] = useState<24 | 168>(24);
   const [isBackfilling, setIsBackfilling] = useState(false);
   const [backfillResult, setBackfillResult] = useState<{ generated: number; candidates: number; skipped_or_failed: number } | null>(null);
-  const [themeFilter, setThemeFilter] = useState<string | null>(null);
-  const [eventTypeFilter, setEventTypeFilter] = useState<string | undefined>(undefined);
   const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(undefined);
-  const [limit, setLimit] = useState(50);
-  const [selectedActor, setSelectedActor] = useState<Id<"users"> | undefined>(undefined);
+  const [viewMode, setViewMode] = useState<ViewMode>("insights");
 
-  const teamMembers = useQuery(api.teams.getTeamMembers, { team_id: teamId });
-  const rawResult = useQuery(api.teamActivity.getTeamActivityFeed, {
-    team_id: teamId,
-    event_type_filter: eventTypeFilter as any,
-    actor_filter: actorFilter,
-    limit,
-  });
   const digest = useQuery(api.sessionInsights.getTeamDigest, { team_id: teamId, window_hours: windowHours });
   const runBackfill = useAction(api.sessionInsights.backfillTeamInsights);
-  const personDigest = useQuery(
-    api.sessionInsights.getPersonDigest,
-    selectedActor ? { team_id: teamId, actor_user_id: selectedActor, window_hours: windowHours } : "skip"
-  );
 
-  const groupedEvents = useMemo(() => {
-    if (!rawResult?.events) return [];
-    const now = Date.now();
-    const buckets = [
-      { label: "Last Hour", since: now - 60 * 60 * 1000 },
-      { label: "Last 6 Hours", since: now - 6 * 60 * 60 * 1000 },
-      { label: "Last 24 Hours", since: now - 24 * 60 * 60 * 1000 },
-      { label: "This Week", since: now - 7 * 24 * 60 * 60 * 1000 },
-      { label: "Older", since: 0 },
-    ];
-    const groups: { label: string; items: ActivityEvent[] }[] = [];
-    const used = new Set<string>();
-    for (const bucket of buckets) {
-      const items = rawResult.events.filter((e: ActivityEvent) => {
-        const id = e._id.toString();
-        if (used.has(id)) return false;
-        const inBucket = e.timestamp >= bucket.since && (bucket.label === "Older" || e.timestamp < (buckets[buckets.indexOf(bucket) - 1]?.since ?? Infinity));
-        if (inBucket) used.add(id);
-        return inBucket;
-      });
-      if (items.length > 0) groups.push({ label: bucket.label, items });
+  const filteredFeed = useMemo(() => {
+    if (!digest?.feed) return [];
+    if (!actorFilter) return digest.feed;
+    return digest.feed.filter((item: any) => item.actor?._id?.toString() === actorFilter?.toString());
+  }, [digest?.feed, actorFilter]);
+
+  const groupedFeed = useMemo(() => {
+    const groups: { label: string; items: any[] }[] = [];
+    let currentGroup = "";
+    for (const item of filteredFeed) {
+      const group = getTimeGroup(item.generated_at);
+      if (group !== currentGroup) {
+        groups.push({ label: group, items: [] });
+        currentGroup = group;
+      }
+      groups[groups.length - 1].items.push(item);
     }
     return groups;
-  }, [rawResult?.events]);
+  }, [filteredFeed]);
 
-  if (rawResult === undefined && digest === undefined) return <LoadingSkeleton />;
-
-  const tabBtn = (mode: "digest" | "people" | "feed", label: string, count?: number) => (
-    <button
-      onClick={() => { setViewMode(mode); setThemeFilter(null); }}
-      className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-        viewMode === mode
-          ? "bg-sol-bg text-sol-text shadow-sm border border-sol-border/60"
-          : "text-sol-text-muted hover:text-sol-text"
-      }`}
-    >
-      {label}
-      {count !== undefined && <span className="ml-1 text-[10px] opacity-50">{count}</span>}
-    </button>
-  );
+  if (digest === undefined) return <LoadingSkeleton />;
 
   return (
-    <div className="space-y-5">
-      {/* Header controls */}
+    <div className="space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-1 bg-sol-bg-alt/60 rounded-lg p-1">
-          {tabBtn("digest", "Digest", digest?.highlights.length)}
-          {tabBtn("people", "People", digest?.people.length)}
-          {tabBtn("feed", "Raw Feed")}
+        {viewMode === "insights" ? (
+        <div className="flex items-baseline gap-3">
+          <span className="text-lg font-semibold text-sol-text tabular-nums">{digest.sessions_analyzed}</span>
+          <span className="text-xs text-sol-text-dim">
+            sessions{digest.people.length > 1 ? ` across ${digest.people.length} people` : ""}
+          </span>
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-sol-green"><span className="font-semibold tabular-nums">{digest.outcomes.shipped}</span> shipped</span>
+            <span className="text-sol-cyan"><span className="font-semibold tabular-nums">{digest.outcomes.progress}</span> wip</span>
+            {digest.outcomes.blocked > 0 && (
+              <span className="text-sol-red"><span className="font-semibold tabular-nums">{digest.outcomes.blocked}</span> blocked</span>
+            )}
+          </div>
         </div>
+        ) : (
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm font-medium text-sol-text">Raw Events</span>
+          <span className="text-xs text-sol-text-dim">commits, sessions, PRs</span>
+        </div>
+        )}
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-sol-bg-alt/60 rounded-md p-0.5">
+          <div className="flex items-center gap-0.5 bg-sol-bg-alt/60 rounded-md p-0.5">
             <button
-              onClick={() => { setWindowHours(24); setThemeFilter(null); }}
+              onClick={() => setViewMode("insights")}
+              className={`px-2.5 py-1 text-xs rounded transition-colors ${viewMode === "insights" ? "bg-sol-bg text-sol-text shadow-sm border border-sol-border/60" : "text-sol-text-muted hover:text-sol-text"}`}
+            >
+              Feed
+            </button>
+            <button
+              onClick={() => setViewMode("raw")}
+              className={`px-2.5 py-1 text-xs rounded transition-colors ${viewMode === "raw" ? "bg-sol-bg text-sol-text shadow-sm border border-sol-border/60" : "text-sol-text-muted hover:text-sol-text"}`}
+            >
+              Raw
+            </button>
+          </div>
+          {viewMode === "insights" && (
+          <div className="flex items-center gap-0.5 bg-sol-bg-alt/60 rounded-md p-0.5">
+            <button
+              onClick={() => { setWindowHours(24); setActorFilter(undefined); }}
               className={`px-2.5 py-1 text-xs rounded transition-colors ${windowHours === 24 ? "bg-sol-bg text-sol-text shadow-sm border border-sol-border/60" : "text-sol-text-muted hover:text-sol-text"}`}
             >
               24h
             </button>
             <button
-              onClick={() => { setWindowHours(168); setThemeFilter(null); }}
+              onClick={() => { setWindowHours(168); setActorFilter(undefined); }}
               className={`px-2.5 py-1 text-xs rounded transition-colors ${windowHours === 168 ? "bg-sol-bg text-sol-text shadow-sm border border-sol-border/60" : "text-sol-text-muted hover:text-sol-text"}`}
             >
               7d
             </button>
           </div>
+          )}
 
+          {viewMode === "insights" && (
           <button
             onClick={async () => {
               setIsBackfilling(true);
@@ -406,266 +417,50 @@ export function TeamActivityFeed({ teamId }: TeamActivityFeedProps) {
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
           </button>
+          )}
         </div>
       </div>
 
       {backfillResult && (
         <div className="text-xs text-sol-text-dim bg-sol-bg-alt/40 border border-sol-border/30 rounded px-3 py-1.5">
           Generated {backfillResult.generated} insights from {backfillResult.candidates} sessions
-          {backfillResult.skipped_or_failed > 0 ? ` · ${backfillResult.skipped_or_failed} skipped` : ""}
+          {backfillResult.skipped_or_failed > 0 ? ` / ${backfillResult.skipped_or_failed} skipped` : ""}
         </div>
       )}
 
-      {/* Digest view */}
-      {viewMode === "digest" && (
-        <div className="space-y-4">
-          {!digest ? (
-            <LoadingSkeleton />
-          ) : digest.sessions_analyzed === 0 ? (
+      {viewMode === "raw" ? (
+        <RawFeed teamId={teamId} />
+      ) : (
+        <>
+          <OutcomeBar outcomes={digest.outcomes} />
+
+          {/* People filter row */}
+          <PeopleRow people={digest.people} onSelect={setActorFilter} selectedId={actorFilter} />
+
+          {/* Feed */}
+          {digest.sessions_analyzed === 0 ? (
             <EmptyState title="No insights yet" description="Insights appear after team sessions produce activity. Try regenerating with the refresh button above." />
+          ) : filteredFeed.length === 0 ? (
+            <EmptyState title="No sessions" description={actorFilter ? "This person has no sessions in this window." : "No sessions found."} />
           ) : (
-            <>
-              {/* Stats + Themes */}
-              <div className="pb-3 border-b border-sol-border/30 space-y-3">
-                <div className="flex items-baseline gap-3">
-                  <span className="text-2xl font-semibold text-sol-text tabular-nums leading-none">{digest.sessions_analyzed}</span>
-                  <span className="text-xs text-sol-text-dim">sessions{digest.people.length > 1 ? ` from ${digest.people.length} people` : ""}</span>
-                  <span className="text-xs text-sol-text-dim mx-1">·</span>
-                  <span className="text-xs text-sol-green"><span className="font-semibold tabular-nums">{digest.outcomes.shipped}</span> shipped</span>
-                  <span className="text-xs text-sol-cyan"><span className="font-semibold tabular-nums">{digest.outcomes.progress}</span> in progress</span>
-                  {digest.outcomes.blocked > 0 && (
-                    <span className="text-xs text-sol-red"><span className="font-semibold tabular-nums">{digest.outcomes.blocked}</span> blocked</span>
-                  )}
-                </div>
-                <OutcomeBar outcomes={digest.outcomes} />
-                {digest.top_themes.length > 0 && (
-                  <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1.5 pt-1">
-                    {themeFilter && (
-                      <button
-                        onClick={() => setThemeFilter(null)}
-                        className="text-[10px] text-sol-text-dim hover:text-sol-text transition-colors"
-                      >
-                        clear
-                      </button>
-                    )}
-                    {digest.top_themes.map((theme: any) => {
-                      const size = theme.count >= 5 ? "text-xs" : "text-[11px]";
-                      const weight = theme.count >= 3 ? "font-medium" : "";
-                      const isActive = themeFilter === theme.theme;
-                      return (
-                        <button
-                          key={theme.theme}
-                          onClick={() => setThemeFilter(isActive ? null : theme.theme)}
-                          className={`${size} ${weight} px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
-                            isActive
-                              ? "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/40"
-                              : "bg-sol-yellow/8 text-sol-yellow/80 border-sol-yellow/15 hover:border-sol-yellow/30"
-                          }`}
-                        >
-                          {theme.theme}
-                          <span className="text-sol-text-dim ml-1 text-[10px] opacity-60">{theme.count}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Highlights */}
-              <div>
-                {(() => {
-                  const filtered = themeFilter
-                    ? digest.highlights.filter((h: any) => h.themes?.some((t: string) => t.toLowerCase() === themeFilter))
-                    : digest.highlights;
-                  const sorted = [...filtered].sort((a: any, b: any) => {
-                    const order: Record<string, number> = { blocked: 0, progress: 1, shipped: 2, unknown: 3 };
-                    return (order[a.outcome_type] ?? 3) - (order[b.outcome_type] ?? 3);
-                  });
-                  if (sorted.length === 0 && themeFilter) {
-                    return (
-                      <div className="py-8 text-center text-sm text-sol-text-dim">
-                        No sessions matching "{themeFilter}"
-                      </div>
-                    );
-                  }
-                  let lastOutcome = "";
-                  return sorted.map((item: any) => {
-                    const showDivider = lastOutcome && lastOutcome !== item.outcome_type &&
-                      ((lastOutcome === "blocked" && item.outcome_type !== "blocked") ||
-                       (lastOutcome !== "shipped" && item.outcome_type === "shipped"));
-                    lastOutcome = item.outcome_type;
-                    return (
-                      <div key={item.conversation_id}>
-                        {showDivider && item.outcome_type === "shipped" && (
-                          <div className="flex items-center gap-2 pt-3 pb-1 px-1">
-                            <div className="h-px flex-1 bg-sol-border/30" />
-                            <span className="text-[10px] font-medium text-sol-text-dim uppercase tracking-wider">Completed</span>
-                            <div className="h-px flex-1 bg-sol-border/30" />
-                          </div>
-                        )}
-                        {showDivider && item.outcome_type === "progress" && lastOutcome !== "progress" && (
-                          <div className="h-px bg-sol-border/20 my-1" />
-                        )}
-                        <HighlightCard item={item} />
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* People view */}
-      {viewMode === "people" && (
-        <div className="space-y-4">
-          {!digest ? (
-            <LoadingSkeleton />
-          ) : digest.people.length === 0 ? (
-            <EmptyState title="No people insights yet" description="Once insights are generated, this view summarizes each teammate's work." />
-          ) : (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {digest.people.map((person: any) => {
-                  const isSelected = selectedActor?.toString() === person.actor._id.toString();
-                  return (
-                    <button
-                      key={person.actor._id}
-                      onClick={() => setSelectedActor(isSelected ? undefined : person.actor._id)}
-                      className={`text-left bg-sol-bg border rounded-lg p-3.5 transition-all ${
-                        isSelected ? "border-sol-yellow/50 bg-sol-yellow/5" : "border-sol-border/50 hover:border-sol-border"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 mb-2">
-                        <ActorAvatar name={person.actor.name} size="md" />
-                        <span className="text-sm font-medium text-sol-text flex-1">{person.actor.name}</span>
-                        <span className="text-xs text-sol-text-dim tabular-nums">{person.sessions}</span>
-                      </div>
-                      <OutcomeBar outcomes={person.outcomes} />
-                      <div className="flex items-center gap-3 text-[11px] mt-1.5 mb-2">
-                        <span className="text-sol-green tabular-nums">{person.outcomes.shipped} shipped</span>
-                        <span className="text-sol-cyan tabular-nums">{person.outcomes.progress} in progress</span>
-                        {person.outcomes.blocked > 0 && <span className="text-sol-red tabular-nums">{person.outcomes.blocked} blocked</span>}
-                      </div>
-                      {person.top_themes.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mb-1.5">
-                          {person.top_themes.slice(0, 4).map((t: string) => (
-                            <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-sol-yellow/8 border border-sol-yellow/15 text-sol-yellow/70">{t}</span>
-                          ))}
-                        </div>
-                      )}
-                      {person.latest_summary && (
-                        <p className="text-[11px] text-sol-text-dim leading-relaxed truncate">{person.latest_summary}</p>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {selectedActor && personDigest && (
-                <div className="bg-sol-bg border border-sol-yellow/30 rounded-lg p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-medium text-sol-text">{personDigest.actor.name}</h3>
-                    <span className="text-xs text-sol-text-dim">{personDigest.sessions_analyzed} sessions analyzed</span>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs">
-                    <span className="text-sol-green">{personDigest.outcomes.shipped} shipped</span>
-                    <span className="text-sol-cyan">{personDigest.outcomes.progress} in progress</span>
-                    {personDigest.outcomes.blocked > 0 && <span className="text-sol-red">{personDigest.outcomes.blocked} blocked</span>}
-                  </div>
-
-                  {personDigest.top_themes.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {personDigest.top_themes.map((t: any) => (
-                        <span key={t.theme} className="px-2 py-0.5 text-xs rounded-full border border-sol-yellow/25 bg-sol-yellow/8 text-sol-yellow/80">
-                          {t.theme} {t.count > 1 && <span className="opacity-60">({t.count})</span>}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {personDigest.blockers.length > 0 && (
-                    <div>
-                      <div className="text-[11px] text-sol-red uppercase tracking-wide mb-1.5">Blockers</div>
-                      <ul className="space-y-1">
-                        {personDigest.blockers.map((b: any) => (
-                          <li key={b.blocker} className="flex items-start gap-1.5 text-xs text-sol-text-muted">
-                            <svg className="w-3 h-3 text-sol-red mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                            </svg>
-                            {b.blocker}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Raw feed view */}
-      {viewMode === "feed" && (
-        <div className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            <select
-              value={eventTypeFilter || "all"}
-              onChange={(e) => { setEventTypeFilter(e.target.value === "all" ? undefined : e.target.value); setLimit(50); }}
-              className="px-2.5 py-1.5 bg-sol-bg border border-sol-border/60 rounded-md text-xs text-sol-text focus:outline-none focus:ring-1 focus:ring-sol-yellow/40"
-            >
-              <option value="all">All events</option>
-              <option value="session_started">Sessions started</option>
-              <option value="session_completed">Sessions completed</option>
-              <option value="commit_pushed">Commits</option>
-              <option value="pr_created">PRs created</option>
-              <option value="pr_merged">PRs merged</option>
-            </select>
-            {teamMembers && teamMembers.length > 0 && (
-              <select
-                value={actorFilter?.toString() || "all"}
-                onChange={(e) => { setActorFilter(e.target.value === "all" ? undefined : e.target.value as Id<"users">); setLimit(50); }}
-                className="px-2.5 py-1.5 bg-sol-bg border border-sol-border/60 rounded-md text-xs text-sol-text focus:outline-none focus:ring-1 focus:ring-sol-yellow/40"
-              >
-                <option value="all">All members</option>
-                {teamMembers
-                  .filter((m: any): m is NonNullable<typeof m> => m !== null)
-                  .map((member: any) => (
-                    <option key={member._id} value={member._id}>{member.name || member.email}</option>
-                  ))}
-              </select>
-            )}
-          </div>
-
-          {!rawResult?.events?.length ? (
-            <EmptyState title="No activity yet" description="Team activity appears here as members work on sessions, commits, and PRs." />
-          ) : (
-            <>
-              {groupedEvents.map((group) => (
+            <div className="space-y-1">
+              {groupedFeed.map((group) => (
                 <div key={group.label}>
-                  <div className="text-[10px] font-medium uppercase tracking-wider text-sol-text-dim px-1 py-1 mb-1">
-                    {group.label}
+                  <div className="flex items-center gap-2 py-2 px-1">
+                    <div className="h-px flex-1 bg-sol-border/20" />
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-sol-text-dim">{group.label}</span>
+                    <div className="h-px flex-1 bg-sol-border/20" />
                   </div>
-                  <div className="divide-y divide-sol-border/20">
-                    {group.items.map((event) => (
-                      <ActivityEventCard key={event._id} event={event} />
+                  <div className="space-y-2">
+                    {group.items.map((item: any) => (
+                      <SessionCard key={item.conversation_id} item={item} />
                     ))}
                   </div>
                 </div>
               ))}
-              {rawResult.hasMore && (
-                <button
-                  onClick={() => setLimit((p) => p + 50)}
-                  className="w-full py-2 text-xs text-sol-text-muted hover:text-sol-text transition-colors border border-sol-border/40 rounded-md"
-                >
-                  Load more
-                </button>
-              )}
-            </>
+            </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );

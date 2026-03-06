@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -239,17 +239,17 @@ export interface ConversationViewHandle {
 
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
-  const storeSwitchProject = useInboxStore((s) => s.switchProject);
-  const updateSessionProject = useInboxStore((s) => s.updateSessionProject);
   const storeSession = useInboxStore((s) =>
     s.sessions.find((sess) => sess._id === conversation._id)
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
-
-  const resolvedId = storeSession?._id || conversation._id;
+  const createQuickSession = useMutation(api.conversations.createQuickSession);
+  const killSession = useMutation(api.conversations.killSession);
+  const router = useRouter();
 
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
+  const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
 
   const otherProjects = useMemo(() => {
     if (!recentProjects) return [];
@@ -261,23 +261,25 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const handleSwitch = useCallback(async (projectPath: string) => {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
-    if (isConvexId(resolvedId)) {
-      storeSwitchProject(resolvedId, trimmed);
-    } else {
-      updateSessionProject(resolvedId, trimmed);
-      const realId = await new Promise<string>((resolve, reject) => {
-        const timeout = setTimeout(() => { unsub(); reject(new Error("timeout")); }, 15000);
-        const check = () => {
-          const sess = useInboxStore.getState().sessions.find((s) => s.session_id === resolvedId);
-          if (sess && isConvexId(sess._id)) { clearTimeout(timeout); unsub(); resolve(sess._id); }
-        };
-        check();
-        const unsub = useInboxStore.subscribe(check);
-      }).catch(() => "");
-      if (!realId) return;
-      storeSwitchProject(realId, trimmed);
+    try {
+      const resolvedId = storeSession?._id || conversation._id;
+      if (isConvexId(resolvedId)) {
+        killSession({ conversation_id: resolvedId as Id<"conversations">, mark_completed: true }).catch(() => {});
+        const { sessions, currentIndex } = useInboxStore.getState();
+        const filtered = sessions.filter((s) => s._id !== resolvedId);
+        const newIndex = currentIndex >= filtered.length ? Math.max(0, filtered.length - 1) : currentIndex;
+        useInboxStore.setState({ sessions: filtered, currentIndex: newIndex });
+      }
+      const conversationId = await createQuickSession({
+        agent_type: currentAgent as "claude_code" | "codex" | "gemini",
+        project_path: trimmed,
+        git_root: trimmed,
+      });
+      router.push(`/inbox?s=${conversationId}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create session");
     }
-  }, [storeSwitchProject, resolvedId, updateSessionProject]);
+  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, router]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -623,7 +625,7 @@ type UserMessageKind =
   | { kind: 'empty' }
   | { kind: 'teammate_events' };
 
-const STICKY_NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "continue", "<task-notification>", "Your task is to create a detailed summary", "Please continue the conversation"];
+const STICKY_NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "<task-notification>", "Your task is to create a detailed summary"];
 
 function classifyUserMessage(
   msg: Message,
@@ -950,7 +952,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
   const subagentColors: Record<string, { bg: string; border: string; text: string }> = {
     Explore: { bg: "bg-sol-green/20", border: "border-sol-green/50", text: "text-sol-green" },
     Plan: { bg: "bg-sol-blue/20", border: "border-sol-blue/50", text: "text-sol-blue" },
-    implementor: { bg: "bg-sol-orange/20", border: "border-sol-orange/50", text: "text-sol-orange" },
+    implementor: { bg: "bg-sol-yellow/20", border: "border-sol-yellow/50", text: "text-sol-yellow" },
     "general-purpose": { bg: "bg-sol-bg-alt/60", border: "border-sol-border/50", text: "text-sol-text-secondary" },
     "claude-code-guide": { bg: "bg-sol-violet/20", border: "border-sol-violet/50", text: "text-sol-violet" },
     "code-reviewer": { bg: "bg-sol-red/20", border: "border-sol-red/50", text: "text-sol-red" },
@@ -4275,15 +4277,33 @@ function CyclingShortcutHint() {
 
 type NavUserMessage = { _id: string; message_uuid?: string; content: string; timestamp: number };
 
-function MessageNavigator({ userMessages, onRewind, onFork, onClose }: {
+function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMap, onBranchSwitch, activeBranches }: {
   userMessages: NavUserMessage[];
   onRewind: (msg: NavUserMessage, indexFromEnd: number) => void;
   onFork: (msg: NavUserMessage) => void;
   onClose: (selectedMsg?: { content: string }) => void;
+  forkPointMap?: Record<string, ForkChild[]>;
+  onBranchSwitch?: (messageUuid: string, convId: string | null) => void;
+  activeBranches?: Record<string, string>;
 }) {
   const [selectedIdx, setSelectedIdx] = useState(userMessages.length - 1);
+  const [branchIdx, setBranchIdx] = useState<number>(-1);
   const listRef = useRef<HTMLDivElement>(null);
   const escTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const selectedMsg = userMessages[selectedIdx];
+  const forks = selectedMsg?.message_uuid && forkPointMap ? forkPointMap[selectedMsg.message_uuid] || [] : [];
+  const hasBranches = forks.length > 0;
+
+  useEffect(() => {
+    if (!hasBranches) { setBranchIdx(-1); return; }
+    const uuid = selectedMsg?.message_uuid;
+    if (!uuid || !activeBranches) { setBranchIdx(-1); return; }
+    const activeId = activeBranches[uuid];
+    if (!activeId) { setBranchIdx(-1); return; }
+    const idx = forks.findIndex(f => f._id === activeId);
+    setBranchIdx(idx >= 0 ? idx : -1);
+  }, [selectedIdx, hasBranches, selectedMsg?.message_uuid, activeBranches, forks]);
 
   useEffect(() => {
     return () => { if (escTimerRef.current) clearTimeout(escTimerRef.current); };
@@ -4319,6 +4339,30 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose }: {
         setSelectedIdx(i => Math.max(i - 1, 0));
         return;
       }
+      if ((e.key === "h" || e.key === "ArrowLeft") && hasBranches) {
+        e.preventDefault();
+        setBranchIdx(i => {
+          const newIdx = Math.max(i - 1, -1);
+          const uuid = selectedMsg?.message_uuid;
+          if (uuid && onBranchSwitch) {
+            onBranchSwitch(uuid, newIdx === -1 ? null : forks[newIdx]._id);
+          }
+          return newIdx;
+        });
+        return;
+      }
+      if ((e.key === "l" || e.key === "ArrowRight") && hasBranches) {
+        e.preventDefault();
+        setBranchIdx(i => {
+          const newIdx = Math.min(i + 1, forks.length - 1);
+          const uuid = selectedMsg?.message_uuid;
+          if (uuid && onBranchSwitch) {
+            onBranchSwitch(uuid, newIdx === -1 ? null : forks[newIdx]._id);
+          }
+          return newIdx;
+        });
+        return;
+      }
       if (e.key === "Enter") {
         e.preventDefault();
         const indexFromEnd = userMessages.length - 1 - selectedIdx;
@@ -4333,34 +4377,81 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose }: {
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [userMessages, selectedIdx, onRewind, onFork, onClose]);
+  }, [userMessages, selectedIdx, onRewind, onFork, onClose, hasBranches, forks, selectedMsg, onBranchSwitch]);
 
   return (
     <div className="absolute bottom-full left-0 right-0 mb-2 z-50" style={{ maxHeight: "calc(100vh - 200px)" }}>
       <div className="mx-auto max-w-5xl px-4 h-full flex flex-col">
         <div className="bg-sol-bg-alt border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "calc(100vh - 220px)" }}>
-          <div ref={listRef} className="flex-1 overflow-y-auto py-2" style={{ maxHeight: "calc(100vh - 280px)" }}>
-            {userMessages.map((msg, idx) => (
-              <button
-                key={msg._id}
-                onClick={() => setSelectedIdx(idx)}
-                onDoubleClick={() => { setSelectedIdx(idx); onRewind(msg, userMessages.length - 1 - idx); }}
-                className={`w-full text-left px-4 py-2.5 transition-colors flex items-start gap-3 ${
-                  idx === selectedIdx
-                    ? "bg-sol-blue/20 ring-1 ring-inset ring-sol-blue/50"
-                    : "hover:bg-sol-bg-highlight"
-                }`}
-              >
-                <span className={`text-xs font-mono mt-0.5 shrink-0 w-6 text-right ${idx === selectedIdx ? "text-sol-blue" : "text-sol-blue/40"}`}>{idx + 1}</span>
-                <span className={`text-sm leading-relaxed ${idx === selectedIdx ? "text-sol-text" : "text-sol-text-secondary"}`} style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                  {msg.content}
-                </span>
-              </button>
-            ))}
+          <div ref={listRef} className="flex-1 overflow-y-auto py-2 relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
+            {userMessages.map((msg, idx) => {
+              const msgForks = msg.message_uuid && forkPointMap ? forkPointMap[msg.message_uuid] || [] : [];
+              const msgHasBranches = msgForks.length > 0;
+              const isSelected = idx === selectedIdx;
+              const isLast = idx === userMessages.length - 1;
+              return (
+                <div key={msg._id} className="relative">
+                  {/* Tree line */}
+                  <div className="absolute left-3 top-0 bottom-0 flex flex-col items-center" style={{ width: "12px" }}>
+                    {/* Vertical line segment */}
+                    <div className={`w-px flex-1 ${msgHasBranches ? "bg-sol-cyan/30" : "bg-sol-blue/15"} ${isLast ? "hidden" : ""}`} />
+                  </div>
+                  {/* Fork node dot */}
+                  {msgHasBranches && (
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center" style={{ width: "12px" }}>
+                      <div className={`w-2 h-2 rounded-full mx-auto ${isSelected ? "bg-sol-cyan shadow-[0_0_6px_rgba(0,205,205,0.5)]" : "bg-sol-cyan/50"}`} />
+                    </div>
+                  )}
+                  {!msgHasBranches && (
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center" style={{ width: "12px" }}>
+                      <div className={`w-1 h-1 rounded-full mx-auto ${isSelected ? "bg-sol-blue/60" : "bg-sol-blue/20"}`} />
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setSelectedIdx(idx)}
+                    onDoubleClick={() => { setSelectedIdx(idx); onRewind(msg, userMessages.length - 1 - idx); }}
+                    className={`w-full text-left pl-8 pr-4 py-2.5 transition-colors flex items-start gap-3 ${
+                      isSelected
+                        ? "bg-sol-blue/20 ring-1 ring-inset ring-sol-blue/50"
+                        : "hover:bg-sol-bg-highlight"
+                    }`}
+                  >
+                    <span className={`text-xs font-mono mt-0.5 shrink-0 w-6 text-right ${isSelected ? "text-sol-blue" : "text-sol-blue/40"}`}>{idx + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <span className={`text-sm leading-relaxed ${isSelected ? "text-sol-text" : "text-sol-text-secondary"}`} style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                        {msg.content}
+                      </span>
+                      {msgHasBranches && isSelected && (
+                        <div className="flex items-center gap-1 mt-1.5">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${branchIdx === -1 ? "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/30" : "text-sol-text-dim border-transparent"}`}>
+                            main
+                          </span>
+                          {msgForks.map((fork, fi) => (
+                            <span
+                              key={fork._id}
+                              className={`text-[10px] px-1.5 py-0.5 rounded border truncate max-w-[120px] transition-colors ${fi === branchIdx ? "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/30" : "text-sol-text-dim border-transparent"}`}
+                            >
+                              {fork.title || fork.short_id || "fork"}
+                            </span>
+                          ))}
+                          <span className="text-[9px] text-sol-blue/30 ml-1">h/l</span>
+                        </div>
+                      )}
+                      {msgHasBranches && !isSelected && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <span className="text-[9px] text-sol-cyan/50">{msgForks.length + 1} branches</span>
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                </div>
+              );
+            })}
           </div>
           <div className="px-4 py-2 border-t border-sol-blue/20 flex items-center justify-between">
             <div className="flex items-center gap-4 text-[11px] text-sol-blue/60">
               <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">j</kbd><span className="mx-0.5">/</span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">k</kbd> navigate</span>
+              <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">h</kbd><span className="mx-0.5">/</span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">l</kbd> branches</span>
               <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">Enter</kbd> rewind</span>
               <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">F</kbd> fork</span>
               <span><kbd className="px-1.5 py-0.5 rounded border border-sol-blue/20 bg-sol-blue/5 text-[10px] font-mono text-sol-blue/70">Esc</kbd> close</span>
@@ -5356,7 +5447,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const doFork = useCallback(async (messageUuid: string) => {
     if (!conversation?._id) return;
     const sourceConvId = effectiveConversationId || conversation._id;
-    const forkSessionId = crypto.randomUUID();
+    const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     addOptimisticFork({
       _id: forkSessionId,
       title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
@@ -7497,6 +7588,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               onRewind={handleNavigatorRewind}
               onFork={handleNavigatorFork}
               onClose={handleNavigatorClose}
+              forkPointMap={forkPointMap}
+              onBranchSwitch={handleBranchSwitch}
+              activeBranches={activeBranches}
             />
           )}
         </div>

@@ -7,6 +7,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { AuthGuard } from "../../../components/AuthGuard";
+import Link from "next/link";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 type Command = "status" | "restart" | "force_update" | "version";
@@ -391,6 +392,11 @@ function AdminDaemonLogs() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-4">
+            <Link href="/inbox" className="text-zinc-500 hover:text-zinc-300 transition-colors">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </Link>
             <h1 className="text-lg font-medium tracking-tight">Daemon Admin</h1>
             <div className="flex items-center gap-3 text-xs text-zinc-500">
               <span>

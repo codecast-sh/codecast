@@ -39,10 +39,6 @@ export function useSyncInboxSessions(showAll: boolean) {
   const prevActiveIdsRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
-    useInboxStore.getState().hydrateFromCache();
-  }, []);
-
-  useEffect(() => {
     _setDispatch((action, args, patches) => dispatchMutation({ action, args, patches }));
   }, [dispatchMutation, _setDispatch]);
 

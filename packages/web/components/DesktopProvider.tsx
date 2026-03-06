@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import {
   isDesktop,
   updateBadge,
@@ -21,18 +23,29 @@ export function DesktopProvider() {
     if (!isDesktop()) return;
     const pending = sessions.filter((s) => s.has_pending || s.is_idle).length;
     updateBadge(pending);
-
-    if (prevCountRef.current !== null && pending > prevCountRef.current) {
-      const newest = sessions.find((s) => s.is_idle);
-      if (newest) {
-        notifyNative(
-          "Codecast",
-          newest.title || newest.idle_summary || "Session needs attention"
-        );
-      }
-    }
     prevCountRef.current = pending;
   }, [sessions]);
+
+  const notifications = useQuery(api.notifications.list);
+  const seenIdsRef = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    if (!isDesktop() || !notifications) return;
+
+    if (seenIdsRef.current === null) {
+      seenIdsRef.current = new Set(notifications.map((n) => n._id));
+      return;
+    }
+
+    for (const n of notifications) {
+      if (!seenIdsRef.current.has(n._id) && !n.read) {
+        const actor = n.actor?.name || n.actor?.github_username;
+        const title = actor ? `${actor}` : "Codecast";
+        notifyNative(title, n.message);
+      }
+    }
+    seenIdsRef.current = new Set(notifications.map((n) => n._id));
+  }, [notifications]);
 
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
 

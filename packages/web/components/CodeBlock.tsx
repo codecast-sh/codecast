@@ -1,14 +1,49 @@
 "use client";
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";
+import Prism from "prismjs";
+import "prismjs/components/prism-typescript";
+import "prismjs/components/prism-javascript";
+import "prismjs/components/prism-jsx";
+import "prismjs/components/prism-tsx";
+import "prismjs/components/prism-python";
+import "prismjs/components/prism-json";
+import "prismjs/components/prism-bash";
+import "prismjs/components/prism-css";
+import "prismjs/components/prism-markdown";
+import "prismjs/components/prism-yaml";
+import "prismjs/components/prism-sql";
+import "prismjs/components/prism-diff";
+import "prismjs/components/prism-rust";
+import "prismjs/components/prism-go";
+import "prismjs/components/prism-swift";
 
 interface CodeBlockProps {
   code: string;
   language?: string;
 }
 
+const LANG_ALIASES: Record<string, string> = {
+  ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
+  py: "python", sh: "bash", shell: "bash", zsh: "bash",
+  yml: "yaml", md: "markdown", html: "markup", xml: "markup",
+};
+
+function highlightCode(code: string, language?: string): string | null {
+  if (!language) return null;
+  const lang = LANG_ALIASES[language] || language;
+  const grammar = Prism.languages[lang];
+  if (!grammar) return null;
+  try {
+    return Prism.highlight(code, grammar, lang);
+  } catch {
+    return null;
+  }
+}
+
 export function CodeBlock({ code, language }: CodeBlockProps) {
+  const highlighted = useMemo(() => highlightCode(code, language), [code, language]);
   const [extraWidth, setExtraWidth] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [maxExpand, setMaxExpand] = useState(600);
@@ -89,7 +124,11 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
         </div>
       )}
       <pre className="!m-0 !p-3 !border-0 cb-hscroll text-sm bg-sol-bg-alt rounded-b-md">
-        <code className="font-mono text-sol-text-secondary">{code}</code>
+        {highlighted ? (
+          <code className="font-mono text-sol-text-secondary" dangerouslySetInnerHTML={{ __html: highlighted }} />
+        ) : (
+          <code className="font-mono text-sol-text-secondary">{code}</code>
+        )}
       </pre>
       {/* Drag handle */}
       <div

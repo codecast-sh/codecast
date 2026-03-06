@@ -36,8 +36,6 @@ interface DashboardLayoutProps {
 const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
 
 export function DashboardLayout({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
-  const hydrated = useInboxStore(s => s._hydratedFromCache);
-  useEffect(() => { useInboxStore.getState().hydrateFromCache(); }, []);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const isSidebarCollapsed = useInboxStore(s => s.clientState.ui?.sidebar_collapsed ?? false);
   const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
@@ -159,6 +157,10 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         e.preventDefault();
         updateUI({ zen_mode: !isZenMode });
       }
+      if (e.key === "1" && e.metaKey && e.shiftKey && e.altKey) {
+        e.preventDefault();
+        router.push("/inbox");
+      }
       if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         if (currentConvContext.projectPath || currentConvContext.gitRoot) {
@@ -173,8 +175,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [hideSidebar, isSidebarCollapsed, isZenMode, isOnInboxPage, currentConvContext, openNewSession, handleQuickCreate, updateUI]);
-
-  if (!hydrated) return null;
 
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">

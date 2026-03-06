@@ -125,6 +125,8 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
+  const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
+  const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.email === "ashot@almostcandid.com";
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -276,47 +278,63 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
               </>
             )}
           </Link>
-          <button
-            onClick={() => handleFilterClick("team")}
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
-              isDashboard && filter === "team"
+          <Link
+            href="/tasks"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+              isTasks
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
-            title={activeTeam?.name || "Team"}
+            title="Tasks"
           >
-            {activeTeam ? (
-              <TeamIcon icon={activeTeam.icon} color={activeTeam.icon_color} className="w-5 h-5 flex-shrink-0" />
-            ) : (
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-            )}
-            {!isNarrow && (
-              <>
-                <span>{activeTeam?.name || "Team"}</span>
-                {teamUnreadCount !== undefined && teamUnreadCount > 0 && !(isDashboard && filter === "team") && (
-                  <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-xs font-semibold bg-sol-cyan text-sol-bg rounded-full">
-                    {teamUnreadCount}
-                  </span>
-                )}
-              </>
-            )}
-          </button>
-          {activeTeamId && (
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+            {!isNarrow && <span>Tasks</span>}
+          </Link>
+          <Link
+            href="/docs"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+              isDocs
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+            }`}
+            title="Documents"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            {!isNarrow && <span>Docs</span>}
+          </Link>
+          {(activeTeamId || (teams && teams.length > 0)) && (
             <Link
               href="/team/activity"
-              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
                 isTeamActivity
-                  ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-yellow"
+                  ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                   : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
               }`}
-              title="Team Digest"
+              title={activeTeam?.name || teams?.[0]?.name || "Team"}
             >
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-              {!isNarrow && <span>Team Digest</span>}
+              {activeTeam ? (
+                <TeamIcon icon={activeTeam.icon} color={activeTeam.icon_color} className="w-5 h-5 flex-shrink-0" />
+              ) : teams?.[0] ? (
+                <TeamIcon icon={teams[0].icon} color={teams[0].icon_color} className="w-5 h-5 flex-shrink-0" />
+              ) : (
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+              )}
+              {!isNarrow && (
+                <>
+                  <span>{activeTeam?.name || teams?.[0]?.name || "Team"}</span>
+                  {teamUnreadCount !== undefined && teamUnreadCount > 0 && !isTeamActivity && (
+                    <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-xs font-semibold bg-sol-cyan text-sol-bg rounded-full">
+                      {teamUnreadCount}
+                    </span>
+                  )}
+                </>
+              )}
             </Link>
           )}
           {isAdmin && (

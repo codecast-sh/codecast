@@ -1,12 +1,95 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 
+function UrlBarModal({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
+  const [url, setUrl] = useState("");
+  const [copied, setCopied] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setUrl(window.location.href);
+    setTimeout(() => inputRef.current?.select(), 50);
+  }, []);
+
+  const handleNavigate = useCallback(() => {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      if (parsed.origin === window.location.origin) {
+        router.push(parsed.pathname + parsed.search + parsed.hash);
+      } else {
+        window.location.href = url;
+      }
+      onClose();
+    } catch {
+      if (url.startsWith("/")) {
+        router.push(url);
+        onClose();
+      }
+    }
+  }, [url, router, onClose]);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [url]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleNavigate();
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onClose();
+    }
+  }, [handleNavigate, onClose]);
+
+  return (
+    <div ref={backdropRef} className="fixed inset-0 z-[200] flex items-start justify-center pt-[20vh] bg-black/60 backdrop-blur-sm" onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}>
+      <div className="w-full max-w-lg bg-sol-bg border border-sol-border rounded-xl shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-sol-border flex items-center justify-between">
+          <span className="text-xs font-mono uppercase tracking-wider text-sol-text-dim">URL Bar</span>
+          <div className="flex items-center gap-1">
+            <button onClick={() => { window.history.back(); setUrl(window.location.href); }} className="p-1.5 text-sol-text-dim hover:text-sol-text transition-colors rounded" title="Back">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
+            </button>
+            <button onClick={() => { window.history.forward(); setUrl(window.location.href); }} className="p-1.5 text-sol-text-dim hover:text-sol-text transition-colors rounded" title="Forward">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+            </button>
+          </div>
+        </div>
+        <div className="p-4 flex items-center gap-2">
+          <input
+            ref={inputRef}
+            type="text"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={handleKeyDown}
+            className="flex-1 px-3 py-2 bg-sol-bg-alt border border-sol-border rounded-lg text-sm font-mono text-sol-text placeholder-sol-text-dim focus:outline-none focus:border-sol-cyan"
+            placeholder="https://codecast.sh/..."
+          />
+          <button onClick={handleCopy} className="px-3 py-2 text-xs font-medium rounded-lg border border-sol-border text-sol-text-dim hover:text-sol-text hover:border-sol-cyan transition-colors whitespace-nowrap">
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <button onClick={handleNavigate} className="px-3 py-2 text-xs font-medium rounded-lg bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors">
+            Go
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function UserMenu() {
   const [open, setOpen] = useState(false);
+  const [urlBarOpen, setUrlBarOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const { signOut } = useAuthActions();
   const router = useRouter();
@@ -53,6 +136,7 @@ export function UserMenu() {
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
         </svg>
       </button>
+      {urlBarOpen && <UrlBarModal onClose={() => setUrlBarOpen(false)} />}
       {open && (
         <div className="absolute right-0 mt-2 w-56 bg-sol-base02 bg-sol-bg border border-sol-base01 border-sol-border rounded-lg shadow-lg py-1 z-50">
           <div className="px-4 py-3 border-b border-sol-base01 border-sol-border">
@@ -78,6 +162,18 @@ export function UserMenu() {
           >
             Feed
           </button>
+          <button
+            onClick={() => { setOpen(false); router.push("/tasks"); }}
+            className={menuBtnClass}
+          >
+            Tasks
+          </button>
+          <button
+            onClick={() => { setOpen(false); router.push("/docs"); }}
+            className={menuBtnClass}
+          >
+            Documents
+          </button>
           <div className="border-t border-sol-border my-1" />
           <button
             onClick={() => { setOpen(false); router.push("/settings"); }}
@@ -101,6 +197,12 @@ export function UserMenu() {
                 className={menuBtnClass}
               >
                 Daemon logs
+              </button>
+              <button
+                onClick={() => { setOpen(false); setUrlBarOpen(true); }}
+                className={menuBtnClass}
+              >
+                URL bar
               </button>
             </>
           )}

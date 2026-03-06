@@ -1,10 +1,12 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const withBundleAnalyzer = require('@next/bundle-analyzer')({
   enabled: process.env.ANALYZE === 'true',
 });
 
 const nextConfig: NextConfig = {
+  outputFileTracingRoot: path.join(__dirname, '../../'),
   typescript: {
     // TODO: Fix Convex generated types issue with indexes
     ignoreBuildErrors: true,

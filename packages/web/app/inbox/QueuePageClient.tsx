@@ -309,7 +309,7 @@ function SessionCard({
           </div>
         )}
         {(session.idle_summary || session.subtitle) && !session.implementation_session && (
-          <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug">
+          <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
             {session.idle_summary || session.subtitle}
           </div>
         )}

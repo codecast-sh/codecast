@@ -2,7 +2,7 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 
 type TreeNode = {
   id: string;
@@ -31,16 +31,32 @@ const agentLabels: Record<string, string> = {
   gemini: "Gemini",
 };
 
+type FlatNode = { node: TreeNode; depth: number };
+
+function flattenTree(node: TreeNode, depth = 0): FlatNode[] {
+  const result: FlatNode[] = [{ node, depth }];
+  for (const child of node.children) {
+    result.push(...flattenTree(child, depth + 1));
+  }
+  return result;
+}
+
 function TreeRow({
   node,
   depth = 0,
   activeBranchIds,
   onSwitchToConversation,
+  isSelected,
+  onMouseEnter,
+  rowRef,
 }: {
   node: TreeNode;
   depth?: number;
   activeBranchIds: Set<string>;
   onSwitchToConversation: (convId: string) => void;
+  isSelected: boolean;
+  onMouseEnter: () => void;
+  rowRef?: React.Ref<HTMLButtonElement>;
 }) {
   const isActive = node.is_current || activeBranchIds.has(node.id);
   const timeStr = new Date(node.started_at).toLocaleDateString(undefined, {
@@ -49,44 +65,37 @@ function TreeRow({
   });
 
   return (
-    <>
-      <button
-        onClick={() => onSwitchToConversation(node.id)}
-        className={`w-full flex items-center gap-2 py-1.5 px-2 rounded text-xs transition-colors text-left ${
-          isActive
+    <button
+      ref={rowRef}
+      onClick={() => onSwitchToConversation(node.id)}
+      onMouseEnter={onMouseEnter}
+      className={`w-full flex items-center gap-2 py-1.5 px-2 rounded text-xs transition-colors text-left ${
+        isSelected
+          ? "bg-sol-cyan/20 ring-1 ring-inset ring-sol-cyan/40 text-sol-cyan"
+          : isActive
             ? "bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30"
             : "hover:bg-sol-bg-alt text-sol-text-secondary"
-        }`}
-        style={{ paddingLeft: `${depth * 14 + 8}px` }}
-      >
-        {depth > 0 && (
-          <span className="text-sol-text-dim text-[10px] flex-shrink-0">
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-            </svg>
-          </span>
-        )}
-        {node.agent_type && (
-          <span className={`text-[9px] font-medium flex-shrink-0 ${agentColors[node.agent_type] || "text-sol-text-dim"}`}>
-            {agentLabels[node.agent_type] || node.agent_type}
-          </span>
-        )}
-        <span className="truncate flex-1 min-w-0">{node.title}</span>
-        <span className="text-[9px] text-sol-text-dim flex-shrink-0 tabular-nums">
-          {node.message_count}
+      }`}
+      style={{ paddingLeft: `${depth * 14 + 8}px` }}
+    >
+      {depth > 0 && (
+        <span className="text-sol-text-dim text-[10px] flex-shrink-0">
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+          </svg>
         </span>
-        <span className="text-[9px] text-sol-text-dim flex-shrink-0">{timeStr}</span>
-      </button>
-      {node.children.map((child) => (
-        <TreeRow
-          key={child.id}
-          node={child}
-          depth={depth + 1}
-          activeBranchIds={activeBranchIds}
-          onSwitchToConversation={onSwitchToConversation}
-        />
-      ))}
-    </>
+      )}
+      {node.agent_type && (
+        <span className={`text-[9px] font-medium flex-shrink-0 ${agentColors[node.agent_type] || "text-sol-text-dim"}`}>
+          {agentLabels[node.agent_type] || node.agent_type}
+        </span>
+      )}
+      <span className="truncate flex-1 min-w-0">{node.title}</span>
+      <span className="text-[9px] text-sol-text-dim flex-shrink-0 tabular-nums">
+        {node.message_count}
+      </span>
+      <span className="text-[9px] text-sol-text-dim flex-shrink-0">{timeStr}</span>
+    </button>
   );
 }
 
@@ -104,9 +113,39 @@ export function ForkTreePanel({
   onSwitchToConversation: (convId: string) => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const selectedRef = useRef<HTMLButtonElement>(null);
   const result = useQuery(
     api.conversations.getConversationTree,
     open ? { conversation_id: conversationId } : "skip"
+  );
+
+  const tree = result && !("error" in result) ? (result.tree as TreeNode) : null;
+
+  const flatNodes = useMemo(() => (tree ? flattenTree(tree) : []), [tree]);
+
+  const initialIdx = useMemo(() => {
+    const currentIdx = flatNodes.findIndex(
+      (f) => f.node.is_current || activeBranchIds.has(f.node.id)
+    );
+    return currentIdx >= 0 ? currentIdx : 0;
+  }, [flatNodes, activeBranchIds]);
+
+  const [selectedIdx, setSelectedIdx] = useState(initialIdx);
+
+  useEffect(() => {
+    if (open) setSelectedIdx(initialIdx);
+  }, [open, initialIdx]);
+
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selectedIdx]);
+
+  const handleSelect = useCallback(
+    (idx: number) => {
+      const flat = flatNodes[idx];
+      if (flat) onSwitchToConversation(flat.node.id);
+    },
+    [flatNodes, onSwitchToConversation]
   );
 
   useEffect(() => {
@@ -121,6 +160,25 @@ export function ForkTreePanel({
         e.preventDefault();
         e.stopPropagation();
         onClose();
+        return;
+      }
+      if (e.key === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSelectedIdx((i) => Math.min(i + 1, flatNodes.length - 1));
+        return;
+      }
+      if (e.key === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSelectedIdx((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        handleSelect(selectedIdx);
+        return;
       }
     };
     document.addEventListener("mousedown", handleClick);
@@ -132,11 +190,9 @@ export function ForkTreePanel({
       document.removeEventListener("mousedown", handleClick);
       document.removeEventListener("keydown", handleKey, true);
     };
-  }, [open, onClose]);
+  }, [open, onClose, flatNodes.length, selectedIdx, handleSelect]);
 
   if (!open) return null;
-
-  const tree = result && !("error" in result) ? (result.tree as TreeNode) : null;
 
   return (
     <div
@@ -166,15 +222,24 @@ export function ForkTreePanel({
             Loading tree...
           </div>
         ) : (
-          <TreeRow
-            node={tree}
-            activeBranchIds={activeBranchIds}
-            onSwitchToConversation={onSwitchToConversation}
-          />
+          flatNodes.map((flat, idx) => (
+            <TreeRow
+              key={flat.node.id}
+              node={flat.node}
+              depth={flat.depth}
+              activeBranchIds={activeBranchIds}
+              onSwitchToConversation={onSwitchToConversation}
+              isSelected={idx === selectedIdx}
+              onMouseEnter={() => setSelectedIdx(idx)}
+              rowRef={idx === selectedIdx ? selectedRef : undefined}
+            />
+          ))
         )}
       </div>
-      <div className="px-3 py-2 border-t border-sol-border text-[9px] text-sol-text-dim shrink-0">
-        Press <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">t</kbd> to toggle
+      <div className="px-3 py-2 border-t border-sol-border text-[9px] text-sol-text-dim shrink-0 flex items-center gap-3">
+        <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">j</kbd>/<kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">k</kbd> navigate</span>
+        <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">Enter</kbd> switch</span>
+        <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">t</kbd> close</span>
       </div>
     </div>
   );
