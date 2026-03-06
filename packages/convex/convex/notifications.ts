@@ -79,6 +79,9 @@ export const notifyTeamSessionStart = internalMutation({
       }
     }
 
+    const THROTTLE_MS = 15 * 60 * 1000;
+    const now = Date.now();
+
     for (const member of teamMembers) {
       if (
         member.push_token &&
@@ -92,18 +95,33 @@ export const notifyTeamSessionStart = internalMutation({
           conversation_id: args.conversation_id,
           message: body,
           read: false,
-          created_at: Date.now(),
+          created_at: now,
         });
 
-        await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
-          push_token: member.push_token,
-          title: `${actorName} started coding`,
-          body,
-          data: {
-            conversationId: args.conversation_id,
-            type: 'team_session_start',
-          },
-        });
+        const recentNotifs = await ctx.db
+          .query("notifications")
+          .withIndex("by_recipient_created", (q: any) =>
+            q.eq("recipient_user_id", member._id).gte("created_at", now - THROTTLE_MS)
+          )
+          .collect();
+        const alreadyPushed = recentNotifs.some(
+          (n: any) =>
+            n.type === "team_session_start" &&
+            n.actor_user_id?.toString() === args.user_id.toString() &&
+            n.conversation_id?.toString() !== args.conversation_id.toString()
+        );
+
+        if (!alreadyPushed) {
+          await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+            push_token: member.push_token,
+            title: `${actorName} started coding`,
+            body,
+            data: {
+              conversationId: args.conversation_id,
+              type: 'team_session_start',
+            },
+          });
+        }
       }
     }
   },

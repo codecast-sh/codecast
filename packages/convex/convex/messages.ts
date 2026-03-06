@@ -7,6 +7,7 @@ import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { shouldGenerateTitle } from "./titleGeneration";
 import { canTeamMemberAccess } from "./privacy";
+import { redactSecrets } from "./redact";
 
 export const getMessageTimestamp = query({
   args: {
@@ -107,6 +108,17 @@ export const addMessage = mutation({
 
     const msgTimestamp = args.timestamp || Date.now();
 
+    const safeContent = args.content ? redactSecrets(args.content) : args.content;
+    const safeThinking = args.thinking ? redactSecrets(args.thinking) : args.thinking;
+    const safeToolCalls = args.tool_calls?.map(tc => ({
+      ...tc,
+      input: redactSecrets(tc.input),
+    }));
+    const safeToolResults = args.tool_results?.map(tr => ({
+      ...tr,
+      content: redactSecrets(tr.content),
+    }));
+
     if (args.message_uuid) {
       const existing = await ctx.db
         .query("messages")
@@ -123,7 +135,7 @@ export const addMessage = mutation({
       }
     }
 
-    if (args.role === "user" && args.content?.trim()) {
+    if (args.role === "user" && safeContent?.trim()) {
       const recent = await ctx.db
         .query("messages")
         .withIndex("by_conversation_timestamp", (q) =>
@@ -134,7 +146,7 @@ export const addMessage = mutation({
       if (
         recent &&
         recent.role === "user" &&
-        recent.content?.trim() === args.content.trim() &&
+        redactSecrets(recent.content || "").trim() === safeContent.trim() &&
         Math.abs(msgTimestamp - recent.timestamp) < 5 * 60 * 1000
       ) {
         return recent._id;
@@ -142,24 +154,25 @@ export const addMessage = mutation({
     }
 
     let images = args.images;
-    if (args.role === "user" && (!images || images.length === 0)) {
-      const pendingWithImage = await ctx.db
+    let contentToStore = safeContent;
+    if (args.role === "user") {
+      const pendingMsg = await ctx.db
         .query("pending_messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-        .filter((q) => q.or(
-          q.neq(q.field("image_storage_id"), undefined),
-          q.neq(q.field("image_storage_ids"), undefined)
-        ))
         .order("desc")
         .first();
-      if (pendingWithImage) {
-        const c = (args.content || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
-        const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
-        const contentMatch = c === pc;
-        if (contentMatch) {
-          const ids = pendingWithImage.image_storage_ids ?? (pendingWithImage.image_storage_id ? [pendingWithImage.image_storage_id] : []);
-          if (ids.length > 0) {
-            images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
+      if (pendingMsg) {
+        const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
+        const pc = redactSecrets(pendingMsg.content).replace(/\[image\]/gi, "").trim();
+        const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+        const cFlat = c.replace(/\s+/g, " ").trim();
+        if (cFlat === pcFlat || c === pc) {
+          contentToStore = redactSecrets(pendingMsg.content);
+          if (!images || images.length === 0) {
+            const ids = pendingMsg.image_storage_ids ?? (pendingMsg.image_storage_id ? [pendingMsg.image_storage_id] : []);
+            if (ids.length > 0) {
+              images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
+            }
           }
         }
       }
@@ -169,10 +182,10 @@ export const addMessage = mutation({
       conversation_id: args.conversation_id,
       message_uuid: args.message_uuid,
       role: args.role,
-      content: args.content,
-      thinking: args.thinking,
-      tool_calls: args.tool_calls,
-      tool_results: args.tool_results,
+      content: contentToStore,
+      thinking: safeThinking,
+      tool_calls: safeToolCalls,
+      tool_results: safeToolResults,
       images,
       subtype: args.subtype,
       timestamp: msgTimestamp,
@@ -183,8 +196,8 @@ export const addMessage = mutation({
       updated_at: msgTimestamp,
       last_message_role: args.role,
     };
-    if (args.role === "user" && args.content?.trim()) {
-      convPatch.last_message_preview = args.content.replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
+    if (args.role === "user" && contentToStore?.trim()) {
+      convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
     } else if (args.role === "user") {
       convPatch.last_user_message_at = msgTimestamp;
@@ -273,12 +286,24 @@ export const addMessages = mutation({
     const ids: Id<"messages">[] = [];
     let insertedCount = 0;
     let maxTimestamp = conversation.updated_at;
+    let lastUserContentStored: string | undefined;
 
     for (const msg of args.messages) {
       const msgTimestamp = msg.timestamp || Date.now();
       if (msgTimestamp > maxTimestamp) {
         maxTimestamp = msgTimestamp;
       }
+
+      const safeContent = msg.content ? redactSecrets(msg.content) : msg.content;
+      const safeThinking = msg.thinking ? redactSecrets(msg.thinking) : msg.thinking;
+      const safeToolCalls = msg.tool_calls?.map(tc => ({
+        ...tc,
+        input: redactSecrets(tc.input),
+      }));
+      const safeToolResults = msg.tool_results?.map(tr => ({
+        ...tr,
+        content: redactSecrets(tr.content),
+      }));
 
       if (msg.message_uuid) {
         const existing = await ctx.db
@@ -297,7 +322,7 @@ export const addMessages = mutation({
         }
       }
 
-      if (msg.role === "user" && msg.content?.trim()) {
+      if (msg.role === "user" && safeContent?.trim()) {
         const recent = await ctx.db
           .query("messages")
           .withIndex("by_conversation_timestamp", (q) =>
@@ -308,7 +333,7 @@ export const addMessages = mutation({
         if (
           recent &&
           recent.role === "user" &&
-          recent.content?.trim() === msg.content.trim() &&
+          redactSecrets(recent.content || "").trim() === safeContent.trim() &&
           Math.abs(msgTimestamp - recent.timestamp) < 5 * 60 * 1000
         ) {
           ids.push(recent._id);
@@ -317,24 +342,25 @@ export const addMessages = mutation({
       }
 
       let images = msg.images;
-      if (msg.role === "user" && (!images || images.length === 0)) {
-        const pendingWithImage = await ctx.db
+      let contentToStore = safeContent;
+      if (msg.role === "user") {
+        const pendingMsg = await ctx.db
           .query("pending_messages")
           .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-          .filter((q) => q.or(
-            q.neq(q.field("image_storage_id"), undefined),
-            q.neq(q.field("image_storage_ids"), undefined)
-          ))
           .order("desc")
           .first();
-        if (pendingWithImage) {
-          const c = (msg.content || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
-          const pc = pendingWithImage.content.replace(/\[image\]/gi, "").trim();
-          const contentMatch = c === pc;
-          if (contentMatch) {
-            const ids = pendingWithImage.image_storage_ids ?? (pendingWithImage.image_storage_id ? [pendingWithImage.image_storage_id] : []);
-            if (ids.length > 0) {
-              images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
+        if (pendingMsg) {
+          const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
+          const pc = redactSecrets(pendingMsg.content).replace(/\[image\]/gi, "").trim();
+          const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+          const cFlat = c.replace(/\s+/g, " ").trim();
+          if (cFlat === pcFlat || c === pc) {
+            contentToStore = redactSecrets(pendingMsg.content);
+            if (!images || images.length === 0) {
+              const ids = pendingMsg.image_storage_ids ?? (pendingMsg.image_storage_id ? [pendingMsg.image_storage_id] : []);
+              if (ids.length > 0) {
+                images = ids.map(id => ({ media_type: "image/png", storage_id: id }));
+              }
             }
           }
         }
@@ -344,16 +370,17 @@ export const addMessages = mutation({
         conversation_id: args.conversation_id,
         message_uuid: msg.message_uuid,
         role: msg.role,
-        content: msg.content,
-        thinking: msg.thinking,
-        tool_calls: msg.tool_calls,
-        tool_results: msg.tool_results,
+        content: contentToStore,
+        thinking: safeThinking,
+        tool_calls: safeToolCalls,
+        tool_results: safeToolResults,
         images,
         subtype: msg.subtype,
         timestamp: msgTimestamp,
       });
       ids.push(messageId);
       insertedCount++;
+      if (msg.role === "user") lastUserContentStored = contentToStore;
     }
 
     if (insertedCount > 0) {
@@ -371,7 +398,8 @@ export const addMessages = mutation({
         if (lastUserTs > 0) {
           convPatch.last_user_message_at = lastUserTs;
         }
-        const preview = lastUserMsg.content?.replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
+        const previewSrc = lastUserContentStored || lastUserMsg.content;
+        const preview = redactSecrets(previewSrc || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
         if (preview) {
           convPatch.last_message_preview = preview;
         }

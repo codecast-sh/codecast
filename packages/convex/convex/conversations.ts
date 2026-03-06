@@ -5352,7 +5352,7 @@ export const listIdleSessions = query({
       );
 
       const agentStatus = agentStatusMap.get(conv._id.toString());
-      const isIdle = agentStatus
+      let isIdle = agentStatus
         ? agentStatus !== "working" && agentStatus !== "compacting" && agentStatus !== "thinking" && agentStatus !== "connected"
         : daemonAlive
           ? (!hasPending && !lastRoleIsUser && !recentlyUpdated)
@@ -5373,6 +5373,9 @@ export const listIdleSessions = query({
         );
         if (implChild) {
           implementationSession = { _id: implChild._id.toString(), title: implChild.title };
+        }
+        if (isIdle && children.some((c) => c.is_subagent && c.status === "active")) {
+          isIdle = false;
         }
       }
 
@@ -5962,6 +5965,7 @@ export const sendKeysToSession = mutation({
 export const killSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    mark_completed: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -5976,6 +5980,10 @@ export const killSession = mutation({
       args: JSON.stringify({ conversation_id: args.conversation_id }),
       created_at: Date.now(),
     });
+
+    if (args.mark_completed) {
+      await ctx.db.patch(args.conversation_id, { status: "completed" });
+    }
   },
 });
 

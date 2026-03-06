@@ -1393,6 +1393,25 @@ export const startSession = mutation({
       throw new Error("Not authenticated");
     }
 
+    const now = Date.now();
+    const sessionId = `remote-${crypto.randomUUID()}`;
+
+    const conversationId = await ctx.db.insert("conversations", {
+      user_id: userId,
+      agent_type: args.agent_type === "claude" ? "claude_code" : args.agent_type,
+      session_id: sessionId,
+      project_path: args.project_path,
+      started_at: now,
+      updated_at: now,
+      message_count: 0,
+      is_private: true,
+      status: "active" as const,
+    });
+
+    await ctx.db.patch(conversationId, {
+      short_id: conversationId.toString().slice(0, 7),
+    });
+
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_session",
@@ -1400,11 +1419,13 @@ export const startSession = mutation({
         agent_type: args.agent_type,
         project_path: args.project_path,
         prompt: args.prompt,
+        conversation_id: conversationId,
+        session_id: sessionId,
       }),
-      created_at: Date.now(),
+      created_at: now,
     });
 
-    return { command_id: commandId };
+    return { command_id: commandId, conversation_id: conversationId };
   },
 });
 

@@ -661,7 +661,7 @@ export const getTeamDigest = query({
     );
 
     const conversations = await Promise.all(
-      deduped.slice(0, 20).map((i) => ctx.db.get(i.conversation_id))
+      deduped.slice(0, 50).map((i) => ctx.db.get(i.conversation_id))
     );
     const conversationMap = new Map(
       conversations
@@ -821,6 +821,35 @@ export const getTeamDigest = query({
       };
     });
 
+    const feed = sorted.slice(0, 50).map((insight) => {
+      const actor = actorMap.get(insight.actor_user_id.toString());
+      const conv = conversationMap.get(insight.conversation_id.toString());
+      return {
+        conversation_id: insight.conversation_id,
+        title: conv?.title || conv?.subtitle || "Session",
+        summary: insight.summary,
+        goal: insight.goal,
+        what_changed: insight.what_changed,
+        outcome_type: insight.outcome_type,
+        blockers: insight.blockers,
+        next_action: insight.next_action,
+        themes: insight.themes,
+        confidence: insight.confidence,
+        generated_at: insight.generated_at,
+        metadata: insight.metadata,
+        actor: {
+          _id: insight.actor_user_id,
+          name: actor?.name || actor?.email || "Unknown",
+        },
+        project_path: conv?.project_path,
+        git_branch: conv?.git_branch,
+        message_count: conv?.message_count,
+        status: conv?.status,
+        started_at: conv?.started_at,
+        updated_at: conv?.updated_at,
+      };
+    });
+
     const people = [...peopleMap.values()]
       .map((p) => {
         const actor = actorMap.get(p.actor_user_id.toString());
@@ -856,6 +885,7 @@ export const getTeamDigest = query({
       outcomes,
       top_themes: topThemes,
       highlights,
+      feed,
       people,
     };
   },
