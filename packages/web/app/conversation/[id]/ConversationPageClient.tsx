@@ -2,7 +2,7 @@
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
@@ -379,6 +379,18 @@ function NotFoundView() {
   );
 }
 
+function useRedirectToInbox(id: string) {
+  const router = useRouter();
+  const redirectedRef = useRef(false);
+
+  return useCallback(() => {
+    if (redirectedRef.current) return;
+    redirectedRef.current = true;
+    useInboxStore.setState({ pendingNavigateId: id });
+    router.replace("/inbox");
+  }, [id, router]);
+}
+
 export default function ConversationPage() {
   const params = useParams();
   const router = useRouter();
@@ -389,6 +401,7 @@ export default function ConversationPage() {
 
   const resetForkNav = useForkNavigationStore((s) => s.reset);
   const resetForkData = useInboxStore((s) => s.resetForkNav);
+  const redirectToInbox = useRedirectToInbox(id);
 
   useEffect(() => {
     resetForkNav();
@@ -430,16 +443,8 @@ export default function ConversationPage() {
     if (sessionLookup === undefined) {
       const hasLocalSession = useInboxStore.getState().conversations[id];
       if (hasLocalSession) {
-        return (
-          <OwnerView
-            id={id}
-            highlightQuery={highlightQuery}
-            onClearHighlight={handleClearHighlight}
-            targetMessageId={targetMessageId}
-            isOwner={true}
-            autoFocusInput={searchParams.get("focus") === "1"}
-          />
-        );
+        redirectToInbox();
+        return <ConversationLoadingSkeleton />;
       }
       return <ConversationLoadingSkeleton />;
     }
@@ -448,28 +453,11 @@ export default function ConversationPage() {
     }
     const effectiveId = resolvedConvexId || id;
     if (publicData === undefined) {
-      return (
-        <OwnerView
-          id={effectiveId}
-          highlightQuery={highlightQuery}
-          onClearHighlight={handleClearHighlight}
-          targetMessageId={targetMessageId}
-          isOwner={true}
-          autoFocusInput={searchParams.get("focus") === "1"}
-        />
-      );
+      return <ConversationLoadingSkeleton />;
     }
     if (publicData.access_level === "owner" || publicData.access_level === "team") {
-      return (
-        <OwnerView
-          id={effectiveId}
-          highlightQuery={highlightQuery}
-          onClearHighlight={handleClearHighlight}
-          targetMessageId={targetMessageId}
-          isOwner={publicData.access_level === "owner"}
-          autoFocusInput={searchParams.get("focus") === "1"}
-        />
-      );
+      redirectToInbox();
+      return <ConversationLoadingSkeleton />;
     }
     if (publicData.access_level === "shared") {
       return <SharedView id={effectiveId} highlightQuery={highlightQuery} onClearHighlight={handleClearHighlight} />;
@@ -490,16 +478,8 @@ export default function ConversationPage() {
   }
 
   if (publicData.access_level === "owner" || publicData.access_level === "team") {
-    return (
-      <OwnerView
-        id={id}
-        highlightQuery={highlightQuery}
-        onClearHighlight={handleClearHighlight}
-        targetMessageId={targetMessageId}
-        isOwner={publicData.access_level === "owner"}
-        autoFocusInput={searchParams.get("focus") === "1"}
-      />
-    );
+    redirectToInbox();
+    return <ConversationLoadingSkeleton />;
   }
 
   if (publicData.access_level === "shared") {

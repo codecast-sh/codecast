@@ -151,7 +151,7 @@ export function NotificationBell() {
   const handleNotificationClick = async (notificationId: Id<"notifications">, conversationId?: Id<"conversations">) => {
     await markAsRead({ notificationId });
     if (conversationId) {
-      router.push(`/inbox?s=${conversationId}`);
+      router.push(`/conversation/${conversationId}`);
     } else {
       router.push('/inbox');
     }

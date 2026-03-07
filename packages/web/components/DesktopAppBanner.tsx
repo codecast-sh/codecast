@@ -1,18 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { X, Monitor, ArrowRight } from "lucide-react";
 import { isDesktop } from "../lib/desktop";
 import { useInboxStore } from "../store/inboxStore";
 
 export function DesktopAppBanner() {
+  const initialized = useInboxStore(s => s.clientStateInitialized);
   const dismissed = useInboxStore(s => s.clientState.dismissed?.desktop_app ?? false);
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
-  const [mounted, setMounted] = useState(false);
 
-  useEffect(() => { setMounted(true); }, []);
-
-  if (!mounted || dismissed) return null;
+  if (!initialized || dismissed) return null;
   if (isDesktop()) return null;
 
   const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) && !("ontouchend" in document);

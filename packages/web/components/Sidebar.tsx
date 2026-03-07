@@ -55,6 +55,7 @@ function RecentSessions({
   totalCount: number;
   onMobileClose?: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const [visibleCount, setVisibleCount] = useState(INITIAL_SESSION_LIMIT);
   const showMore = useCallback(() => setVisibleCount(c => c + SESSION_PAGE_SIZE), []);
   const groups = ["Last Hour", "Last 6 Hours", "Last Day", "Yesterday", "This Week", "This Month", "Older"];
@@ -64,10 +65,21 @@ function RecentSessions({
 
   return (
     <div className="mt-4">
-      <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
-        Recent Sessions
-      </div>
-      <div className="space-y-2">
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="w-full flex items-center justify-between text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 hover:text-sol-text-muted transition-colors"
+      >
+        <span>Recent Sessions</span>
+        <svg
+          className={`w-3 h-3 transition-transform ${expanded ? "rotate-180" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {!expanded ? null : <div className="space-y-2">
         {groups.map((group) => {
           if (rendered >= visibleCount) return null;
           const items = groupedSessions[group];
@@ -111,22 +123,21 @@ function RecentSessions({
             {hiddenCount} more...
           </button>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
 
-export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
+export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const isDashboard = pathname === "/dashboard" || pathname?.startsWith("/dashboard/");
-  const isTimeline = pathname === "/timeline" || pathname?.startsWith("/timeline/");
-  const isFeed = pathname === "/feed" || pathname?.startsWith("/feed/");
+  const showMySessions = useInboxStore((s) => s.showMySessions);
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
+  const isRoadmap = pathname === "/roadmap" || pathname?.startsWith("/roadmap/");
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.email === "ashot@almostcandid.com";
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -137,7 +148,6 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
     api.conversations.getTeamUnreadCount,
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
-  const markTeamSeen = useMutation(api.conversations.markTeamConversationsSeen);
   const toggleFavorite = useMutation(api.conversations.toggleFavorite);
   const activeSessions = useQuery(api.conversations.listIdleSessions, {});
   const needsInputCount = activeSessions?.filter((s: any) => s.is_idle && s.message_count > 0).length ?? 0;
@@ -160,21 +170,9 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
       include_message_previews: false,
     }) ?? { conversations: [] };
 
-  const handleFilterClick = (newFilter: "my" | "team") => {
-    if (newFilter === "team") {
-      markTeamSeen();
-    }
-    if (!isDashboard) {
-      router.push(newFilter === "team" ? "/dashboard?filter=team" : "/dashboard");
-    } else {
-      onFilterChange?.(newFilter);
-    }
-    onMobileClose?.();
-  };
-
   const handleDirectoryClick = (dir: string) => {
     const newDir = directoryFilter === dir ? null : dir;
-    if (!isDashboard) {
+    if (!pathname?.startsWith("/dashboard")) {
       if (newDir) {
         router.push(`/dashboard?dir=${encodeURIComponent(newDir)}`);
       } else {
@@ -236,19 +234,22 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
     <>
       <div className="flex-1 flex flex-col min-h-0">
         {!isNarrow && (
-          <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2">
+          <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2">
             Conversations
           </div>
         )}
-        <div className="space-y-1">
+        <div>
           <button
-            onClick={() => handleFilterClick("my")}
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
-              isDashboard && filter === "my"
+            onClick={() => {
+              useInboxStore.getState().setShowMySessions(true);
+              router.push("/inbox");
+            }}
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none text-left ${
+              showMySessions && isInbox
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
             }`}
-            title="My Sessions (summaries shared with team)"
+            title="My Sessions"
           >
             <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
@@ -257,10 +258,11 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
           </button>
           <Link
             href="/inbox"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
-              isInbox
+            onClick={() => { if (showMySessions) useInboxStore.getState().setShowMySessions(false); }}
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isInbox && !showMySessions
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
             }`}
             title="Inbox"
           >
@@ -280,10 +282,10 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
           </Link>
           <Link
             href="/tasks"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
               isTasks
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
             }`}
             title="Tasks"
           >
@@ -294,10 +296,10 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
           </Link>
           <Link
             href="/docs"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
               isDocs
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
             }`}
             title="Documents"
           >
@@ -306,13 +308,27 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
             </svg>
             {!isNarrow && <span>Docs</span>}
           </Link>
+          <Link
+            href="/roadmap"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isRoadmap
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Roadmap"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            {!isNarrow && <span>Roadmap</span>}
+          </Link>
           {(activeTeamId || (teams && teams.length > 0)) && (
             <Link
               href="/team/activity"
-              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none text-left ${
+              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none text-left ${
                 isTeamActivity
                   ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                  : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+                  : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
               }`}
               title={activeTeam?.name || teams?.[0]?.name || "Team"}
             >
@@ -340,10 +356,10 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
           {isAdmin && (
             <Link
               href="/admin/daemon-logs"
-              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg transition-colors motion-reduce:transition-none ${
+              className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
                 isAdminLogs
                   ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                  : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+                  : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
               }`}
               title="Daemon Logs"
             >
@@ -357,7 +373,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
 
         {!isNarrow && favorites && favorites.length > 0 && (
           <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2 flex items-center gap-1.5">
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center gap-1.5">
               <svg className="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
               </svg>
@@ -369,7 +385,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
                   <Link
                     href={`/conversation/${fav._id}`}
                     onClick={onMobileClose}
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors flex-1 min-w-0"
+                    className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors flex-1 min-w-0"
                   >
                     <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
@@ -397,7 +413,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
 
         {!isNarrow && bookmarks && bookmarks.length > 0 && (
           <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2 flex items-center gap-1.5">
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center gap-1.5">
               <svg className="w-3.5 h-3.5 text-sol-cyan" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
               </svg>
@@ -409,7 +425,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
                   key={bookmark._id}
                   href={`/conversation/${bookmark.conversation_id}#msg-${bookmark.message_id}`}
                   onClick={onMobileClose}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors group"
+                  className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors group"
                 >
                   <svg className={`w-3 h-3 flex-shrink-0 ${bookmark.message_role === "user" ? "text-sol-blue" : "text-sol-violet"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
@@ -423,7 +439,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
 
         {!isNarrow && computedDirectories.length > 0 && (
           <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-3 mb-2 flex items-center justify-between">
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center justify-between">
               <span>Projects</span>
               <button
                 onClick={() => openNewSession()}
@@ -440,10 +456,10 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
                 <button
                   key={dir}
                   onClick={() => handleDirectoryClick(dir)}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors motion-reduce:transition-none text-left text-sm ${
+                  className={`w-full flex items-center gap-2 px-4 py-1.5 transition-colors motion-reduce:transition-none text-left text-sm ${
                     directoryFilter === dir
                       ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                      : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+                      : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
                   }`}
                   title={dir}
                 >
@@ -471,7 +487,7 @@ export function Sidebar({ filter = "my", onFilterChange, directoryFilter, onDire
   return (
     <nav
       className={`
-        h-full w-full p-3 sm:p-4 flex flex-col bg-sol-bg-alt
+        h-full w-full py-3 sm:py-4 flex flex-col bg-sol-bg-alt
         ${isMobileOpen ? 'shadow-xl' : 'hidden md:flex'}
       `}
     >

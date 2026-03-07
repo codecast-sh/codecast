@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -275,7 +275,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
         project_path: trimmed,
         git_root: trimmed,
       });
-      router.push(`/inbox?s=${conversationId}`);
+      router.push(`/conversation/${conversationId}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create session");
     }
@@ -4926,7 +4926,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         <div className="relative">
-          {(isFocused || shortcutTooltip || showStuckBanner || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
+          {(isFocused || shortcutTooltip || showStuckBanner || isInactive || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {showStuckBanner && sessionId ? (
@@ -5223,8 +5223,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const messageInputRef = useRef<HTMLDivElement>(null);
   const [messageInputHeight, setMessageInputHeight] = useState(0);
 
-  const pathname = usePathname();
-  const convLink = useCallback((id: string) => pathname === "/inbox" ? `/inbox?s=${id}` : `/conversation/${id}`, [pathname]);
+  const convLink = useCallback((id: string) => `/conversation/${id}`, []);
 
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
@@ -5563,7 +5562,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const handleNavigatorRewind = useCallback((msg: NavUserMessage, indexFromEnd: number) => {
     if (!conversation || !isOwner) return;
     setNavigatorOpen(false);
-    const keys = ["Escape", "Escape", ...Array(indexFromEnd).fill("Up"), "Enter"];
+    const keys = ["Escape", "Escape", ...Array(indexFromEnd).fill("Up"), "Enter", "Enter"];
     sendKeys({ conversation_id: conversation._id, keys: keys.join(" ") });
     toast.info(`Rewinding ${indexFromEnd} message${indexFromEnd !== 1 ? "s" : ""}`);
   }, [conversation, isOwner, sendKeys]);
@@ -6360,14 +6359,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
     scrollContainer.addEventListener("scroll", handleScroll);
 
-    // When collapsed changes, content may shrink below viewport making scroll
-    // impossible. Run pagination check after the DOM settles so we still load
-    // older/newer pages even when the container isn't scrollable.
-    const rafId = requestAnimationFrame(handleScroll);
+    // When content shrinks below viewport, scroll events won't fire so run a
+    // one-shot pagination check after the DOM settles. Skip this when collapsed
+    // because collapsed content is intentionally tiny and would trigger an
+    // infinite load-all-pages loop (scrollTop stays near 0 after each page).
+    let rafId: number | undefined;
+    if (!collapsed) {
+      rafId = requestAnimationFrame(handleScroll);
+    }
 
     return () => {
       scrollContainer.removeEventListener("scroll", handleScroll);
-      cancelAnimationFrame(rafId);
+      if (rafId !== undefined) cancelAnimationFrame(rafId);
     };
   }, [hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, collapsed]);
 

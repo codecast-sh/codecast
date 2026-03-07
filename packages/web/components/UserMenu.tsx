@@ -174,6 +174,12 @@ export function UserMenu() {
           >
             Documents
           </button>
+          <button
+            onClick={() => { setOpen(false); router.push("/roadmap"); }}
+            className={menuBtnClass}
+          >
+            Roadmap
+          </button>
           <div className="border-t border-sol-border my-1" />
           <button
             onClick={() => { setOpen(false); router.push("/settings"); }}

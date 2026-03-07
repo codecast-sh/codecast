@@ -697,9 +697,10 @@ interface ConversationListProps {
   directoryFilter?: string | null;
   memberFilter?: string | null;
   onMemberFilterChange?: (memberId: string | null) => void;
+  onNavigate?: (conversationId: string) => void;
 }
 
-export function ConversationList({ filter, directoryFilter, memberFilter, onMemberFilterChange }: ConversationListProps) {
+export function ConversationList({ filter, directoryFilter, memberFilter, onMemberFilterChange, onNavigate }: ConversationListProps) {
   const router = useRouter();
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
@@ -809,11 +810,15 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
         e.preventDefault();
         const conversation = flatConversations[focusedIndex];
         if (conversation) {
-          router.push(`/conversation/${conversation._id}`);
+          if (onNavigate) {
+            onNavigate(conversation._id);
+          } else {
+            router.push(`/conversation/${conversation._id}`);
+          }
         }
       }
     },
-    [flatConversations, focusedIndex, router]
+    [flatConversations, focusedIndex, router, onNavigate]
   );
 
   useEffect(() => {
@@ -1031,6 +1036,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                       className="group block relative"
                       role="listitem"
                       data-flip-key={conv._id}
+                      onClick={onNavigate ? (e) => { e.preventDefault(); onNavigate(conv._id); } : undefined}
                     >
                       <div className="relative bg-blue-50/50 dark:bg-blue-950/20 border-2 border-blue-300/50 dark:border-blue-500/30 rounded-lg p-3 hover:border-blue-400 transition-colors">
                         {minimalContent}
@@ -1064,7 +1070,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                   role="listitem"
                   aria-label={createConversationAriaLabel(conv)}
                   aria-current={isFocused ? "true" : undefined}
-                  onClick={isOthersRestrictedView ? (e) => e.preventDefault() : undefined}
+                  onClick={isOthersRestrictedView ? (e) => e.preventDefault() : onNavigate ? (e) => { e.preventDefault(); onNavigate(conv._id); } : undefined}
                   data-flip-key={conv._id}
                 >
                   <div className={`relative border rounded-lg sm:rounded-xl transition-all duration-200 dark:shadow-none ${

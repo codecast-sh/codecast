@@ -1,7 +1,7 @@
 "use client";
 import { ReactNode, useState, useEffect, useCallback, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
@@ -13,7 +13,7 @@ import { NotificationBell } from "./NotificationBell";
 import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
 import { Logo } from "./Logo";
-import { PanelLeftClose, PanelLeftOpen, PanelRightOpen, PanelRightClose, Plus } from "lucide-react";
+import { PanelRightOpen, PanelRightClose, Plus } from "lucide-react";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
@@ -22,6 +22,7 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { ElectronUpdateBanner } from "./ElectronUpdateBanner";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
+import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag } from "../lib/desktop";
 
 interface DashboardLayoutProps {
@@ -39,7 +40,11 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const isSidebarCollapsed = useInboxStore(s => s.clientState.ui?.sidebar_collapsed ?? false);
   const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
-  const layout = useInboxStore(s => s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT);
+  const rawLayout = useInboxStore(s => s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT);
+  const layout = {
+    sidebar: Math.max(10, Math.min(50, rawLayout.sidebar ?? 25)),
+    main: Math.max(30, Math.min(90, rawLayout.main ?? 75)),
+  };
   const updateUI = useInboxStore(s => s.updateClientUI);
   const updateLayout = useInboxStore(s => s.updateClientLayout);
   const [mounted, setMounted] = useState(false);
@@ -57,6 +62,15 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const creatingRef = useRef(false);
   const [desktopClass, setDesktopClass] = useState("");
   const headerRef = useRef<HTMLElement>(null);
+  usePrefetch();
+
+  const serverClientState = useQuery(api.client_state.get, {});
+  useEffect(() => {
+    if (serverClientState) {
+      useInboxStore.getState().syncClientState(serverClientState);
+    }
+  }, [serverClientState]);
+
   useEffect(() => {
     setDesktopClass(desktopHeaderClass());
     const timer = setTimeout(() => setDesktopClass(desktopHeaderClass()), 500);
@@ -72,8 +86,10 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
   const isOnCommitPage = pathname?.includes("/commit/") ?? false;
   const isOnPRPage = pathname?.includes("/pr/") ?? false;
-  const isOnInboxPage = pathname === "/inbox" || (pathname?.startsWith("/inbox/") ?? false);
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage;
+  const inboxSource = useInboxStore((s) => s.currentConversation?.source);
+  const isOnInboxPage = pathname === "/inbox" || (pathname?.startsWith("/inbox/") ?? false) || inboxSource === "inbox";
+  const isOnTasksPage = pathname === "/tasks" || (pathname?.startsWith("/tasks/") ?? false);
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage;
 
   useEffect(() => {
     setMounted(true);
@@ -85,10 +101,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
     updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
-  };
-
-  const toggleSidebar = () => {
-    updateUI({ sidebar_collapsed: !isSidebarCollapsed });
   };
 
   const handleQuickCreate = useCallback(() => {
@@ -145,14 +157,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!hideSidebar && e.key === "s" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-        const target = e.target as HTMLElement;
-        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-          return;
-        }
-        e.preventDefault();
-        toggleSidebar();
-      }
       if (e.key === "." && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         updateUI({ zen_mode: !isZenMode });
@@ -186,29 +190,15 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             <span className="hidden sm:contents"><Logo size="sm" showText={true} /></span>
             <span className="sm:hidden"><Logo size="sm" showText={false} /></span>
             {!hideSidebar && (
-              <>
-                <button
-                  onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-                  className="md:hidden p-1.5 sm:p-2 text-sol-text hover:text-sol-yellow transition-colors"
-                  aria-label="Toggle menu"
-                >
-                  <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                  </svg>
-                </button>
-                <button
-                  onClick={toggleSidebar}
-                  className="hidden md:block p-1.5 text-sol-text-dim hover:text-sol-text transition-colors"
-                  aria-label={isSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-                  title={isSidebarCollapsed ? "Show sidebar (s)" : "Hide sidebar (s)"}
-                >
-                  {isSidebarCollapsed ? (
-                    <PanelLeftOpen className="w-5 h-5" />
-                  ) : (
-                    <PanelLeftClose className="w-5 h-5" />
-                  )}
-                </button>
-              </>
+              <button
+                onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+                className="md:hidden p-1.5 sm:p-2 text-sol-text hover:text-sol-yellow transition-colors"
+                aria-label="Toggle menu"
+              >
+                <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
             )}
           </div>
 
@@ -289,7 +279,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             defaultLayout={layout}
             onLayoutChange={handleLayoutChange}
           >
-            <Panel id="sidebar" minSize={0}>
+            <Panel id="sidebar" minSize="10%" maxSize="50%">
               <div className="h-full bg-sol-bg-alt overflow-auto">
                 <Sidebar
                   filter={filter}
@@ -302,7 +292,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
               </div>
             </Panel>
             <Separator className="relative w-1 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
-            <Panel id="main" minSize={0}>
+            <Panel id="main" minSize="30%">
               {isFullWidthPage ? (
                 <div className="h-full">
                   {children}

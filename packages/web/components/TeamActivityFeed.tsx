@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
+import { ConversationList } from "./ConversationList";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 function getRelativeTime(timestamp: number): string {
@@ -243,70 +244,6 @@ interface TeamActivityFeedProps {
 
 type ViewMode = "insights" | "raw";
 
-const EVENT_ICONS: Record<string, string> = {
-  session_started: "\u25B6",
-  session_completed: "\u2713",
-  commit_pushed: "\u2022",
-  pr_created: "\u2191",
-  pr_merged: "\u2714",
-  member_joined: "+",
-  member_left: "\u2212",
-};
-
-const EVENT_COLORS: Record<string, string> = {
-  session_started: "text-sol-cyan",
-  session_completed: "text-sol-green",
-  commit_pushed: "text-sol-violet",
-  pr_created: "text-sol-yellow",
-  pr_merged: "text-sol-green",
-  member_joined: "text-sol-cyan",
-  member_left: "text-sol-text-dim",
-};
-
-function RawEventRow({ event }: { event: any }) {
-  const actorName = event.actor?.name || event.actor?.email || "Unknown";
-  const icon = EVENT_ICONS[event.event_type] || "\u2022";
-  const color = EVENT_COLORS[event.event_type] || "text-sol-text-dim";
-
-  return (
-    <div className="flex items-start gap-2 py-1.5 px-2 text-xs hover:bg-sol-bg-alt/30 rounded transition-colors">
-      <span className={`${color} w-4 text-center shrink-0 font-mono`}>{icon}</span>
-      <span className="text-sol-text-muted shrink-0 w-16 tabular-nums text-[10px]">{getRelativeTime(event.timestamp)}</span>
-      <span className="text-sol-text-dim shrink-0 w-20 truncate">{actorName.split(" ")[0]}</span>
-      <span className="text-sol-text flex-1 truncate">{event.title}</span>
-      {event.description && (
-        <span className="text-sol-text-dim truncate max-w-[200px] hidden lg:inline">{event.description}</span>
-      )}
-      {event.metadata?.git_branch && (
-        <span className="text-sol-violet/50 font-mono text-[10px] hidden lg:inline">{event.metadata.git_branch}</span>
-      )}
-    </div>
-  );
-}
-
-function RawFeed({ teamId }: { teamId: Id<"teams"> }) {
-  const [cursor, setCursor] = useState<number | undefined>(undefined);
-  const rawFeed = useQuery(api.teamActivity.getTeamActivityFeed, { team_id: teamId, limit: 50, cursor });
-
-  if (rawFeed === undefined) return <LoadingSkeleton />;
-  if (!rawFeed.events.length) return <EmptyState title="No events" description="No raw activity events recorded yet." />;
-
-  return (
-    <div className="space-y-0.5">
-      {rawFeed.events.map((event: any) => (
-        <RawEventRow key={event._id} event={event} />
-      ))}
-      {rawFeed.hasMore && (
-        <button
-          onClick={() => setCursor(rawFeed.nextCursor)}
-          className="w-full text-center text-[11px] text-sol-text-dim hover:text-sol-text py-2 transition-colors"
-        >
-          Load more
-        </button>
-      )}
-    </div>
-  );
-}
 
 export function TeamActivityFeed({ teamId }: TeamActivityFeedProps) {
   const [windowHours, setWindowHours] = useState<24 | 168>(24);
@@ -360,8 +297,7 @@ export function TeamActivityFeed({ teamId }: TeamActivityFeedProps) {
         </div>
         ) : (
         <div className="flex items-baseline gap-2">
-          <span className="text-sm font-medium text-sol-text">Raw Events</span>
-          <span className="text-xs text-sol-text-dim">commits, sessions, PRs</span>
+          <span className="text-sm font-medium text-sol-text">Team Sessions</span>
         </div>
         )}
 
@@ -429,7 +365,7 @@ export function TeamActivityFeed({ teamId }: TeamActivityFeedProps) {
       )}
 
       {viewMode === "raw" ? (
-        <RawFeed teamId={teamId} />
+        <ConversationList filter="team" />
       ) : (
         <>
           <OutcomeBar outcomes={digest.outcomes} />
