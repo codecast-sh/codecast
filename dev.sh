@@ -21,6 +21,11 @@ MAX_RAPID_RESTARTS=5
 RAPID_WINDOW=60
 WEB_FAIL_COUNT=0
 WEB_FAIL_THRESHOLD=3
+HTTP_FAIL_COUNT=0
+HTTP_FAIL_THRESHOLD=2
+HTTP_CHECK_INTERVAL=30
+LAST_HTTP_CHECK=0
+WEB_STARTED_AT=0
 
 log() { printf "\033[90m[%s]\033[0m %s\n" "$(date +%H:%M:%S)" "$*"; }
 log_warn() { printf "\033[90m[%s]\033[0m \033[33m%s\033[0m\n" "$(date +%H:%M:%S)" "$*"; }
@@ -124,6 +129,8 @@ start_web() {
         if lsof -ti :$PORT -sTCP:LISTEN >/dev/null 2>&1; then
             log "Web ready on port $PORT"
             WEB_FAIL_COUNT=0
+            HTTP_FAIL_COUNT=0
+            WEB_STARTED_AT=$(date +%s)
             return
         fi
     done
@@ -132,6 +139,12 @@ start_web() {
 
 port_is_listening() {
     lsof -ti :$PORT -sTCP:LISTEN >/dev/null 2>&1
+}
+
+http_is_healthy() {
+    local status
+    status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://localhost:$PORT/api/health" 2>/dev/null)
+    [ "$status" = "200" ]
 }
 
 # --- startup ---
@@ -182,5 +195,22 @@ while true; do
         fi
     else
         WEB_FAIL_COUNT=0
+    fi
+
+    now=$(date +%s)
+    uptime=$((now - WEB_STARTED_AT))
+    if port_is_listening && [ $uptime -gt 60 ] && [ $((now - LAST_HTTP_CHECK)) -ge $HTTP_CHECK_INTERVAL ]; then
+        LAST_HTTP_CHECK=$now
+        if ! http_is_healthy; then
+            HTTP_FAIL_COUNT=$((HTTP_FAIL_COUNT + 1))
+            log_warn "HTTP health check failed (${HTTP_FAIL_COUNT}/${HTTP_FAIL_THRESHOLD})"
+            if [ $HTTP_FAIL_COUNT -ge $HTTP_FAIL_THRESHOLD ]; then
+                log_err "Web server unhealthy (port open but not responding to HTTP), restarting..."
+                HTTP_FAIL_COUNT=0
+                start_web
+            fi
+        else
+            HTTP_FAIL_COUNT=0
+        fi
     fi
 done
