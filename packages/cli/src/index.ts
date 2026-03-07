@@ -10,7 +10,7 @@ import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
@@ -240,6 +240,8 @@ interface Config {
   memory_version?: string;
   task_enabled?: boolean;
   task_version?: string;
+  work_enabled?: boolean;
+  work_version?: string;
   claude_args?: string;
   codex_args?: string;
   sync_mode?: "all" | "selected";
@@ -1450,21 +1452,21 @@ You can schedule follow-up work that runs autonomously after this session ends. 
 
 \`\`\`bash
 # Schedule tasks
-codecast task add "Check if CI is green on main" --in 30m
-codecast task add "Review open PRs and summarize findings" --every 4h
-codecast task add "Respond to new PR review comments" --on pr_comment
-codecast task add "Continue the auth refactor" --in 2h --context current --mode apply
+codecast schedule add "Check if CI is green on main" --in 30m
+codecast schedule add "Review open PRs and summarize findings" --every 4h
+codecast schedule add "Respond to new PR review comments" --on pr_comment
+codecast schedule add "Continue the auth refactor" --in 2h --context current --mode apply
 
 # Report completion (when running inside a task)
-codecast task complete <task_id> --summary "what was done"
+codecast schedule complete <task_id> --summary "what was done"
 
 # Manage tasks
-codecast task ls                       # list active tasks
-codecast task ls --all                 # include completed/failed
-codecast task pause <id>               # pause a task
-codecast task run <id>                 # run immediately
-codecast task cancel <id>              # cancel a task
-codecast task log <id>                 # show last run conversation
+codecast schedule ls                       # list active tasks
+codecast schedule ls --all                 # include completed/failed
+codecast schedule pause <id>               # pause a task
+codecast schedule run <id>                 # run immediately
+codecast schedule cancel <id>              # cancel a task
+codecast schedule log <id>                 # show last run conversation
 \`\`\`
 
 Options:
@@ -1476,8 +1478,36 @@ Options:
 - \`--project <path>\`: set working directory (defaults to current)
 - \`--max-runtime <duration>\`: override max runtime (default: 10m)
 
-When a task fires, a new agent session spawns with your prompt and the task ID. The agent should call \`codecast task complete <task_id> --summary "..."\` when done to report results back.
+When a task fires, a new agent session spawns with your prompt and the task ID. The agent should call \`codecast schedule complete <task_id> --summary "..."\` when done to report results back.
 ${TASK_SNIPPET_END}
+`;
+
+const WORK_SNIPPET_END = "<!-- /codecast-work -->";
+const WORK_SNIPPET = `
+## Issue Tracking with codecast task
+
+Use \`codecast task\` for work item tracking (tasks, bugs, features). Cloud-persistent via Convex.
+
+### Quick Start
+
+\`\`\`bash
+codecast task ready                          # Unblocked tasks ready to work
+codecast task create "Title" -t task -p high # Create new task
+codecast task start ct-a1b2                  # Claim work (set in_progress)
+codecast task done ct-a1b2 -m "Done"        # Mark complete
+codecast task context ct-a1b2               # Full context for agents
+codecast project ls                         # List projects
+codecast doc sync                           # Sync plan files to doc library
+\`\`\`
+
+### Workflow
+
+1. \`codecast task ready\` - Find available work
+2. \`codecast task start <short_id>\` - Claim it
+3. Work on implementation
+4. \`codecast task comment <short_id> "progress" -t progress\` - Report progress
+5. \`codecast task done <short_id>\` - Mark done
+${WORK_SNIPPET_END}
 `;
 
 interface SnippetTarget {
@@ -1619,6 +1649,56 @@ function installTaskSnippet(update = false): { installed: boolean; updated: bool
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
+function installWorkSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+
+  let existing = "";
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, "utf-8");
+  }
+
+  const hasWork = existing.includes("## Issue Tracking with codecast task") && existing.includes(WORK_SNIPPET_END);
+  if (hasWork && !update) {
+    return { installed: false, updated: false };
+  }
+
+  if (hasWork && update) {
+    const workStart = existing.indexOf("## Issue Tracking with codecast task");
+    let workEnd = existing.length;
+
+    const endMarkerIdx = existing.indexOf(WORK_SNIPPET_END, workStart);
+    if (endMarkerIdx !== -1) {
+      workEnd = endMarkerIdx + WORK_SNIPPET_END.length;
+      if (existing[workEnd] === "\n") workEnd++;
+    }
+
+    const before = existing.slice(0, workStart);
+    const after = existing.slice(workEnd);
+    existing = before + after;
+    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + WORK_SNIPPET, { mode: 0o600 });
+    return { installed: true, updated: true };
+  }
+
+  fs.writeFileSync(filePath, existing + WORK_SNIPPET, { mode: 0o600 });
+  return { installed: true, updated: false };
+}
+
+function installWorkSnippet(update = false): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    const result = installWorkSnippetToFile(target.filePath, target.dirPath, update);
+    if (result.installed) anyInstalled = true;
+    if (result.updated) anyUpdated = true;
+  }
+
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
 async function promptMemoryEnablement(): Promise<void> {
   const config = readConfig() || {};
 
@@ -1633,6 +1713,19 @@ async function promptMemoryEnablement(): Promise<void> {
     }
   } else if (config.task_enabled) {
     installTaskSnippet(false);
+  }
+
+  // Auto-update work snippet if enabled
+  if (config.work_enabled && config.work_version !== getWorkVersion()) {
+    const result = installWorkSnippet(true);
+    config.work_version = getWorkVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Work snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.work_enabled) {
+    installWorkSnippet(false);
   }
 
   if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
@@ -4902,11 +4995,21 @@ program
 
       // Remove task snippet
       const taskStart = content.indexOf("## Async Tasks");
-      if (taskStart !== -1 && content.includes("codecast task")) {
+      if (taskStart !== -1 && (content.includes("codecast task") || content.includes("codecast schedule"))) {
         const taskEndMarker = content.indexOf(TASK_SNIPPET_END, taskStart);
         let taskEnd = taskEndMarker !== -1 ? taskEndMarker + TASK_SNIPPET_END.length : content.length;
         if (content[taskEnd] === "\n") taskEnd++;
         content = content.slice(0, taskStart) + content.slice(taskEnd);
+        changed = true;
+      }
+
+      // Remove work snippet
+      const workStart = content.indexOf("## Issue Tracking with codecast task");
+      if (workStart !== -1 && content.includes(WORK_SNIPPET_END)) {
+        const workEndMarker = content.indexOf(WORK_SNIPPET_END, workStart);
+        let workEnd = workEndMarker !== -1 ? workEndMarker + WORK_SNIPPET_END.length : content.length;
+        if (content[workEnd] === "\n") workEnd++;
+        content = content.slice(0, workStart) + content.slice(workEnd);
         changed = true;
       }
 
@@ -6884,11 +6987,12 @@ const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> 
   push: { event_type: "push" },
 };
 
-const task = program
-  .command("task")
+const schedule = program
+  .command("schedule")
+  .alias("sched")
   .description("Manage scheduled agent tasks");
 
-task
+schedule
   .command("add")
   .description("Schedule a new agent task")
   .argument("<prompt>", "Task instruction for the agent")
@@ -7010,7 +7114,7 @@ task
     }
   });
 
-task
+schedule
   .command("ls")
   .description("List agent tasks")
   .option("-s, --status <status>", "Filter by status (scheduled, running, completed, failed, paused)")
@@ -7087,7 +7191,7 @@ task
     }
   });
 
-task
+schedule
   .command("complete")
   .description("Mark a running task as completed (called by the agent)")
   .argument("<id>", "Task ID (full or last 8 chars)")
@@ -7129,7 +7233,7 @@ task
     }
   });
 
-task
+schedule
   .command("cancel")
   .description("Cancel a task")
   .argument("<id>", "Task ID (full or last 8 chars)")
@@ -7137,7 +7241,7 @@ task
     await taskAction("cancel", id, "Cancelled");
   });
 
-task
+schedule
   .command("pause")
   .description("Pause a scheduled task")
   .argument("<id>", "Task ID (full or last 8 chars)")
@@ -7145,7 +7249,7 @@ task
     await taskAction("pause", id, "Paused");
   });
 
-task
+schedule
   .command("run")
   .description("Run a task immediately")
   .argument("<id>", "Task ID (full or last 8 chars)")
@@ -7153,7 +7257,7 @@ task
     await taskAction("run", id, "Queued for immediate run");
   });
 
-task
+schedule
   .command("log")
   .description("Show last run conversation for a task")
   .argument("<id>", "Task ID (full or last 8 chars)")
@@ -7191,7 +7295,7 @@ task
     console.log(fmt.muted(`Use: codecast read ${t.last_run_conversation_id}`));
   });
 
-task
+schedule
   .command("install")
   .description("Install task snippet into agent config (CLAUDE.md, AGENTS.md)")
   .option("--disable", "Remove task snippet and disable")
@@ -7201,7 +7305,7 @@ task
     if (options.disable) {
       config.task_enabled = false;
       writeConfig(config);
-      console.log("Task snippet disabled. Run 'codecast task install' to re-enable.");
+      console.log("Schedule snippet disabled. Run 'codecast schedule install' to re-enable.");
       return;
     }
 
@@ -7213,12 +7317,12 @@ task
     const targets = getSnippetTargets();
     const targetList = targets.map(t => t.label).join(", ");
     if (result.updated) {
-      console.log(`Task snippet updated in ${targetList}`);
+      console.log(`Schedule snippet updated in ${targetList}`);
     } else if (result.installed) {
-      console.log(`Task snippet installed in ${targetList}`);
+      console.log(`Schedule snippet installed in ${targetList}`);
       console.log("Your agents can now schedule follow-up work autonomously.");
     } else {
-      console.log("Task snippet is up to date.");
+      console.log("Schedule snippet is up to date.");
     }
   });
 
@@ -7300,6 +7404,375 @@ function formatRunAt(timestamp: number): string {
   if (diff < 0) return "overdue";
   return `in ${formatMs(diff)}`;
 }
+
+// --- Work Items (codecast task) ---
+
+function getCliEndpoint(): { siteUrl: string; apiToken: string } {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.convex_url) {
+    console.error("Not authenticated. Run: codecast auth");
+    process.exit(1);
+  }
+  return {
+    siteUrl: config.convex_url.replace(".cloud", ".site"),
+    apiToken: config.auth_token,
+  };
+}
+
+async function cliPost(urlPath: string, body: Record<string, any>): Promise<any> {
+  const { siteUrl, apiToken } = getCliEndpoint();
+  const response = await fetch(`${siteUrl}${urlPath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: apiToken, ...body }),
+  });
+  const text = await response.text();
+  let result: any;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    console.error(`API error (${response.status}): ${text.slice(0, 200)}`);
+    process.exit(1);
+  }
+  if (result.error) {
+    console.error(`Error: ${result.error}`);
+    process.exit(1);
+  }
+  return result;
+}
+
+const PRIORITY_COLORS: Record<string, string> = {
+  urgent: c.red,
+  high: c.yellow,
+  medium: "",
+  low: c.dim,
+  none: c.dim,
+};
+
+const STATUS_ICONS: Record<string, string> = {
+  draft: "○",
+  open: "◎",
+  in_progress: "◉",
+  in_review: "◈",
+  done: "●",
+  dropped: "✕",
+};
+
+function formatWorkItem(t: any, verbose = false): string {
+  const icon = STATUS_ICONS[t.status] || "?";
+  const pcolor = PRIORITY_COLORS[t.priority] || "";
+  const pri = t.priority !== "medium" ? ` ${pcolor}${t.priority}${c.reset}` : "";
+  const labels = t.labels?.length ? ` ${c.dim}[${t.labels.join(", ")}]${c.reset}` : "";
+  const blocked = t.blocked_by?.length ? ` ${c.red}blocked${c.reset}` : "";
+  let line = `  ${icon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${pri}${labels}${blocked}`;
+  if (verbose && t.description) {
+    line += `\n    ${c.dim}${t.description.slice(0, 120)}${c.reset}`;
+  }
+  return line;
+}
+
+const work = program
+  .command("task")
+  .alias("t")
+  .description("Manage work items (tasks, bugs, features)");
+
+work
+  .command("create")
+  .description("Create a new work item")
+  .argument("<title>", "Task title")
+  .option("-d, --description <text>", "Description")
+  .option("-t, --type <type>", "Type: task, feature, bug, chore", "task")
+  .option("-p, --priority <level>", "Priority: urgent, high, medium, low", "medium")
+  .option("--project <id>", "Project ID")
+  .option("--blocked-by <ids>", "Comma-separated short_ids this is blocked by")
+  .option("--labels <labels>", "Comma-separated labels")
+  .option("--assignee <name>", "Assignee")
+  .option("--status <status>", "Initial status (default: open)", "open")
+  .action(async (title: string, options: any) => {
+    const body: Record<string, any> = {
+      title,
+      task_type: options.type,
+      status: options.status,
+      priority: options.priority,
+    };
+    if (options.description) body.description = options.description;
+    if (options.project) body.project_id = options.project;
+    if (options.assignee) body.assignee = options.assignee;
+    if (options.blockedBy) body.blocked_by = options.blockedBy.split(",").map((s: string) => s.trim());
+    if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    if (sessionId) body.conversation_id = sessionId;
+
+    const result = await cliPost("/cli/work/create", body);
+    console.log(`${c.green}ok${c.reset} Created ${c.cyan}${result.short_id}${c.reset}: ${title}`);
+  });
+
+work
+  .command("ls")
+  .description("List work items")
+  .option("-p, --project <id>", "Filter by project ID")
+  .option("-s, --status <status>", "Filter by status")
+  .option("-r, --ready", "Show only ready items (open, no blockers)")
+  .option("-a, --all", "Include derived/mined tasks (hidden by default)")
+  .option("-n, --limit <n>", "Max results", "50")
+  .option("-v, --verbose", "Show descriptions")
+  .action(async (options: any) => {
+    const body: Record<string, any> = { limit: parseInt(options.limit) };
+    if (options.project) body.project_id = options.project;
+    if (options.status) body.status = options.status;
+    if (options.ready) body.ready = true;
+    if (options.all) body.include_derived = true;
+
+    const tasks = await cliPost("/cli/work/list", body);
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      console.log(fmt.muted("No tasks found."));
+      return;
+    }
+    for (const t of tasks) {
+      console.log(formatWorkItem(t, options.verbose));
+    }
+    console.log(fmt.muted(`\n  ${tasks.length} items`));
+  });
+
+work
+  .command("show")
+  .description("Show task details")
+  .argument("<short_id>", "Task short ID (e.g., ct-a1b2)")
+  .action(async (shortId: string) => {
+    const result = await cliPost("/cli/work/get", { short_id: shortId });
+    if (!result) {
+      console.error("Task not found");
+      process.exit(1);
+    }
+    const t = result;
+    const icon = STATUS_ICONS[t.status] || "?";
+    console.log(`\n  ${icon} ${c.bold}${t.title}${c.reset}`);
+    console.log(`  ${c.cyan}${t.short_id}${c.reset} | ${t.status} | ${t.priority} | ${t.task_type}`);
+    if (t.description) console.log(`\n  ${t.description}`);
+    if (t.labels?.length) console.log(`  ${c.dim}Labels: ${t.labels.join(", ")}${c.reset}`);
+    if (t.assignee) console.log(`  ${c.dim}Assignee: ${t.assignee}${c.reset}`);
+    if (t.blocked_by?.length) console.log(`  ${c.red}Blocked by: ${t.blocked_by.join(", ")}${c.reset}`);
+    if (t.blocks?.length) console.log(`  ${c.dim}Blocks: ${t.blocks.join(", ")}${c.reset}`);
+    if (t.comments?.length) {
+      console.log(`\n  ${c.bold}Comments (${t.comments.length})${c.reset}`);
+      for (const cm of t.comments.slice(-5)) {
+        const ago = formatMs(Date.now() - cm.created_at);
+        console.log(`  ${c.dim}${cm.author} (${ago} ago):${c.reset} ${cm.text}`);
+      }
+    }
+    console.log();
+  });
+
+work
+  .command("start")
+  .description("Start working on a task (set in_progress)")
+  .argument("<short_id>", "Task short ID")
+  .action(async (shortId: string) => {
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const body: Record<string, any> = { short_id: shortId, status: "in_progress" };
+    if (sessionId) body.conversation_id = sessionId;
+    await cliPost("/cli/work/update", body);
+    console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
+  });
+
+work
+  .command("done")
+  .description("Mark a task as done")
+  .argument("<short_id>", "Task short ID")
+  .option("-m, --message <text>", "Completion comment")
+  .action(async (shortId: string, options: any) => {
+    await cliPost("/cli/work/update", { short_id: shortId, status: "done" });
+    if (options.message) {
+      await cliPost("/cli/work/comment", { short_id: shortId, text: options.message, comment_type: "note" });
+    }
+    console.log(`${c.green}ok${c.reset} Completed ${c.cyan}${shortId}${c.reset}`);
+  });
+
+work
+  .command("drop")
+  .description("Drop/cancel a task")
+  .argument("<short_id>", "Task short ID")
+  .option("-m, --message <text>", "Reason for dropping")
+  .action(async (shortId: string, options: any) => {
+    await cliPost("/cli/work/update", { short_id: shortId, status: "dropped" });
+    if (options.message) {
+      await cliPost("/cli/work/comment", { short_id: shortId, text: options.message, comment_type: "note" });
+    }
+    console.log(`${c.green}ok${c.reset} Dropped ${c.cyan}${shortId}${c.reset}`);
+  });
+
+work
+  .command("update")
+  .description("Update a task")
+  .argument("<short_id>", "Task short ID")
+  .option("-s, --status <status>", "New status")
+  .option("-p, --priority <level>", "New priority")
+  .option("-t, --title <title>", "New title")
+  .option("-d, --description <text>", "New description")
+  .option("--assignee <name>", "New assignee")
+  .option("--labels <labels>", "Comma-separated labels")
+  .option("--project <id>", "Project ID")
+  .action(async (shortId: string, options: any) => {
+    const body: Record<string, any> = { short_id: shortId };
+    if (options.status) body.status = options.status;
+    if (options.priority) body.priority = options.priority;
+    if (options.title) body.title = options.title;
+    if (options.description !== undefined) body.description = options.description;
+    if (options.assignee !== undefined) body.assignee = options.assignee;
+    if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+    if (options.project !== undefined) body.project_id = options.project;
+    await cliPost("/cli/work/update", body);
+    console.log(`${c.green}ok${c.reset} Updated ${c.cyan}${shortId}${c.reset}`);
+  });
+
+work
+  .command("comment")
+  .description("Add a comment to a task")
+  .argument("<short_id>", "Task short ID")
+  .argument("<text>", "Comment text")
+  .option("-t, --type <type>", "Comment type: note, progress, blocker, review", "note")
+  .action(async (shortId: string, text: string, options: any) => {
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const body: Record<string, any> = { short_id: shortId, text, comment_type: options.type };
+    if (sessionId) body.conversation_id = sessionId;
+    await cliPost("/cli/work/comment", body);
+    console.log(`${c.green}ok${c.reset} Comment added to ${c.cyan}${shortId}${c.reset}`);
+  });
+
+work
+  .command("dep")
+  .description("Add a dependency between tasks")
+  .argument("<short_id>", "Task short ID")
+  .option("--blocks <id>", "This task blocks <id>")
+  .option("--blocked-by <id>", "This task is blocked by <id>")
+  .action(async (shortId: string, options: any) => {
+    if (!options.blocks && !options.blockedBy) {
+      console.error("Specify --blocks or --blocked-by");
+      process.exit(1);
+    }
+    const body: Record<string, any> = { short_id: shortId };
+    if (options.blocks) body.blocks = options.blocks;
+    if (options.blockedBy) body.blocked_by = options.blockedBy;
+    await cliPost("/cli/work/dep", body);
+    console.log(`${c.green}ok${c.reset} Dependency added`);
+  });
+
+work
+  .command("context")
+  .description("Get full context for a task (for agents)")
+  .argument("<short_id>", "Task short ID")
+  .action(async (shortId: string) => {
+    const result = await cliPost("/cli/work/context", { short_id: shortId });
+    if (!result) {
+      console.error("Task not found");
+      process.exit(1);
+    }
+    const t = result.task;
+    console.log(`\n# ${t.title}`);
+    console.log(`ID: ${t.short_id} | Status: ${t.status} | Priority: ${t.priority} | Type: ${t.task_type}`);
+    if (t.description) console.log(`\n${t.description}`);
+    if (result.project) {
+      console.log(`\nProject: ${result.project.title}`);
+      if (result.project.description) console.log(result.project.description);
+    }
+    if (t.blocked_by?.length) console.log(`\nBlocked by: ${t.blocked_by.join(", ")}`);
+    if (t.blocks?.length) console.log(`Blocks: ${t.blocks.join(", ")}`);
+    if (result.comments?.length) {
+      console.log(`\n## Comments`);
+      for (const cm of result.comments) {
+        console.log(`- [${cm.author}] ${cm.text}`);
+      }
+    }
+    if (result.relatedDocs?.length) {
+      console.log(`\n## Related Plans`);
+      for (const d of result.relatedDocs) {
+        console.log(`- ${d.title} (${d.doc_type})`);
+        if (d.content) console.log(`  ${d.content.slice(0, 200)}`);
+      }
+    }
+    if (result.sessionSummaries?.length) {
+      console.log(`\n## Session History`);
+      for (const s of result.sessionSummaries) {
+        console.log(`- ${s}`);
+      }
+    }
+    console.log();
+  });
+
+work
+  .command("ready")
+  .description("Show tasks ready to work on (open, no blockers)")
+  .option("-p, --project <id>", "Filter by project")
+  .action(async (options: any) => {
+    const body: Record<string, any> = { ready: true };
+    if (options.project) body.project_id = options.project;
+    const tasks = await cliPost("/cli/work/list", body);
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      console.log(fmt.muted("No ready tasks."));
+      return;
+    }
+    for (const t of tasks) {
+      console.log(formatWorkItem(t));
+    }
+    console.log(fmt.muted(`\n  ${tasks.length} ready`));
+  });
+
+work
+  .command("promote")
+  .description("Promote a mined/derived task to a real task")
+  .argument("<short_id>", "Task short ID")
+  .action(async (shortId: string) => {
+    await cliPost("/cli/work/promote", { short_id: shortId });
+    console.log(`${c.green}ok${c.reset} Promoted ${c.cyan}${shortId}${c.reset}`);
+  });
+
+work
+  .command("snippet")
+  .description("Show current team task context (what agents see)")
+  .action(async () => {
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const body: Record<string, any> = {};
+    if (sessionId) body.conversation_id = sessionId;
+    const result = await cliPost("/cli/work/snippet", body);
+    if (result.snippet) {
+      console.log(result.snippet);
+    } else {
+      console.log(fmt.muted("No active tasks or plans."));
+    }
+    console.log(fmt.muted(`\n  ${result.task_count} tasks, ${result.plan_count} plans`));
+  });
+
+work
+  .command("install")
+  .description("Install work item snippet into agent config (CLAUDE.md, AGENTS.md)")
+  .option("--disable", "Remove work snippet and disable")
+  .action(async (options: any) => {
+    const config = readConfig() || {};
+
+    if (options.disable) {
+      config.work_enabled = false;
+      writeConfig(config);
+      console.log("Work snippet disabled. Run 'codecast task install' to re-enable.");
+      return;
+    }
+
+    const result = installWorkSnippet(true);
+    config.work_enabled = true;
+    config.work_version = getWorkVersion();
+    writeConfig(config);
+
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
+    if (result.updated) {
+      console.log(`Work snippet updated in ${targetList}`);
+    } else if (result.installed) {
+      console.log(`Work snippet installed in ${targetList}`);
+      console.log("Your agents can now track and manage work items.");
+    } else {
+      console.log("Work snippet is up to date.");
+    }
+  });
 
 // --- Stable Mode ---
 

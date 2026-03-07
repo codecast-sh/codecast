@@ -552,6 +552,19 @@ export class SyncService {
     } catch {}
   }
 
+  async markSessionCompleted(conversationId: string): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.client.mutation(
+        "conversations:markSessionCompleted" as any,
+        {
+          conversation_id: conversationId,
+          api_token: this.apiToken,
+        }
+      );
+    } catch {}
+  }
+
   async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped", clientTs?: number, permissionMode?: string): Promise<void> {
     if (!this.apiToken) return;
     try {

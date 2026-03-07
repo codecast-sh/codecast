@@ -6,6 +6,7 @@ import { execSync, spawn } from "child_process";
 const VERSION = "1.0.56";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
+const WORK_VERSION = "1";
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -92,6 +93,10 @@ export function getMemoryVersion(): string {
 
 export function getTaskVersion(): string {
   return TASK_VERSION;
+}
+
+export function getWorkVersion(): string {
+  return WORK_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {
