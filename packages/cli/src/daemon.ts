@@ -46,6 +46,23 @@ const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", 
 const EXEC_TIMEOUT_MS = 10_000;
 const execAsync: typeof _execAsync = (cmd, opts?) => _execAsync(cmd, { timeout: EXEC_TIMEOUT_MS, ...opts as any, env: { ...process.env, PATH: ENRICHED_PATH, ...(opts as any)?.env } });
 
+// Sleep/wake detection: if the last tick was more than 30s ago, we probably just woke from sleep.
+// During the wake grace period, skip polling to let tmux recover and avoid zombie accumulation.
+let lastTickTime = Date.now();
+const SLEEP_DETECTION_THRESHOLD_MS = 30_000;
+const WAKE_GRACE_PERIOD_MS = 5_000;
+let wakeGraceUntil = 0;
+setInterval(() => {
+  const now = Date.now();
+  const elapsed = now - lastTickTime;
+  if (elapsed > SLEEP_DETECTION_THRESHOLD_MS) {
+    wakeGraceUntil = now + WAKE_GRACE_PERIOD_MS;
+    log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+  }
+  lastTickTime = now;
+}, 5_000);
+function isInWakeGrace(): boolean { return Date.now() < wakeGraceUntil; }
+
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
@@ -675,6 +692,100 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "rewind": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId = parsed.conversation_id;
+        const stepsBack = parsed.steps_back;
+        if (!conversationId || stepsBack === undefined || stepsBack < 1) {
+          error = "Missing conversation_id or invalid steps_back";
+          break;
+        }
+        const cache = readConversationCache();
+        const reverse = buildReverseConversationCache(cache);
+        const sessionId = reverse[conversationId];
+        if (!sessionId) {
+          error = `No session found for conversation ${conversationId}`;
+          break;
+        }
+        const agentType = detectSessionAgentType(sessionId);
+        if (agentType !== "claude") {
+          error = `Rewind not yet supported for ${agentType} sessions`;
+          break;
+        }
+        const proc = await findSessionProcess(sessionId, agentType);
+        if (!proc) {
+          error = `No running process for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+        if (!tmuxTarget) {
+          error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+
+        const PROMPT_RE = /[❯›]/;
+        const PROMPT_EMPTY_RE = /[❯›]\s*(\n|$)/;
+        const BUSY_RE = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Wandering|Vibing|Coasting|Working|thinking/;
+
+        const captureLast = async (): Promise<string> => {
+          const { stdout } = await execAsync(`tmux capture-pane -p -J -t '${tmuxTarget}' -S -8`);
+          return stdout.split("\n").slice(-10).join("\n");
+        };
+
+        const isAtPrompt = async (): Promise<boolean> => {
+          const last = await captureLast();
+          return PROMPT_RE.test(last) && !BUSY_RE.test(last);
+        };
+
+        const hasEmptyPrompt = async (): Promise<boolean> => {
+          const last = await captureLast();
+          return PROMPT_EMPTY_RE.test(last);
+        };
+
+        // Step 1: Get to idle prompt
+        if (!(await isAtPrompt())) {
+          log(`[REWIND] Session not at prompt, sending Escape`);
+          await execAsync(`tmux send-keys -t '${tmuxTarget}' Escape`);
+          let gotPrompt = false;
+          for (let i = 0; i < 60; i++) {
+            await new Promise(r => setTimeout(r, 500));
+            if (await isAtPrompt()) { gotPrompt = true; break; }
+          }
+          if (!gotPrompt) {
+            error = "Timed out waiting for prompt after interrupt";
+            break;
+          }
+          log(`[REWIND] Got prompt after interrupt`);
+        }
+
+        // Step 2: Clear any existing text in the prompt
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (await hasEmptyPrompt()) break;
+          log(`[REWIND] Clearing existing prompt text (attempt ${attempt + 1})`);
+          await execAsync(`tmux send-keys -t '${tmuxTarget}' Escape`);
+          await new Promise(r => setTimeout(r, 500));
+        }
+
+        // Step 3: Navigate history with Up arrows
+        log(`[REWIND] Sending ${stepsBack} Up arrows`);
+        const ups = Array(stepsBack).fill("Up").join(" ");
+        await execAsync(`tmux send-keys -t '${tmuxTarget}' ${ups}`);
+        await new Promise(r => setTimeout(r, 300));
+
+        // Step 4: Verify prompt has text (history was navigated)
+        if (await hasEmptyPrompt()) {
+          log(`[REWIND] Prompt still empty after Up arrows, no history at position ${stepsBack}`);
+          error = `No message found at history position ${stepsBack}`;
+          break;
+        }
+
+        // Step 5: Submit with single Enter (no confirmation needed)
+        log(`[REWIND] Submitting rewind`);
+        await execAsync(`tmux send-keys -t '${tmuxTarget}' Enter`);
+        result = "rewind_sent";
+        log(`[REWIND] Rewind ${stepsBack} steps sent to session ${sessionId.slice(0, 8)}`);
+        break;
+      }
       case "send_keys": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const conversationId = parsed.conversation_id;
@@ -827,6 +938,7 @@ async function executeRemoteCommand(
           break;
         }
         const projectPath = parsed.project_path;
+        restartingSessionIds.set(sessionId, Date.now());
         log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
         let resumed = await autoResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
         if (!resumed) {
@@ -838,34 +950,74 @@ async function executeRemoteCommand(
             const cache = readConversationCache();
             cache[sessionId] = conversationId;
             saveConversationCache(cache);
+            if (syncServiceRef) {
+              syncServiceRef.markSessionActive(conversationId).catch(() => {});
+              syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+            }
           }
+          restartingSessionIds.delete(sessionId);
           result = JSON.stringify({ resumed: true, session_id: sessionId });
           log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
         } else if (conversationId && projectPath) {
-          log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, starting fresh session in ${projectPath}`);
-          const shortId = Math.random().toString(36).slice(2, 8);
-          const tmuxSession = `cc-claude-${shortId}`;
+          log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, reconstituting session from DB...`);
           const cwd = fs.existsSync(projectPath) ? projectPath : (process.env.HOME || "/tmp");
-          let extraFlags = config.claude_args || "";
-          const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; claude${extraFlags ? " " + extraFlags : ""}`;
-          const execPath = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
-          const execOpts = { timeout: 5000, env: { ...process.env, PATH: execPath } };
-          try {
-            execSync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
-            execSync(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
-            startedSessionTmux.set(conversationId, {
-              tmuxSession,
-              projectPath: cwd,
-              startedAt: Date.now(),
-              agentType: "claude",
-            });
-            discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
-              log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
-            });
-            result = JSON.stringify({ started_fresh: true, tmux_session: tmuxSession });
-            log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-          } catch (spawnErr) {
-            error = `Failed to start fresh session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
+          let reconstituted = false;
+
+          if (config?.convex_url && config?.auth_token) {
+            try {
+              const siteUrl = config.convex_url.replace(".cloud", ".site");
+              const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
+              if (exportData.messages.length > 0) {
+                const TOKEN_BUDGET = 100_000;
+                const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
+                const { jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId });
+                const newSessionId = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+                log(`[REMOTE] Reconstituted JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
+
+                const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), false, cwd, conversationId);
+                if (reconResumed) {
+                  const cache = readConversationCache();
+                  cache[newSessionId] = conversationId;
+                  saveConversationCache(cache);
+                  if (syncServiceRef) {
+                    syncServiceRef.markSessionActive(conversationId).catch(() => {});
+                    syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {});
+                  }
+                  restartingSessionIds.delete(sessionId);
+                  result = JSON.stringify({ reconstituted: true, session_id: newSessionId });
+                  log(`[REMOTE] Reconstituted + resumed session ${sessionId.slice(0, 8)}`);
+                  reconstituted = true;
+                }
+              }
+            } catch (reconErr) {
+              log(`[REMOTE] Reconstitution failed for ${sessionId.slice(0, 8)}: ${reconErr instanceof Error ? reconErr.message : String(reconErr)}`);
+            }
+          }
+
+          if (!reconstituted) {
+            log(`[REMOTE] Starting blank session in ${projectPath}`);
+            const shortId = Math.random().toString(36).slice(2, 8);
+            const tmuxSession = `cc-claude-${shortId}`;
+            let extraFlags = config.claude_args || "";
+            const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; claude${extraFlags ? " " + extraFlags : ""}`;
+            const execOpts = { timeout: 5000, env: { ...process.env, PATH: ENRICHED_PATH } };
+            try {
+              execSync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
+              execSync(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
+              startedSessionTmux.set(conversationId, {
+                tmuxSession,
+                projectPath: cwd,
+                startedAt: Date.now(),
+                agentType: "claude",
+              });
+              discoverAndLinkSession(conversationId, tmuxSession, cwd).catch(err => {
+                log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
+              });
+              result = JSON.stringify({ started_fresh: true, tmux_session: tmuxSession });
+              log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+            } catch (spawnErr) {
+              error = `Failed to start fresh session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
+            }
           }
         } else {
           error = `Failed to resume session ${sessionId.slice(0, 8)} — session file may not exist locally`;
@@ -3334,6 +3486,7 @@ const resumeHeartbeatIntervals = new Map<string, NodeJS.Timeout>();
 // Codex tmux pane monitoring for permission prompts
 const codexPermissionPollers = new Map<string, NodeJS.Timeout>();
 const codexPermissionPending = new Set<string>(); // sessionIds currently waiting for permission decision
+const codexPermissionRunning = new Set<string>(); // sessionIds with an in-flight tmux capture
 
 const CODEX_PERMISSION_PATTERNS = [
   /Would you like to run the following command\?/,
@@ -3371,10 +3524,13 @@ function startCodexPermissionPoller(sessionId: string, tmuxSession: string, conv
   if (codexPermissionPollers.has(sessionId)) return;
 
   const interval = setInterval(async () => {
-    if (codexPermissionPending.has(sessionId)) return; // already waiting for decision
+    if (codexPermissionPending.has(sessionId)) return;
+    if (codexPermissionRunning.has(sessionId)) return;
+    if (isInWakeGrace()) return;
 
+    codexPermissionRunning.add(sessionId);
     try {
-      const { stdout: paneContent } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -30 2>/dev/null`);
+      const { stdout: paneContent } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -30 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
       const prompt = detectCodexPermissionFromPane(paneContent);
       if (!prompt) return;
 
@@ -3401,7 +3557,6 @@ function startCodexPermissionPoller(sessionId: string, tmuxSession: string, conv
       handlePermissionRequest(syncService, conversationId, sessionId, permissionPrompt, log)
         .then(async (decision) => {
           if (decision) {
-            // Codex uses Enter to approve, Escape to deny
             const key = decision.approved ? "Enter" : "Escape";
             log(`Injecting Codex permission '${key}' for session ${sessionId.slice(0, 8)}`);
             try {
@@ -3419,6 +3574,8 @@ function startCodexPermissionPoller(sessionId: string, tmuxSession: string, conv
         });
     } catch {
       // tmux session may have ended
+    } finally {
+      codexPermissionRunning.delete(sessionId);
     }
   }, 3000);
 
@@ -3444,6 +3601,8 @@ type StartedSessionInfo = {
 
 const startedSessionTmux = new Map<string, StartedSessionInfo>();
 const STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
+const restartingSessionIds = new Map<string, number>();
+const RESTART_GUARD_TTL_MS = 60_000;
 
 const UUID_JSONL_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
 
@@ -3794,7 +3953,7 @@ async function repairAndResumeSession(
     } else {
       const TOKEN_BUDGET = 100_000;
       tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-      ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages }));
+      ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
     }
 
     const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
@@ -4348,20 +4507,17 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
   if (!hasTmux()) return false;
   try {
     const { stdout } = await execAsync(
-      `tmux list-panes -t '${tmuxSession}' -F '#{pane_pid}' 2>/dev/null`
+      `tmux list-panes -t '${tmuxSession}' -F '#{pane_pid}' 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" }
     );
     const panePid = stdout.trim();
     if (!panePid) return false;
     try {
-      await execAsync(`pgrep -P ${panePid}`);
+      await execAsync(`pgrep -P ${panePid}`, { timeout: 3000, killSignal: "SIGKILL" });
       return true;
     } catch {
-      // pgrep found no children — but check pane content as fallback
-      // The agent may be alive with a different process tree structure,
-      // or pgrep may false-negative under load (observed in production)
       try {
         const { stdout: paneContent } = await execAsync(
-          `tmux capture-pane -p -J -t '${tmuxSession}' -S -5 2>/dev/null`, { timeout: 2000 }
+          `tmux capture-pane -p -J -t '${tmuxSession}' -S -5 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" }
         );
         const trimmed = paneContent.trim();
         // If the last line is a shell prompt, agent has exited back to shell
@@ -4987,8 +5143,12 @@ function startWatchdog(
   deps: WatchdogDependencies
 ): NodeJS.Timeout {
   log("Watchdog started");
+  let watchdogRunning = false;
 
   return setInterval(async () => {
+    if (watchdogRunning || isInWakeGrace()) return;
+    watchdogRunning = true;
+    try {
     const state = readDaemonState();
     const now = Date.now();
 
@@ -5009,7 +5169,7 @@ function startWatchdog(
     for (const [convId, entry] of startedSessionTmux.entries()) {
       if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
         try {
-          await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 2000 });
+          await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
           if (!(await isTmuxAgentAlive(entry.tmuxSession))) {
             log(`Pruning started session ${entry.tmuxSession}: agent dead (zombie shell)`);
             try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}' 2>/dev/null`); } catch {}
@@ -5024,7 +5184,7 @@ function startWatchdog(
     // Reap zombie cc-resume-* and cc-claude-* tmux sessions where agent has crashed
     const activeStartedTmux = new Set([...startedSessionTmux.values()].map(e => e.tmuxSession));
     try {
-      const { stdout: tmuxList } = await execAsync("tmux list-sessions -F '#{session_name}' 2>/dev/null", { timeout: 3000 });
+      const { stdout: tmuxList } = await execAsync("tmux list-sessions -F '#{session_name}' 2>/dev/null", { timeout: 3000, killSignal: "SIGKILL" });
       for (const tmuxName of tmuxList.trim().split("\n")) {
         if (!tmuxName || (!/^cc-resume-/.test(tmuxName) && !/^cc-claude-/.test(tmuxName))) continue;
         if (activeStartedTmux.has(tmuxName)) continue;
@@ -5207,6 +5367,7 @@ function startWatchdog(
     }
 
     log(`Watchdog: Sync completed for ${totalStale} files`);
+    } finally { watchdogRunning = false; }
   }, WATCHDOG_INTERVAL_MS);
 }
 
@@ -5522,9 +5683,15 @@ async function main(): Promise<void> {
       }
 
       if (data.status === "stopped" && statusChanged) {
-        log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
-        syncService.markSessionCompleted(convId).catch(() => {});
-        try { fs.unlinkSync(filePath); } catch {}
+        const restartTs = restartingSessionIds.get(sessionId);
+        if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
+          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress — skipping completion`);
+          try { fs.unlinkSync(filePath); } catch {}
+        } else {
+          log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
+          syncService.markSessionCompleted(convId).catch(() => {});
+          try { fs.unlinkSync(filePath); } catch {}
+        }
       }
 
       if (data.status === "permission_blocked" && statusChanged && !permissionRecordPending.has(sessionId)) {

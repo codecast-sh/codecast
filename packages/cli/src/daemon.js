@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @bun
 var __defProp = Object.defineProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -10,23 +11,23 @@ var __export = (target, all) => {
     });
 };
 
-// src/daemon.ts
+// packages/cli/src/daemon.ts
 import * as fs13 from "fs";
 import * as os2 from "os";
 import * as path12 from "path";
 import { Database as Database3 } from "bun:sqlite";
 import { execSync as execSync2, exec as exec2, spawn } from "child_process";
 
-// node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/index.js
+// packages/cli/node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/index.js
 import { stat as statcb } from "fs";
 import { stat as stat3, readdir as readdir2 } from "fs/promises";
 import { EventEmitter } from "events";
 import * as sysPath2 from "path";
 
-// node_modules/.pnpm/readdirp@4.1.2/node_modules/readdirp/esm/index.js
-import { stat, lstat, readdir, realpath } from "node:fs/promises";
-import { Readable } from "node:stream";
-import { resolve as presolve, relative as prelative, join as pjoin, sep as psep } from "node:path";
+// packages/cli/node_modules/.pnpm/readdirp@4.1.2/node_modules/readdirp/esm/index.js
+import { stat, lstat, readdir, realpath } from "fs/promises";
+import { Readable } from "stream";
+import { resolve as presolve, relative as prelative, join as pjoin, sep as psep } from "path";
 var EntryTypes = {
   FILE_TYPE: "files",
   DIR_TYPE: "directories",
@@ -243,7 +244,7 @@ function readdirp(root, options = {}) {
   return new ReaddirpStream(options);
 }
 
-// node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/handler.js
+// packages/cli/node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/handler.js
 import { watchFile, unwatchFile, watch as fs_watch } from "fs";
 import { open, stat as stat2, lstat as lstat2, realpath as fsrealpath } from "fs/promises";
 import * as sysPath from "path";
@@ -955,7 +956,7 @@ class NodeFsHandler {
   }
 }
 
-// node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/index.js
+// packages/cli/node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/index.js
 /*! chokidar - MIT License (c) 2012 Paul Miller (paulmillr.com) */
 var SLASH = "/";
 var SLASH_SLASH = "//";
@@ -1590,7 +1591,7 @@ function watch(paths, options = {}) {
   return watcher;
 }
 
-// src/sessionWatcher.ts
+// packages/cli/src/sessionWatcher.ts
 import { EventEmitter as EventEmitter2 } from "events";
 import * as path from "path";
 import * as fs from "fs";
@@ -1742,7 +1743,7 @@ class SessionWatcher extends EventEmitter2 {
   }
 }
 
-// src/cursorWatcher.ts
+// packages/cli/src/cursorWatcher.ts
 import { EventEmitter as EventEmitter3 } from "events";
 import * as path2 from "path";
 import * as fs2 from "fs";
@@ -1895,7 +1896,7 @@ class CursorWatcher extends EventEmitter3 {
   }
 }
 
-// src/cursorTranscriptWatcher.ts
+// packages/cli/src/cursorTranscriptWatcher.ts
 import { EventEmitter as EventEmitter4 } from "events";
 import * as path3 from "path";
 import * as fs3 from "fs";
@@ -1985,7 +1986,7 @@ class CursorTranscriptWatcher extends EventEmitter4 {
   }
 }
 
-// src/codexWatcher.ts
+// packages/cli/src/codexWatcher.ts
 import { EventEmitter as EventEmitter5 } from "events";
 import * as path4 from "path";
 import * as fs4 from "fs";
@@ -2074,7 +2075,7 @@ class CodexWatcher extends EventEmitter5 {
   }
 }
 
-// src/sessionProcessMatcher.ts
+// packages/cli/src/sessionProcessMatcher.ts
 function isResumeInvocation(agentType, commandLine) {
   if (agentType === "codex" || agentType === "gemini") {
     return /\s--resume(\s|$)/.test(commandLine) || /\sresume(\s|$)/.test(commandLine);
@@ -2126,7 +2127,7 @@ function matchSingleFreshStartedConversation(entries, {
   return fresh[0][0];
 }
 
-// src/geminiWatcher.ts
+// packages/cli/src/geminiWatcher.ts
 import { EventEmitter as EventEmitter6 } from "events";
 import * as path5 from "path";
 import * as fs5 from "fs";
@@ -2221,7 +2222,7 @@ class GeminiWatcher extends EventEmitter6 {
   }
 }
 
-// src/parser.ts
+// packages/cli/src/parser.ts
 function parseSessionLine(line) {
   if (!line.trim())
     return null;
@@ -2717,7 +2718,7 @@ function parseGeminiSessionFile(content) {
   return messages;
 }
 
-// src/cursorProcessor.ts
+// packages/cli/src/cursorProcessor.ts
 import { Database as Database2 } from "bun:sqlite";
 function extractTextFromInitText(initText) {
   if (!initText.startsWith("{")) {
@@ -2808,7 +2809,7 @@ function extractMessagesFromCursorDb(dbPath, skipCount = 0) {
   }
 }
 
-// src/positionTracker.ts
+// packages/cli/src/positionTracker.ts
 import * as fs6 from "fs";
 import * as path6 from "path";
 var CONFIG_DIR = process.env.HOME + "/.codecast";
@@ -2842,7 +2843,7 @@ function setPosition(filePath, offset) {
   savePositions(positions);
 }
 
-// src/syncLedger.ts
+// packages/cli/src/syncLedger.ts
 import * as fs7 from "fs";
 import * as path7 from "path";
 var CONFIG_DIR2 = process.env.HOME + "/.codecast";
@@ -2955,10 +2956,10 @@ function findUnsyncedFiles(baseDir, maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
   return unsynced;
 }
 
-// node_modules/convex/dist/esm/index.js
+// packages/cli/node_modules/convex/dist/esm/index.js
 var version = "1.31.2";
 
-// node_modules/convex/dist/esm/values/base64.js
+// packages/cli/node_modules/convex/dist/esm/values/base64.js
 var exports_base64 = {};
 __export(exports_base64, {
   toByteArray: () => toByteArray,
@@ -3058,7 +3059,7 @@ function fromByteArrayUrlSafeNoPadding(uint8) {
   return fromByteArray(uint8).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
-// node_modules/convex/dist/esm/common/index.js
+// packages/cli/node_modules/convex/dist/esm/common/index.js
 function parseArgs(args) {
   if (args === undefined) {
     return {};
@@ -3094,7 +3095,7 @@ function isSimpleObject(value) {
   return isObject && isSimple;
 }
 
-// node_modules/convex/dist/esm/values/value.js
+// packages/cli/node_modules/convex/dist/esm/values/value.js
 var LITTLE_ENDIAN = true;
 var MIN_INT64 = BigInt("-9223372036854775808");
 var MAX_INT64 = BigInt("9223372036854775807");
@@ -3333,7 +3334,7 @@ function convexOrUndefinedToJsonInternal(value, originalValue, context) {
 function convexToJson(value) {
   return convexToJsonInternal(value, value, "", false);
 }
-// node_modules/convex/dist/esm/values/errors.js
+// packages/cli/node_modules/convex/dist/esm/values/errors.js
 var __defProp2 = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => (key in obj) ? __defProp2(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -3350,7 +3351,7 @@ class ConvexError extends (_b = Error, _a = IDENTIFYING_FIELD, _b) {
     this.data = data;
   }
 }
-// node_modules/convex/dist/esm/browser/logging.js
+// packages/cli/node_modules/convex/dist/esm/browser/logging.js
 var __defProp3 = Object.defineProperty;
 var __defNormalProp2 = (obj, key, value) => (key in obj) ? __defProp3(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField2 = (obj, key, value) => __defNormalProp2(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -3470,7 +3471,7 @@ function forwardData(result, error) {
   return error;
 }
 
-// node_modules/convex/dist/esm/browser/sync/udf_path_utils.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/udf_path_utils.js
 function canonicalizeUdfPath(udfPath) {
   const pieces = udfPath.split(":");
   let moduleName;
@@ -3507,7 +3508,7 @@ function serializedQueryTokenIsPaginated(token) {
   return JSON.parse(token).type === "paginated";
 }
 
-// node_modules/convex/dist/esm/browser/sync/local_state.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/local_state.js
 var __defProp4 = Object.defineProperty;
 var __defNormalProp3 = (obj, key, value) => (key in obj) ? __defProp4(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField3 = (obj, key, value) => __defNormalProp3(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -3796,7 +3797,7 @@ class LocalSyncState {
   }
 }
 
-// node_modules/convex/dist/esm/browser/sync/request_manager.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/request_manager.js
 var __defProp5 = Object.defineProperty;
 var __defNormalProp4 = (obj, key, value) => (key in obj) ? __defProp5(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField4 = (obj, key, value) => __defNormalProp4(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -3979,10 +3980,10 @@ class RequestManager {
   }
 }
 
-// node_modules/convex/dist/esm/server/functionName.js
+// packages/cli/node_modules/convex/dist/esm/server/functionName.js
 var functionName = Symbol.for("functionName");
 
-// node_modules/convex/dist/esm/server/components/paths.js
+// packages/cli/node_modules/convex/dist/esm/server/components/paths.js
 var toReferencePath = Symbol.for("toReferencePath");
 function extractReferencePath(reference) {
   return reference[toReferencePath] ?? null;
@@ -4010,7 +4011,7 @@ function getFunctionAddress(functionReference) {
   return functionAddress;
 }
 
-// node_modules/convex/dist/esm/server/api.js
+// packages/cli/node_modules/convex/dist/esm/server/api.js
 function getFunctionName(functionReference) {
   const address = getFunctionAddress(functionReference);
   if (address.name === undefined) {
@@ -4058,7 +4059,7 @@ function createApi(pathParts = []) {
 }
 var anyApi = createApi();
 
-// node_modules/convex/dist/esm/browser/sync/optimistic_updates_impl.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/optimistic_updates_impl.js
 var __defProp6 = Object.defineProperty;
 var __defNormalProp5 = (obj, key, value) => (key in obj) ? __defProp6(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField5 = (obj, key, value) => __defNormalProp5(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -4193,7 +4194,7 @@ class OptimisticQueryResults {
   }
 }
 
-// node_modules/convex/dist/esm/vendor/long.js
+// packages/cli/node_modules/convex/dist/esm/vendor/long.js
 var __defProp7 = Object.defineProperty;
 var __defNormalProp6 = (obj, key, value) => (key in obj) ? __defProp7(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField6 = (obj, key, value) => __defNormalProp6(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -4271,7 +4272,7 @@ var TWO_PWR_32_DBL = TWO_PWR_16_DBL * TWO_PWR_16_DBL;
 var TWO_PWR_64_DBL = TWO_PWR_32_DBL * TWO_PWR_32_DBL;
 var MAX_UNSIGNED_VALUE = new Long(4294967295 | 0, 4294967295 | 0);
 
-// node_modules/convex/dist/esm/browser/sync/remote_query_set.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/remote_query_set.js
 var __defProp8 = Object.defineProperty;
 var __defNormalProp7 = (obj, key, value) => (key in obj) ? __defProp8(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField7 = (obj, key, value) => __defNormalProp7(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -4344,7 +4345,7 @@ class RemoteQuerySet {
   }
 }
 
-// node_modules/convex/dist/esm/browser/sync/protocol.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/protocol.js
 function u64ToLong(encoded) {
   const integerBytes = exports_base64.toByteArray(encoded);
   return Long.fromBytesLE(Array.from(integerBytes));
@@ -4412,7 +4413,7 @@ function encodeClientMessage(message) {
   return;
 }
 
-// node_modules/convex/dist/esm/browser/sync/web_socket_manager.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/web_socket_manager.js
 var __defProp9 = Object.defineProperty;
 var __defNormalProp8 = (obj, key, value) => (key in obj) ? __defProp9(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField8 = (obj, key, value) => __defNormalProp8(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -4890,7 +4891,7 @@ class WebSocketManager {
   }
 }
 
-// node_modules/convex/dist/esm/browser/sync/session.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/session.js
 function newSessionId() {
   return uuidv4();
 }
@@ -4901,7 +4902,7 @@ function uuidv4() {
   });
 }
 
-// node_modules/convex/dist/esm/vendor/jwt-decode/index.js
+// packages/cli/node_modules/convex/dist/esm/vendor/jwt-decode/index.js
 class InvalidTokenError extends Error {
 }
 InvalidTokenError.prototype.name = "InvalidTokenError";
@@ -4957,7 +4958,7 @@ function jwtDecode(token, options) {
   }
 }
 
-// node_modules/convex/dist/esm/browser/sync/authentication_manager.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/authentication_manager.js
 var __defProp10 = Object.defineProperty;
 var __defNormalProp9 = (obj, key, value) => (key in obj) ? __defProp10(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField9 = (obj, key, value) => __defNormalProp9(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -5222,7 +5223,7 @@ class AuthenticationManager {
   }
 }
 
-// node_modules/convex/dist/esm/browser/sync/metrics.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/metrics.js
 var markNames = [
   "convexClientConstructed",
   "convexWebSocketOpen",
@@ -5254,7 +5255,7 @@ function getMarksReport(sessionId) {
   return allMarks.map(performanceMarkToJson);
 }
 
-// node_modules/convex/dist/esm/browser/sync/client.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/client.js
 var __defProp11 = Object.defineProperty;
 var __defNormalProp10 = (obj, key, value) => (key in obj) ? __defProp11(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField10 = (obj, key, value) => __defNormalProp10(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -5739,10 +5740,10 @@ class BaseConvexClient {
   }
 }
 
-// node_modules/convex/dist/esm/browser/simple_client-node.js
+// packages/cli/node_modules/convex/dist/esm/browser/simple_client-node.js
 import { createRequire } from "module";
 import { resolve as nodePathResolve } from "path";
-// node_modules/convex/dist/esm/browser/http_client.js
+// packages/cli/node_modules/convex/dist/esm/browser/http_client.js
 var __defProp12 = Object.defineProperty;
 var __defNormalProp11 = (obj, key, value) => (key in obj) ? __defProp12(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField11 = (obj, key, value) => __defNormalProp11(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -6060,7 +6061,7 @@ function forwardErrorData(errorData, error) {
   return error;
 }
 
-// node_modules/convex/dist/esm/browser/sync/pagination.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/pagination.js
 function asPaginationResult(value) {
   if (typeof value !== "object" || value === null || !Array.isArray(value.page) || typeof value.isDone !== "boolean" || typeof value.continueCursor !== "string") {
     throw new Error(`Not a valid paginated query result: ${value?.toString()}`);
@@ -6068,7 +6069,7 @@ function asPaginationResult(value) {
   return value;
 }
 
-// node_modules/convex/dist/esm/browser/sync/paginated_query_client.js
+// packages/cli/node_modules/convex/dist/esm/browser/sync/paginated_query_client.js
 var __defProp13 = Object.defineProperty;
 var __defNormalProp12 = (obj, key, value) => (key in obj) ? __defProp13(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField12 = (obj, key, value) => __defNormalProp12(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -6345,7 +6346,7 @@ class PaginatedQueryClient {
   }
 }
 
-// node_modules/convex/dist/esm/browser/simple_client.js
+// packages/cli/node_modules/convex/dist/esm/browser/simple_client.js
 var __defProp14 = Object.defineProperty;
 var __defNormalProp13 = (obj, key, value) => (key in obj) ? __defProp14(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField13 = (obj, key, value) => __defNormalProp13(obj, typeof key !== "symbol" ? key + "" : key, value);
@@ -6597,7 +6598,7 @@ class ConvexClient {
   }
 }
 
-// node_modules/convex/dist/esm/browser/simple_client-node.js
+// packages/cli/node_modules/convex/dist/esm/browser/simple_client-node.js
 var __dirname = "/Users/ashot/src/codecast/packages/cli/node_modules/convex/dist/esm/browser";
 var require2 = createRequire(nodePathResolve("."));
 var __create = Object.create;
@@ -9683,7 +9684,7 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 var wrapper_default = import_websocket.default;
 var nodeWebSocket = wrapper_default;
 setDefaultWebSocketConstructor(nodeWebSocket);
-// src/redact.ts
+// packages/cli/src/redact.ts
 var API_KEY_PATTERNS = [
   /sk-[a-zA-Z0-9]{20,}/g,
   /sk-ant-[a-zA-Z0-9-]{20,}/g,
@@ -9713,7 +9714,7 @@ function maskToken(token) {
   return `${token.slice(0, 3)}...${token.slice(-3)}`;
 }
 
-// src/hash.ts
+// packages/cli/src/hash.ts
 import * as crypto2 from "crypto";
 import * as path8 from "path";
 function hashPath(inputPath) {
@@ -9721,7 +9722,7 @@ function hashPath(inputPath) {
   return crypto2.createHash("sha256").update(normalized).digest("hex");
 }
 
-// src/syncService.ts
+// packages/cli/src/syncService.ts
 var MAX_CONTENT_SIZE = 1e5;
 var MAX_TOOL_RESULT_SIZE = 50000;
 var MAX_IMAGE_SIZE = 5000000;
@@ -10138,6 +10139,17 @@ class SyncService {
     } catch {
     }
   }
+  async markSessionActive(conversationId) {
+    if (!this.apiToken)
+      return;
+    try {
+      await this.client.mutation("conversations:markSessionActive", {
+        conversation_id: conversationId,
+        api_token: this.apiToken
+      });
+    } catch {
+    }
+  }
   async updateSessionAgentStatus(conversationId, status, clientTs, permissionMode) {
     if (!this.apiToken)
       return;
@@ -10304,7 +10316,7 @@ class SyncService {
   }
 }
 
-// src/retryQueue.ts
+// packages/cli/src/retryQueue.ts
 import fs8 from "fs";
 function parseRateLimitDelay(error) {
   const match = error.match(/wait (\d+) seconds/i);
@@ -10571,7 +10583,7 @@ class RetryQueue {
   }
 }
 
-// src/invalidateSync.ts
+// packages/cli/src/invalidateSync.ts
 async function delay(ms) {
   return new Promise((resolve3) => setTimeout(resolve3, ms));
 }
@@ -10679,10 +10691,10 @@ class InvalidateSync {
   };
 }
 
-// src/daemon.ts
+// packages/cli/src/daemon.ts
 import { promisify as promisify2 } from "util";
 
-// src/permissionDetector.ts
+// packages/cli/src/permissionDetector.ts
 var PERMISSION_PATTERNS = [
   /Allow tool (\w+)\?\s*\[y\/n\]/i,
   /Permission required.*?to use (\w+)/i,
@@ -10753,7 +10765,7 @@ function extractArgumentsPreview(content) {
   return preview || content.substring(0, 200);
 }
 
-// src/permissionHandler.ts
+// packages/cli/src/permissionHandler.ts
 var POLL_INTERVAL_MS = 1000;
 var TIMEOUT_MS = 5 * 60 * 1000;
 async function handlePermissionRequest(syncService2, conversationId, sessionId, prompt, log) {
@@ -10784,11 +10796,11 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
   }
 }
 
-// src/update.ts
+// packages/cli/src/update.ts
 import * as fs9 from "fs";
 import * as path9 from "path";
 import * as os from "os";
-var VERSION = "1.0.56";
+var VERSION = "1.0.57";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -10892,7 +10904,7 @@ async function performUpdate() {
   }
 }
 
-// src/reconciliation.ts
+// packages/cli/src/reconciliation.ts
 import * as fs10 from "fs";
 import * as path10 from "path";
 var CONFIG_DIR4 = process.env.HOME + "/.codecast";
@@ -11016,13 +11028,13 @@ async function repairDiscrepancies(discrepancies, log) {
   return repaired;
 }
 
-// src/taskScheduler.ts
+// packages/cli/src/taskScheduler.ts
 import { exec } from "child_process";
 import { promisify } from "util";
 import * as fs11 from "fs";
 import * as crypto3 from "crypto";
 
-// src/tmux.ts
+// packages/cli/src/tmux.ts
 import { execSync, spawnSync } from "child_process";
 var ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 var _hasTmux = null;
@@ -11038,7 +11050,7 @@ function hasTmux() {
   return _hasTmux;
 }
 
-// src/taskScheduler.ts
+// packages/cli/src/taskScheduler.ts
 var _execAsync = promisify(exec);
 var execAsync = (cmd, opts) => _execAsync(cmd, { timeout: 1e4, ...opts });
 var POLL_INTERVAL_MS2 = 30000;
@@ -11263,7 +11275,7 @@ function formatTimeAgo(ms) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-// src/jsonlGenerator.ts
+// packages/cli/src/jsonlGenerator.ts
 import * as fs12 from "fs";
 import * as path11 from "path";
 import * as crypto4 from "crypto";
@@ -11497,7 +11509,7 @@ function partitionToolResultsByExpected(results, expectedToolUseIds) {
 }
 function generateClaudeCodeJsonl(data, options = {}) {
   const lines = [];
-  const sessionId = uuidv42();
+  const sessionId = options.sessionId || uuidv42();
   const cwd = data.conversation.project_path || process.cwd();
   let parentUuid = null;
   let expectedToolUseIds = new Set;
@@ -11651,7 +11663,25 @@ function generateClaudeCodeJsonl(data, options = {}) {
       }
     }
   }
-  return { jsonl: lines.join(`
+  const merged = [];
+  for (let i = 0;i < lines.length; i++) {
+    try {
+      const cur = JSON.parse(lines[i]);
+      if (cur.message?.role === "assistant" && merged.length > 0) {
+        const prev = JSON.parse(merged[merged.length - 1]);
+        if (prev.message?.role === "assistant") {
+          const prevContent = Array.isArray(prev.message.content) ? prev.message.content : [];
+          const curContent = Array.isArray(cur.message.content) ? cur.message.content : [];
+          prev.message.content = [...prevContent, ...curContent];
+          merged[merged.length - 1] = JSON.stringify(prev);
+          continue;
+        }
+      }
+    } catch {
+    }
+    merged.push(lines[i]);
+  }
+  return { jsonl: merged.join(`
 `) + `
 `, sessionId };
 }
@@ -11801,12 +11831,28 @@ function writeCodexSession(jsonl, sessionId, name) {
   return sessionId;
 }
 
-// src/daemon.ts
+// packages/cli/src/daemon.ts
 var __dirname = "/Users/ashot/src/codecast/packages/cli/src", __filename = "/Users/ashot/src/codecast/packages/cli/src/daemon.ts";
 var _execAsync2 = promisify2(exec2);
 var ENRICHED_PATH2 = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 var EXEC_TIMEOUT_MS = 1e4;
 var execAsync2 = (cmd, opts) => _execAsync2(cmd, { timeout: EXEC_TIMEOUT_MS, ...opts, env: { ...process.env, PATH: ENRICHED_PATH2, ...opts?.env } });
+var lastTickTime = Date.now();
+var SLEEP_DETECTION_THRESHOLD_MS = 30000;
+var WAKE_GRACE_PERIOD_MS = 5000;
+var wakeGraceUntil = 0;
+setInterval(() => {
+  const now = Date.now();
+  const elapsed = now - lastTickTime;
+  if (elapsed > SLEEP_DETECTION_THRESHOLD_MS) {
+    wakeGraceUntil = now + WAKE_GRACE_PERIOD_MS;
+    log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+  }
+  lastTickTime = now;
+}, 5000);
+function isInWakeGrace() {
+  return Date.now() < wakeGraceUntil;
+}
 var CONFIG_DIR5 = process.env.HOME + "/.codecast";
 var CONFIG_FILE = path12.join(CONFIG_DIR5, "config.json");
 var LOG_FILE = path12.join(CONFIG_DIR5, "daemon.log");
@@ -12312,6 +12358,92 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         }
         break;
       }
+      case "rewind": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId = parsed.conversation_id;
+        const stepsBack = parsed.steps_back;
+        if (!conversationId || stepsBack === undefined || stepsBack < 1) {
+          error = "Missing conversation_id or invalid steps_back";
+          break;
+        }
+        const cache = readConversationCache();
+        const reverse = buildReverseConversationCache(cache);
+        const sessionId = reverse[conversationId];
+        if (!sessionId) {
+          error = `No session found for conversation ${conversationId}`;
+          break;
+        }
+        const agentType = detectSessionAgentType(sessionId);
+        if (agentType !== "claude") {
+          error = `Rewind not yet supported for ${agentType} sessions`;
+          break;
+        }
+        const proc = await findSessionProcess(sessionId, agentType);
+        if (!proc) {
+          error = `No running process for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+        if (!tmuxTarget) {
+          error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        const PROMPT_RE = /[\u276F\u203A]/;
+        const PROMPT_EMPTY_RE = /[\u276F\u203A]\s*(\n|$)/;
+        const BUSY_RE = /\u280B|\u2819|\u2839|\u2838|\u283C|\u2834|\u2826|\u2827|\u2807|\u280F|Wandering|Vibing|Coasting|Working|thinking/;
+        const captureLast = async () => {
+          const { stdout } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxTarget}' -S -8`);
+          return stdout.split(`
+`).slice(-10).join(`
+`);
+        };
+        const isAtPrompt = async () => {
+          const last = await captureLast();
+          return PROMPT_RE.test(last) && !BUSY_RE.test(last);
+        };
+        const hasEmptyPrompt = async () => {
+          const last = await captureLast();
+          return PROMPT_EMPTY_RE.test(last);
+        };
+        if (!await isAtPrompt()) {
+          log(`[REWIND] Session not at prompt, sending Escape`);
+          await execAsync2(`tmux send-keys -t '${tmuxTarget}' Escape`);
+          let gotPrompt = false;
+          for (let i = 0;i < 60; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            if (await isAtPrompt()) {
+              gotPrompt = true;
+              break;
+            }
+          }
+          if (!gotPrompt) {
+            error = "Timed out waiting for prompt after interrupt";
+            break;
+          }
+          log(`[REWIND] Got prompt after interrupt`);
+        }
+        for (let attempt = 0;attempt < 3; attempt++) {
+          if (await hasEmptyPrompt())
+            break;
+          log(`[REWIND] Clearing existing prompt text (attempt ${attempt + 1})`);
+          await execAsync2(`tmux send-keys -t '${tmuxTarget}' Escape`);
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        log(`[REWIND] Sending ${stepsBack} Up arrows`);
+        const ups = Array(stepsBack).fill("Up").join(" ");
+        await execAsync2(`tmux send-keys -t '${tmuxTarget}' ${ups}`);
+        await new Promise((r) => setTimeout(r, 300));
+        if (await hasEmptyPrompt()) {
+          log(`[REWIND] Prompt still empty after Up arrows, no history at position ${stepsBack}`);
+          error = `No message found at history position ${stepsBack}`;
+          break;
+        }
+        log(`[REWIND] Submitting rewind`);
+        await execAsync2(`tmux send-keys -t '${tmuxTarget}' Enter`);
+        result = "rewind_sent";
+        log(`[REWIND] Rewind ${stepsBack} steps sent to session ${sessionId.slice(0, 8)}`);
+        break;
+      }
       case "send_keys": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const conversationId = parsed.conversation_id;
@@ -12469,6 +12601,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           break;
         }
         const projectPath = parsed.project_path;
+        restartingSessionIds.set(sessionId, Date.now());
         log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
         let resumed = await autoResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
         if (!resumed) {
@@ -12480,37 +12613,78 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             const cache = readConversationCache();
             cache[sessionId] = conversationId;
             saveConversationCache(cache);
+            if (syncServiceRef) {
+              syncServiceRef.markSessionActive(conversationId).catch(() => {
+              });
+              syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {
+              });
+            }
           }
+          restartingSessionIds.delete(sessionId);
           result = JSON.stringify({ resumed: true, session_id: sessionId });
           log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
         } else if (conversationId && projectPath) {
-          log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, starting fresh session in ${projectPath}`);
-          const shortId = Math.random().toString(36).slice(2, 8);
-          const tmuxSession = `cc-claude-${shortId}`;
+          log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, reconstituting session from DB...`);
           const cwd = fs13.existsSync(projectPath) ? projectPath : process.env.HOME || "/tmp";
-          let extraFlags = config.claude_args || "";
-          const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; claude${extraFlags ? " " + extraFlags : ""}`;
-          const execPath = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
-          const execOpts = { timeout: 5000, env: { ...process.env, PATH: execPath } };
-          try {
-            execSync2(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
-            execSync2(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
-            startedSessionTmux.set(conversationId, {
-              tmuxSession,
-              projectPath: cwd,
-              startedAt: Date.now(),
-              agentType: "claude"
-            });
-            discoverAndLinkSession(conversationId, tmuxSession, cwd).catch((err) => {
-              log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
-            });
-            result = JSON.stringify({ started_fresh: true, tmux_session: tmuxSession });
-            log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
-          } catch (spawnErr) {
-            error = `Failed to start fresh session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
+          let reconstituted = false;
+          if (config?.convex_url && config?.auth_token) {
+            try {
+              const siteUrl2 = config.convex_url.replace(".cloud", ".site");
+              const exportData = await fetchExport(siteUrl2, config.auth_token, conversationId);
+              if (exportData.messages.length > 0) {
+                const TOKEN_BUDGET = 1e5;
+                const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
+                const { jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId });
+                const newSessionId2 = writeClaudeCodeSession(jsonl, sessionId, projectPath);
+                log(`[REMOTE] Reconstituted JSONL for ${sessionId.slice(0, 8)} (${exportData.messages.length} msgs, tail=${tailMessages})`);
+                const reconResumed = await autoResumeSession(newSessionId2, "", readTitleCache(), false, cwd, conversationId);
+                if (reconResumed) {
+                  const cache = readConversationCache();
+                  cache[newSessionId2] = conversationId;
+                  saveConversationCache(cache);
+                  if (syncServiceRef) {
+                    syncServiceRef.markSessionActive(conversationId).catch(() => {
+                    });
+                    syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {
+                    });
+                  }
+                  restartingSessionIds.delete(sessionId);
+                  result = JSON.stringify({ reconstituted: true, session_id: newSessionId2 });
+                  log(`[REMOTE] Reconstituted + resumed session ${sessionId.slice(0, 8)}`);
+                  reconstituted = true;
+                }
+              }
+            } catch (reconErr) {
+              log(`[REMOTE] Reconstitution failed for ${sessionId.slice(0, 8)}: ${reconErr instanceof Error ? reconErr.message : String(reconErr)}`);
+            }
+          }
+          if (!reconstituted) {
+            log(`[REMOTE] Starting blank session in ${projectPath}`);
+            const shortId = Math.random().toString(36).slice(2, 8);
+            const tmuxSession = `cc-claude-${shortId}`;
+            let extraFlags = config.claude_args || "";
+            const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; claude${extraFlags ? " " + extraFlags : ""}`;
+            const execOpts = { timeout: 5000, env: { ...process.env, PATH: ENRICHED_PATH2 } };
+            try {
+              execSync2(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
+              execSync2(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
+              startedSessionTmux.set(conversationId, {
+                tmuxSession,
+                projectPath: cwd,
+                startedAt: Date.now(),
+                agentType: "claude"
+              });
+              discoverAndLinkSession(conversationId, tmuxSession, cwd).catch((err) => {
+                log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
+              });
+              result = JSON.stringify({ started_fresh: true, tmux_session: tmuxSession });
+              log(`[REMOTE] Started fresh session ${tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+            } catch (spawnErr) {
+              error = `Failed to start fresh session: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
+            }
           }
         } else {
-          error = `Failed to resume session ${sessionId.slice(0, 8)} — session file may not exist locally`;
+          error = `Failed to resume session ${sessionId.slice(0, 8)} \u2014 session file may not exist locally`;
         }
         break;
       }
@@ -13120,7 +13294,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             setPosition(filePath, stats.size);
             return;
           }
@@ -13178,7 +13352,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
     }
     const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -13411,7 +13585,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
     } catch (err) {
       if (err instanceof AuthExpiredError) {
         if (handleAuthFailure()) {
-          log("⚠️  Authentication expired - sync paused");
+          log("\u26A0\uFE0F  Authentication expired - sync paused");
           setPosition(dbPath, totalCount);
           return;
         }
@@ -13451,7 +13625,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
   }
   const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
   if (batchResult.authExpired) {
-    log("⚠️  Authentication expired - sync paused");
+    log("\u26A0\uFE0F  Authentication expired - sync paused");
     return;
   }
   if (batchResult.conversationNotFound) {
@@ -13557,7 +13731,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             setPosition(filePath, stats.size);
             return;
           }
@@ -13598,7 +13772,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
     }
     const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -13796,7 +13970,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             setPosition(filePath, stats.size);
             return;
           }
@@ -13838,7 +14012,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
     }
     const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -13938,7 +14112,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             geminiSyncedCounts.set(filePath, allMessages.length);
             return;
           }
@@ -13979,7 +14153,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
     }
     const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -14414,7 +14588,7 @@ function tmuxPromptStillHasInput(paneContent, input) {
 `);
   const recent = lines.slice(-80).join(`
 `);
-  const lastPromptIndex = recent.lastIndexOf("❯");
+  const lastPromptIndex = recent.lastIndexOf("\u276F");
   if (lastPromptIndex === -1)
     return false;
   const fromPrompt = recent.slice(lastPromptIndex);
@@ -14470,7 +14644,7 @@ async function injectViaTmuxInner(target, content) {
   const sanitized = content.replace(/\r?\n/g, " ");
   try {
     const { stdout: preCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -5`);
-    if (/Press enter to continue|Update available/i.test(preCheck) && !/❯/.test(preCheck.split(`
+    if (/Press enter to continue|Update available/i.test(preCheck) && !/\u276F/.test(preCheck.split(`
 `).slice(-5).join(`
 `))) {
       log(`Clearing blocking dialog before inject to ${target}`);
@@ -14519,15 +14693,15 @@ async function injectViaTmuxInner(target, content) {
         const lastLines = postCheck.split(`
 `).slice(-5).join(`
 `);
-        const hasPrompt = /❯/.test(lastLines);
-        const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
+        const hasPrompt = /\u276F/.test(lastLines);
+        const hasActivity = /\u280B|\u2819|\u2839|\u2838|\u283C|\u2834|\u2826|\u2827|\u2807|\u280F|\u25CF|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
         if (hasActivity || !hasPrompt) {
           break;
         }
         const promptLine = lastLines.split(`
-`).find((l) => l.includes("❯"));
+`).find((l) => l.includes("\u276F"));
         if (promptLine) {
-          const afterPrompt = promptLine.slice(promptLine.indexOf("❯") + 1).trim();
+          const afterPrompt = promptLine.slice(promptLine.indexOf("\u276F") + 1).trim();
           if (!afterPrompt)
             break;
         }
@@ -14681,6 +14855,7 @@ var resumeSessionCache = new Map;
 var resumeHeartbeatIntervals = new Map;
 var codexPermissionPollers = new Map;
 var codexPermissionPending = new Set;
+var codexPermissionRunning = new Set;
 var CODEX_PERMISSION_PATTERNS = [
   /Would you like to run the following command\?/,
   /Press enter to confirm or esc to cancel/,
@@ -14717,8 +14892,13 @@ function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, sync
   const interval = setInterval(async () => {
     if (codexPermissionPending.has(sessionId))
       return;
+    if (codexPermissionRunning.has(sessionId))
+      return;
+    if (isInWakeGrace())
+      return;
+    codexPermissionRunning.add(sessionId);
     try {
-      const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -30 2>/dev/null`);
+      const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -30 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
       const prompt = detectCodexPermissionFromPane(paneContent);
       if (!prompt)
         return;
@@ -14754,6 +14934,8 @@ function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, sync
         codexPermissionPending.delete(sessionId);
       });
     } catch {
+    } finally {
+      codexPermissionRunning.delete(sessionId);
     }
   }, 3000);
   codexPermissionPollers.set(sessionId, interval);
@@ -14769,6 +14951,8 @@ function stopCodexPermissionPoller(sessionId) {
 }
 var startedSessionTmux = new Map;
 var STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
+var restartingSessionIds = new Map;
+var RESTART_GUARD_TTL_MS = 60000;
 var UUID_JSONL_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
 async function discoverAndLinkSession(conversationId, tmuxSession, cwd) {
   const claudeProjectsDir = path12.join(process.env.HOME || "", ".claude", "projects");
@@ -14928,9 +15112,40 @@ async function autoResumeSession(sessionId, content, titleCache, nonInteractive 
     if (nonInteractive && agentType === "claude") {
       const tmpFile = path12.join(os2.tmpdir(), `codecast-msg-${shortId}.txt`);
       fs13.writeFileSync(tmpFile, content);
-      const nonInteractiveCmd = `env -u CLAUDECODE ${resumeCmd} -p "$(cat '${tmpFile}')" --output-format stream-json --verbose; rm -f '${tmpFile}'`;
+      const nonInteractiveCmd = `env -u CLAUDECODE ${resumeCmd} -p "$(cat '${tmpFile}')" --output-format stream-json --verbose && rm -f '${tmpFile}'`;
       await execAsync2(`tmux send-keys -t '${tmuxSession}' '${nonInteractiveCmd.replace(/'/g, "'\\''")}'  Enter`);
       logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} (non-interactive) cwd=${cwd}`);
+      const fatalErrors2 = [
+        "No conversation found",
+        "Session not found",
+        "command not found",
+        "cannot be launched inside another",
+        "is not an object",
+        "ENOENT"
+      ];
+      for (let i = 0;i < 20; i++) {
+        await new Promise((resolve4) => setTimeout(resolve4, 500));
+        try {
+          const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
+          if (fatalErrors2.some((e) => paneContent.includes(e))) {
+            logDelivery(`Auto-resume FATAL (non-interactive) for ${shortId}: ${paneContent.slice(0, 300)}`);
+            try {
+              await execAsync2(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`);
+            } catch {
+            }
+            try {
+              fs13.unlinkSync(tmpFile);
+            } catch {
+            }
+            return false;
+          }
+          if (paneContent.includes('"type":"result"') || paneContent.includes('"type":"assistant"')) {
+            logDelivery(`Agent ${shortId} (non-interactive) producing output after ${(i + 1) * 500}ms`);
+            break;
+          }
+        } catch {
+        }
+      }
       resumeSessionCache.set(sessionId, tmuxSession);
       if (syncServiceRef) {
         syncServiceRef.registerManagedSession(sessionId, process.pid, tmuxSession, conversationId).catch(() => {
@@ -14970,7 +15185,7 @@ async function autoResumeSession(sessionId, content, titleCache, nonInteractive 
       "is not an object",
       "ENOENT"
     ];
-    const promptPattern = /❯/;
+    const promptPattern = /\u276F/;
     const startTime = Date.now();
     let ready = false;
     for (let i = 0;i < 60; i++) {
@@ -15047,7 +15262,7 @@ async function repairAndResumeSession(sessionId, content, titleCache, nonInterac
     } else {
       const TOKEN_BUDGET = 1e5;
       tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-      ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages }));
+      ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
     }
     const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
     if (sessionFile) {
@@ -15143,7 +15358,7 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
       log(`Health check: repair failed for ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
         await syncService2.retryMessage(messageId);
-        await syncService2.setSessionError(conversationId, "Session crashed — retrying message delivery");
+        await syncService2.setSessionError(conversationId, "Session crashed \u2014 retrying message delivery");
       } catch {
       }
     }
@@ -15174,7 +15389,7 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
       log(`Health check: repair failed for crashed session ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
         await syncService2.retryMessage(messageId);
-        await syncService2.setSessionError(conversationId, "Session crashed — retrying message delivery");
+        await syncService2.setSessionError(conversationId, "Session crashed \u2014 retrying message delivery");
       } catch {
       }
     }
@@ -15270,7 +15485,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
     const tryStartedTmux = async (entry) => {
       try {
         await execAsync2(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
-        const promptPattern = entry.agentType === "codex" ? />\s*$/ : entry.agentType === "gemini" ? />\s*$|gemini/i : /❯|⏵/;
+        const promptPattern = entry.agentType === "codex" ? />\s*$/ : entry.agentType === "gemini" ? />\s*$|gemini/i : /\u276F|\u23F5/;
         const fatalErrors = [
           "cannot be launched inside another",
           "command not found",
@@ -15534,22 +15749,22 @@ async function isTmuxAgentAlive(tmuxSession) {
   if (!hasTmux())
     return false;
   try {
-    const { stdout } = await execAsync2(`tmux list-panes -t '${tmuxSession}' -F '#{pane_pid}' 2>/dev/null`);
+    const { stdout } = await execAsync2(`tmux list-panes -t '${tmuxSession}' -F '#{pane_pid}' 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
     const panePid = stdout.trim();
     if (!panePid)
       return false;
     try {
-      await execAsync2(`pgrep -P ${panePid}`);
+      await execAsync2(`pgrep -P ${panePid}`, { timeout: 3000, killSignal: "SIGKILL" });
       return true;
     } catch {
       try {
-        const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -5 2>/dev/null`, { timeout: 2000 });
+        const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -5 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
         const trimmed = paneContent.trim();
         if (/[$%#]\s*$/.test(trimmed))
           return false;
         if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed))
           return false;
-        if (/❯|⏵|thinking|Thinking|working|Running|bypass permissions|permission/.test(trimmed)) {
+        if (/\u276F|\u23F5|thinking|Thinking|working|Running|bypass permissions|permission/.test(trimmed)) {
           return true;
         }
       } catch {
@@ -15991,11 +16206,11 @@ function checkDiskVersionMismatch() {
   }
 }
 function startEventLoopMonitor() {
-  let lastTickTime = Date.now();
+  let lastTickTime2 = Date.now();
   return setInterval(() => {
     const now = Date.now();
-    const elapsed = now - lastTickTime;
-    lastTickTime = now;
+    const elapsed = now - lastTickTime2;
+    lastTickTime2 = now;
     saveDaemonState({ lastHeartbeatTick: now });
     if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
       logLifecycle("wake_detected", `System was suspended for ${Math.round(elapsed / 1000)}s, recovering`);
@@ -16053,165 +16268,173 @@ function startReconciliation(syncService2, retryQueue) {
 }
 function startWatchdog(deps) {
   log("Watchdog started");
+  let watchdogRunning = false;
   return setInterval(async () => {
-    const state = readDaemonState();
-    const now = Date.now();
-    saveDaemonState({ lastWatchdogCheck: now });
-    if (state?.authExpired) {
+    if (watchdogRunning || isInWakeGrace())
       return;
-    }
-    if (isSyncPaused()) {
-      return;
-    }
-    validateProcessCache();
-    for (const [convId, entry] of startedSessionTmux.entries()) {
-      if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
-        try {
-          await execAsync2(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 2000 });
-          if (!await isTmuxAgentAlive(entry.tmuxSession)) {
-            log(`Pruning started session ${entry.tmuxSession}: agent dead (zombie shell)`);
-            try {
-              await execAsync2(`tmux kill-session -t '${entry.tmuxSession}' 2>/dev/null`);
-            } catch {
+    watchdogRunning = true;
+    try {
+      const state = readDaemonState();
+      const now = Date.now();
+      saveDaemonState({ lastWatchdogCheck: now });
+      if (state?.authExpired) {
+        return;
+      }
+      if (isSyncPaused()) {
+        return;
+      }
+      validateProcessCache();
+      for (const [convId, entry] of startedSessionTmux.entries()) {
+        if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
+          try {
+            await execAsync2(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+            if (!await isTmuxAgentAlive(entry.tmuxSession)) {
+              log(`Pruning started session ${entry.tmuxSession}: agent dead (zombie shell)`);
+              try {
+                await execAsync2(`tmux kill-session -t '${entry.tmuxSession}' 2>/dev/null`);
+              } catch {
+              }
+              startedSessionTmux.delete(convId);
             }
+          } catch {
             startedSessionTmux.delete(convId);
           }
-        } catch {
-          startedSessionTmux.delete(convId);
         }
       }
-    }
-    const activeStartedTmux = new Set([...startedSessionTmux.values()].map((e) => e.tmuxSession));
-    try {
-      const { stdout: tmuxList } = await execAsync2("tmux list-sessions -F '#{session_name}' 2>/dev/null", { timeout: 3000 });
-      for (const tmuxName of tmuxList.trim().split(`
+      const activeStartedTmux = new Set([...startedSessionTmux.values()].map((e) => e.tmuxSession));
+      try {
+        const { stdout: tmuxList } = await execAsync2("tmux list-sessions -F '#{session_name}' 2>/dev/null", { timeout: 3000, killSignal: "SIGKILL" });
+        for (const tmuxName of tmuxList.trim().split(`
 `)) {
-        if (!tmuxName || !/^cc-resume-/.test(tmuxName) && !/^cc-claude-/.test(tmuxName))
-          continue;
-        if (activeStartedTmux.has(tmuxName))
-          continue;
-        if (!await isTmuxAgentAlive(tmuxName)) {
-          log(`Reaping zombie tmux session ${tmuxName}`);
-          try {
-            await execAsync2(`tmux kill-session -t '${tmuxName}' 2>/dev/null`);
-          } catch {
+          if (!tmuxName || !/^cc-resume-/.test(tmuxName) && !/^cc-claude-/.test(tmuxName))
+            continue;
+          if (activeStartedTmux.has(tmuxName))
+            continue;
+          if (!await isTmuxAgentAlive(tmuxName)) {
+            log(`Reaping zombie tmux session ${tmuxName}`);
+            try {
+              await execAsync2(`tmux kill-session -t '${tmuxName}' 2>/dev/null`);
+            } catch {
+            }
           }
         }
+      } catch {
       }
-    } catch {
-    }
-    try {
-      const statusDir = AGENT_STATUS_DIR;
-      if (fs13.existsSync(statusDir)) {
-        const IDLE_STALE_MS = 10 * 60 * 1000;
-        const ACTIVE_STALE_MS = 30 * 60 * 1000;
-        for (const file of fs13.readdirSync(statusDir)) {
-          if (!file.endsWith(".json"))
-            continue;
-          const sessionId = file.replace(".json", "");
-          const filePath = path12.join(statusDir, file);
-          try {
-            const raw = fs13.readFileSync(filePath, "utf-8");
-            const data = JSON.parse(raw);
-            if (!data.ts)
+      try {
+        const statusDir = AGENT_STATUS_DIR;
+        if (fs13.existsSync(statusDir)) {
+          const IDLE_STALE_MS = 10 * 60 * 1000;
+          const ACTIVE_STALE_MS = 30 * 60 * 1000;
+          for (const file of fs13.readdirSync(statusDir)) {
+            if (!file.endsWith(".json"))
               continue;
-            const ageMs = now - data.ts * 1000;
-            const threshold = data.status === "idle" || data.status === "stopped" ? IDLE_STALE_MS : ACTIVE_STALE_MS;
-            if (ageMs < threshold)
-              continue;
-            const convId = deps.conversationCache[sessionId];
-            if (!convId) {
+            const sessionId = file.replace(".json", "");
+            const filePath = path12.join(statusDir, file);
+            try {
+              const raw = fs13.readFileSync(filePath, "utf-8");
+              const data = JSON.parse(raw);
+              if (!data.ts)
+                continue;
+              const ageMs = now - data.ts * 1000;
+              const threshold = data.status === "idle" || data.status === "stopped" ? IDLE_STALE_MS : ACTIVE_STALE_MS;
+              if (ageMs < threshold)
+                continue;
+              const convId = deps.conversationCache[sessionId];
+              if (!convId) {
+                try {
+                  fs13.unlinkSync(filePath);
+                } catch {
+                }
+                continue;
+              }
+              log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min), marking completed`);
+              deps.syncService.markSessionCompleted(convId).catch(() => {
+              });
+              sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
               try {
                 fs13.unlinkSync(filePath);
               } catch {
               }
-              continue;
-            }
-            log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min), marking completed`);
-            deps.syncService.markSessionCompleted(convId).catch(() => {
-            });
-            sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
-            try {
-              fs13.unlinkSync(filePath);
             } catch {
             }
-          } catch {
           }
         }
+      } catch {
       }
-    } catch {
-    }
-    const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);
-    if (watcherIdleMinutes >= 5) {
-      log(`Watcher idle for ${watcherIdleMinutes}min, restarting`);
-      try {
-        deps.watcher.restart();
-        lastWatcherEventTime = now;
-        log(`Watcher restarted successfully`);
-      } catch (err) {
-        logError("Failed to restart watcher", err instanceof Error ? err : new Error(String(err)));
+      const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);
+      if (watcherIdleMinutes >= 5) {
+        log(`Watcher idle for ${watcherIdleMinutes}min, restarting`);
+        try {
+          deps.watcher.restart();
+          lastWatcherEventTime = now;
+          log(`Watcher restarted successfully`);
+        } catch (err) {
+          logError("Failed to restart watcher", err instanceof Error ? err : new Error(String(err)));
+        }
       }
-    }
-    const staleClaudeFiles = findStaleSessionFiles();
-    const staleCodexFiles = findStaleCodexSessionFiles();
-    const staleCursorSessions = findStaleCursorSessions();
-    const staleCursorTranscriptFiles = findStaleCursorTranscriptFiles();
-    const totalStale = staleClaudeFiles.length + staleCodexFiles.length + staleCursorSessions.length + staleCursorTranscriptFiles.length;
-    if (totalStale === 0) {
-      return;
-    }
-    log(`Watchdog: Detected ${totalStale} files needing sync`);
-    const currentRestarts = state?.watchdogRestarts || 0;
-    saveDaemonState({ watchdogRestarts: currentRestarts + 1 });
-    for (const filePath of staleClaudeFiles) {
-      const parts = filePath.split(path12.sep);
-      const sessionId = resolveSessionId(filePath);
-      const projectDirName = parts[parts.length - 2];
-      const decoded = decodeProjectDirName(projectDirName);
-      const projectPath = decoded && fs13.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path12.sep).replace(/^-/, "");
-      if (deps.config.excluded_paths && isPathExcluded(projectPath, deps.config.excluded_paths)) {
-        continue;
+      const staleClaudeFiles = findStaleSessionFiles();
+      const staleCodexFiles = findStaleCodexSessionFiles();
+      const staleCursorSessions = findStaleCursorSessions();
+      const staleCursorTranscriptFiles = findStaleCursorTranscriptFiles();
+      const totalStale = staleClaudeFiles.length + staleCodexFiles.length + staleCursorSessions.length + staleCursorTranscriptFiles.length;
+      if (totalStale === 0) {
+        return;
       }
-      if (!isProjectAllowedToSync(projectPath, deps.config)) {
-        continue;
-      }
-      log(`Watchdog: Syncing stale session ${sessionId}`);
-      await processSessionFile(filePath, sessionId, projectPath, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.titleCache, deps.updateState);
-    }
-    for (const filePath of staleCodexFiles) {
-      const filename = path12.basename(filePath, ".jsonl");
-      const match = filename.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-      const sessionId = match ? match[1] : filename;
-      log(`Watchdog: Syncing stale Codex session ${sessionId}`);
-      await processCodexSession(filePath, sessionId, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.titleCache, deps.updateState);
-    }
-    for (const cursorSession of staleCursorSessions) {
-      if (deps.config.excluded_paths && isPathExcluded(cursorSession.workspacePath, deps.config.excluded_paths)) {
-        continue;
-      }
-      if (!isProjectAllowedToSync(cursorSession.workspacePath, deps.config)) {
-        continue;
-      }
-      log(`Watchdog: Syncing stale Cursor session ${cursorSession.sessionId}`);
-      await processCursorSession(cursorSession.dbPath, cursorSession.sessionId, cursorSession.workspacePath, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.updateState);
-    }
-    for (const filePath of staleCursorTranscriptFiles) {
-      const sessionId = path12.basename(filePath, ".txt");
-      const workspacePath = findWorkspacePathForCursorConversation(sessionId);
-      if (workspacePath) {
-        if (deps.config.excluded_paths && isPathExcluded(workspacePath, deps.config.excluded_paths)) {
+      log(`Watchdog: Detected ${totalStale} files needing sync`);
+      const currentRestarts = state?.watchdogRestarts || 0;
+      saveDaemonState({ watchdogRestarts: currentRestarts + 1 });
+      for (const filePath of staleClaudeFiles) {
+        const parts = filePath.split(path12.sep);
+        const sessionId = resolveSessionId(filePath);
+        const projectDirName = parts[parts.length - 2];
+        const decoded = decodeProjectDirName(projectDirName);
+        const projectPath = decoded && fs13.existsSync(decoded) ? decoded : projectDirName.replace(/-/g, path12.sep).replace(/^-/, "");
+        if (deps.config.excluded_paths && isPathExcluded(projectPath, deps.config.excluded_paths)) {
           continue;
         }
-        if (!isProjectAllowedToSync(workspacePath, deps.config)) {
+        if (!isProjectAllowedToSync(projectPath, deps.config)) {
           continue;
         }
-      } else if (deps.config.sync_mode === "selected") {
-        continue;
+        log(`Watchdog: Syncing stale session ${sessionId}`);
+        await processSessionFile(filePath, sessionId, projectPath, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.titleCache, deps.updateState);
       }
-      log(`Watchdog: Syncing stale Cursor transcript ${sessionId}`);
-      await processCursorTranscriptFile(filePath, sessionId, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.updateState);
+      for (const filePath of staleCodexFiles) {
+        const filename = path12.basename(filePath, ".jsonl");
+        const match = filename.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+        const sessionId = match ? match[1] : filename;
+        log(`Watchdog: Syncing stale Codex session ${sessionId}`);
+        await processCodexSession(filePath, sessionId, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.titleCache, deps.updateState);
+      }
+      for (const cursorSession of staleCursorSessions) {
+        if (deps.config.excluded_paths && isPathExcluded(cursorSession.workspacePath, deps.config.excluded_paths)) {
+          continue;
+        }
+        if (!isProjectAllowedToSync(cursorSession.workspacePath, deps.config)) {
+          continue;
+        }
+        log(`Watchdog: Syncing stale Cursor session ${cursorSession.sessionId}`);
+        await processCursorSession(cursorSession.dbPath, cursorSession.sessionId, cursorSession.workspacePath, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.updateState);
+      }
+      for (const filePath of staleCursorTranscriptFiles) {
+        const sessionId = path12.basename(filePath, ".txt");
+        const workspacePath = findWorkspacePathForCursorConversation(sessionId);
+        if (workspacePath) {
+          if (deps.config.excluded_paths && isPathExcluded(workspacePath, deps.config.excluded_paths)) {
+            continue;
+          }
+          if (!isProjectAllowedToSync(workspacePath, deps.config)) {
+            continue;
+          }
+        } else if (deps.config.sync_mode === "selected") {
+          continue;
+        }
+        log(`Watchdog: Syncing stale Cursor transcript ${sessionId}`);
+        await processCursorTranscriptFile(filePath, sessionId, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.updateState);
+      }
+      log(`Watchdog: Sync completed for ${totalStale} files`);
+    } finally {
+      watchdogRunning = false;
     }
-    log(`Watchdog: Sync completed for ${totalStale} files`);
   }, WATCHDOG_INTERVAL_MS);
 }
 async function main() {
@@ -16295,7 +16518,7 @@ async function main() {
   logLifecycle("daemon_start", `v${daemonVersion} PID=${process.pid}${isRestart ? " (restart after update)" : ""}${crashRecoveryInfo}`);
   log(`PID: ${process.pid}`);
   if (isSyncPaused()) {
-    log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
+    log("\u26A0\uFE0F  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
   }
   saveDaemonState({ connected: false, runtimeVersion: getVersion() });
   const { config, convexUrl } = await waitForConfig();
@@ -16457,12 +16680,21 @@ async function main() {
         log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ""} for session ${sessionId.slice(0, 8)}`);
       }
       if (data.status === "stopped" && statusChanged) {
-        log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
-        syncService2.markSessionCompleted(convId).catch(() => {
-        });
-        try {
-          fs13.unlinkSync(filePath);
-        } catch {
+        const restartTs = restartingSessionIds.get(sessionId);
+        if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
+          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress \u2014 skipping completion`);
+          try {
+            fs13.unlinkSync(filePath);
+          } catch {
+          }
+        } else {
+          log(`Session ended for ${sessionId.slice(0, 8)}, marking completed`);
+          syncService2.markSessionCompleted(convId).catch(() => {
+          });
+          try {
+            fs13.unlinkSync(filePath);
+          } catch {
+          }
         }
       }
       if (data.status === "permission_blocked" && statusChanged && !permissionRecordPending.has(sessionId)) {
