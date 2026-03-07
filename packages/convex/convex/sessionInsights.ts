@@ -410,27 +410,28 @@ export const generateSessionInsight = internalAction({
           .join("\n")
       : "- none";
 
-    const prompt = `You are extracting structured team insight from one coding session.
+    const prompt = `You are writing a session digest for a team activity feed. Someone reading this should understand what happened without needing to open the session.
 
 Return ONLY valid JSON with this exact shape:
 {
-  "summary": "string (1 sentence)",
-  "goal": "string",
-  "what_changed": "string",
+  "summary": "string (2-4 sentences)",
   "outcome_type": "shipped|progress|blocked|unknown",
   "blockers": ["string"],
-  "next_action": "string",
   "themes": ["string"],
   "confidence": number (0..1)
 }
 
-Rules:
-- Be concrete, terse, and evidence-based.
-- Prefer shipped over progress when clear completed outcomes exist.
-- Use blockers only for real blockers.
-- themes should be 2-6 short tags.
-- If uncertain, use outcome_type unknown and lower confidence.
-- No markdown, no commentary.
+Rules for summary:
+- Write a concise narrative paragraph (2-4 sentences) that covers what was done and why.
+- Include specific technical details: file names, function names, config values, URLs, error messages, package names -- anything concrete that helps the reader understand without opening the session.
+- Mention what changed and the outcome naturally within the narrative, don't use labels like "Goal:" or "Changed:".
+- If there were commits or PRs, mention the key ones.
+
+Other rules:
+- outcome_type: shipped if clear completed work, progress if still ongoing, blocked if stuck.
+- blockers: only real blockers, empty array if none.
+- themes: 2-6 short tags.
+- No markdown, no commentary, just JSON.
 
 Session metadata:
 - title: ${context.conversation.title || ""}
@@ -463,7 +464,7 @@ ${sampledMessages}`;
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 450,
+          max_tokens: 600,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -487,7 +488,7 @@ ${sampledMessages}`;
       const summary = (parsed.summary || context.conversation.idle_summary || context.conversation.subtitle || "Updated session activity")
         .toString()
         .trim()
-        .slice(0, 300);
+        .slice(0, 600);
 
       const goal = parsed.goal ? String(parsed.goal).trim().slice(0, 220) : undefined;
       const whatChanged = parsed.what_changed ? String(parsed.what_changed).trim().slice(0, 320) : undefined;
@@ -821,7 +822,7 @@ export const getTeamDigest = query({
       };
     });
 
-    const feed = sorted.slice(0, 50).map((insight) => {
+    const feedUnsorted = sorted.slice(0, 50).map((insight) => {
       const actor = actorMap.get(insight.actor_user_id.toString());
       const conv = conversationMap.get(insight.conversation_id.toString());
       return {
@@ -849,6 +850,9 @@ export const getTeamDigest = query({
         updated_at: conv?.updated_at,
       };
     });
+    const feed = feedUnsorted.sort((a, b) =>
+      (b.updated_at || b.started_at || b.generated_at) - (a.updated_at || a.started_at || a.generated_at)
+    );
 
     const people = [...peopleMap.values()]
       .map((p) => {

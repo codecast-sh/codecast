@@ -918,8 +918,15 @@ export const webGetDocDetail = query({
         }));
     }
 
+    // Load author profile
+    const author = await ctx.db.get(doc.user_id);
+    const authorInfo = author
+      ? { author_name: author.name, author_image: author.image || (author as any).github_avatar_url }
+      : {};
+
     const result: any = {
       ...doc,
+      ...authorInfo,
       conversation,
       related_tasks: relatedTasks,
       related_sessions: relatedSessions,

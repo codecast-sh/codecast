@@ -273,7 +273,24 @@ export const webList = query({
     enriched.sort((a: any, b: any) => (b.originated_at || b.created_at) - (a.originated_at || a.created_at));
     const result = enriched.slice(0, args.limit || 100);
 
-    return { docs: result.map(extractPlanTitle), projectPaths };
+    // Batch-load user profiles for author attribution
+    const userIds = new Set<string>();
+    for (const d of result) {
+      if (d.user_id) userIds.add(String(d.user_id));
+    }
+    const userMap = new Map<string, { name?: string; image?: string }>();
+    for (const uid of userIds) {
+      const u = await ctx.db.get(uid as Id<"users">);
+      if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url });
+    }
+
+    const withAuthors = result.map(extractPlanTitle).map((d: any) => {
+      const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
+      if (author) return { ...d, author_name: author.name, author_image: author.image };
+      return d;
+    });
+
+    return { docs: withAuthors, projectPaths };
   },
 });
 
