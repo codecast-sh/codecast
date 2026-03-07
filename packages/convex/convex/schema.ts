@@ -839,6 +839,11 @@ export default defineSchema({
       v.literal("import")
     ),
     confidence: v.optional(v.number()),
+    promoted: v.optional(v.boolean()),
+
+    // Visibility (inherited from source conversation for mined tasks)
+    is_private: v.optional(v.boolean()),
+    team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
 
     // Drive state (iterative polish)
     drive: v.optional(v.object({
@@ -883,6 +888,19 @@ export default defineSchema({
   })
     .index("by_task_id", ["task_id"]),
 
+  task_history: defineTable({
+    task_id: v.id("tasks"),
+    user_id: v.optional(v.id("users")),
+    actor_type: v.union(v.literal("user"), v.literal("agent"), v.literal("system")),
+    action: v.string(),
+    field: v.optional(v.string()),
+    old_value: v.optional(v.string()),
+    new_value: v.optional(v.string()),
+    conversation_id: v.optional(v.id("conversations")),
+    created_at: v.number(),
+  })
+    .index("by_task_id", ["task_id"]),
+
   docs: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
@@ -900,12 +918,14 @@ export default defineSchema({
     project_id: v.optional(v.id("projects")),
     task_ids: v.optional(v.array(v.id("tasks"))),
     conversation_id: v.optional(v.id("conversations")),
+    related_conversation_ids: v.optional(v.array(v.id("conversations"))),
 
     source: v.union(
       v.literal("agent"),
       v.literal("human"),
       v.literal("plan_mode"),
       v.literal("file_sync"),
+      v.literal("inline_extract"),
       v.literal("import")
     ),
     source_file: v.optional(v.string()),
@@ -913,6 +933,10 @@ export default defineSchema({
     project_path: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
     pinned: v.optional(v.boolean()),
+
+    // Visibility (inherited from source conversation for mined docs)
+    is_private: v.optional(v.boolean()),
+    team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
 
     embedding: v.optional(v.array(v.float64())),
 

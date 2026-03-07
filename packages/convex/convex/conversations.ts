@@ -5437,6 +5437,24 @@ export const setSessionError = mutation({
   },
 });
 
+export const markSessionCompleted = mutation({
+  args: {
+    conversation_id: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const convId = ctx.db.normalizeId("conversations", args.conversation_id);
+    if (!convId) return;
+    const conv = await ctx.db.get(convId);
+    if (!conv || conv.user_id !== userId) return;
+    if (conv.status === "active") {
+      await ctx.db.patch(convId, { status: "completed" });
+    }
+  },
+});
+
 export const dismissFromInbox = mutation({
   args: {
     conversation_id: v.id("conversations"),

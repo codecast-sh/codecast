@@ -281,4 +281,151 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       created_at: Date.now(),
     });
   },
+
+  updateTaskStatus: async (ctx, userId, [shortId, newStatus]: [string, string]) => {
+    const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
+    if (!task) throw new Error("Task not found");
+    const user = await ctx.db.get(userId);
+    const teamId = user?.active_team_id || user?.team_id;
+    if (task.user_id !== userId && task.team_id !== teamId) throw new Error("Not authorized");
+
+    const now = Date.now();
+    const updates: any = { status: newStatus, updated_at: now };
+    if (newStatus === "done" || newStatus === "dropped") updates.closed_at = now;
+    if (newStatus === "in_progress") updates.attempt_count = (task.attempt_count || 0) + 1;
+
+    if (newStatus !== task.status) {
+      await ctx.db.insert("task_history", {
+        task_id: task._id,
+        user_id: userId,
+        actor_type: "user" as const,
+        action: "updated",
+        field: "status",
+        old_value: task.status,
+        new_value: newStatus,
+        created_at: now,
+      });
+    }
+    await ctx.db.patch(task._id, updates);
+  },
+
+  updateTask: async (ctx, userId, [shortId, fields]: [string, Record<string, any>]) => {
+    const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
+    if (!task) throw new Error("Task not found");
+    const user = await ctx.db.get(userId);
+    const teamId = user?.active_team_id || user?.team_id;
+    if (task.user_id !== userId && task.team_id !== teamId) throw new Error("Not authorized");
+
+    const now = Date.now();
+    const updates: any = { updated_at: now };
+    for (const [key, val] of Object.entries(fields)) {
+      if (key === "status") {
+        updates.status = val;
+        if (val === "done" || val === "dropped") updates.closed_at = now;
+        if (val === "in_progress") updates.attempt_count = (task.attempt_count || 0) + 1;
+        if (val !== task.status) {
+          await ctx.db.insert("task_history", {
+            task_id: task._id, user_id: userId, actor_type: "user" as const,
+            action: "updated", field: "status", old_value: task.status, new_value: val,
+            created_at: now,
+          });
+        }
+      } else if (key === "priority" && val !== task.priority) {
+        updates.priority = val;
+        await ctx.db.insert("task_history", {
+          task_id: task._id, user_id: userId, actor_type: "user" as const,
+          action: "updated", field: "priority", old_value: task.priority, new_value: val,
+          created_at: now,
+        });
+      } else if (key === "title" && val !== task.title) {
+        updates.title = val;
+        await ctx.db.insert("task_history", {
+          task_id: task._id, user_id: userId, actor_type: "user" as const,
+          action: "updated", field: "title", old_value: task.title, new_value: val,
+          created_at: now,
+        });
+      } else if (key === "description") {
+        updates.description = val;
+      } else if (key === "labels") {
+        updates.labels = val;
+      }
+    }
+    await ctx.db.patch(task._id, updates);
+  },
+
+  createTask: async (ctx, userId, [opts]: [any]) => {
+    const user = await ctx.db.get(userId);
+    const teamId = user?.active_team_id || user?.team_id;
+    const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+    let shortId = "ct-";
+    for (let i = 0; i < 4; i++) shortId += chars[Math.floor(Math.random() * chars.length)];
+
+    let projectId;
+    if (opts.project_id) {
+      const p = await ctx.db.query("projects").filter((q: any) => q.eq(q.field("_id"), opts.project_id)).first();
+      if (p) projectId = p._id;
+    }
+
+    const now = Date.now();
+    const id = await ctx.db.insert("tasks", {
+      user_id: userId,
+      team_id: teamId,
+      project_id: projectId,
+      short_id: shortId,
+      title: opts.title,
+      description: opts.description,
+      task_type: opts.task_type || "task",
+      status: opts.status || "open",
+      priority: opts.priority || "medium",
+      labels: opts.labels,
+      source: "human" as const,
+      attempt_count: 0,
+      created_at: now,
+      updated_at: now,
+    });
+
+    await ctx.db.insert("task_history", {
+      task_id: id,
+      user_id: userId,
+      actor_type: "user" as const,
+      action: "created",
+      created_at: now,
+    });
+
+    return { id, short_id: shortId };
+  },
+
+  addTaskComment: async (ctx, userId, [shortId, text, commentType]: [string, string, string?]) => {
+    const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
+    if (!task) throw new Error("Task not found");
+    const user = await ctx.db.get(userId);
+    const teamId = user?.active_team_id || user?.team_id;
+    if (task.user_id !== userId && task.team_id !== teamId) throw new Error("Not authorized");
+
+    await ctx.db.insert("task_comments", {
+      task_id: task._id,
+      author: user?.name || "unknown",
+      text,
+      comment_type: (commentType || "note") as any,
+      created_at: Date.now(),
+    });
+  },
+
+  pinDoc: async (ctx, userId, [docId, pinned]: [string, boolean]) => {
+    const doc = await ctx.db.get(docId as Id<"docs">);
+    if (!doc) throw new Error("Doc not found");
+    const user = await ctx.db.get(userId);
+    const teamId = user?.active_team_id || user?.team_id;
+    if (doc.user_id !== userId && doc.team_id !== teamId) throw new Error("Not authorized");
+    await ctx.db.patch(doc._id, { pinned, updated_at: Date.now() });
+  },
+
+  archiveDoc: async (ctx, userId, [docId]: [string]) => {
+    const doc = await ctx.db.get(docId as Id<"docs">);
+    if (!doc) throw new Error("Doc not found");
+    const user = await ctx.db.get(userId);
+    const teamId = user?.active_team_id || user?.team_id;
+    if (doc.user_id !== userId && doc.team_id !== teamId) throw new Error("Not authorized");
+    await ctx.db.patch(doc._id, { archived_at: Date.now(), updated_at: Date.now() });
+  },
 };

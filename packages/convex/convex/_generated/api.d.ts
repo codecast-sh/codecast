@@ -48,6 +48,7 @@ import type * as reviews from "../reviews.js";
 import type * as sessionInsights from "../sessionInsights.js";
 import type * as syncCursors from "../syncCursors.js";
 import type * as systemConfig from "../systemConfig.js";
+import type * as taskMining from "../taskMining.js";
 import type * as tasks from "../tasks.js";
 import type * as teamActivity from "../teamActivity.js";
 import type * as teams from "../teams.js";
@@ -101,6 +102,7 @@ declare const fullApi: ApiFromModules<{
   sessionInsights: typeof sessionInsights;
   syncCursors: typeof syncCursors;
   systemConfig: typeof systemConfig;
+  taskMining: typeof taskMining;
   tasks: typeof tasks;
   teamActivity: typeof teamActivity;
   teams: typeof teams;

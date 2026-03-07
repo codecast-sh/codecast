@@ -2708,6 +2708,19 @@ cliRoute("/cli/work/dep", async (ctx, body) => {
 cliRoute("/cli/work/context", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.context, body);
 });
+cliRoute("/cli/work/promote", async (ctx, body) => {
+  return await ctx.runMutation(api.tasks.promote, body);
+});
+cliRoute("/cli/work/snippet", async (ctx, body) => {
+  return await ctx.runQuery(api.tasks.snippet, body);
+});
+cliRoute("/cli/work/backfill", async (ctx, body) => {
+  return await ctx.runMutation(api.tasks.backfillTeamScope, body);
+});
+
+cliRoute("/cli/work/mine", async (ctx, body) => {
+  return await ctx.runAction(internal.taskMining.backfillDocsFromMessages, { user_id: body.user_id });
+});
 
 // Docs
 cliRoute("/cli/docs/create", async (ctx, body) => {
