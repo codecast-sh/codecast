@@ -5,7 +5,8 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import * as Haptics from 'expo-haptics';
-// import * as ImagePicker from 'expo-image-picker';
+let ImagePicker: typeof import('expo-image-picker') | null = null;
+try { ImagePicker = require('expo-image-picker'); } catch {}
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { PermissionCard } from '@/components/PermissionCard';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -52,6 +53,7 @@ type ImageData = {
   media_type: string;
   data?: string;
   storage_id?: string;
+  tool_use_id?: string;
 };
 
 type Message = {
@@ -1703,12 +1705,13 @@ function SkillBlockCard({ name, description, path }: { name?: string; descriptio
   );
 }
 
-function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
+function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImageMap }: {
   toolCall: ToolCall;
   result?: ToolResult;
   expanded: boolean;
   onToggle: () => void;
   images?: ImageData[];
+  globalImageMap?: Record<string, ImageData>;
 }) {
   const { color } = toolIcon(toolCall.name);
   const summary = toolSummary(toolCall);
@@ -1790,8 +1793,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
 
   const isBash = toolCall.name === 'Bash' || toolCall.name === 'shell_command' || toolCall.name === 'shell' || toolCall.name === 'exec_command' || toolCall.name === 'container.exec';
   const isEdit = toolCall.name === 'Edit' || toolCall.name === 'file_edit' || toolCall.name === 'apply_patch';
-  const isScreenshotTool = toolCall.name === 'mcp__claude-in-chrome__computer' && parsedInput.action === 'screenshot';
-  const hasImages = images && images.length > 0 && isScreenshotTool;
+  const toolImage = images?.find(img => img.tool_use_id === toolCall.id)
+    || globalImageMap?.[toolCall.id];
+  const hasToolImage = !!toolImage;
 
   const isWrite = toolCall.name === 'Write' || toolCall.name === 'file_write';
   const filePath = String(parsedInput.file_path || parsedInput.path || '');
@@ -1999,11 +2003,9 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images }: {
           ) : result && (!resultDisplay || !resultDisplay.trim()) ? (
             <RNText style={styles.noOutputText}>No output</RNText>
           ) : null}
-          {hasImages && images && (
+          {hasToolImage && toolImage && (
             <RNView style={styles.toolImagesSection}>
-              {images.map((img, i) => (
-                <ImageBlock key={i} image={img} />
-              ))}
+              <ImageBlock image={toolImage} />
             </RNView>
           )}
         </RNView>
@@ -2189,7 +2191,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap }: {
+function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap }: {
   message: Message;
   agentType?: string;
   model?: string;
@@ -2199,6 +2201,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   onFork?: (messageUuid: string) => void;
   taskSubjectMap?: Record<string, string>;
   globalToolResultMap?: Record<string, ToolResult>;
+  globalImageMap?: Record<string, ImageData>;
   userName?: string;
   showToast?: (msg: string) => void;
   collapsed?: boolean;
@@ -2557,6 +2560,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             return (
               <ToolCallItem
                 images={message.images}
+                globalImageMap={globalImageMap}
                 key={tc.id}
                 toolCall={tc}
                 result={result}
@@ -2619,11 +2623,13 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
   const [isSending, setIsSending] = useState(false);
   const [lastStatus, setLastStatus] = useState<'delivered' | 'failed' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
+  const managedSession = useQuery(api.managedSessions.isSessionManaged, { conversation_id: conversationId });
 
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const retryMessage = useMutation(api.pendingMessages.retryMessage);
   const patchConversation = useMutation(api.conversations.patchConversation);
+  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
 
   const draftRef = useRef(draft || '');
   useEffect(() => {
@@ -2642,38 +2648,54 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
     (msg) => msg.conversation_id === conversationId
   ) || [];
 
+  const uploadToStorage = async (uri: string) => {
+    const uploadUrl = await generateUploadUrl({});
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    const uploadResult = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { "Content-Type": blob.type || "image/jpeg" },
+      body: blob,
+    });
+    const { storageId } = await uploadResult.json();
+    return storageId as string;
+  };
+
   const pickImage = async () => {
-    Alert.alert(
-      'Coming Soon',
-      'Image uploads will be available in the next update.',
-      [{ text: 'OK' }]
-    );
-    // Temporarily disabled - requires expo-image-picker in dev client
-    // try {
-    //   const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    //   if (status !== 'granted') {
-    //     Alert.alert('Permission needed', 'Please grant photo library access to attach images');
-    //     return;
-    //   }
-
-    //   const result = await ImagePicker.launchImageLibraryAsync({
-    //     mediaTypes: ImagePicker.MediaTypeOptions.Images,
-    //     allowsMultipleSelection: true,
-    //     quality: 0.8,
-    //     base64: true,
-    //   });
-
-    //   if (!result.canceled && result.assets) {
-    //     const uris = result.assets.map(asset => asset.uri);
-    //     setSelectedImages(prev => [...prev, ...uris]);
-    //   }
-    // } catch (err) {
-    //   console.error('Image picker error:', err);
-    // }
+    if (!ImagePicker) {
+      Alert.alert('Not available', 'Image uploads require a development build with expo-image-picker.');
+      return;
+    }
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please grant photo library access to attach images');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: true,
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets) {
+        for (const asset of result.assets) {
+          const uri = asset.uri;
+          setSelectedImages(prev => [...prev, { uri, uploading: true }]);
+          uploadToStorage(uri).then(storageId => {
+            setSelectedImages(prev => prev.map(img => img.uri === uri ? { ...img, storageId, uploading: false } : img));
+          }).catch(() => {
+            setSelectedImages(prev => prev.filter(img => img.uri !== uri));
+            Alert.alert('Upload failed', 'Could not upload image');
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Image picker error:', err);
+    }
   };
 
   const removeImage = (uri: string) => {
-    setSelectedImages(prev => prev.filter(img => img !== uri));
+    setSelectedImages(prev => prev.filter(img => img.uri !== uri));
   };
 
   const handleSend = async () => {
@@ -2683,10 +2705,21 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
     setIsSending(true);
     setError(null);
 
+    const hasUploading = selectedImages.some(img => img.uploading);
+    if (hasUploading) {
+      setError('Images still uploading...');
+      setIsSending(false);
+      return;
+    }
+
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      // TODO: Update sendMessage to support images
-      await sendMessage({ conversation_id: conversationId, content: trimmedMessage || '📷' });
+      const storageIds = selectedImages.filter(img => img.storageId).map(img => img.storageId!);
+      await sendMessage({
+        conversation_id: conversationId,
+        content: trimmedMessage || (storageIds.length > 0 ? '[image]' : ''),
+        ...(storageIds.length > 0 ? { image_storage_ids: storageIds as Id<"_storage">[] } : {}),
+      });
       setMessage('');
       draftRef.current = '';
       patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
@@ -2715,12 +2748,17 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
       )}
       {selectedImages.length > 0 && (
         <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false}>
-          {selectedImages.map((uri, index) => (
+          {selectedImages.map((img, index) => (
             <RNView key={index} style={styles.imagePreview}>
-              <Image source={{ uri }} style={styles.previewImage} />
+              <Image source={{ uri: img.uri }} style={styles.previewImage} />
+              {img.uploading && (
+                <RNView style={styles.imageUploadingOverlay}>
+                  <ActivityIndicator size="small" color="#fff" />
+                </RNView>
+              )}
               <TouchableOpacity
                 style={styles.removeImageButton}
-                onPress={() => removeImage(uri)}
+                onPress={() => removeImage(img.uri)}
                 activeOpacity={0.7}
               >
                 <FontAwesome name="times-circle" size={20} color={Theme.red} />
@@ -2733,6 +2771,41 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
         <RNView style={styles.inactiveSessionBanner}>
           <RNText style={styles.inactiveSessionCompactText} numberOfLines={1}>
             Session inactive. Send to auto-resume.
+          </RNText>
+        </RNView>
+      )}
+      {managedSession?.managed && (managedSession.agent_status === "working" || managedSession.agent_status === "thinking" || managedSession.agent_status === "compacting" || managedSession.agent_status === "permission_blocked" || managedSession.agent_status === "connected") && (
+        <RNView style={[styles.agentStatusBar, {
+          backgroundColor: managedSession.agent_status === "thinking" ? 'rgba(108,113,196,0.12)' :
+            managedSession.agent_status === "compacting" ? 'rgba(245,158,11,0.12)' :
+            managedSession.agent_status === "permission_blocked" ? 'rgba(203,75,22,0.12)' :
+            managedSession.agent_status === "connected" ? 'rgba(42,161,152,0.12)' :
+            'rgba(16,185,129,0.12)',
+          borderColor: managedSession.agent_status === "thinking" ? 'rgba(108,113,196,0.3)' :
+            managedSession.agent_status === "compacting" ? 'rgba(245,158,11,0.3)' :
+            managedSession.agent_status === "permission_blocked" ? 'rgba(203,75,22,0.3)' :
+            managedSession.agent_status === "connected" ? 'rgba(42,161,152,0.3)' :
+            'rgba(16,185,129,0.3)',
+        }]}>
+          <RNView style={[styles.agentStatusDot, {
+            backgroundColor: managedSession.agent_status === "thinking" ? Theme.violet :
+              managedSession.agent_status === "compacting" ? '#f59e0b' :
+              managedSession.agent_status === "permission_blocked" ? Theme.orange :
+              managedSession.agent_status === "connected" ? Theme.cyan :
+              Theme.greenBright,
+          }]} />
+          <RNText style={[styles.agentStatusText, {
+            color: managedSession.agent_status === "thinking" ? Theme.violet :
+              managedSession.agent_status === "compacting" ? '#f59e0b' :
+              managedSession.agent_status === "permission_blocked" ? Theme.orange :
+              managedSession.agent_status === "connected" ? Theme.cyan :
+              Theme.greenBright,
+          }]}>
+            {managedSession.agent_status === "thinking" ? "Thinking" :
+             managedSession.agent_status === "compacting" ? "Compacting" :
+             managedSession.agent_status === "permission_blocked" ? "Needs Input" :
+             managedSession.agent_status === "connected" ? "Connected" :
+             "Working"}
           </RNText>
         </RNView>
       )}
@@ -2965,6 +3038,20 @@ export default function SessionDetailScreen() {
       if (msg.role === 'user' && msg.tool_results) {
         for (const tr of msg.tool_results) {
           map[tr.tool_use_id] = tr;
+        }
+      }
+    }
+    return map;
+  }, [allMessages]);
+
+  const globalImageMap = useMemo(() => {
+    const map: Record<string, ImageData> = {};
+    for (const msg of allMessages) {
+      if (msg.images) {
+        for (const img of msg.images) {
+          if (img.tool_use_id) {
+            map[img.tool_use_id] = img;
+          }
         }
       }
     }
@@ -3814,6 +3901,7 @@ export default function SessionDetailScreen() {
                   onFork={handleForkFromMessage}
                   taskSubjectMap={taskSubjectMap}
                   globalToolResultMap={globalToolResultMap}
+                  globalImageMap={globalImageMap}
                   userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
                   showToast={showToast}
                   collapsed={collapsed}
@@ -4576,6 +4664,27 @@ const styles = StyleSheet.create({
     borderTopColor: Theme.borderLight,
     paddingBottom: 34,
   },
+  agentStatusBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  agentStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  agentStatusText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
   inactiveSessionBanner: {
     marginHorizontal: 12,
     marginBottom: 4,
@@ -4622,6 +4731,13 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 8,
+  },
+  imageUploadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 8,
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
   },
   removeImageButton: {
     position: 'absolute',
