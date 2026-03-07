@@ -1882,6 +1882,11 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
           <RNText style={[styles.toolCallResultHint, result?.is_error && { color: Theme.red }]}> {resultSummary}</RNText>
         ) : null}
       </RNText>
+      {hasToolImage && toolImage && (
+        <RNView style={styles.toolImagesSection}>
+          <ImageBlock image={toolImage} />
+        </RNView>
+      )}
       {expanded && (
         <RNView style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError]}>
           {language && !isBash && (
@@ -2003,11 +2008,6 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
           ) : result && (!resultDisplay || !resultDisplay.trim()) ? (
             <RNText style={styles.noOutputText}>No output</RNText>
           ) : null}
-          {hasToolImage && toolImage && (
-            <RNView style={styles.toolImagesSection}>
-              <ImageBlock image={toolImage} />
-            </RNView>
-          )}
         </RNView>
       )}
       {mdFullscreen && (
