@@ -159,6 +159,16 @@ export default function DocDetailPage() {
 
           {/* Metadata bar */}
           <div className="flex items-center gap-4 text-xs text-sol-text-dim mb-4 flex-wrap">
+            {(doc as any).author_image && (
+              <span className="flex items-center gap-1.5">
+                <img
+                  src={(doc as any).author_image}
+                  alt={(doc as any).author_name || ""}
+                  className="w-4 h-4 rounded-full object-cover"
+                />
+                <span className="text-sol-text-muted">{(doc as any).author_name}</span>
+              </span>
+            )}
             <span className="flex items-center gap-1">
               <Clock className="w-3 h-3" />
               Created {formatDate(doc.created_at)}

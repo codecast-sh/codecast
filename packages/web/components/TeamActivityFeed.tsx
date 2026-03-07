@@ -103,15 +103,22 @@ function SessionCard({ item }: { item: any }) {
       isBlocked ? "border-sol-red/40 bg-sol-red/[0.02]" : isShipped ? "border-sol-green/25 bg-sol-bg/60" : "border-sol-cyan/20 bg-sol-bg/60"
     }`}>
       <div className="pl-3 pr-2 py-3">
-        {/* Header: avatar, name, outcome, time */}
         <div className="flex items-center gap-2 mb-2">
           <ActorAvatar name={actorName} />
           <span className="text-[11px] font-medium text-sol-text">{actorName}</span>
           <OutcomeBadge type={item.outcome_type} />
-          <span className="ml-auto text-[10px] text-sol-text-dim tabular-nums">{getRelativeTime(item.generated_at)}</span>
+          {item.project_path && (
+            <span className="text-[10px] font-mono text-sol-text-dim">
+              {item.project_path.split("/").pop()}
+              {item.git_branch && item.git_branch !== "main" && <span className="opacity-50"> / {item.git_branch}</span>}
+            </span>
+          )}
+          {item.message_count != null && (
+            <span className="text-[10px] text-sol-text-dim opacity-50">{item.message_count} msgs</span>
+          )}
+          <span className="ml-auto text-[10px] text-sol-text-dim tabular-nums">{getRelativeTime(item.updated_at || item.started_at || item.generated_at)}</span>
         </div>
 
-        {/* Title + project */}
         <Link
           href={`/conversation/${item.conversation_id}`}
           className="block mb-1.5 hover:text-sol-yellow transition-colors"
@@ -121,44 +128,12 @@ function SessionCard({ item }: { item: any }) {
           </span>
         </Link>
 
-        {item.project_path && (
-          <div className="flex items-center gap-1.5 text-[10px] text-sol-text-dim mb-2">
-            <span className="font-mono">{item.project_path.split("/").pop()}</span>
-            {item.git_branch && (
-              <>
-                <span className="opacity-40">/</span>
-                <span className="font-mono">{item.git_branch}</span>
-              </>
-            )}
-            {item.message_count && (
-              <span className="opacity-50">{item.message_count} msgs</span>
-            )}
-          </div>
-        )}
-
-        {/* Goal */}
-        {item.goal && (
-          <p className="text-xs text-sol-text-muted leading-relaxed mb-1.5">
-            <span className="text-sol-text-dim font-medium">Goal:</span> {item.goal}
-          </p>
-        )}
-
-        {/* Summary - the main content */}
-        <p className="text-xs text-sol-text leading-relaxed mb-1.5">
+        <p className="text-xs text-sol-text leading-relaxed whitespace-pre-line">
           {item.summary}
         </p>
 
-        {/* What changed */}
-        {item.what_changed && (
-          <p className="text-xs leading-relaxed mb-1.5">
-            <span className="text-sol-green font-medium">Changed:</span>{" "}
-            <span className="text-sol-text-muted">{item.what_changed}</span>
-          </p>
-        )}
-
-        {/* Blockers */}
         {item.blockers?.length > 0 && (
-          <div className="mb-1.5">
+          <div className="mt-1.5">
             {item.blockers.map((b: string, i: number) => (
               <div key={i} className="flex items-start gap-1.5 text-xs text-sol-red/80 leading-relaxed">
                 <span className="shrink-0 mt-0.5">!</span>
@@ -168,18 +143,10 @@ function SessionCard({ item }: { item: any }) {
           </div>
         )}
 
-        {/* Next action */}
-        {item.next_action && (
-          <p className="text-[11px] text-sol-text-dim leading-relaxed mb-1.5">
-            <span className="text-sol-yellow/70">Next:</span> {item.next_action}
-          </p>
-        )}
-
-        {/* Expandable details: commits, files, themes */}
-        {(item.metadata?.commit_shas?.length > 0 || item.metadata?.files_touched?.length > 0 || item.themes?.length > 0) && (
+        {(item.metadata?.files_touched?.length > 0 || item.themes?.length > 0) && (
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-[10px] text-sol-text-dim hover:text-sol-text transition-colors mt-1"
+            className="text-[10px] text-sol-text-dim hover:text-sol-text transition-colors mt-1.5"
           >
             {expanded ? "less" : "details"}
             <span className="ml-1 opacity-40">{expanded ? "\u25B4" : "\u25BE"}</span>
@@ -190,7 +157,7 @@ function SessionCard({ item }: { item: any }) {
           <div className="mt-2 pt-2 border-t border-sol-border/20 space-y-1.5">
             {item.metadata?.files_touched?.length > 0 && (
               <div className="text-[11px] text-sol-text-dim">
-                <span className="font-medium text-sol-text-dim">Commits:</span>
+                <span className="font-medium">Commits:</span>
                 {item.metadata.files_touched.map((f: string, i: number) => (
                   <div key={i} className="font-mono text-[10px] text-sol-violet/70 pl-2 truncate">{f}</div>
                 ))}
@@ -265,7 +232,7 @@ export function TeamActivityFeed({ teamId }: TeamActivityFeedProps) {
     const groups: { label: string; items: any[] }[] = [];
     let currentGroup = "";
     for (const item of filteredFeed) {
-      const group = getTimeGroup(item.generated_at);
+      const group = getTimeGroup(item.updated_at || item.started_at || item.generated_at);
       if (group !== currentGroup) {
         groups.push({ label: group, items: [] });
         currentGroup = group;

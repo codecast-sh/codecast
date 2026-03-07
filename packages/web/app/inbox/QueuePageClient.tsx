@@ -22,6 +22,14 @@ import { toast } from "sonner";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
 
+const NOISE_PATTERNS = [
+  /toolu_[A-Za-z0-9_-]+/,
+  /\/private\/tmp\/claude/,
+  /\/tmp\/claude-\d+\//,
+  /\.output<\/out/,
+  /tasks\/[a-z0-9]+\.output/,
+];
+
 function cleanUserMessage(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const cleaned = raw
@@ -32,6 +40,7 @@ function cleanUserMessage(raw: string | null | undefined): string | null {
     .trim();
   if (!cleaned) return null;
   if (NOISE_PREFIXES.some(p => cleaned.startsWith(p))) return null;
+  if (NOISE_PATTERNS.some(p => p.test(cleaned))) return null;
   return cleaned;
 }
 
@@ -65,10 +74,12 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   } = useConversationMessages(sessionId);
 
   const resumeSession = useMutation(api.users.resumeSession);
+  const restartSessionMutation = useMutation(api.conversations.restartSession);
   const setPrivacy = useMutation(api.conversations.setPrivacy);
   const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
+  const forceRestartAttemptedRef = useRef(false);
 
   const lastMsg = conversation?.messages?.[conversation.messages.length - 1];
   const lastRoleIsUser = lastMsg?.role === "user";
@@ -78,16 +89,27 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   useEffect(() => {
     if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {
       setResumeState("idle");
+      forceRestartAttemptedRef.current = false;
     }
   }, [isIdle, resumeState]);
 
   useEffect(() => {
     if (resumeState !== "sent") return;
-    const timeout = setTimeout(() => {
-      setResumeState("failed");
+    const timeout = setTimeout(async () => {
+      if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
+        forceRestartAttemptedRef.current = true;
+        try {
+          await restartSessionMutation({ conversation_id: sessionId as Id<"conversations"> });
+          setResumeState("sent");
+        } catch {
+          setResumeState("failed");
+        }
+      } else {
+        setResumeState("failed");
+      }
     }, 45_000);
     return () => clearTimeout(timeout);
-  }, [resumeState]);
+  }, [resumeState, sessionId, restartSessionMutation]);
 
   const handleManualResume = useCallback(() => {
     setResumeState("resuming");
@@ -901,8 +923,10 @@ export function QueuePageClient() {
           </div>
         </div>
       ) : (
-        <div className="h-full overflow-y-auto">
-          <ConversationList filter="my" onNavigate={handleNavigateToConversation} />
+        <div className="h-full overflow-y-auto" data-main-scroll>
+          <div className="max-w-4xl mx-auto px-4">
+            <ConversationList filter="my" onNavigate={handleNavigateToConversation} />
+          </div>
         </div>
       )}
     </>

@@ -79,8 +79,17 @@ function DocCard({ doc, onClick }: { doc: DocItem; onClick: () => void }) {
       onClick={onClick}
       className="w-full text-left group relative pl-8"
     >
-      {/* Timeline dot */}
-      <div className="absolute left-[11px] top-5 w-2 h-2 rounded-full bg-sol-border group-hover:bg-sol-cyan transition-colors z-10" />
+      {/* Timeline avatar or dot */}
+      {(doc as any).author_image ? (
+        <img
+          src={(doc as any).author_image}
+          alt={(doc as any).author_name || ""}
+          title={(doc as any).author_name || ""}
+          className="absolute left-[5px] top-4 w-5 h-5 rounded-full ring-2 ring-sol-bg z-10 object-cover"
+        />
+      ) : (
+        <div className="absolute left-[11px] top-5 w-2 h-2 rounded-full bg-sol-border group-hover:bg-sol-cyan transition-colors z-10" />
+      )}
 
       <div className="py-4 pr-5 pl-4 hover:bg-sol-bg-alt/40 transition-colors rounded-r-lg">
         <div className="flex items-start gap-3">

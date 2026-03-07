@@ -6,9 +6,13 @@ import { TeamActivityFeed } from "../../../components/TeamActivityFeed";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { EmptyState } from "../../../components/EmptyState";
 import { DashboardLayout } from "../../../components/DashboardLayout";
+import { useInboxStore } from "../../../store/inboxStore";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 export default function TeamActivityPage() {
   const user = useQuery(api.users.getCurrentUser);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
+  const teamId = activeTeamId || user?.active_team_id || user?.team_id;
 
   if (!user) {
     return (
@@ -20,7 +24,7 @@ export default function TeamActivityPage() {
     );
   }
 
-  if (!user.team_id) {
+  if (!teamId) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center min-h-[60vh] p-6">
@@ -36,7 +40,7 @@ export default function TeamActivityPage() {
   return (
     <DashboardLayout>
       <div className="max-w-3xl mx-auto py-6">
-        <TeamActivityFeed teamId={user.team_id} />
+        <TeamActivityFeed teamId={teamId} />
       </div>
     </DashboardLayout>
   );

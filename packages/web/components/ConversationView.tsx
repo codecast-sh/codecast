@@ -243,6 +243,8 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     s.sessions.find((sess) => sess._id === conversation._id)
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
+  const inboxSource = useInboxStore((s) => s.currentConversation?.source);
+  const injectSession = useInboxStore((s) => s.injectSession);
   const createQuickSession = useMutation(api.conversations.createQuickSession);
   const killSession = useMutation(api.conversations.killSession);
   const router = useRouter();
@@ -250,6 +252,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
+  const isInInbox = inboxSource === "inbox";
 
   const otherProjects = useMemo(() => {
     if (!recentProjects) return [];
@@ -263,23 +266,55 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     if (!trimmed) return;
     try {
       const resolvedId = storeSession?._id || conversation._id;
-      if (isConvexId(resolvedId)) {
-        killSession({ conversation_id: resolvedId as Id<"conversations">, mark_completed: true }).catch(() => {});
-        const { sessions, currentIndex } = useInboxStore.getState();
-        const filtered = sessions.filter((s) => s._id !== resolvedId);
-        const newIndex = currentIndex >= filtered.length ? Math.max(0, filtered.length - 1) : currentIndex;
-        useInboxStore.setState({ sessions: filtered, currentIndex: newIndex });
+      const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+      const now = Date.now();
+
+      if (isInInbox) {
+        useInboxStore.getState().setConversationMeta(sessionId, {
+          _id: sessionId, _creationTime: now, user_id: "", agent_type: currentAgent,
+          session_id: sessionId, project_path: trimmed, git_root: trimmed,
+          started_at: now, updated_at: now, message_count: 0, status: "active",
+          title: "New session", messages: [], user: null,
+          child_conversations: [], child_conversation_map: {},
+          has_more_above: false, oldest_timestamp: null, last_timestamp: null,
+          fork_count: 0, forked_from_details: null, compaction_count: 0,
+          fork_children: [], parent_conversation_id: null,
+        } as any);
+        injectSession({
+          _id: sessionId,
+          session_id: sessionId,
+          title: "New session",
+          updated_at: now,
+          project_path: trimmed,
+          git_root: trimmed,
+          agent_type: currentAgent as "claude_code" | "codex" | "gemini",
+          message_count: 0,
+          is_idle: true,
+          has_pending: false,
+          last_user_message: null,
+        });
       }
+
       const conversationId = await createQuickSession({
         agent_type: currentAgent as "claude_code" | "codex" | "gemini",
         project_path: trimmed,
         git_root: trimmed,
+        session_id: isInInbox ? sessionId : undefined,
       });
-      router.push(`/conversation/${conversationId}`);
+
+      if (isInInbox) {
+        useInboxStore.getState().resolveSessionId(sessionId, conversationId);
+      } else {
+        router.push(`/conversation/${conversationId}`);
+      }
+
+      if (isConvexId(resolvedId)) {
+        killSession({ conversation_id: resolvedId as Id<"conversations">, mark_completed: true }).catch(() => {});
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create session");
     }
-  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, router]);
+  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, router, isInInbox, injectSession]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -4481,7 +4516,9 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [modeTooltip, setModeTooltip] = useState(false);
   const modeLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoResumeTriggeredRef = useRef(false);
+  const forceRestartAttemptedRef = useRef(false);
   const resumeSessionMutation = useMutation(api.users.resumeSession);
+  const restartSessionMutation = useMutation(api.conversations.restartSession);
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
   const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
   const sentContentRef = useRef<string | null>(null);
@@ -4502,6 +4539,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if (!existingPending) {
       if (!isWaitingForResponse) setShowStuckBanner(false);
       autoResumeTriggeredRef.current = false;
+      forceRestartAttemptedRef.current = false;
       return;
     }
     const age = Date.now() - existingPending.created_at;
@@ -4601,12 +4639,20 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       return;
     }
     if (!isResuming) return;
-    const timeout = setTimeout(() => {
+    const timeout = setTimeout(async () => {
       setIsResuming(false);
-      toast.error("Resume timed out — session may need manual restart");
+      if (!forceRestartAttemptedRef.current && conversationId && isConvexId(conversationId)) {
+        forceRestartAttemptedRef.current = true;
+        try {
+          await restartSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
+          setIsResuming(true);
+        } catch {
+          toast.error("Session restart failed");
+        }
+      }
     }, 30_000);
     return () => clearTimeout(timeout);
-  }, [isResuming, isConversationLive, isThinking]);
+  }, [isResuming, isConversationLive, isThinking, conversationId, restartSessionMutation]);
 
   useEffect(() => {
     if (!showStuckBanner || !sessionId || isResuming || autoResumeTriggeredRef.current) return;
@@ -4697,7 +4743,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   }, [selectedMessageContent, selectedMessageUuid]);
 
-  const isInactive = status && status !== "active";
+  const isInactive = status && status !== "active" && !pendingMessageId;
   const hasContent = message.trim().length > 0 || pastedImages.length > 0;
   const isExpanded = !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0;
 
@@ -5229,6 +5275,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const sendEscape = useMutation(api.conversations.sendEscapeToSession);
   const sendKeys = useMutation(api.conversations.sendKeysToSession);
+  const rewindSession = useMutation(api.conversations.rewindSession);
   const sendInlineMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
   const restartSession = useMutation(api.conversations.restartSession);
@@ -5560,12 +5607,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [navigatorUserMessages]);
 
   const handleNavigatorRewind = useCallback((msg: NavUserMessage, indexFromEnd: number) => {
-    if (!conversation || !isOwner) return;
+    if (!msg.message_uuid || !conversation) return;
     setNavigatorOpen(false);
-    const keys = ["Escape", "Escape", ...Array(indexFromEnd).fill("Up"), "Enter", "Enter"];
-    sendKeys({ conversation_id: conversation._id, keys: keys.join(" ") });
-    toast.info(`Rewinding ${indexFromEnd} message${indexFromEnd !== 1 ? "s" : ""}`);
-  }, [conversation, isOwner, sendKeys]);
+    handleForkFromMessage(msg.message_uuid);
+    if (isOwner && conversation.status === "active") {
+      rewindSession({ conversation_id: conversation._id, steps_back: indexFromEnd });
+    }
+  }, [handleForkFromMessage, conversation, isOwner, rewindSession]);
 
   const handleNavigatorFork = useCallback((msg: NavUserMessage) => {
     if (!msg.message_uuid) return;
@@ -7501,6 +7549,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   {content && (
                     <div className={`max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {content}
+                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
+                        <div className="flex items-center gap-3 mt-3 mb-1">
+                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to right, transparent, var(--sol-border))' }} />
+                          <span className="text-[11px] text-sol-text-dim">{formatRelativeTime(lastActivityAt)}</span>
+                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to left, transparent, var(--sol-border))' }} />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
