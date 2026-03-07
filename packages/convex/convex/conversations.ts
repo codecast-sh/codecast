@@ -5450,7 +5450,37 @@ export const markSessionCompleted = mutation({
     const conv = await ctx.db.get(convId);
     if (!conv || conv.user_id !== userId) return;
     if (conv.status === "active") {
+      if (conv.has_pending_messages) {
+        return;
+      }
+      const pendingMsg = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q: any) =>
+          q.eq("conversation_id", convId).eq("status", "pending")
+        )
+        .first();
+      if (pendingMsg) {
+        return;
+      }
       await ctx.db.patch(convId, { status: "completed" });
+    }
+  },
+});
+
+export const markSessionActive = mutation({
+  args: {
+    conversation_id: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    const convId = ctx.db.normalizeId("conversations", args.conversation_id);
+    if (!convId) return;
+    const conv = await ctx.db.get(convId);
+    if (!conv || conv.user_id !== userId) return;
+    if (conv.status === "completed") {
+      await ctx.db.patch(convId, { status: "active" });
     }
   },
 });
@@ -5975,6 +6005,27 @@ export const sendKeysToSession = mutation({
       user_id: userId,
       command: "send_keys",
       args: JSON.stringify({ conversation_id: args.conversation_id, keys: args.keys }),
+      created_at: Date.now(),
+    });
+  },
+});
+
+export const rewindSession = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    steps_back: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "rewind",
+      args: JSON.stringify({ conversation_id: args.conversation_id, steps_back: args.steps_back }),
       created_at: Date.now(),
     });
   },

@@ -83,7 +83,8 @@ export default defineSchema({
       v.literal("escape"),
       v.literal("resume_session"),
       v.literal("kill_session"),
-      v.literal("send_keys")
+      v.literal("send_keys"),
+      v.literal("rewind")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),
