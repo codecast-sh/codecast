@@ -93,6 +93,58 @@ export type CurrentConversationContext = {
   source?: "inbox" | "sessions";
 };
 
+// -- Task / Doc Types --
+
+export type TaskItem = {
+  _id: string;
+  short_id: string;
+  title: string;
+  description?: string;
+  task_type: string;
+  status: string;
+  priority: string;
+  source: string;
+  labels?: string[];
+  blocked_by?: string[];
+  blocks?: string[];
+  assignee?: string;
+  assignee_info?: { name: string; image?: string } | null;
+  confidence?: number;
+  created_at: number;
+  updated_at: number;
+  closed_at?: number;
+  creator?: { name: string; image?: string };
+};
+
+export type TaskDetail = TaskItem & {
+  comments?: any[];
+  linked_conversations?: any[];
+  related_docs?: any[];
+  source_insight?: any;
+  creator?: { _id: string; name: string; image?: string };
+  history?: any[];
+  created_from_conversation?: string;
+};
+
+export type DocItem = {
+  _id: string;
+  title: string;
+  content: string;
+  doc_type: string;
+  source: string;
+  source_file?: string;
+  labels?: string[];
+  pinned?: boolean;
+  created_at: number;
+  updated_at: number;
+};
+
+export type DocDetail = DocItem & {
+  conversation?: any;
+  related_tasks?: any[];
+  related_sessions?: any[];
+};
+
 export type ClientUI = {
   theme?: "light" | "dark";
   sidebar_collapsed?: boolean;
@@ -147,6 +199,8 @@ interface InboxStoreState {
   showDismissed: boolean;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
+  showMySessions: boolean;
+  setShowMySessions: (show: boolean) => void;
   mruStack: string[];
 
   messages: Record<string, Message[]>;
@@ -154,6 +208,7 @@ interface InboxStoreState {
   conversations: Record<string, ConversationMeta>;
 
   clientState: ClientState;
+  clientStateInitialized: boolean;
 
   drafts: Record<string, Record<string, any>>;
 
@@ -235,6 +290,31 @@ interface InboxStoreState {
   updateClientLayout: (key: keyof ClientLayouts, value: any) => void;
   updateClientDismissed: (key: keyof ClientDismissed, value: any) => void;
 
+  // -- Task / Doc state --
+  tasks: TaskItem[];
+  docs: DocItem[];
+  docProjectPaths: string[];
+  taskDetails: Record<string, TaskDetail>;
+  docDetails: Record<string, DocDetail>;
+  taskFilter: { status: string };
+  docFilter: { type: string; query: string; project: string; scope: string };
+
+  // -- Task / Doc sync (local) --
+  syncTasks: (tasks: TaskItem[]) => void;
+  syncDocs: (docs: DocItem[], projectPaths?: string[]) => void;
+  syncTaskDetail: (id: string, detail: TaskDetail) => void;
+  syncDocDetail: (id: string, detail: DocDetail) => void;
+  setTaskFilter: (filter: Partial<{ status: string }>) => void;
+  setDocFilter: (filter: Partial<{ type: string; query: string; project: string; scope: string }>) => void;
+
+  // -- Task / Doc mutations (action + side effect) --
+  updateTaskStatus: (shortId: string, status: string) => Promise<any>;
+  updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[] }) => Promise<any>;
+  createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[] }) => Promise<any>;
+  addTaskComment: (shortId: string, text: string, commentType?: string) => Promise<any>;
+  pinDoc: (id: string, pinned: boolean) => Promise<any>;
+  archiveDoc: (id: string) => Promise<any>;
+
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
 }
@@ -266,6 +346,8 @@ export const useInboxStore = create<InboxStoreState>(
   showDismissed: false,
   viewingDismissedId: null,
   pendingNavigateId: null,
+  showMySessions: false,
+  setShowMySessions: (show: boolean) => set({ showMySessions: show }),
   mruStack: [],
 
   messages: {},
@@ -273,6 +355,7 @@ export const useInboxStore = create<InboxStoreState>(
   conversations: {},
 
   clientState: {},
+  clientStateInitialized: false,
 
   drafts: {},
 
@@ -513,7 +596,7 @@ export const useInboxStore = create<InboxStoreState>(
       } : undefined),
       dismissed: { ...prev.dismissed, ...serverState.dismissed },
     };
-    set({ clientState: cs });
+    set({ clientState: cs, clientStateInitialized: true });
   },
 
   navigateUp: () => {
@@ -839,6 +922,130 @@ export const useInboxStore = create<InboxStoreState>(
       optimisticForkChildren: [],
     });
   },
+
+  // =====================
+  // TASK / DOC STATE
+  // =====================
+
+  tasks: [],
+  docs: [],
+  taskDetails: {},
+  docDetails: {},
+  taskFilter: { status: "" },
+  docFilter: { type: "", query: "", project: "", scope: "" },
+  docProjectPaths: [],
+
+  syncTasks: (incoming: TaskItem[]) => {
+    set({ tasks: incoming });
+  },
+
+  syncDocs: (incoming: DocItem[], projectPaths?: string[]) => {
+    const update: any = { docs: incoming };
+    if (projectPaths) update.docProjectPaths = projectPaths;
+    set(update);
+  },
+
+  syncTaskDetail: (id: string, detail: TaskDetail) => {
+    set((s: InboxStoreState) => ({
+      taskDetails: { ...s.taskDetails, [id]: detail },
+    }));
+  },
+
+  syncDocDetail: (id: string, detail: DocDetail) => {
+    set((s: InboxStoreState) => ({
+      docDetails: { ...s.docDetails, [id]: detail },
+    }));
+  },
+
+  setTaskFilter: (filter: Partial<{ status: string }>) => {
+    set((s: InboxStoreState) => ({
+      taskFilter: { ...s.taskFilter, ...filter },
+    }));
+  },
+
+  setDocFilter: (filter: Partial<{ type: string; query: string }>) => {
+    set((s: InboxStoreState) => ({
+      docFilter: { ...s.docFilter, ...filter },
+    }));
+  },
+
+  // Task mutations via dispatch side effects
+  updateTaskStatus: action(function (this: Draft, shortId: string, status: string) {
+    // Optimistic: update in tasks list
+    const idx = this.tasks.findIndex((t: TaskItem) => t.short_id === shortId);
+    if (idx >= 0) {
+      this.tasks[idx].status = status;
+      this.tasks[idx].updated_at = Date.now();
+      if (status === "done" || status === "dropped") {
+        (this.tasks[idx] as any).closed_at = Date.now();
+      }
+    }
+    // Optimistic: update in detail cache
+    for (const detail of Object.values(this.taskDetails)) {
+      if ((detail as TaskDetail).short_id === shortId) {
+        (detail as TaskDetail).status = status;
+        (detail as TaskDetail).updated_at = Date.now();
+        if (status === "done" || status === "dropped") {
+          (detail as TaskDetail).closed_at = Date.now();
+        }
+      }
+    }
+  }),
+
+  updateTask: action(function (this: Draft, shortId: string, fields: Record<string, any>) {
+    const idx = this.tasks.findIndex((t: TaskItem) => t.short_id === shortId);
+    if (idx >= 0) {
+      Object.assign(this.tasks[idx], fields, { updated_at: Date.now() });
+    }
+    for (const detail of Object.values(this.taskDetails)) {
+      if ((detail as TaskDetail).short_id === shortId) {
+        Object.assign(detail as TaskDetail, fields, { updated_at: Date.now() });
+      }
+    }
+  }),
+
+  createTask: action(function (this: Draft, opts: any) {
+    const tempId = `temp_${Date.now()}`;
+    const tempShortId = `ct-new`;
+    this.tasks.unshift({
+      _id: tempId,
+      short_id: tempShortId,
+      title: opts.title,
+      description: opts.description,
+      task_type: opts.task_type || "task",
+      status: opts.status || "open",
+      priority: opts.priority || "medium",
+      source: "human",
+      labels: opts.labels,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    } as TaskItem);
+  }),
+
+  addTaskComment: action(function (this: Draft, shortId: string, text: string, commentType?: string) {
+    for (const detail of Object.values(this.taskDetails)) {
+      if ((detail as TaskDetail).short_id === shortId && (detail as TaskDetail).comments) {
+        (detail as TaskDetail).comments!.push({
+          _id: `temp_${Date.now()}`,
+          author: "You",
+          text,
+          comment_type: commentType || "note",
+          created_at: Date.now(),
+        });
+      }
+    }
+  }),
+
+  pinDoc: action(function (this: Draft, id: string, pinned: boolean) {
+    const idx = this.docs.findIndex((d: DocItem) => d._id === id);
+    if (idx >= 0) this.docs[idx].pinned = pinned;
+    if (this.docDetails[id]) (this.docDetails[id] as any).pinned = pinned;
+  }),
+
+  archiveDoc: action(function (this: Draft, id: string) {
+    this.docs = this.docs.filter((d: DocItem) => d._id !== id);
+    delete this.docDetails[id];
+  }),
 
   // =====================
   // SELECTORS
