@@ -1,10 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { useQuery, useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
-
-const api = _api as any;
+import { useRouter } from "next/navigation";
+import { useInboxStore, DocItem } from "../../store/inboxStore";
+import { useSyncDocs } from "../../hooks/useSyncDocs";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { Badge } from "../../components/ui/badge";
@@ -12,10 +10,8 @@ import {
   FileText,
   Search,
   Pin,
-  Archive,
-  Clock,
-  Filter,
-  X,
+  FolderGit2,
+  Layers,
 } from "lucide-react";
 
 const DOC_TYPE_CONFIG: Record<string, { label: string; color: string }> = {
@@ -27,157 +23,154 @@ const DOC_TYPE_CONFIG: Record<string, { label: string; color: string }> = {
   note: { label: "Note", color: "text-sol-text-muted" },
 };
 
-function DocRow({ doc, onClick }: { doc: any; onClick: () => void }) {
+function shortProject(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts.slice(-2).join("/");
+}
+
+function formatTime(ts: number) {
+  return new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function dateKey(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 86400000);
+  const docDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  if (docDay.getTime() === today.getTime()) return "Today";
+  if (docDay.getTime() === yesterday.getTime()) return "Yesterday";
+
+  const diffDays = Math.floor((today.getTime() - docDay.getTime()) / 86400000);
+  if (diffDays < 7) return d.toLocaleDateString("en-US", { weekday: "long" });
+
+  return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
+}
+
+function extractPreview(content: string): string {
+  const lines = content.split("\n");
+  const body: string[] = [];
+  let pastTitle = false;
+  for (const line of lines) {
+    if (!pastTitle && line.startsWith("# ")) {
+      pastTitle = true;
+      continue;
+    }
+    if (!pastTitle) continue;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("#")) continue;
+    if (trimmed.startsWith("|") || trimmed.startsWith("---")) continue;
+    if (trimmed.startsWith("```")) continue;
+    body.push(trimmed.replace(/^\*\*(.+?)\*\*:?/, "$1:").replace(/^[*-]\s+/, ""));
+    if (body.join(" ").length > 400) break;
+  }
+  return body.join(" ").slice(0, 400);
+}
+
+function DocCard({ doc, onClick }: { doc: DocItem; onClick: () => void }) {
   const type = DOC_TYPE_CONFIG[doc.doc_type] || DOC_TYPE_CONFIG.note;
-  const age = Date.now() - doc.updated_at;
-  const ageStr = age < 3600000
-    ? `${Math.round(age / 60000)}m`
-    : age < 86400000
-      ? `${Math.round(age / 3600000)}h`
-      : `${Math.round(age / 86400000)}d`;
+  const preview = doc.content ? extractPreview(doc.content) : "";
+  const effectiveDate = (doc as any).originated_at || doc.created_at;
 
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors text-left group border-b border-sol-border/30"
+      className="w-full text-left group relative pl-8"
     >
-      <FileText className={`w-4 h-4 flex-shrink-0 ${type.color}`} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-sol-text truncate">{doc.title}</span>
-          {doc.pinned && <Pin className="w-3 h-3 text-sol-yellow flex-shrink-0" />}
+      {/* Timeline dot */}
+      <div className="absolute left-[11px] top-5 w-2 h-2 rounded-full bg-sol-border group-hover:bg-sol-cyan transition-colors z-10" />
+
+      <div className="py-4 pr-5 pl-4 hover:bg-sol-bg-alt/40 transition-colors rounded-r-lg">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-0.5">
+              <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${type.color} border-current/30 flex-shrink-0`}>
+                {type.label}
+              </Badge>
+              <span className="text-sm font-medium text-sol-text group-hover:text-sol-cyan transition-colors truncate">
+                {(doc as any).display_title || doc.title}
+              </span>
+              {doc.pinned && <Pin className="w-3 h-3 text-sol-yellow flex-shrink-0" />}
+            </div>
+            {(doc as any).plan_name && (
+              <span className="text-[11px] text-sol-text-dim mb-1 block">{(doc as any).plan_name}</span>
+            )}
+            {preview && (
+              <p className="text-xs text-sol-text-muted/80 leading-relaxed line-clamp-3 mt-1">
+                {preview}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-1 flex-shrink-0 pt-0.5">
+            <span className="text-[11px] text-sol-text-dim tabular-nums">{formatTime(effectiveDate)}</span>
+            {(doc as any).project_path && (
+              <span className="text-[10px] font-mono text-sol-text-dim truncate max-w-[120px]">
+                {shortProject((doc as any).project_path)}
+              </span>
+            )}
+          </div>
         </div>
-        {doc.content && (
-          <p className="text-xs text-sol-text-dim truncate mt-0.5">
-            {doc.content.slice(0, 120).replace(/\n/g, " ")}
-          </p>
-        )}
       </div>
-      {doc.labels?.map((l: string) => (
-        <Badge key={l} variant="outline" className="text-[10px] px-1.5 py-0 border-sol-border/50 text-sol-text-dim">
-          {l}
-        </Badge>
-      ))}
-      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${type.color} border-current/30`}>
-        {type.label}
-      </Badge>
-      <span className="text-xs text-sol-text-dim w-8 text-right tabular-nums flex-shrink-0">{ageStr}</span>
     </button>
   );
 }
 
-function DocViewer({ doc, onClose }: { doc: any; onClose: () => void }) {
-  const type = DOC_TYPE_CONFIG[doc.doc_type] || DOC_TYPE_CONFIG.note;
-  const updateDoc = useMutation(api.docs.webUpdate);
-
-  const handlePin = useCallback(async () => {
-    await updateDoc({ id: doc._id, pinned: !doc.pinned });
-  }, [doc._id, doc.pinned, updateDoc]);
-
-  const handleArchive = useCallback(async () => {
-    await updateDoc({ id: doc._id, archived: true });
-    onClose();
-  }, [doc._id, updateDoc, onClose]);
-
+function DateSeparator({ label }: { label: string }) {
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center pt-[8vh]" onClick={onClose}>
-      <div
-        className="bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sticky top-0 bg-sol-bg border-b border-sol-border/30 px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Badge variant="outline" className={`text-xs ${type.color} border-current/30`}>
-              {type.label}
-            </Badge>
-            <h2 className="text-lg font-semibold text-sol-text">{doc.title}</h2>
-            {doc.pinned && <Pin className="w-4 h-4 text-sol-yellow" />}
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handlePin}
-              className="p-1.5 rounded-lg text-sol-text-dim hover:text-sol-yellow transition-colors"
-              title={doc.pinned ? "Unpin" : "Pin"}
-            >
-              <Pin className="w-4 h-4" />
-            </button>
-            <button
-              onClick={handleArchive}
-              className="p-1.5 rounded-lg text-sol-text-dim hover:text-sol-red transition-colors"
-              title="Archive"
-            >
-              <Archive className="w-4 h-4" />
-            </button>
-            <button onClick={onClose} className="p-1.5 rounded-lg text-sol-text-dim hover:text-sol-text transition-colors">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-        <div className="px-6 py-4">
-          {doc.labels?.length > 0 && (
-            <div className="flex gap-1.5 mb-3">
-              {doc.labels.map((l: string) => (
-                <Badge key={l} variant="outline" className="text-xs">{l}</Badge>
-              ))}
-            </div>
-          )}
-          <div className="text-sm text-sol-text whitespace-pre-wrap font-mono leading-relaxed">
-            {doc.content}
-          </div>
-          <div className="mt-6 pt-4 border-t border-sol-border/20 flex items-center gap-4 text-xs text-sol-text-dim">
-            <span>Source: {doc.source}</span>
-            {doc.source_file && <span className="font-mono truncate">{doc.source_file}</span>}
-            <span className="flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              {new Date(doc.updated_at).toLocaleDateString()}
-            </span>
-          </div>
-        </div>
-      </div>
+    <div className="relative pl-8 py-2">
+      <div className="absolute left-[7px] top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-sol-bg border-2 border-sol-text-dim z-10" />
+      <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wider">{label}</span>
     </div>
   );
 }
 
 export default function DocsPage() {
-  const [typeFilter, setTypeFilter] = useState<string>("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedDoc, setSelectedDoc] = useState<any>(null);
+  const router = useRouter();
+  const docFilter = useInboxStore((s) => s.docFilter);
+  const setDocFilter = useInboxStore((s) => s.setDocFilter);
+  const docs = useInboxStore((s) => s.docs);
+  const projectPaths = useInboxStore((s) => s.docProjectPaths);
 
-  const docs = useQuery(
-    searchQuery ? api.docs.webSearch : api.docs.webList,
-    searchQuery
-      ? { query: searchQuery, doc_type: typeFilter || undefined }
-      : { doc_type: typeFilter || undefined }
-  );
+  useSyncDocs(docFilter.type || undefined, docFilter.query || undefined, docFilter.project || undefined, docFilter.scope || undefined);
 
-  const docDetail = useQuery(
-    api.docs.webGet,
-    selectedDoc?._id ? { id: selectedDoc._id } : "skip"
-  );
+  // Group docs by date
+  const grouped: { key: string; docs: DocItem[] }[] = [];
+  let currentKey = "";
+  for (const doc of docs) {
+    const effectiveDate = (doc as any).originated_at || doc.created_at;
+    const key = dateKey(effectiveDate);
+    if (key !== currentKey) {
+      currentKey = key;
+      grouped.push({ key, docs: [] });
+    }
+    grouped[grouped.length - 1].docs.push(doc);
+  }
 
   return (
     <AuthGuard>
-      <DashboardLayout hideSidebar>
+      <DashboardLayout>
         <div className="h-full flex flex-col">
           <div className="px-6 py-4 border-b border-sol-border/30">
             <div className="flex items-center justify-between mb-3">
               <h1 className="text-lg font-semibold text-sol-text tracking-tight">Documents</h1>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <div className="relative flex-1 max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sol-text-dim" />
                 <input
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  value={docFilter.query}
+                  onChange={(e) => setDocFilter({ query: e.target.value })}
                   placeholder="Search documents..."
                   className="w-full text-sm pl-9 pr-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
                 />
               </div>
               <div className="flex gap-1">
                 <button
-                  onClick={() => setTypeFilter("")}
+                  onClick={() => setDocFilter({ type: "" })}
                   className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-                    !typeFilter ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                    !docFilter.type ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
                   }`}
                 >
                   All
@@ -185,9 +178,9 @@ export default function DocsPage() {
                 {Object.entries(DOC_TYPE_CONFIG).map(([key, cfg]) => (
                   <button
                     key={key}
-                    onClick={() => setTypeFilter(key)}
+                    onClick={() => setDocFilter({ type: key })}
                     className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
-                      typeFilter === key ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                      docFilter.type === key ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
                     }`}
                   >
                     {cfg.label}
@@ -195,28 +188,76 @@ export default function DocsPage() {
                 ))}
               </div>
             </div>
+            <div className="flex items-center gap-2 mt-2">
+              <div className="flex gap-1 items-center">
+                <Layers className="w-3 h-3 text-sol-text-dim" />
+                <button
+                  onClick={() => setDocFilter({ scope: "", project: "" })}
+                  className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
+                    !docFilter.scope ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                  }`}
+                >
+                  Team
+                </button>
+                <button
+                  onClick={() => setDocFilter({ scope: "projects", project: "" })}
+                  className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
+                    docFilter.scope === "projects" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                  }`}
+                >
+                  Projects
+                </button>
+              </div>
+              {docFilter.scope === "projects" && projectPaths.length > 0 && (
+                <div className="flex items-center gap-1 ml-2">
+                  <FolderGit2 className="w-3 h-3 text-sol-text-dim" />
+                  <button
+                    onClick={() => setDocFilter({ project: "" })}
+                    className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
+                      !docFilter.project ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                    }`}
+                  >
+                    All
+                  </button>
+                  {projectPaths.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setDocFilter({ project: p })}
+                      className={`text-xs px-2 py-0.5 rounded-md transition-colors ${
+                        docFilter.project === p ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                      }`}
+                    >
+                      {shortProject(p)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
-            {!docs ? (
-              <div className="flex items-center justify-center h-32 text-sol-text-dim text-sm">Loading...</div>
-            ) : docs.length === 0 ? (
+          <div className="flex-1 overflow-y-auto px-4 py-2">
+            {docs.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-sol-text-dim">
                 <FileText className="w-8 h-8 mb-2 opacity-30" />
                 <p className="text-sm">No documents found</p>
-                <p className="text-xs mt-1">Sync plan files with: codecast doc sync</p>
               </div>
             ) : (
-              docs.map((d: any) => (
-                <DocRow key={d._id} doc={d} onClick={() => setSelectedDoc(d)} />
-              ))
+              <div className="relative">
+                {/* Timeline line */}
+                <div className="absolute left-[14px] top-4 bottom-4 w-px bg-sol-border/50" />
+                {grouped.map((group) => (
+                  <div key={group.key}>
+                    <DateSeparator label={group.key} />
+                    {group.docs.map((d) => (
+                      <DocCard key={d._id} doc={d} onClick={() => router.push(`/docs/${d._id}`)} />
+                    ))}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
 
-        {selectedDoc && docDetail && (
-          <DocViewer doc={docDetail} onClose={() => setSelectedDoc(null)} />
-        )}
       </DashboardLayout>
     </AuthGuard>
   );
