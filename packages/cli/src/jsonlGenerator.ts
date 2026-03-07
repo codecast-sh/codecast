@@ -335,6 +335,7 @@ function truncate(text: string, max = 2000): string {
 
 export interface GenerateClaudeCodeJsonlOptions {
   tailMessages?: number;
+  sessionId?: string;
 }
 
 type ExportedToolResult = NonNullable<ExportedMessage["tool_results"]>[number];
@@ -360,7 +361,7 @@ export function generateClaudeCodeJsonl(
   options: GenerateClaudeCodeJsonlOptions = {}
 ): { jsonl: string; sessionId: string } {
   const lines: string[] = [];
-  const sessionId = uuidv4();
+  const sessionId = options.sessionId || uuidv4();
   const cwd = data.conversation.project_path || process.cwd();
   let parentUuid: string | null = null;
   let expectedToolUseIds = new Set<string>();
@@ -486,7 +487,29 @@ export function generateClaudeCodeJsonl(
     }
   }
 
-  return { jsonl: lines.join("\n") + "\n", sessionId };
+  // Post-process: merge consecutive assistant messages.
+  // Claude CLI crashes (in --chrome/TUI mode) when it encounters two consecutive
+  // assistant JSONL entries — the tool result renderer gets confused about which
+  // tool_use corresponds to which result. Merge their content blocks into one.
+  const merged: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      const cur = JSON.parse(lines[i]);
+      if (cur.message?.role === "assistant" && merged.length > 0) {
+        const prev = JSON.parse(merged[merged.length - 1]);
+        if (prev.message?.role === "assistant") {
+          const prevContent = Array.isArray(prev.message.content) ? prev.message.content : [];
+          const curContent = Array.isArray(cur.message.content) ? cur.message.content : [];
+          prev.message.content = [...prevContent, ...curContent];
+          merged[merged.length - 1] = JSON.stringify(prev);
+          continue;
+        }
+      }
+    } catch {}
+    merged.push(lines[i]);
+  }
+
+  return { jsonl: merged.join("\n") + "\n", sessionId };
 }
 
 export function writeClaudeCodeSession(jsonl: string, sessionId: string, projectPath?: string): string {

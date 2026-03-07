@@ -188,6 +188,28 @@ describe("fetchExport", () => {
 });
 
 describe("generateClaudeCodeJsonl", () => {
+  test("uses provided sessionId in all entries", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv", title: "t", session_id: "session", agent_type: "codex",
+        project_path: "/tmp/project", model: "claude-opus-4-6-20260205",
+        message_count: 2, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "hi", timestamp: "2026-01-01T00:00:00.000Z" },
+        { role: "assistant", content: "hello", timestamp: "2026-01-01T00:00:00.100Z" },
+      ],
+    };
+
+    const customId = "598dcda2-a20b-4b3a-9a89-d597331a3e2d";
+    const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { sessionId: customId });
+    expect(sessionId).toBe(customId);
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+    for (const line of lines) {
+      if (line.sessionId) expect(line.sessionId).toBe(customId);
+    }
+  });
+
   test("does not emit thinking blocks (cannot generate valid thinking signatures)", () => {
     const data: ExportResult = {
       conversation: {
@@ -365,6 +387,51 @@ describe("generateClaudeCodeJsonl", () => {
     });
 
     expect(hasToolResult).toBe(false);
+  });
+
+  test("merges consecutive assistant messages into a single entry", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv", title: "t", session_id: "session", agent_type: "claude_code",
+        project_path: "/tmp/project", model: "claude-opus-4-6-20260205",
+        message_count: 5, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "hi", timestamp: "2026-01-01T00:00:00.000Z" },
+        { role: "assistant", content: "thinking about it", timestamp: "2026-01-01T00:00:00.100Z" },
+        {
+          role: "assistant", content: "",
+          timestamp: "2026-01-01T00:00:00.200Z",
+          tool_calls: [{ id: "call_1", name: "Bash", input: '{"command":"echo hi"}' }],
+        },
+        {
+          role: "user", content: "",
+          timestamp: "2026-01-01T00:00:00.300Z",
+          tool_results: [{ tool_use_id: "call_1", content: "hi" }],
+        },
+        { role: "assistant", content: "done", timestamp: "2026-01-01T00:00:00.400Z" },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data);
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+
+    const assistants = lines.filter((l) => l.type === "assistant");
+    for (let i = 1; i < lines.length; i++) {
+      const prev = lines[i - 1];
+      const cur = lines[i];
+      if (prev.message?.role === "assistant" && cur.message?.role === "assistant") {
+        throw new Error(`Consecutive assistants at indices ${i - 1} and ${i}`);
+      }
+    }
+
+    const merged = assistants.find((a) => {
+      const content = a.message?.content;
+      return Array.isArray(content) &&
+        content.some((b: any) => b.type === "text" && b.text === "thinking about it") &&
+        content.some((b: any) => b.type === "tool_use" && b.name === "Bash");
+    });
+    expect(merged).toBeTruthy();
   });
 });
 
