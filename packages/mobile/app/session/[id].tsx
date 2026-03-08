@@ -1,10 +1,13 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import * as Haptics from 'expo-haptics';
+import * as ScreenOrientation from 'expo-screen-orientation';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Reanimated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 let ImagePicker: typeof import('expo-image-picker') | null = null;
 try { ImagePicker = require('expo-image-picker'); } catch {}
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -1338,8 +1341,6 @@ function TeamCreateBlock({ tool }: { tool: ToolCall }) {
 }
 
 const IMAGE_COLLAPSED_HEIGHT = 80;
-const SCREEN_WIDTH = Dimensions.get('window').width;
-const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 function useImageSrc(image: ImageData) {
   const storageUrl = useQuery(
@@ -1386,12 +1387,81 @@ function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void
   );
 }
 
-function GalleryImage({ image }: { image: ImageData }) {
+function GalleryImage({ image, screenWidth, screenHeight }: { image: ImageData; screenWidth: number; screenHeight: number }) {
   const src = useImageSrc(image);
-  if (!src) return <RNView style={{ width: SCREEN_WIDTH, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator color="#fff" /></RNView>;
+
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const savedTranslateX = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
+
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((e) => {
+      scale.value = savedScale.value * e.scale;
+    })
+    .onEnd(() => {
+      if (scale.value < 1) {
+        scale.value = withTiming(1);
+        savedScale.value = 1;
+        translateX.value = withTiming(0);
+        translateY.value = withTiming(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      } else if (scale.value > 5) {
+        scale.value = withTiming(5);
+        savedScale.value = 5;
+      } else {
+        savedScale.value = scale.value;
+      }
+    });
+
+  const panGesture = Gesture.Pan()
+    .minPointers(2)
+    .onUpdate((e) => {
+      translateX.value = savedTranslateX.value + e.translationX;
+      translateY.value = savedTranslateY.value + e.translationY;
+    })
+    .onEnd(() => {
+      savedTranslateX.value = translateX.value;
+      savedTranslateY.value = translateY.value;
+    });
+
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .onStart(() => {
+      if (scale.value > 1) {
+        scale.value = withTiming(1);
+        savedScale.value = 1;
+        translateX.value = withTiming(0);
+        translateY.value = withTiming(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      } else {
+        scale.value = withTiming(3);
+        savedScale.value = 3;
+      }
+    });
+
+  const composedGesture = Gesture.Simultaneous(pinchGesture, panGesture, doubleTapGesture);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
+  }));
+
+  if (!src) return <RNView style={{ width: screenWidth, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator color="#fff" /></RNView>;
   return (
-    <RNView style={{ width: SCREEN_WIDTH, justifyContent: 'center', alignItems: 'center' }}>
-      <Image source={{ uri: src }} style={styles.fullscreenImage} resizeMode="contain" />
+    <RNView style={{ width: screenWidth, height: screenHeight, justifyContent: 'center', alignItems: 'center' }}>
+      <GestureDetector gesture={composedGesture}>
+        <Reanimated.View style={animatedStyle}>
+          <Image source={{ uri: src }} style={{ width: screenWidth, height: screenHeight * 0.8 }} resizeMode="contain" />
+        </Reanimated.View>
+      </GestureDetector>
     </RNView>
   );
 }
@@ -1404,39 +1474,53 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
 }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const flatListRef = useRef<FlatList>(null);
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
   useEffect(() => {
     if (visible) {
+      ScreenOrientation.unlockAsync().catch(() => {});
       setCurrentIndex(initialIndex);
       setTimeout(() => flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false }), 50);
+    } else {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     }
+    return () => {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    };
   }, [visible, initialIndex]);
+
+  const handleClose = useCallback(() => {
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    onClose();
+  }, [onClose]);
 
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <RNView style={styles.fullscreenOverlay}>
-        <TouchableOpacity style={styles.fullscreenClose} onPress={onClose} activeOpacity={0.7}>
-          <FontAwesome name="close" size={20} color="#fff" />
-        </TouchableOpacity>
-        <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
-        <FlatList
-          ref={flatListRef}
-          data={images}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          keyExtractor={(_, i) => String(i)}
-          renderItem={({ item }) => <GalleryImage image={item} />}
-          onMomentumScrollEnd={(e) => {
-            const idx = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
-            setCurrentIndex(idx);
-          }}
-          getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
-          initialScrollIndex={initialIndex}
-        />
-      </RNView>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose} supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <RNView style={styles.fullscreenOverlay}>
+          <TouchableOpacity style={styles.fullscreenClose} onPress={handleClose} activeOpacity={0.7}>
+            <FontAwesome name="close" size={20} color="#fff" />
+          </TouchableOpacity>
+          <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
+          <FlatList
+            ref={flatListRef}
+            data={images}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(_, i) => String(i)}
+            renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} />}
+            onMomentumScrollEnd={(e) => {
+              const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
+              setCurrentIndex(idx);
+            }}
+            getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
+            initialScrollIndex={initialIndex}
+          />
+        </RNView>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -5511,10 +5595,6 @@ const styles = StyleSheet.create({
     right: 20,
     zIndex: 10,
     padding: 8,
-  },
-  fullscreenImage: {
-    width: Dimensions.get('window').width,
-    height: Dimensions.get('window').height * 0.8,
   },
   // Thinking label
   thinkingLabel: {
