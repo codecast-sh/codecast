@@ -149,8 +149,9 @@ const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const RECONCILIATION_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const WATCHDOG_STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const LOG_FLUSH_INTERVAL_MS = 30 * 1000; // 30 seconds
-const MAX_LOG_QUEUE_SIZE = 200;
+const LOG_FLUSH_INTERVAL_MS = 15 * 1000; // 15 seconds - flush more frequently
+const MAX_LOG_QUEUE_SIZE = 500;
+const LOG_QUEUE_FILE = path.join(process.env.HOME || "", ".codecast", "log-queue.json");
 const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
 const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
 const HEARTBEAT_STALE_THRESHOLD_MS = 15 * 60 * 1000; // external watchdog: 15 min = deadlocked
@@ -168,11 +169,91 @@ interface RemoteLog {
   timestamp: number;
 }
 
-const remoteLogQueue: RemoteLog[] = [];
+let remoteLogQueue: RemoteLog[] = [];
 let syncServiceRef: SyncService | null = null;
 let daemonVersion: string | undefined;
 let activeConfig: Config | null = null;
 const platform = process.platform;
+
+function loadPersistedLogQueue(): void {
+  try {
+    if (fs.existsSync(LOG_QUEUE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(LOG_QUEUE_FILE, "utf-8"));
+      if (Array.isArray(data) && data.length > 0) {
+        remoteLogQueue = [...data, ...remoteLogQueue].slice(-MAX_LOG_QUEUE_SIZE);
+        fs.unlinkSync(LOG_QUEUE_FILE);
+      }
+    }
+  } catch {}
+}
+
+function persistLogQueue(): void {
+  if (remoteLogQueue.length === 0) return;
+  try {
+    fs.writeFileSync(LOG_QUEUE_FILE, JSON.stringify(remoteLogQueue), { mode: 0o600 });
+  } catch {}
+}
+
+function getSiteUrl(): string | null {
+  const config = activeConfig || readConfig();
+  if (!config?.convex_url) return null;
+  return config.convex_url.replace(".cloud", ".site");
+}
+
+function getAuthToken(): string | null {
+  const config = activeConfig || readConfig();
+  return config?.auth_token || null;
+}
+
+async function flushRemoteLogsViaHttp(): Promise<void> {
+  if (remoteLogQueue.length === 0) return;
+  const siteUrl = getSiteUrl();
+  const token = getAuthToken();
+  if (!siteUrl || !token) return;
+
+  const logsToSend = remoteLogQueue.splice(0, 100);
+  const logsWithMeta = logsToSend.map(l => ({
+    ...l,
+    daemon_version: daemonVersion,
+    platform,
+  }));
+
+  try {
+    const response = await fetch(`${siteUrl}/cli/log-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: token, logs: logsWithMeta }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      remoteLogQueue.unshift(...logsToSend);
+      persistLogQueue();
+    }
+  } catch {
+    remoteLogQueue.unshift(...logsToSend);
+    persistLogQueue();
+  }
+}
+
+function sendLogImmediate(level: LogLevel, message: string, metadata?: RemoteLog["metadata"]): void {
+  const siteUrl = getSiteUrl();
+  const token = getAuthToken();
+  if (!siteUrl || !token) return;
+
+  fetch(`${siteUrl}/cli/log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_token: token,
+      level,
+      message: message.slice(0, 2000),
+      metadata,
+      cli_version: daemonVersion,
+      platform,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => {});
+}
 
 const IDLE_TIMEOUT_MS = 2 * 60_000;
 const IDLE_COOLDOWN_MS = 5 * 60_000;
@@ -349,25 +430,62 @@ function logLifecycle(event: string, details?: string): void {
   });
 }
 
+function getSystemMetrics(): { rss_mb: number; heap_mb: number; heap_total_mb: number; uptime_min: number; fds: number; cpu_user_ms: number; cpu_system_ms: number } {
+  const mem = process.memoryUsage();
+  const cpu = process.cpuUsage();
+  let fds = 0;
+  try {
+    fds = fs.readdirSync(`/dev/fd`).length;
+  } catch {
+    try {
+      fds = parseInt(execSync("lsof -p " + process.pid + " 2>/dev/null | wc -l", { timeout: 5000 }).toString().trim(), 10) || 0;
+    } catch {}
+  }
+  return {
+    rss_mb: Math.round(mem.rss / 1024 / 1024),
+    heap_mb: Math.round(mem.heapUsed / 1024 / 1024),
+    heap_total_mb: Math.round(mem.heapTotal / 1024 / 1024),
+    uptime_min: Math.round(process.uptime() / 60),
+    fds,
+    cpu_user_ms: Math.round(cpu.user / 1000),
+    cpu_system_ms: Math.round(cpu.system / 1000),
+  };
+}
+
+const FD_WARN_THRESHOLD = 5000;
+const RSS_WARN_THRESHOLD_MB = 1500;
+
 function logHealthSummary(): void {
   const now = Date.now();
   const periodMinutes = Math.round((now - syncStats.lastReportTime) / 60000);
   const sessionsCount = syncStats.sessionsActive.size;
-  const hadActivity = syncStats.messagesSynced > 0 || syncStats.conversationsCreated > 0 || sessionsCount > 0 || syncStats.errors > 0;
+  const metrics = getSystemMetrics();
 
-  if (hadActivity) {
-    const summary = `Health OK: ${syncStats.messagesSynced} msgs synced, ${syncStats.conversationsCreated} convos created, ${sessionsCount} active sessions (${periodMinutes}min period)`;
+  const metricStr = `rss=${metrics.rss_mb}MB heap=${metrics.heap_mb}/${metrics.heap_total_mb}MB fds=${metrics.fds} cpu=${metrics.cpu_user_ms}+${metrics.cpu_system_ms}ms uptime=${metrics.uptime_min}min`;
+  const syncStr = `${syncStats.messagesSynced}msgs ${syncStats.conversationsCreated}convos ${sessionsCount}sessions ${syncStats.errors}errs`;
+  const summary = `Health: ${syncStr} | ${metricStr} (${periodMinutes}min)`;
 
-    log(summary, "info");
+  log(summary, "info");
 
-    remoteLogQueue.push({
-      level: "info",
-      message: summary,
-      metadata: {
-        error_code: syncStats.errors > 0 ? `${syncStats.errors} errors` : undefined,
-      },
-      timestamp: now,
-    });
+  remoteLogQueue.push({
+    level: "info",
+    message: summary,
+    metadata: {
+      error_code: syncStats.errors > 0 ? `${syncStats.errors} errors` : undefined,
+    },
+    timestamp: now,
+  });
+
+  if (metrics.fds > FD_WARN_THRESHOLD) {
+    const msg = `HIGH FD COUNT: ${metrics.fds} open file descriptors (threshold: ${FD_WARN_THRESHOLD})`;
+    logWarn(msg);
+    sendLogImmediate("warn", msg, { error_code: "high_fd_count" });
+  }
+
+  if (metrics.rss_mb > RSS_WARN_THRESHOLD_MB) {
+    const msg = `HIGH MEMORY: ${metrics.rss_mb}MB RSS (threshold: ${RSS_WARN_THRESHOLD_MB}MB)`;
+    logWarn(msg);
+    sendLogImmediate("warn", msg, { error_code: "high_memory" });
   }
 
   syncStats.messagesSynced = 0;
@@ -1049,20 +1167,7 @@ async function executeRemoteCommand(
 }
 
 async function flushRemoteLogs(): Promise<void> {
-  if (!syncServiceRef || remoteLogQueue.length === 0) {
-    return;
-  }
-  const logsToSend = remoteLogQueue.splice(0, 100);
-  const logsWithMeta = logsToSend.map(l => ({
-    ...l,
-    daemon_version: daemonVersion,
-    platform,
-  }));
-  try {
-    await syncServiceRef.syncLogs(logsWithMeta);
-  } catch {
-    remoteLogQueue.unshift(...logsToSend);
-  }
+  await flushRemoteLogsViaHttp();
 }
 
 function ensureConfigDir(): void {
@@ -5223,9 +5328,10 @@ function startWatchdog(
       }
     } catch {}
 
-    // Check for watcher staleness and restart if idle too long
+    // Check for watcher staleness -- only restart if idle for 60+ min.
+    // Short idle periods are normal (no active sessions, nighttime, etc.)
     const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);
-    if (watcherIdleMinutes >= 5) {
+    if (watcherIdleMinutes >= 60) {
       log(`Watcher idle for ${watcherIdleMinutes}min, restarting`);
       try {
         deps.watcher.restart();
@@ -5384,6 +5490,7 @@ async function main(): Promise<void> {
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).
   const underLaunchd = !!process.env.XPC_SERVICE_NAME;
   process.on("exit", (code) => {
+    persistLogQueue();
     if (skipRespawn || underLaunchd) return;
     if (code !== 0) {
       const { count, backoffMinutes } = recordCrash();
@@ -5412,18 +5519,19 @@ async function main(): Promise<void> {
 
   process.on("uncaughtException", async (err) => {
     logError("Uncaught exception", err);
-    if (syncServiceRef) {
-      await flushRemoteLogs().catch(() => {});
-    }
+    persistLogQueue();
+    sendLogImmediate("error", `UNCAUGHT EXCEPTION: ${err.message}`, {
+      error_code: err.name,
+      stack: err.stack?.slice(0, 1000),
+    });
+    await flushRemoteLogs().catch(() => {});
     process.exit(1);
   });
 
   process.on("unhandledRejection", async (reason) => {
     const err = reason instanceof Error ? reason : new Error(String(reason));
     logError("Unhandled rejection", err);
-    if (syncServiceRef) {
-      await flushRemoteLogs().catch(() => {});
-    }
+    await flushRemoteLogs().catch(() => {});
   });
 
   try {
@@ -5435,6 +5543,9 @@ async function main(): Promise<void> {
   try {
     fs.writeFileSync(VERSION_FILE, daemonVersion, { mode: 0o600 });
   } catch {}
+
+  activeConfig = readConfig();
+  loadPersistedLogQueue();
 
   // Report crash recovery if we had crashes before this successful startup
   let crashRecoveryInfo = "";
@@ -5449,7 +5560,9 @@ async function main(): Promise<void> {
   clearCrashCount();
 
   const isRestart = process.env.CODECAST_RESTART === "1";
-  logLifecycle("daemon_start", `v${daemonVersion} PID=${process.pid}${isRestart ? " (restart after update)" : ""}${crashRecoveryInfo}`);
+  const startMsg = `v${daemonVersion} PID=${process.pid}${isRestart ? " (restart after update)" : ""}${crashRecoveryInfo}`;
+  logLifecycle("daemon_start", startMsg);
+  sendLogImmediate("info", `[LIFECYCLE] daemon_start: ${startMsg}`, { error_code: "daemon_start" });
   log(`PID: ${process.pid}`);
 
   if (isSyncPaused()) {
@@ -5647,6 +5760,7 @@ async function main(): Promise<void> {
   const statusWatcher = chokidarWatch(AGENT_STATUS_DIR, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 50, pollInterval: 20 },
+    depth: 0,
   });
   statusWatcher.on("add", handleStatusFile).on("change", handleStatusFile);
 
@@ -6287,6 +6401,9 @@ async function main(): Promise<void> {
       );
       logDelivery("Pending messages subscription established");
       saveDaemonState({ connected: true });
+      if (reconnectAttempt > 0) {
+        sendLogImmediate("info", `[LIFECYCLE] connection_restored: after ${reconnectAttempt} attempts`, { error_code: "connection_restored" });
+      }
       resetReconnectDelay();
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -6299,6 +6416,12 @@ async function main(): Promise<void> {
 
       const delay = getReconnectDelay();
       logWarn(`Connection lost, reconnecting in ${delay}ms (attempt ${reconnectAttempt})`);
+      if (reconnectAttempt <= 3 || reconnectAttempt % 10 === 0) {
+        sendLogImmediate("warn", `Connection lost, attempt ${reconnectAttempt}: ${error.message}`, {
+          error_code: "connection_lost",
+          stack: error.stack?.slice(0, 500),
+        });
+      }
       setTimeout(() => {
         setupSubscription();
       }, delay);
@@ -6499,7 +6622,9 @@ async function main(): Promise<void> {
     try { fs.unlinkSync(VERSION_FILE); } catch {}
 
     logLifecycle("daemon_stop", "graceful shutdown");
+    sendLogImmediate("info", "[LIFECYCLE] daemon_stop: graceful shutdown", { error_code: "daemon_stop" });
     await flushRemoteLogs();
+    persistLogQueue();
     process.exit(0);
   };
 

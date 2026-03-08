@@ -1,5 +1,4 @@
 import fs from "fs";
-import path from "path";
 
 export interface RetryOperation {
   id: string;
@@ -239,10 +238,25 @@ export class RetryQueue {
     this.scheduleNextCheck();
   }
 
+  private isNetworkError(error: string): boolean {
+    const networkPatterns = ["typo in the url", "unable to connect", "fetch failed", "econnrefused", "enotfound", "etimedout", "network", "socket"];
+    const lower = error.toLowerCase();
+    return networkPatterns.some(p => lower.includes(p));
+  }
+
   private handleFailure(op: RetryOperation, error: string): void {
     op.lastError = error;
 
-    if (op.attempts >= this.maxAttempts) {
+    const isNetwork = this.isNetworkError(error);
+
+    if (isNetwork && Date.now() - op.createdAt > 24 * 60 * 60 * 1000) {
+      this.log(
+        `Network op retrying >24h: ${op.type} (${op.attempts} attempts, id: ${op.id}). Still persisting.`,
+        "error"
+      );
+    }
+
+    if (op.attempts >= this.maxAttempts && !isNetwork) {
       this.log(
         `Max retries reached. DROPPED: ${op.type} after ${op.attempts} attempts. Last error: ${error}. Session: ${op.params.sessionId || 'unknown'}`,
         "error"
@@ -253,11 +267,16 @@ export class RetryQueue {
     }
 
     const rateLimitDelay = parseRateLimitDelay(error);
-    const nextDelay = rateLimitDelay ?? this.calculateNextDelay(op.attempts);
+    // Network errors cap at 5 min backoff and retry indefinitely
+    const maxDelay = isNetwork ? 5 * 60 * 1000 : this.maxDelayMs;
+    // After many attempts, network errors settle at max delay instead of growing
+    const effectiveAttempts = isNetwork ? Math.min(op.attempts, 10) : op.attempts;
+    const baseDelay = rateLimitDelay ?? this.calculateNextDelay(effectiveAttempts);
+    const nextDelay = Math.min(baseDelay, maxDelay);
     op.nextRetryAt = Date.now() + nextDelay;
     op.rateLimitDelayMs = rateLimitDelay ?? undefined;
     this.log(
-      `Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms${rateLimitDelay ? ' (rate limited)' : ''} (id: ${op.id})`,
+      `Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms${rateLimitDelay ? ' (rate limited)' : ''}${isNetwork ? ' (network, indefinite)' : ''} (id: ${op.id})`,
       "warn"
     );
   }
