@@ -5,9 +5,8 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import * as Haptics from 'expo-haptics';
-import * as ScreenOrientation from 'expo-screen-orientation';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Reanimated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+let ScreenOrientation: typeof import('expo-screen-orientation') | null = null;
+try { ScreenOrientation = require('expo-screen-orientation'); } catch {}
 let ImagePicker: typeof import('expo-image-picker') | null = null;
 try { ImagePicker = require('expo-image-picker'); } catch {}
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -1387,81 +1386,101 @@ function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void
   );
 }
 
+function getDistance(touches: { pageX: number; pageY: number }[]) {
+  const dx = touches[0].pageX - touches[1].pageX;
+  const dy = touches[0].pageY - touches[1].pageY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function getMidpoint(touches: { pageX: number; pageY: number }[]) {
+  return {
+    x: (touches[0].pageX + touches[1].pageX) / 2,
+    y: (touches[0].pageY + touches[1].pageY) / 2,
+  };
+}
+
 function GalleryImage({ image, screenWidth, screenHeight }: { image: ImageData; screenWidth: number; screenHeight: number }) {
   const src = useImageSrc(image);
 
-  const scale = useSharedValue(1);
-  const savedScale = useSharedValue(1);
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
-  const savedTranslateX = useSharedValue(0);
-  const savedTranslateY = useSharedValue(0);
+  const scaleVal = useRef(new Animated.Value(1)).current;
+  const translateXVal = useRef(new Animated.Value(0)).current;
+  const translateYVal = useRef(new Animated.Value(0)).current;
 
-  const pinchGesture = Gesture.Pinch()
-    .onUpdate((e) => {
-      scale.value = savedScale.value * e.scale;
-    })
-    .onEnd(() => {
-      if (scale.value < 1) {
-        scale.value = withTiming(1);
-        savedScale.value = 1;
-        translateX.value = withTiming(0);
-        translateY.value = withTiming(0);
-        savedTranslateX.value = 0;
-        savedTranslateY.value = 0;
-      } else if (scale.value > 5) {
-        scale.value = withTiming(5);
-        savedScale.value = 5;
+  const pinchState = useRef({ startDist: 0, startScale: 1, scale: 1 });
+  const panState = useRef({ startMid: { x: 0, y: 0 }, startTx: 0, startTy: 0, tx: 0, ty: 0 });
+  const lastTap = useRef(0);
+
+  const resetTransform = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(scaleVal, { toValue: 1, useNativeDriver: true, tension: 100, friction: 10 }),
+      Animated.spring(translateXVal, { toValue: 0, useNativeDriver: true, tension: 100, friction: 10 }),
+      Animated.spring(translateYVal, { toValue: 0, useNativeDriver: true, tension: 100, friction: 10 }),
+    ]).start();
+    pinchState.current.scale = 1;
+    panState.current.tx = 0;
+    panState.current.ty = 0;
+  }, [scaleVal, translateXVal, translateYVal]);
+
+  const handleTouchStart = useCallback((e: any) => {
+    const touches = e.nativeEvent.touches;
+    if (touches.length === 2) {
+      pinchState.current.startDist = getDistance(touches);
+      pinchState.current.startScale = pinchState.current.scale;
+      const mid = getMidpoint(touches);
+      panState.current.startMid = mid;
+      panState.current.startTx = panState.current.tx;
+      panState.current.startTy = panState.current.ty;
+    } else if (touches.length === 1) {
+      const now = Date.now();
+      if (now - lastTap.current < 300) {
+        if (pinchState.current.scale > 1) {
+          resetTransform();
+        } else {
+          Animated.spring(scaleVal, { toValue: 3, useNativeDriver: true, tension: 100, friction: 10 }).start();
+          pinchState.current.scale = 3;
+        }
+        lastTap.current = 0;
       } else {
-        savedScale.value = scale.value;
+        lastTap.current = now;
       }
-    });
+    }
+  }, [scaleVal, resetTransform]);
 
-  const panGesture = Gesture.Pan()
-    .minPointers(2)
-    .onUpdate((e) => {
-      translateX.value = savedTranslateX.value + e.translationX;
-      translateY.value = savedTranslateY.value + e.translationY;
-    })
-    .onEnd(() => {
-      savedTranslateX.value = translateX.value;
-      savedTranslateY.value = translateY.value;
-    });
+  const handleTouchMove = useCallback((e: any) => {
+    const touches = e.nativeEvent.touches;
+    if (touches.length === 2) {
+      const dist = getDistance(touches);
+      const newScale = Math.min(5, Math.max(0.5, pinchState.current.startScale * (dist / pinchState.current.startDist)));
+      scaleVal.setValue(newScale);
+      pinchState.current.scale = newScale;
 
-  const doubleTapGesture = Gesture.Tap()
-    .numberOfTaps(2)
-    .onStart(() => {
-      if (scale.value > 1) {
-        scale.value = withTiming(1);
-        savedScale.value = 1;
-        translateX.value = withTiming(0);
-        translateY.value = withTiming(0);
-        savedTranslateX.value = 0;
-        savedTranslateY.value = 0;
-      } else {
-        scale.value = withTiming(3);
-        savedScale.value = 3;
-      }
-    });
+      const mid = getMidpoint(touches);
+      const newTx = panState.current.startTx + (mid.x - panState.current.startMid.x);
+      const newTy = panState.current.startTy + (mid.y - panState.current.startMid.y);
+      translateXVal.setValue(newTx);
+      translateYVal.setValue(newTy);
+      panState.current.tx = newTx;
+      panState.current.ty = newTy;
+    }
+  }, [scaleVal, translateXVal, translateYVal]);
 
-  const composedGesture = Gesture.Simultaneous(pinchGesture, panGesture, doubleTapGesture);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: translateX.value },
-      { translateY: translateY.value },
-      { scale: scale.value },
-    ],
-  }));
+  const handleTouchEnd = useCallback((e: any) => {
+    if (pinchState.current.scale < 1) {
+      resetTransform();
+    }
+  }, [resetTransform]);
 
   if (!src) return <RNView style={{ width: screenWidth, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator color="#fff" /></RNView>;
   return (
-    <RNView style={{ width: screenWidth, height: screenHeight, justifyContent: 'center', alignItems: 'center' }}>
-      <GestureDetector gesture={composedGesture}>
-        <Reanimated.View style={animatedStyle}>
-          <Image source={{ uri: src }} style={{ width: screenWidth, height: screenHeight * 0.8 }} resizeMode="contain" />
-        </Reanimated.View>
-      </GestureDetector>
+    <RNView
+      style={{ width: screenWidth, height: screenHeight, justifyContent: 'center', alignItems: 'center' }}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      <Animated.View style={{ transform: [{ translateX: translateXVal }, { translateY: translateYVal }, { scale: scaleVal }] }}>
+        <Image source={{ uri: src }} style={{ width: screenWidth, height: screenHeight * 0.85 }} resizeMode="contain" />
+      </Animated.View>
     </RNView>
   );
 }
@@ -1478,19 +1497,19 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
 
   useEffect(() => {
     if (visible) {
-      ScreenOrientation.unlockAsync().catch(() => {});
+      ScreenOrientation?.unlockAsync().catch(() => {});
       setCurrentIndex(initialIndex);
       setTimeout(() => flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false }), 50);
     } else {
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+      ScreenOrientation?.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     }
     return () => {
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+      ScreenOrientation?.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     };
   }, [visible, initialIndex]);
 
   const handleClose = useCallback(() => {
-    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    ScreenOrientation?.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     onClose();
   }, [onClose]);
 
@@ -1498,29 +1517,27 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose} supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <RNView style={styles.fullscreenOverlay}>
-          <TouchableOpacity style={styles.fullscreenClose} onPress={handleClose} activeOpacity={0.7}>
-            <FontAwesome name="close" size={20} color="#fff" />
-          </TouchableOpacity>
-          <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
-          <FlatList
-            ref={flatListRef}
-            data={images}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            keyExtractor={(_, i) => String(i)}
-            renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} />}
-            onMomentumScrollEnd={(e) => {
-              const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
-              setCurrentIndex(idx);
-            }}
-            getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
-            initialScrollIndex={initialIndex}
-          />
-        </RNView>
-      </GestureHandlerRootView>
+      <RNView style={styles.fullscreenOverlay}>
+        <TouchableOpacity style={styles.fullscreenClose} onPress={handleClose} activeOpacity={0.7}>
+          <FontAwesome name="close" size={20} color="#fff" />
+        </TouchableOpacity>
+        <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
+        <FlatList
+          ref={flatListRef}
+          data={images}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          keyExtractor={(_, i) => String(i)}
+          renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} />}
+          onMomentumScrollEnd={(e) => {
+            const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
+            setCurrentIndex(idx);
+          }}
+          getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
+          initialScrollIndex={initialIndex}
+        />
+      </RNView>
     </Modal>
   );
 }
