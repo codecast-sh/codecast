@@ -444,7 +444,8 @@ async function fetchAllMessages(
   siteUrl: string,
   apiToken: string,
   conversationId: string,
-  maxMessages: number = 500
+  maxMessages: number = 500,
+  fullContent: boolean = false
 ): Promise<FullReadResult | { error: string }> {
   const firstResponse = await fetch(`${siteUrl}/cli/read`, {
     method: "POST",
@@ -454,6 +455,7 @@ async function fetchAllMessages(
       conversation_id: conversationId,
       start_line: 1,
       end_line: 25,
+      full_content: fullContent || undefined,
     }),
   });
 
@@ -476,6 +478,7 @@ async function fetchAllMessages(
         conversation_id: conversationId,
         start_line: currentLine,
         end_line: endLine,
+        full_content: fullContent || undefined,
       }),
     });
 
@@ -5236,11 +5239,15 @@ program
     "Examples:\n" +
     "  codecast diff <session-id>     # show changes from session\n" +
     "  codecast diff --today          # aggregate today's sessions\n" +
-    "  codecast diff --week           # this week's changes"
+    "  codecast diff --week           # this week's changes\n" +
+    "  codecast diff --full           # include full file diffs\n" +
+    "  codecast diff --patch          # show only the patch (no stats)"
   )
   .argument("[session-id]", "Session ID to analyze")
   .option("--today", "Aggregate changes from today's sessions")
   .option("--week", "Aggregate changes from this week's sessions")
+  .option("--full", "Include full file content diffs")
+  .option("--patch", "Show only the unified diff patch")
   .action(async (sessionId, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -5286,8 +5293,9 @@ program
         messages: Array<{ tool_calls?: Array<{ name?: string; input?: unknown }>; timestamp?: string }>;
       }> = [];
 
+      const needFullContent = options.full || options.patch;
       for (const conv of feedResult.conversations) {
-        const result = await fetchAllMessages(siteUrl, config.auth_token, conv.id, 200);
+        const result = await fetchAllMessages(siteUrl, config.auth_token, conv.id, 200, needFullContent);
         if ("error" in result) {
           console.error(`Error: ${result.error}`);
           continue;
@@ -5304,6 +5312,7 @@ program
         sessions: allSessions,
         aggregated: true,
         period: options.today ? "today" : "week",
+        mode: options.patch ? "patch" : options.full ? "full" : "summary",
       }));
     } else {
       if (!sessionId) {
@@ -5341,7 +5350,8 @@ program
         }
       }
 
-      const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId);
+      const needFullContent = options.full || options.patch;
+      const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId, 500, needFullContent);
       if ("error" in result) {
         console.error(`Error: ${result.error}`);
         process.exit(1);
@@ -5355,6 +5365,7 @@ program
           messages: result.messages,
         }],
         aggregated: false,
+        mode: options.patch ? "patch" : options.full ? "full" : "summary",
       }));
     }
   });

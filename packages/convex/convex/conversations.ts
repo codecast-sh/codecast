@@ -3102,6 +3102,7 @@ export const readConversationMessages = query({
     conversation_id: v.string(),
     start_line: v.optional(v.number()),
     end_line: v.optional(v.number()),
+    full_content: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
@@ -3184,13 +3185,15 @@ export const readConversationMessages = query({
 
     const slicedMessages = nonEmptyMessages.slice(startIdx, startIdx + count);
 
+    const fullContent = args.full_content === true;
+
     const messages = slicedMessages.map((m, idx) => {
       const truncateToolCalls = (calls: typeof m.tool_calls) => {
         if (!calls) return undefined;
         return calls.map((tc) => ({
           id: tc.id,
           name: tc.name,
-          input: tc.input && tc.input.length > 500 ? tc.input.slice(0, 500) + "..." : tc.input,
+          input: fullContent ? tc.input : (tc.input && tc.input.length > 500 ? tc.input.slice(0, 500) + "..." : tc.input),
         }));
       };
 
@@ -3198,7 +3201,7 @@ export const readConversationMessages = query({
         if (!results) return undefined;
         return results.map((tr) => ({
           tool_use_id: tr.tool_use_id,
-          content: tr.content && tr.content.length > 1000 ? tr.content.slice(0, 1000) + "..." : tr.content,
+          content: fullContent ? tr.content : (tr.content && tr.content.length > 1000 ? tr.content.slice(0, 1000) + "..." : tr.content),
           is_error: tr.is_error,
         }));
       };
@@ -5261,7 +5264,10 @@ export const listIdleSessions = query({
         q.eq("user_id", userId).gte("updated_at", cutoff)
       )
       .order("desc")
-      .filter((q) => q.eq(q.field("status"), "active"))
+      .filter((q) => q.or(
+        q.eq(q.field("status"), "active"),
+        q.eq(q.field("status"), "completed")
+      ))
       .take(100);
 
     const managedSessions = await ctx.db
@@ -5305,6 +5311,7 @@ export const listIdleSessions = query({
     const results = [];
     for (const conv of conversations) {
       if (conv.is_subagent || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
+      if (conv.status === "completed" && conv.message_count === 0) continue;
 
       const title = conv.title?.trim() || "";
       if (title.toLowerCase() === "warmup") continue;

@@ -61,13 +61,14 @@ export const generateTitle = internalAction({
       })
       .join("\n\n");
 
-    const prompt = `Generate a title and subtitle for this coding session. Be direct and information-dense. Never use filler phrases like "Please", "Let me", "I'll help", "Sure", etc.
+    const prompt = `Generate a title and subtitle for this coding session.
 
-Title: 3-8 words. The specific task, e.g. "Fix auth redirect loop" or "Add dark mode to settings page"
+Title: 2-5 words max. Short noun phrase or verb phrase identifying the core task. Think git branch names but readable.
+Examples: "Auth redirect fix", "Dark mode settings", "Replace chokidar", "Inbox card redesign", "FD leak debug"
+Anti-examples (too verbose): "Investigate Non-Resumable Session Root Cause", "Implement agent-triggered community chat with leave option", "Add Sessions tab to mobile with chronological summaries"
 
-Subtitle: 1-2 short lines. State what was done or is being done. Use telegraphic style - omit articles and filler.
-Good: "Refactored auth middleware to handle OAuth refresh tokens. Fixed race condition in session validation."
-Bad: "Please let me explain what was accomplished in this session..."
+Subtitle: One line, max 80 chars. What specifically was done or is being done. Telegraphic style.
+Examples: "Switched from chokidar to native fs.watch, cut FD usage 3x", "Fixed OAuth refresh token race condition in auth middleware"
 
 Output ONLY valid JSON, no markdown:
 {"title": "...", "subtitle": "..."}

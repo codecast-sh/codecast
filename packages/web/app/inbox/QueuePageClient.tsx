@@ -264,7 +264,7 @@ function SessionCard({
           isDismissed && isSubagent ? "px-2 py-1 pr-6" : "px-2.5 sm:px-3 py-1.5 sm:py-2 pr-7 sm:pr-8"
         }`}
       >
-        <div className="flex items-center justify-between gap-2 mb-0.5">
+        <div className="flex items-center justify-between gap-2">
           <div className={`truncate leading-tight ${
             isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed && isSubagent ? "text-xs text-sol-text-muted" : "text-sm text-sol-text"
           }`}>
@@ -273,7 +273,7 @@ function SessionCard({
           <div className="flex items-center gap-1.5 flex-shrink-0">
             {isSubagent && (
               <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/30 text-violet-400/70 border border-violet-600/30">
-                subagent
+                sub
               </span>
             )}
             {session.session_error && (
@@ -285,27 +285,28 @@ function SessionCard({
             {session.has_pending && !session.is_unresponsive && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
             )}
+            {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session ended" />
+            )}
             {isWorking && (
               <span className="relative flex h-2 w-2" title="Working">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
               </span>
             )}
-            <span className="text-[10px] text-sol-text-dim tabular-nums">
-              {formatIdleDuration(session.updated_at)}
-            </span>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
-          <span className={`text-[11px] truncate ${
-            isWorking ? "font-semibold text-sol-green" : "font-medium text-sol-cyan"
-          }`}>{project}</span>
-          {session.message_count > 0 && (
-            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
-              {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
-            </span>
-          )}
-        </div>
+        {(session.idle_summary || session.subtitle) && !session.implementation_session && (
+          <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
+            {session.idle_summary || session.subtitle}
+          </div>
+        )}
+        {cleanedUserMsg && (
+          <div className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug font-semibold">
+            <span className="text-sky-600/60 dark:text-sky-400/50 mr-0.5">&gt;</span>
+            {cleanedUserMsg}
+          </div>
+        )}
         {session.message_count === 0 && !session.last_user_message && (
           session.is_connected ? (
             <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-green/70">
@@ -326,17 +327,19 @@ function SessionCard({
             </div>
           )
         )}
-        {cleanedUserMsg && (
-          <div className="text-[11px] text-sky-700 dark:text-sky-300 mt-0.5 truncate leading-snug font-semibold">
-            <span className="text-sky-600/60 dark:text-sky-400/50 mr-0.5">&gt;</span>
-            {cleanedUserMsg}
-          </div>
-        )}
-        {(session.idle_summary || session.subtitle) && !session.implementation_session && (
-          <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
-            {session.idle_summary || session.subtitle}
-          </div>
-        )}
+        <div className="flex items-center gap-1.5 mt-1">
+          <span className={`text-[10px] truncate ${
+            isWorking ? "font-medium text-sol-green/70" : "font-medium text-sol-cyan/70"
+          }`}>{project}</span>
+          {session.message_count > 0 && (
+            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
+              {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
+            </span>
+          )}
+          <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0 ml-auto">
+            {formatIdleDuration(session.updated_at)}
+          </span>
+        </div>
         {session.implementation_session && (
           <div
             className="mt-1 flex items-center gap-1 text-[11px] text-sol-cyan hover:text-sol-cyan/80 cursor-pointer"

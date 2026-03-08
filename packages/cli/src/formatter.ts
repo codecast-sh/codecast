@@ -867,12 +867,15 @@ interface DiffInput {
   sessions: DiffSession[];
   aggregated: boolean;
   period?: "today" | "week";
+  mode?: "summary" | "full" | "patch";
 }
 
 interface FileStats {
   status: "M" | "A";
   additions: number;
   deletions: number;
+  edits: Array<{ oldStr: string; newStr: string }>;
+  writeContent?: string;
 }
 
 interface CommitInfo {
@@ -918,11 +921,12 @@ function extractDiffData(sessions: DiffSession[]): {
             const filePath = tcInput.file_path as string;
             if (!filePath) continue;
 
-            const existing = files.get(filePath) || { status: "M" as const, additions: 0, deletions: 0 };
+            const existing = files.get(filePath) || { status: "M" as const, additions: 0, deletions: 0, edits: [] };
             const oldStr = (tcInput.old_string as string) || "";
             const newStr = (tcInput.new_string as string) || "";
             existing.additions += newStr.split("\n").length;
             existing.deletions += oldStr.split("\n").length;
+            existing.edits.push({ oldStr, newStr });
             files.set(filePath, existing);
           } else if (tc.name === "Write") {
             const filePath = tcInput.file_path as string;
@@ -933,9 +937,10 @@ function extractDiffData(sessions: DiffSession[]): {
             const lineCount = content.split("\n").length;
 
             if (!existing) {
-              files.set(filePath, { status: "A", additions: lineCount, deletions: 0 });
+              files.set(filePath, { status: "A", additions: lineCount, deletions: 0, edits: [], writeContent: content });
             } else {
               existing.additions += lineCount;
+              existing.writeContent = content;
               files.set(filePath, existing);
             }
           } else if (tc.name === "Bash") {
@@ -972,15 +977,63 @@ function extractDiffData(sessions: DiffSession[]): {
   return { files, commits, toolCounts, duration, messageCount };
 }
 
+function formatUnifiedDiff(filePath: string, stats: FileStats): string[] {
+  const lines: string[] = [];
+  const shortPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
+
+  if (stats.writeContent !== undefined && stats.edits.length === 0) {
+    lines.push(`diff --codecast a/${shortPath} b/${shortPath}`);
+    lines.push("--- /dev/null");
+    lines.push(`+++ b/${shortPath}`);
+    const contentLines = stats.writeContent.split("\n");
+    lines.push(`@@ -0,0 +1,${contentLines.length} @@`);
+    for (const line of contentLines) {
+      lines.push(`+${line}`);
+    }
+    return lines;
+  }
+
+  if (stats.edits.length > 0) {
+    lines.push(`diff --codecast a/${shortPath} b/${shortPath}`);
+    lines.push(`--- a/${shortPath}`);
+    lines.push(`+++ b/${shortPath}`);
+
+    for (const edit of stats.edits) {
+      const oldLines = edit.oldStr.split("\n");
+      const newLines = edit.newStr.split("\n");
+      lines.push(`@@ -1,${oldLines.length} +1,${newLines.length} @@`);
+      for (const line of oldLines) {
+        lines.push(`-${line}`);
+      }
+      for (const line of newLines) {
+        lines.push(`+${line}`);
+      }
+    }
+  }
+
+  return lines;
+}
+
 export function formatDiffResults(input: DiffInput): string {
   const lines: string[] = [];
-  const { sessions, aggregated, period } = input;
+  const { sessions, aggregated, period, mode = "summary" } = input;
 
   if (sessions.length === 0) {
     return "No sessions to analyze";
   }
 
   const { files, commits, toolCounts, duration, messageCount } = extractDiffData(sessions);
+
+  if (mode === "patch") {
+    for (const [filePath, stats] of Array.from(files.entries())) {
+      const diffLines = formatUnifiedDiff(filePath, stats);
+      if (diffLines.length > 0) {
+        lines.push(...diffLines);
+        lines.push("");
+      }
+    }
+    return lines.join("\n");
+  }
 
   if (aggregated) {
     const periodLabel = period === "today" ? "Today" : "This Week";
@@ -1027,6 +1080,17 @@ export function formatDiffResults(input: DiffInput): string {
     lines.push("");
   }
 
+  if (mode === "full" && files.size > 0) {
+    lines.push("## Diffs");
+    for (const [filePath, stats] of Array.from(files.entries())) {
+      const diffLines = formatUnifiedDiff(filePath, stats);
+      if (diffLines.length > 0) {
+        lines.push(...diffLines);
+        lines.push("");
+      }
+    }
+  }
+
   const validCommits = commits.filter(c => c.hash !== "pending");
   if (validCommits.length > 0) {
     lines.push(`## Commits (${validCommits.length})`);
@@ -1048,6 +1112,10 @@ export function formatDiffResults(input: DiffInput): string {
       lines.push(`- ${tool}: ${count} call${count === 1 ? "" : "s"}`);
     }
     lines.push("");
+  }
+
+  if (mode === "summary") {
+    lines.push("Use --full for file diffs, --patch for patch only");
   }
 
   lines.push("</DIFF>");

@@ -5244,10 +5244,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   )}
                 </div>
               )}
-              {lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && createPortal(
-                <div className="fixed inset-0 z-[9998] flex items-center justify-center pointer-events-none" style={{ bottom: "120px" }}>
-                  <div className="absolute inset-0 bg-black/80 pointer-events-auto" onClick={() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }} />
-                  <div className="relative pointer-events-auto" onClick={(e) => e.stopPropagation()}>
+              {lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && (
+                <div className="fixed inset-0 z-[-1] flex items-center justify-center">
+                  <div className="absolute inset-0 bg-black/80" onClick={() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }} />
+                  <div className="relative" onClick={(e) => e.stopPropagation()}>
                     <img
                       src={pastedImages[lightboxImageIndex].previewUrl}
                       alt="Image preview"
@@ -5261,8 +5261,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                       </div>
                     )}
                   </div>
-                </div>,
-                document.body
+                </div>
               )}
               <div className="flex items-end gap-2">
                 <textarea
