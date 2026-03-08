@@ -60,7 +60,7 @@ function getProjectName(gitRoot?: string, projectPath?: string): string {
   return path.split("/").filter(Boolean).pop() || "unknown";
 }
 
-const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string }) {
+const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void }) {
   const {
     conversation,
     hasMoreAbove,
@@ -200,7 +200,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
         onSendAndAdvance={onSendAndAdvance}
         autoFocusInput
         backHref="/inbox"
-
+        onBack={onBack}
         fallbackStickyContent={cleanUserMessage(lastUserMessage)}
       />
     </div>
@@ -876,6 +876,10 @@ export function QueuePageClient() {
     if (showMySessions) setShowMySessions(false);
   }, [sessions, rawSetCurrentIndex, showMySessions, setShowMySessions]);
 
+  const handleBack = useCallback(() => {
+    setShowMySessions(true);
+  }, [setShowMySessions]);
+
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const [isMobileInbox, setIsMobileInbox] = useState(false);
 
@@ -902,6 +906,7 @@ export function QueuePageClient() {
           onSendAndAdvance={() => setViewingDismissedId(null)}
           lastUserMessage={viewingDismissedSession.last_user_message}
           sessionError={viewingDismissedSession.session_error}
+          onBack={handleBack}
         />
       ) : currentSession ? (
         <InboxConversation
@@ -911,6 +916,7 @@ export function QueuePageClient() {
           onSendAndAdvance={handleSendAndAdvance}
           lastUserMessage={currentSession.last_user_message}
           sessionError={currentSession.session_error}
+          onBack={handleBack}
         />
       ) : pendingInjectId ? (
         <div className="h-full flex items-center justify-center text-sol-text-dim">

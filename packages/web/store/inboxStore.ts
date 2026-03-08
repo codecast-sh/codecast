@@ -245,6 +245,7 @@ interface InboxStoreState {
   navigateUp: () => void;
   navigateDown: () => void;
   setCurrentIndex: (index: number) => void;
+  clearSelection: () => void;
   setShowDismissed: (show: boolean) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
@@ -526,15 +527,18 @@ export const useInboxStore = create<InboxStoreState>(
       if (!isConvexId(old._id)) {
         const serverMatch = incomingBySessionId.get(old.session_id || old._id);
         if (serverMatch) {
+          if (seen.has(serverMatch._id)) continue;
           get().resolveSessionId(old._id, serverMatch._id);
           merged.push(serverMatch);
           seen.add(serverMatch._id);
         } else {
+          if (seen.has(old._id)) continue;
           merged.push(old);
           seen.add(old._id);
         }
         continue;
       }
+      if (seen.has(old._id)) continue;
       const fresh = incomingById.get(old._id);
       if (fresh && !dismissedIds.has(old._id)) {
         merged.push(fresh);
@@ -618,6 +622,10 @@ export const useInboxStore = create<InboxStoreState>(
     }
   },
 
+  clearSelection: () => {
+    set({ currentIndex: -1, viewingDismissedId: null });
+  },
+
   setShowDismissed: (show: boolean) => {
     set({ showDismissed: show });
   },
@@ -637,7 +645,8 @@ export const useInboxStore = create<InboxStoreState>(
     if (newDismissed.delete(session._id)) {
       get()._dispatch("patch", [], { conversations: { [session._id]: { inbox_dismissed_at: null } } }).catch(() => {});
     }
-    set({ sessions: [session, ...sessions], currentIndex: 0, dismissedIds: newDismissed, viewingDismissedId: null });
+    const filtered = sessions.filter((s: InboxSession) => s._id !== session._id);
+    set({ sessions: [session, ...filtered], currentIndex: 0, dismissedIds: newDismissed, viewingDismissedId: null });
   },
 
   updateSessionProject: (id: string, projectPath: string) => {

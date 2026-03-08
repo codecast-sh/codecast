@@ -39,6 +39,7 @@ interface ConversationDiffLayoutProps {
   autoFocusInput?: boolean;
   backHref?: string;
   fallbackStickyContent?: string | null;
+  onBack?: () => void;
 }
 
 export function ConversationDiffLayout({
@@ -63,6 +64,7 @@ export function ConversationDiffLayout({
   autoFocusInput,
   backHref: backHrefProp,
   fallbackStickyContent,
+  onBack,
 }: ConversationDiffLayoutProps) {
   const heightClass = embedded ? "h-full" : "h-screen";
   const [isMobile, setIsMobile] = useState(false);
@@ -177,6 +179,7 @@ export function ConversationDiffLayout({
     onSendAndAdvance,
     autoFocusInput,
     fallbackStickyContent,
+    onBack,
   };
 
   // Mobile: tabs layout

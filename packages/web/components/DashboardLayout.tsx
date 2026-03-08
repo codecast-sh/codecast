@@ -87,7 +87,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const isOnCommitPage = pathname?.includes("/commit/") ?? false;
   const isOnPRPage = pathname?.includes("/pr/") ?? false;
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
-  const isOnInboxPage = pathname === "/inbox" || (pathname?.startsWith("/inbox/") ?? false) || inboxSource === "inbox";
+  const isOnInboxPage = pathname === "/inbox" || (pathname?.startsWith("/inbox/") ?? false) || (isOnConversationPage && inboxSource === "inbox");
   const isOnTasksPage = pathname === "/tasks" || (pathname?.startsWith("/tasks/") ?? false);
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage;
 
@@ -167,6 +167,10 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       }
       if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
+        const store = useInboxStore.getState();
+        if (store.showMySessions) {
+          store.setShowMySessions(false);
+        }
         if (currentConvContext.projectPath || currentConvContext.gitRoot) {
           handleQuickCreate();
         } else {

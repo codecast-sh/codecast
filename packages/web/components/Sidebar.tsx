@@ -131,7 +131,6 @@ function RecentSessions({
 export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const showMySessions = useInboxStore((s) => s.showMySessions);
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
@@ -241,25 +240,11 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
           <button
             onClick={() => {
               useInboxStore.getState().setShowMySessions(true);
+              useInboxStore.getState().clearSelection();
               router.push("/inbox");
             }}
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none text-left ${
-              showMySessions && isInbox
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="My Sessions"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-            </svg>
-            {!isNarrow && <span>My Sessions</span>}
-          </button>
-          <Link
-            href="/inbox"
-            onClick={() => { if (showMySessions) useInboxStore.getState().setShowMySessions(false); }}
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isInbox && !showMySessions
+              isInbox
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
             }`}
@@ -278,7 +263,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
                 )}
               </>
             )}
-          </Link>
+          </button>
           <Link
             href="/tasks"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${

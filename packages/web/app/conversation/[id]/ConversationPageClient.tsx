@@ -427,6 +427,7 @@ export default function ConversationPage() {
   );
 
   const resolvedConvexId = sessionLookup?._id?.toString();
+  const redirectToInboxResolved = useRedirectToInbox(resolvedConvexId || id);
 
   const publicData = useQuery(
     api.conversations.getConversationPublic,
@@ -456,7 +457,7 @@ export default function ConversationPage() {
       return <ConversationLoadingSkeleton />;
     }
     if (publicData.access_level === "owner" || publicData.access_level === "team") {
-      redirectToInbox();
+      redirectToInboxResolved();
       return <ConversationLoadingSkeleton />;
     }
     if (publicData.access_level === "shared") {
