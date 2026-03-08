@@ -1337,54 +1337,107 @@ function TeamCreateBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
-function ImageBlock({ image }: { image: ImageData }) {
+const IMAGE_COLLAPSED_HEIGHT = 80;
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const SCREEN_HEIGHT = Dimensions.get('window').height;
+
+function useImageSrc(image: ImageData) {
   const storageUrl = useQuery(
     api.images.getImageUrl,
     image.storage_id ? { storageId: image.storage_id as Id<"_storage"> } : "skip"
   );
-
-  const src = image.storage_id
+  return image.storage_id
     ? storageUrl ?? undefined
     : image.data
       ? `data:${image.media_type};base64,${image.data}`
       : undefined;
+}
 
-  const [fullscreen, setFullscreen] = useState(false);
+function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void }) {
+  const src = useImageSrc(image);
 
   if (!src) {
     return (
       <RNView style={styles.imageLoading}>
         <ActivityIndicator size="small" color={Theme.textMuted} />
-        <RNText style={styles.imageLoadingText}>Loading image...</RNText>
       </RNView>
     );
   }
 
   return (
-    <>
-      <Pressable onPress={() => setFullscreen(true)} style={styles.imageContainer}>
+    <Pressable onPress={onPress} style={styles.imageContainer}>
+      <RNView style={{ height: IMAGE_COLLAPSED_HEIGHT, overflow: 'hidden' }}>
         <Image
           source={{ uri: src }}
-          style={styles.messageImage}
-          resizeMode="contain"
+          style={{ width: '100%', height: IMAGE_COLLAPSED_HEIGHT * 2.5 }}
+          resizeMode="cover"
         />
-        <RNView style={styles.imageExpandHint}>
-          <FontAwesome name="expand" size={10} color="rgba(255,255,255,0.8)" />
-        </RNView>
-      </Pressable>
-      <Modal visible={fullscreen} transparent animationType="fade" onRequestClose={() => setFullscreen(false)}>
-        <Pressable style={styles.fullscreenOverlay} onPress={() => setFullscreen(false)}>
-          <TouchableOpacity style={styles.fullscreenClose} onPress={() => setFullscreen(false)} activeOpacity={0.7}>
-            <FontAwesome name="close" size={20} color="#fff" />
-          </TouchableOpacity>
-          <Image
-            source={{ uri: src }}
-            style={styles.fullscreenImage}
-            resizeMode="contain"
-          />
-        </Pressable>
-      </Modal>
-    </>
+      </RNView>
+      <RNView style={styles.imageFadeOverlay} pointerEvents="none">
+        <RNView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.02)' }} />
+        <RNView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.08)' }} />
+        <RNView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)' }} />
+        <RNView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }} />
+      </RNView>
+      <RNView style={styles.imageExpandHint}>
+        <FontAwesome name="expand" size={10} color="rgba(255,255,255,0.8)" />
+      </RNView>
+    </Pressable>
+  );
+}
+
+function GalleryImage({ image }: { image: ImageData }) {
+  const src = useImageSrc(image);
+  if (!src) return <RNView style={{ width: SCREEN_WIDTH, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator color="#fff" /></RNView>;
+  return (
+    <RNView style={{ width: SCREEN_WIDTH, justifyContent: 'center', alignItems: 'center' }}>
+      <Image source={{ uri: src }} style={styles.fullscreenImage} resizeMode="contain" />
+    </RNView>
+  );
+}
+
+function ImageGallery({ images, initialIndex, visible, onClose }: {
+  images: ImageData[];
+  initialIndex: number;
+  visible: boolean;
+  onClose: () => void;
+}) {
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const flatListRef = useRef<FlatList>(null);
+
+  useEffect(() => {
+    if (visible) {
+      setCurrentIndex(initialIndex);
+      setTimeout(() => flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false }), 50);
+    }
+  }, [visible, initialIndex]);
+
+  if (!visible) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <RNView style={styles.fullscreenOverlay}>
+        <TouchableOpacity style={styles.fullscreenClose} onPress={onClose} activeOpacity={0.7}>
+          <FontAwesome name="close" size={20} color="#fff" />
+        </TouchableOpacity>
+        <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
+        <FlatList
+          ref={flatListRef}
+          data={images}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          keyExtractor={(_, i) => String(i)}
+          renderItem={({ item }) => <GalleryImage image={item} />}
+          onMomentumScrollEnd={(e) => {
+            const idx = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+            setCurrentIndex(idx);
+          }}
+          getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+          initialScrollIndex={initialIndex}
+        />
+      </RNView>
+    </Modal>
   );
 }
 
@@ -1705,13 +1758,14 @@ function SkillBlockCard({ name, description, path }: { name?: string; descriptio
   );
 }
 
-function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImageMap }: {
+function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImageMap, openGallery }: {
   toolCall: ToolCall;
   result?: ToolResult;
   expanded: boolean;
   onToggle: () => void;
   images?: ImageData[];
   globalImageMap?: Record<string, ImageData>;
+  openGallery?: (image: ImageData) => void;
 }) {
   const { color } = toolIcon(toolCall.name);
   const summary = toolSummary(toolCall);
@@ -1884,7 +1938,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
       </RNText>
       {hasToolImage && toolImage && (
         <RNView style={styles.toolImagesSection}>
-          <ImageBlock image={toolImage} />
+          <ImageBlock image={toolImage} onPress={() => openGallery?.(toolImage)} />
         </RNView>
       )}
       {expanded && (
@@ -2191,7 +2245,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap }: {
+function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap }: {
   message: Message;
   agentType?: string;
   model?: string;
@@ -2202,6 +2256,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   taskSubjectMap?: Record<string, string>;
   globalToolResultMap?: Record<string, ToolResult>;
   globalImageMap?: Record<string, ImageData>;
+  openGallery?: (image: ImageData) => void;
   userName?: string;
   showToast?: (msg: string) => void;
   collapsed?: boolean;
@@ -2376,7 +2431,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       {hasImages && (
         <RNView style={styles.imagesContainer}>
           {message.images!.map((img, i) => (
-            <ImageBlock key={i} image={img} />
+            <ImageBlock key={i} image={img} onPress={() => openGallery?.(img)} />
           ))}
         </RNView>
       )}
@@ -2561,6 +2616,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               <ToolCallItem
                 images={message.images}
                 globalImageMap={globalImageMap}
+                openGallery={openGallery}
                 key={tc.id}
                 toolCall={tc}
                 result={result}
@@ -3057,6 +3113,30 @@ export default function SessionDetailScreen() {
     }
     return map;
   }, [allMessages]);
+
+  const allSessionImages = useMemo(() => {
+    const imgs: ImageData[] = [];
+    for (const msg of allMessages) {
+      if (msg.images) {
+        for (const img of msg.images) {
+          imgs.push(img);
+        }
+      }
+    }
+    return imgs;
+  }, [allMessages]);
+
+  const [galleryVisible, setGalleryVisible] = useState(false);
+  const [galleryIndex, setGalleryIndex] = useState(0);
+  const openGallery = useCallback((image: ImageData) => {
+    const idx = allSessionImages.findIndex(img =>
+      (img.storage_id && img.storage_id === image.storage_id) ||
+      (img.data && img.data === image.data) ||
+      (img.tool_use_id && img.tool_use_id === image.tool_use_id)
+    );
+    setGalleryIndex(Math.max(0, idx));
+    setGalleryVisible(true);
+  }, [allSessionImages]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     if (!id) return;
@@ -3902,6 +3982,7 @@ export default function SessionDetailScreen() {
                   taskSubjectMap={taskSubjectMap}
                   globalToolResultMap={globalToolResultMap}
                   globalImageMap={globalImageMap}
+                  openGallery={openGallery}
                   userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
                   showToast={showToast}
                   collapsed={collapsed}
@@ -4055,6 +4136,12 @@ export default function SessionDetailScreen() {
           </ScrollView>
         </RNView>
       </Modal>
+      <ImageGallery
+        images={allSessionImages}
+        initialIndex={galleryIndex}
+        visible={galleryVisible}
+        onClose={() => setGalleryVisible(false)}
+      />
     </>
   );
 }
@@ -5054,12 +5141,34 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
+  imageFadeOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 30,
+    backgroundColor: 'transparent',
+    // Gradient effect via layered semi-transparent views
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 8,
+  },
+  galleryCounter: {
+    position: 'absolute',
+    top: 64,
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 13,
+    fontWeight: '500',
+    zIndex: 10,
+  },
   messageImage: {
     width: '100%',
     height: 200,
   },
   imageLoading: {
-    height: 120,
+    height: 60,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: Theme.bgAlt,
