@@ -1,7 +1,7 @@
-import { watch, type FSWatcher } from "chokidar";
 import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
+import { RecursiveWatcher } from "./recursiveWatcher.js";
 
 export interface CursorTranscriptEvent {
   sessionId: string;
@@ -27,7 +27,7 @@ export declare interface CursorTranscriptWatcher {
 }
 
 export class CursorTranscriptWatcher extends EventEmitter {
-  private watcher: FSWatcher | null = null;
+  private watcher: RecursiveWatcher | null = null;
   private historyPath: string;
 
   constructor(historyPath?: string) {
@@ -48,33 +48,16 @@ export class CursorTranscriptWatcher extends EventEmitter {
 
     this.emitExistingFilesSorted();
 
-    const pattern = path.join(this.historyPath, "**", "agent-transcripts", "*.txt");
-
-    this.watcher = watch(pattern, {
-      persistent: true,
-      ignoreInitial: true,
-      awaitWriteFinish: {
-        stabilityThreshold: 100,
-        pollInterval: 50,
-      },
+    this.watcher = new RecursiveWatcher({
+      path: this.historyPath,
+      filter: (rel) => rel.endsWith(".txt") && rel.includes(`agent-transcripts${path.sep}`) || rel.includes("agent-transcripts/"),
+      callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      debounceMs: 100,
     });
 
-    this.watcher.on("add", (filePath) => {
-      this.handleFileEvent(filePath, "add");
-    });
-
-    this.watcher.on("change", (filePath) => {
-      this.handleFileEvent(filePath, "change");
-    });
-
-    this.watcher.on("error", (err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.emit("error", error);
-    });
-
-    this.watcher.on("ready", () => {
-      this.emit("ready");
-    });
+    this.watcher.on("error", (err: Error) => this.emit("error", err));
+    this.watcher.on("ready", () => this.emit("ready"));
+    this.watcher.start();
   }
 
   private emitExistingFilesSorted(): void {
@@ -106,7 +89,6 @@ export class CursorTranscriptWatcher extends EventEmitter {
     };
 
     scanDir(this.historyPath);
-
     files.sort((a, b) => b.mtime - a.mtime);
 
     for (const file of files) {
@@ -116,7 +98,7 @@ export class CursorTranscriptWatcher extends EventEmitter {
 
   stop(): void {
     if (this.watcher) {
-      this.watcher.close();
+      this.watcher.stop();
       this.watcher = null;
     }
   }

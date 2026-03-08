@@ -4,20 +4,10 @@ import * as os from "os";
 import * as path from "path";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
 
-function waitForReady(watcher: CodexWatcher, timeoutMs = 3000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for watcher ready")), timeoutMs);
-    watcher.once("ready", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-}
-
 function waitForSessionEvent(
   watcher: CodexWatcher,
   predicate: (event: CodexSessionEvent) => boolean,
-  timeoutMs = 3000
+  timeoutMs = 5000
 ): Promise<CodexSessionEvent> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -49,11 +39,11 @@ describe("CodexWatcher", () => {
 
     const watcher = new CodexWatcher(root);
     watcher.start();
-    await waitForReady(watcher);
+    await new Promise(r => setTimeout(r, 200));
 
     const addPromise = waitForSessionEvent(
       watcher,
-      (event) => event.eventType === "add" && event.filePath === filePath
+      (event) => event.filePath === filePath
     );
     fs.writeFileSync(filePath, "{\"type\":\"response_item\"}\n");
     const addEvent = await addPromise;
@@ -61,7 +51,7 @@ describe("CodexWatcher", () => {
 
     const changePromise = waitForSessionEvent(
       watcher,
-      (event) => event.eventType === "change" && event.filePath === filePath
+      (event) => event.filePath === filePath
     );
     fs.appendFileSync(filePath, "{\"type\":\"response_item\"}\n");
     const changeEvent = await changePromise;

@@ -1,7 +1,7 @@
-import { watch, type FSWatcher } from "chokidar";
 import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
+import { RecursiveWatcher } from "./recursiveWatcher.js";
 
 export interface CodexSessionEvent {
   sessionId: string;
@@ -27,7 +27,7 @@ export declare interface CodexWatcher {
 }
 
 export class CodexWatcher extends EventEmitter {
-  private watcher: FSWatcher | null = null;
+  private watcher: RecursiveWatcher | null = null;
   private historyPath: string;
 
   constructor(historyPath?: string) {
@@ -46,38 +46,19 @@ export class CodexWatcher extends EventEmitter {
       fs.mkdirSync(this.historyPath, { recursive: true });
     }
 
-    // Scan existing files sorted by mtime (newest first)
     this.emitExistingFilesSorted();
 
-    this.watcher = watch(this.historyPath, {
-      persistent: true,
-      ignoreInitial: true, // We handle initial files ourselves for sorting
-      awaitWriteFinish: {
-        stabilityThreshold: 100,
-        pollInterval: 50,
-      },
+    this.watcher = new RecursiveWatcher({
+      path: this.historyPath,
+      filter: (rel) => rel.endsWith(".jsonl"),
+      callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      maxDepth: 4,
+      debounceMs: 100,
     });
 
-    this.watcher.on("add", (filePath) => {
-      if (filePath.endsWith(".jsonl")) {
-        this.handleFileEvent(filePath, "add");
-      }
-    });
-
-    this.watcher.on("change", (filePath) => {
-      if (filePath.endsWith(".jsonl")) {
-        this.handleFileEvent(filePath, "change");
-      }
-    });
-
-    this.watcher.on("error", (err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.emit("error", error);
-    });
-
-    this.watcher.on("ready", () => {
-      this.emit("ready");
-    });
+    this.watcher.on("error", (err: Error) => this.emit("error", err));
+    this.watcher.on("ready", () => this.emit("ready"));
+    this.watcher.start();
   }
 
   private emitExistingFilesSorted(): void {
@@ -94,22 +75,15 @@ export class CodexWatcher extends EventEmitter {
             try {
               const stat = fs.statSync(fullPath);
               files.push({ path: fullPath, mtime: stat.mtimeMs });
-            } catch {
-              // Skip files we can't stat
-            }
+            } catch {}
           }
         }
-      } catch {
-        // Skip directories we can't read
-      }
+      } catch {}
     };
 
     scanDir(this.historyPath);
-
-    // Sort by mtime descending (newest first)
     files.sort((a, b) => b.mtime - a.mtime);
 
-    // Emit events for each file
     for (const file of files) {
       this.handleFileEvent(file.path, "add");
     }
@@ -117,7 +91,7 @@ export class CodexWatcher extends EventEmitter {
 
   stop(): void {
     if (this.watcher) {
-      this.watcher.close();
+      this.watcher.stop();
       this.watcher = null;
     }
   }

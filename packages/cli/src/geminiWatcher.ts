@@ -1,7 +1,7 @@
-import { watch, type FSWatcher } from "chokidar";
 import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
+import { RecursiveWatcher } from "./recursiveWatcher.js";
 
 export interface GeminiSessionEvent {
   sessionId: string;
@@ -28,7 +28,7 @@ export declare interface GeminiWatcher {
 }
 
 export class GeminiWatcher extends EventEmitter {
-  private watcher: FSWatcher | null = null;
+  private watcher: RecursiveWatcher | null = null;
   private basePath: string;
 
   constructor(basePath?: string) {
@@ -49,33 +49,16 @@ export class GeminiWatcher extends EventEmitter {
 
     this.emitExistingFilesSorted();
 
-    const pattern = path.join(this.basePath, "**", "chats", "*.json");
-
-    this.watcher = watch(pattern, {
-      persistent: true,
-      ignoreInitial: true,
-      awaitWriteFinish: {
-        stabilityThreshold: 200,
-        pollInterval: 50,
-      },
+    this.watcher = new RecursiveWatcher({
+      path: this.basePath,
+      filter: (rel) => rel.endsWith(".json") && (rel.includes(`chats${path.sep}`) || rel.includes("chats/")),
+      callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      debounceMs: 200,
     });
 
-    this.watcher.on("add", (filePath) => {
-      this.handleFileEvent(filePath, "add");
-    });
-
-    this.watcher.on("change", (filePath) => {
-      this.handleFileEvent(filePath, "change");
-    });
-
-    this.watcher.on("error", (err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.emit("error", error);
-    });
-
-    this.watcher.on("ready", () => {
-      this.emit("ready");
-    });
+    this.watcher.on("error", (err: Error) => this.emit("error", err));
+    this.watcher.on("ready", () => this.emit("ready"));
+    this.watcher.start();
   }
 
   private emitExistingFilesSorted(): void {
@@ -92,18 +75,13 @@ export class GeminiWatcher extends EventEmitter {
             try {
               const stat = fs.statSync(fullPath);
               files.push({ path: fullPath, mtime: stat.mtimeMs });
-            } catch {
-              // Skip files we can't stat
-            }
+            } catch {}
           }
         }
-      } catch {
-        // Skip directories we can't read
-      }
+      } catch {}
     };
 
     scanDir(this.basePath);
-
     files.sort((a, b) => b.mtime - a.mtime);
 
     for (const file of files) {
@@ -113,7 +91,7 @@ export class GeminiWatcher extends EventEmitter {
 
   stop(): void {
     if (this.watcher) {
-      this.watcher.close();
+      this.watcher.stop();
       this.watcher = null;
     }
   }

@@ -1,7 +1,7 @@
-import { watch, type FSWatcher } from "chokidar";
 import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
+import { RecursiveWatcher } from "./recursiveWatcher.js";
 
 export interface SessionEvent {
   sessionId: string;
@@ -28,7 +28,7 @@ export declare interface SessionWatcher {
 }
 
 export class SessionWatcher extends EventEmitter {
-  private watcher: FSWatcher | null = null;
+  private watcher: RecursiveWatcher | null = null;
   private projectsPath: string;
 
   constructor(projectsPath?: string) {
@@ -47,47 +47,26 @@ export class SessionWatcher extends EventEmitter {
       fs.mkdirSync(this.projectsPath, { recursive: true });
     }
 
-    // Scan existing files
     this.emitExistingFilesSorted();
 
-    this.watcher = watch(this.projectsPath, {
-      persistent: true,
-      ignoreInitial: true, // We handle initial files ourselves for sorting
-      depth: 2, // Main sessions only (projects/<hash>/<session>.jsonl) - subagents not needed
-      awaitWriteFinish: {
-        stabilityThreshold: 100,
-        pollInterval: 50,
-      },
+    this.watcher = new RecursiveWatcher({
+      path: this.projectsPath,
+      filter: (rel) => rel.endsWith(".jsonl"),
+      callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
+      maxDepth: 2,
+      debounceMs: 100,
     });
 
-    this.watcher.on("add", (filePath) => {
-      if (filePath.endsWith(".jsonl")) {
-        this.handleFileEvent(filePath, "add");
-      }
-    });
-
-    this.watcher.on("change", (filePath) => {
-      if (filePath.endsWith(".jsonl")) {
-        this.handleFileEvent(filePath, "change");
-      }
-    });
-
-    this.watcher.on("error", (err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      this.emit("error", error);
-    });
-
-    this.watcher.on("ready", () => {
-      this.emit("ready");
-    });
+    this.watcher.on("error", (err: Error) => this.emit("error", err));
+    this.watcher.on("ready", () => this.emit("ready"));
+    this.watcher.start();
   }
 
   private emitExistingFilesSorted(): void {
     const files: { path: string; size: number; mtimeMs: number }[] = [];
-    const RECENT_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+    const RECENT_THRESHOLD_MS = 10 * 60 * 1000;
     const now = Date.now();
 
-    // Recursively scan for .jsonl files up to depth 2 (main sessions only)
     const scanDir = (dir: string, depth: number) => {
       if (depth > 2) return;
       try {
@@ -100,30 +79,21 @@ export class SessionWatcher extends EventEmitter {
             try {
               const fileStat = fs.statSync(fullPath);
               files.push({ path: fullPath, size: fileStat.size, mtimeMs: fileStat.mtimeMs });
-            } catch {
-              // Skip files we can't stat
-            }
+            } catch {}
           }
         }
-      } catch {
-        // Skip directories we can't read
-      }
+      } catch {}
     };
 
     try {
       scanDir(this.projectsPath, 0);
     } catch {
-      // Directory doesn't exist or can't be read
       return;
     }
 
-    // Only emit recently modified files on startup - watchdog handles older files
     const recentFiles = files.filter(f => now - f.mtimeMs < RECENT_THRESHOLD_MS);
-
-    // Sort recent files by mtime descending (most recent first)
     recentFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
-    // Only emit recent files to avoid flooding the API on startup
     for (const file of recentFiles) {
       this.handleFileEvent(file.path, "add");
     }
@@ -131,69 +101,33 @@ export class SessionWatcher extends EventEmitter {
 
   stop(): void {
     if (this.watcher) {
-      this.watcher.close();
+      this.watcher.stop();
       this.watcher = null;
     }
   }
 
   restart(): void {
     this.stop();
-    this.watcher = null;
     this.start();
   }
 
-  private handleFileEvent(filePath: string, eventType: "add" | "change"): void {
-    const sessionId = this.extractSessionId(filePath);
-    const projectPath = this.extractProjectPath(filePath);
-    this.emit("session", { sessionId, filePath, eventType, projectPath });
-  }
+  private handleFileEvent(
+    filePath: string,
+    eventType: "add" | "change"
+  ): void {
+    const relative = path.relative(this.projectsPath, filePath);
+    const parts = relative.split(path.sep);
+    if (parts.length < 2) return;
 
-  private extractSessionId(filePath: string): string {
-    const name = path.basename(filePath, ".jsonl");
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (UUID_RE.test(name)) return name;
-    try {
-      const head = fs.readFileSync(filePath, "utf-8").slice(0, 4096);
-      const m = head.match(/"sessionId"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i);
-      if (m) return m[1];
-    } catch {}
-    return name;
-  }
+    const projectDirName = parts[0];
+    const sessionFileName = parts[1];
+    const sessionId = sessionFileName.replace(".jsonl", "");
 
-  private extractProjectPath(filePath: string): string {
-    const dirName = path.basename(path.dirname(filePath));
-    const decoded = this.decodeProjectDirName(dirName);
-    return decoded && fs.existsSync(decoded) ? decoded : dirName.replace(/-/g, "/");
-  }
-
-  private decodeProjectDirName(dirName: string): string {
-    const stripped = dirName.startsWith("-") ? dirName.slice(1) : dirName;
-    const tokens = stripped.split("-");
-    let resolved = "/";
-    let i = 0;
-    while (i < tokens.length) {
-      if (tokens[i] === "") { i++; continue; }
-      let matched = false;
-      for (let len = tokens.length - i; len >= 1; len--) {
-        const candidate = tokens.slice(i, i + len).join("-");
-        if (fs.existsSync(path.join(resolved, candidate))) {
-          resolved = path.join(resolved, candidate);
-          i += len;
-          matched = true;
-          break;
-        }
-        if (fs.existsSync(path.join(resolved, "." + candidate))) {
-          resolved = path.join(resolved, "." + candidate);
-          i += len;
-          matched = true;
-          break;
-        }
-      }
-      if (!matched) {
-        resolved = path.join(resolved, tokens[i]);
-        i++;
-      }
-    }
-    return resolved;
+    this.emit("session", {
+      sessionId,
+      filePath,
+      eventType,
+      projectPath: projectDirName,
+    });
   }
 }
