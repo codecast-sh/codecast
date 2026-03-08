@@ -5,8 +5,6 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import * as Haptics from 'expo-haptics';
-let ScreenOrientation: typeof import('expo-screen-orientation') | null = null;
-try { ScreenOrientation = require('expo-screen-orientation'); } catch {}
 let ImagePicker: typeof import('expo-image-picker') | null = null;
 try { ImagePicker = require('expo-image-picker'); } catch {}
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -1399,7 +1397,7 @@ function getMidpoint(touches: { pageX: number; pageY: number }[]) {
   };
 }
 
-function GalleryImage({ image, screenWidth, screenHeight }: { image: ImageData; screenWidth: number; screenHeight: number }) {
+function GalleryImage({ image, screenWidth, screenHeight, onZoomChange }: { image: ImageData; screenWidth: number; screenHeight: number; onZoomChange?: (zoomed: boolean) => void }) {
   const src = useImageSrc(image);
 
   const scaleVal = useRef(new Animated.Value(1)).current;
@@ -1407,8 +1405,12 @@ function GalleryImage({ image, screenWidth, screenHeight }: { image: ImageData; 
   const translateYVal = useRef(new Animated.Value(0)).current;
 
   const pinchState = useRef({ startDist: 0, startScale: 1, scale: 1 });
-  const panState = useRef({ startMid: { x: 0, y: 0 }, startTx: 0, startTy: 0, tx: 0, ty: 0 });
+  const panState = useRef({ startX: 0, startY: 0, startTx: 0, startTy: 0, tx: 0, ty: 0, isPanning: false });
   const lastTap = useRef(0);
+
+  const setZoomed = useCallback((scale: number) => {
+    onZoomChange?.(scale > 1.05);
+  }, [onZoomChange]);
 
   const resetTransform = useCallback(() => {
     Animated.parallel([
@@ -1419,7 +1421,8 @@ function GalleryImage({ image, screenWidth, screenHeight }: { image: ImageData; 
     pinchState.current.scale = 1;
     panState.current.tx = 0;
     panState.current.ty = 0;
-  }, [scaleVal, translateXVal, translateYVal]);
+    setZoomed(1);
+  }, [scaleVal, translateXVal, translateYVal, setZoomed]);
 
   const handleTouchStart = useCallback((e: any) => {
     const touches = e.nativeEvent.touches;
@@ -1427,9 +1430,11 @@ function GalleryImage({ image, screenWidth, screenHeight }: { image: ImageData; 
       pinchState.current.startDist = getDistance(touches);
       pinchState.current.startScale = pinchState.current.scale;
       const mid = getMidpoint(touches);
-      panState.current.startMid = mid;
+      panState.current.startX = mid.x;
+      panState.current.startY = mid.y;
       panState.current.startTx = panState.current.tx;
       panState.current.startTy = panState.current.ty;
+      panState.current.isPanning = false;
     } else if (touches.length === 1) {
       const now = Date.now();
       if (now - lastTap.current < 300) {
@@ -1438,13 +1443,21 @@ function GalleryImage({ image, screenWidth, screenHeight }: { image: ImageData; 
         } else {
           Animated.spring(scaleVal, { toValue: 3, useNativeDriver: true, tension: 100, friction: 10 }).start();
           pinchState.current.scale = 3;
+          setZoomed(3);
         }
         lastTap.current = 0;
       } else {
         lastTap.current = now;
+        if (pinchState.current.scale > 1.05) {
+          panState.current.startX = touches[0].pageX;
+          panState.current.startY = touches[0].pageY;
+          panState.current.startTx = panState.current.tx;
+          panState.current.startTy = panState.current.ty;
+          panState.current.isPanning = true;
+        }
       }
     }
-  }, [scaleVal, resetTransform]);
+  }, [scaleVal, resetTransform, setZoomed]);
 
   const handleTouchMove = useCallback((e: any) => {
     const touches = e.nativeEvent.touches;
@@ -1453,18 +1466,27 @@ function GalleryImage({ image, screenWidth, screenHeight }: { image: ImageData; 
       const newScale = Math.min(5, Math.max(0.5, pinchState.current.startScale * (dist / pinchState.current.startDist)));
       scaleVal.setValue(newScale);
       pinchState.current.scale = newScale;
+      setZoomed(newScale);
 
       const mid = getMidpoint(touches);
-      const newTx = panState.current.startTx + (mid.x - panState.current.startMid.x);
-      const newTy = panState.current.startTy + (mid.y - panState.current.startMid.y);
+      const newTx = panState.current.startTx + (mid.x - panState.current.startX);
+      const newTy = panState.current.startTy + (mid.y - panState.current.startY);
+      translateXVal.setValue(newTx);
+      translateYVal.setValue(newTy);
+      panState.current.tx = newTx;
+      panState.current.ty = newTy;
+    } else if (touches.length === 1 && panState.current.isPanning) {
+      const newTx = panState.current.startTx + (touches[0].pageX - panState.current.startX);
+      const newTy = panState.current.startTy + (touches[0].pageY - panState.current.startY);
       translateXVal.setValue(newTx);
       translateYVal.setValue(newTy);
       panState.current.tx = newTx;
       panState.current.ty = newTy;
     }
-  }, [scaleVal, translateXVal, translateYVal]);
+  }, [scaleVal, translateXVal, translateYVal, setZoomed]);
 
-  const handleTouchEnd = useCallback((e: any) => {
+  const handleTouchEnd = useCallback(() => {
+    panState.current.isPanning = false;
     if (pinchState.current.scale < 1) {
       resetTransform();
     }
@@ -1492,33 +1514,28 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
   onClose: () => void;
 }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [isZoomed, setIsZoomed] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
   useEffect(() => {
     if (visible) {
-      ScreenOrientation?.unlockAsync().catch(() => {});
       setCurrentIndex(initialIndex);
+      setIsZoomed(false);
       setTimeout(() => flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false }), 50);
-    } else {
-      ScreenOrientation?.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     }
-    return () => {
-      ScreenOrientation?.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
-    };
   }, [visible, initialIndex]);
 
-  const handleClose = useCallback(() => {
-    ScreenOrientation?.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
-    onClose();
-  }, [onClose]);
+  const handleZoomChange = useCallback((zoomed: boolean) => {
+    setIsZoomed(zoomed);
+  }, []);
 
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose} supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
       <RNView style={styles.fullscreenOverlay}>
-        <TouchableOpacity style={styles.fullscreenClose} onPress={handleClose} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.fullscreenClose} onPress={onClose} activeOpacity={0.7}>
           <FontAwesome name="close" size={20} color="#fff" />
         </TouchableOpacity>
         <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
@@ -1527,9 +1544,10 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
           data={images}
           horizontal
           pagingEnabled
+          scrollEnabled={!isZoomed}
           showsHorizontalScrollIndicator={false}
           keyExtractor={(_, i) => String(i)}
-          renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} />}
+          renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} onZoomChange={handleZoomChange} />}
           onMomentumScrollEnd={(e) => {
             const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
             setCurrentIndex(idx);
