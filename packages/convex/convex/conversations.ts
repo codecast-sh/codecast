@@ -484,8 +484,8 @@ export const createConversation = mutation({
       short_id: conversationId.toString().slice(0, 7),
     });
 
-    // Auto-dismiss parent for plan handoffs and continuation children
-    if (parentConversationId && (!args.parent_message_uuid || args.parent_message_uuid === "plan-handoff")) {
+    // Auto-dismiss parent only for plan handoffs (clear context -> implementation session)
+    if (parentConversationId && args.parent_message_uuid === "plan-handoff") {
       const parent = await ctx.db.get(parentConversationId);
       if (parent && !parent.inbox_dismissed_at) {
         await ctx.db.patch(parentConversationId, {

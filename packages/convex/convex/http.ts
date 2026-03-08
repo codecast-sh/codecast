@@ -1700,6 +1700,72 @@ http.route({
 });
 
 http.route({
+  path: "/cli/log-batch",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const { api_token, logs } = body;
+
+      if (!api_token || !Array.isArray(logs) || logs.length === 0) {
+        return new Response(JSON.stringify({ error: "Missing api_token or logs array" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const validLevels = ["debug", "info", "warn", "error"] as const;
+      type LogLevel = typeof validLevels[number];
+      const toLevel = (s?: string): LogLevel => validLevels.includes(s as LogLevel) ? s as LogLevel : "error";
+
+      await ctx.runMutation(api.daemonLogs.insertBatch, {
+        api_token,
+        logs: logs.map((log: { level?: string; message: string; metadata?: Record<string, string>; daemon_version?: string; platform?: string; timestamp?: number }) => ({
+          level: toLevel(log.level),
+          message: log.message,
+          metadata: log.metadata,
+          daemon_version: log.daemon_version,
+          platform: log.platform,
+          timestamp: log.timestamp || Date.now(),
+        })),
+      });
+
+      return new Response(JSON.stringify({ success: true, inserted: logs.length }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      console.error("CLI log-batch error:", error);
+      return new Response(JSON.stringify({ error: "Internal error", details: error instanceof Error ? error.message : String(error) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/log-batch",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
   path: "/cli/teams",
   method: "POST",
   handler: httpAction(async (ctx, request) => {

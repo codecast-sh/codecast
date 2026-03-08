@@ -22,4 +22,10 @@ crons.interval(
   internal.pendingMessages.retryStuckMessages
 );
 
+crons.interval(
+  "check daemon health",
+  { minutes: 5 },
+  internal.daemonLogs.checkDaemonHealth
+);
+
 export default crons;

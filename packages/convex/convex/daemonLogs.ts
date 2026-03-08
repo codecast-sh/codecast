@@ -319,6 +319,55 @@ export const adminGetStats = query({
   },
 });
 
+export const checkDaemonHealth = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const OFFLINE_THRESHOLD_MS = 10 * 60 * 1000; // 10 min no heartbeat = offline
+    const RECENTLY_ACTIVE_MS = 24 * 60 * 60 * 1000; // Only care about daemons active in last 24h
+
+    const allUsers = await ctx.db.query("users").collect();
+    const activeUsers = allUsers.filter(
+      (u) => u.last_heartbeat && now - u.last_heartbeat < RECENTLY_ACTIVE_MS
+    );
+
+    let alertsCreated = 0;
+
+    for (const user of activeUsers) {
+      const silenceDuration = now - (user.last_heartbeat ?? 0);
+      if (silenceDuration < OFFLINE_THRESHOLD_MS) continue;
+
+      // Only alert once per offline episode: check if the most recent log for this
+      // user is already an offline alert (meaning we already noticed this outage)
+      const lastLogs = await ctx.db
+        .query("daemon_logs")
+        .withIndex("by_user_timestamp", (q) => q.eq("user_id", user._id))
+        .order("desc")
+        .take(3);
+
+      const alreadyAlerted = lastLogs.some(
+        (l) => l.metadata?.error_code === "server_offline_detected"
+          && now - l.timestamp < silenceDuration
+      );
+      if (alreadyAlerted) continue;
+
+      const minutes = Math.round(silenceDuration / 60000);
+      await ctx.db.insert("daemon_logs", {
+        user_id: user._id,
+        level: "error",
+        message: `DAEMON OFFLINE: No heartbeat for ${minutes}min (last seen: ${new Date(user.last_heartbeat!).toISOString()}, v${user.cli_version || "?"})`,
+        metadata: { error_code: "server_offline_detected" },
+        daemon_version: user.cli_version,
+        platform: user.cli_platform,
+        timestamp: now,
+      });
+      alertsCreated++;
+    }
+
+    return { checked: activeUsers.length, alertsCreated };
+  },
+});
+
 export const clearOfflineAlerts = internalMutation({
   args: {},
   handler: async (ctx) => {
