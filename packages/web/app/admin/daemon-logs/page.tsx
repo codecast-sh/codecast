@@ -282,6 +282,138 @@ function UserListItem({
   );
 }
 
+interface HealthMetric {
+  timestamp: number;
+  rss_mb: number;
+  heap_mb: number;
+  heap_max_mb: number;
+  fds: number;
+  uptime_min: number;
+  cpu_user_ms: number;
+  cpu_system_ms: number;
+}
+
+const HEALTH_RE = /rss=(\d+)MB heap=(\d+)\/(\d+)MB fds=(\d+) cpu=(\d+)\+(\d+)ms uptime=(\d+)min/;
+
+function parseHealthMetrics(logs: { message: string; timestamp: number }[]): HealthMetric[] {
+  const metrics: HealthMetric[] = [];
+  for (const log of logs) {
+    const m = HEALTH_RE.exec(log.message);
+    if (m) {
+      metrics.push({
+        timestamp: log.timestamp,
+        rss_mb: parseInt(m[1]),
+        heap_mb: parseInt(m[2]),
+        heap_max_mb: parseInt(m[3]),
+        fds: parseInt(m[4]),
+        cpu_user_ms: parseInt(m[5]),
+        cpu_system_ms: parseInt(m[6]),
+        uptime_min: parseInt(m[7]),
+      });
+    }
+  }
+  return metrics.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+const FD_WARN = 5000;
+const RSS_WARN = 1500;
+
+function MetricsChart({ logs }: { logs: { message: string; timestamp: number }[] }) {
+  const metrics = useMemo(() => parseHealthMetrics(logs), [logs]);
+
+  if (metrics.length < 2) {
+    return (
+      <div className="bg-zinc-900/60 rounded-lg border border-zinc-800/60 px-4 py-6 text-center">
+        <span className="text-[11px] font-mono text-zinc-600">Collecting metrics...</span>
+      </div>
+    );
+  }
+
+  const latest = metrics[metrics.length - 1];
+  const W = 600;
+  const H = 100;
+  const PAD = { top: 8, right: 8, bottom: 8, left: 8 };
+  const cw = W - PAD.left - PAD.right;
+  const ch = H - PAD.top - PAD.bottom;
+
+  const rssMax = Math.max(...metrics.map((m) => m.rss_mb), RSS_WARN * 0.5);
+  const fdMax = Math.max(...metrics.map((m) => m.fds), FD_WARN * 0.5);
+  const tMin = metrics[0].timestamp;
+  const tMax = metrics[metrics.length - 1].timestamp;
+  const tRange = tMax - tMin || 1;
+
+  const showRssWarn = rssMax >= RSS_WARN * 0.8;
+  const showFdWarn = fdMax >= FD_WARN * 0.8;
+
+  const x = (t: number) => PAD.left + ((t - tMin) / tRange) * cw;
+  const yRss = (v: number) => PAD.top + ch - (v / (rssMax * 1.15)) * ch;
+  const yFd = (v: number) => PAD.top + ch - (v / (fdMax * 1.15)) * ch;
+
+  const rssPoints = metrics.map((m) => `${x(m.timestamp)},${yRss(m.rss_mb)}`).join(" ");
+  const rssAreaPoints = `${x(tMin)},${PAD.top + ch} ${rssPoints} ${x(tMax)},${PAD.top + ch}`;
+  const fdPoints = metrics.map((m) => `${x(m.timestamp)},${yFd(m.fds)}`).join(" ");
+
+  return (
+    <div className="bg-zinc-900/60 rounded-lg border border-zinc-800/60 overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-zinc-800/60 flex items-center justify-between">
+        <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">
+          System Metrics
+        </span>
+        <div className="flex items-center gap-4 text-[11px]">
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-1 rounded-sm bg-sky-500/60" />
+            <span className="text-zinc-500">RSS</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-0.5 rounded-sm bg-amber-500" />
+            <span className="text-zinc-500">FDs</span>
+          </span>
+        </div>
+      </div>
+      <div className="px-4 py-3">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 120 }} preserveAspectRatio="none">
+          <polygon points={rssAreaPoints} fill="rgba(56,189,248,0.12)" />
+          <polyline points={rssPoints} fill="none" stroke="rgba(56,189,248,0.5)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+          <polyline points={fdPoints} fill="none" stroke="rgba(245,158,11,0.7)" strokeWidth="1.5" strokeDasharray="4 2" vectorEffect="non-scaling-stroke" />
+          {showRssWarn && (
+            <line
+              x1={PAD.left} y1={yRss(RSS_WARN)}
+              x2={PAD.left + cw} y2={yRss(RSS_WARN)}
+              stroke="rgba(239,68,68,0.4)" strokeWidth="1" strokeDasharray="6 3"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+          {showFdWarn && (
+            <line
+              x1={PAD.left} y1={yFd(FD_WARN)}
+              x2={PAD.left + cw} y2={yFd(FD_WARN)}
+              stroke="rgba(239,68,68,0.3)" strokeWidth="1" strokeDasharray="6 3"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+          {metrics.map((m, i) => (
+            <circle key={i} cx={x(m.timestamp)} cy={yRss(m.rss_mb)} r="2" fill="rgba(56,189,248,0.7)" />
+          ))}
+        </svg>
+      </div>
+      <div className="px-4 py-2.5 border-t border-zinc-800/60 flex items-center gap-6 text-[11px] font-mono">
+        <span className="text-zinc-500">
+          RSS <span className={`${latest.rss_mb >= RSS_WARN ? "text-red-400" : "text-sky-400"}`}>{latest.rss_mb}MB</span>
+        </span>
+        <span className="text-zinc-500">
+          Heap <span className="text-zinc-300">{latest.heap_mb}/{latest.heap_max_mb}MB</span>
+        </span>
+        <span className="text-zinc-500">
+          FDs <span className={`${latest.fds >= FD_WARN ? "text-red-400" : "text-amber-400"}`}>{latest.fds}</span>
+        </span>
+        <span className="text-zinc-500">
+          Uptime <span className="text-zinc-300">{latest.uptime_min >= 60 ? `${Math.round(latest.uptime_min / 60)}h` : `${latest.uptime_min}m`}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function AdminDaemonLogs() {
   const [selectedUserId, setSelectedUserId] = useState<Id<"users"> | undefined>();
   const [levelFilter, setLevelFilter] = useState<LogLevel | "all">("all");
@@ -510,6 +642,11 @@ function AdminDaemonLogs() {
                   Date.now() - ((selectedUser as any).last_heartbeat ?? 0) < 10 * 60 * 1000
                 }
               />
+            )}
+
+            {/* Metrics chart - shown when a specific user is selected */}
+            {selectedUser && (
+              <MetricsChart logs={filteredLogs} />
             )}
 
             {/* Filters + Toggle */}
