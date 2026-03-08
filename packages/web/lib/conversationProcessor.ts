@@ -20,6 +20,7 @@ const COMMAND_PATTERNS = [
   /^<local-command-stdout>/,
   /^<local-command-stderr>/,
   /^Caveat:/,
+  /^\/[a-z][\w-]*/i,
 ];
 
 const SKILL_EXPANSION_PATTERN = /Base directory for this skill:\s*([^\n]+)/;

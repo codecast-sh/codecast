@@ -44,7 +44,7 @@ import { copyToClipboard } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, isConvexId, type ForkChild } from "../store/inboxStore";
+import { useInboxStore, isConvexId, type ForkChild, type InboxSession } from "../store/inboxStore";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
@@ -231,6 +231,7 @@ type ConversationViewProps = {
   onSendAndAdvance?: () => void;
   autoFocusInput?: boolean;
   fallbackStickyContent?: string | null;
+  onBack?: () => void;
 };
 
 export interface ConversationViewHandle {
@@ -244,7 +245,6 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
-  const injectSession = useInboxStore((s) => s.injectSession);
   const createQuickSession = useMutation(api.conversations.createQuickSession);
   const killSession = useMutation(api.conversations.killSession);
   const router = useRouter();
@@ -270,17 +270,9 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       const now = Date.now();
 
       if (isInInbox) {
-        useInboxStore.getState().setConversationMeta(sessionId, {
-          _id: sessionId, _creationTime: now, user_id: "", agent_type: currentAgent,
-          session_id: sessionId, project_path: trimmed, git_root: trimmed,
-          started_at: now, updated_at: now, message_count: 0, status: "active",
-          title: "New session", messages: [], user: null,
-          child_conversations: [], child_conversation_map: {},
-          has_more_above: false, oldest_timestamp: null, last_timestamp: null,
-          fork_count: 0, forked_from_details: null, compaction_count: 0,
-          fork_children: [], parent_conversation_id: null,
-        } as any);
-        injectSession({
+        const store = useInboxStore.getState();
+        const oldId = storeSession?._id || conversation._id;
+        const newSession: InboxSession = {
           _id: sessionId,
           session_id: sessionId,
           title: "New session",
@@ -292,6 +284,28 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
           is_idle: true,
           has_pending: false,
           last_user_message: null,
+        };
+        const newDismissed = new Set(store.dismissedIds);
+        newDismissed.delete(sessionId);
+        const filtered = store.sessions.filter((s) => s._id !== oldId && s._id !== sessionId);
+        useInboxStore.setState({
+          sessions: [newSession, ...filtered],
+          currentIndex: 0,
+          dismissedIds: newDismissed,
+          viewingDismissedId: null,
+          conversations: {
+            ...store.conversations,
+            [sessionId]: {
+              _id: sessionId, _creationTime: now, user_id: "", agent_type: currentAgent,
+              session_id: sessionId, project_path: trimmed, git_root: trimmed,
+              started_at: now, updated_at: now, message_count: 0, status: "active",
+              title: "New session", messages: [], user: null,
+              child_conversations: [], child_conversation_map: {},
+              has_more_above: false, oldest_timestamp: null, last_timestamp: null,
+              fork_count: 0, forked_from_details: null, compaction_count: 0,
+              fork_children: [], parent_conversation_id: null,
+            },
+          },
         });
       }
 
@@ -314,7 +328,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create session");
     }
-  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, router, isInInbox, injectSession]);
+  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, router, isInInbox]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -2557,25 +2571,14 @@ function UserIcon() {
 
 function CommandStatusLine({ content, timestamp }: { content: string; timestamp: number }) {
   const cmdType = getCommandType(content);
-  const cmdNameMatch = content.match(/<command-name>([^<]*)<\/command-name>/) || content.match(/<command-message>([^<]*)<\/command-message>/);
+  const cmdNameMatch = content.match(/<command-name>([^<]*)<\/command-name>/) || content.match(/<command-message>([^<]*)<\/command-message>/) || content.trim().match(/^\/([\w-]+)/);
   const cmdName = cmdNameMatch?.[1]?.replace(/^\//, "");
   const cleaned = cleanContent(content);
-  const isSkillCmd = cmdName && cleaned.length > 200;
   const rawDisplay = cleaned.slice(0, 100) || content.replace(/<[^>]+>/g, "").slice(0, 100);
   const displayText = cmdName ? rawDisplay.replace(new RegExp(`(/?${cmdName}\\s*)+`), "").trim() : rawDisplay;
 
-  if (isSkillCmd) {
-    return <SkillExpansionBlock content={content} timestamp={timestamp} cmdName={cmdName} />;
-  }
-
   if (cmdName) {
-    return (
-      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-sol-text-dim">
-        <span className="text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-        <span className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>
-        {displayText && <span className="truncate text-sol-text-dim">{displayText}</span>}
-      </div>
-    );
+    return <SkillExpansionBlock content={content} timestamp={timestamp} cmdName={cmdName} />;
   }
 
   return (
@@ -4499,7 +4502,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -4592,6 +4595,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
+  const [lightboxImageIndex, setLightboxImageIndex] = useState<number | null>(null);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   pastedImagesRef.current = pastedImages;
@@ -4790,6 +4795,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const clearAllImages = useCallback(() => {
     pastedImages.forEach(img => URL.revokeObjectURL(img.previewUrl));
     setPastedImages([]);
+    setSelectedImageIndex(null);
+    setLightboxImageIndex(null);
     updateDraft(message, null);
   }, [pastedImages, updateDraft, message]);
 
@@ -4937,6 +4944,70 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       flashModeLabel();
       return;
     }
+
+    if (selectedImageIndex !== null && pastedImages.length > 0) {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const next = Math.max(0, selectedImageIndex - 1);
+        setSelectedImageIndex(next);
+        if (lightboxImageIndex !== null) setLightboxImageIndex(next);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        if (selectedImageIndex < pastedImages.length - 1) {
+          const next = selectedImageIndex + 1;
+          setSelectedImageIndex(next);
+          if (lightboxImageIndex !== null) setLightboxImageIndex(next);
+        } else {
+          setSelectedImageIndex(null);
+          setLightboxImageIndex(null);
+        }
+        return;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        const nextIdx = pastedImages.length <= 1 ? null : Math.min(selectedImageIndex, pastedImages.length - 2);
+        clearImage(selectedImageIndex);
+        setSelectedImageIndex(nextIdx);
+        if (lightboxImageIndex === selectedImageIndex) setLightboxImageIndex(nextIdx);
+        return;
+      }
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        setLightboxImageIndex(lightboxImageIndex === selectedImageIndex ? null : selectedImageIndex);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (lightboxImageIndex !== null) {
+          setLightboxImageIndex(null);
+        } else {
+          setSelectedImageIndex(null);
+        }
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedImageIndex(null);
+        setLightboxImageIndex(null);
+        return;
+      }
+      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+        setSelectedImageIndex(null);
+      }
+    }
+
+    if (e.key === "ArrowUp" && pastedImages.length > 0) {
+      const textarea = textareaRef.current;
+      if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
+        e.preventDefault();
+        setSelectedImageIndex(pastedImages.length - 1);
+        return;
+      }
+    }
+
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -4968,11 +5039,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const canSubmit = hasContent && !isWaitingForUpload;
 
   return (
-    <div className="shrink-0 z-40 pointer-events-none sticky bottom-0">
+    <div className="shrink-0 z-[10000] pointer-events-none sticky bottom-0">
       <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
       <div className="bg-sol-bg pb-4 pointer-events-auto">
         <div className="relative">
-          {(isFocused || shortcutTooltip || showStuckBanner || isInactive || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
+          {(isFocused || shortcutTooltip || showStuckBanner || isInactive || isSessionDisconnected || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {showStuckBanner && sessionId ? (
@@ -5037,6 +5108,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                     Working
+                  </span>
+                ) : isSessionDisconnected ? (
+                  <span className="flex items-center gap-1.5 text-sol-text-dim/50">
+                    <span className="w-2 h-2 rounded-full bg-sol-text-dim/30" />
+                    Session disconnected — message to resume
                   </span>
                 ) : isInactive ? "Session inactive — message to resume in new terminal" : "\u00A0"}
               </p>
@@ -5131,8 +5207,16 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               {pastedImages.length > 0 && (
                 <div className="flex items-center gap-2 pb-2 mb-2 border-b border-sol-border/50 flex-wrap">
                   {pastedImages.map((img, idx) => (
-                    <div key={idx} className="relative group">
-                      <div className="relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0">
+                    <div
+                      key={idx}
+                      className="relative group cursor-pointer"
+                      onClick={() => {
+                        setSelectedImageIndex(idx);
+                        setLightboxImageIndex(idx);
+                        textareaRef.current?.focus();
+                      }}
+                    >
+                      <div className={`relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0 transition-all ${selectedImageIndex === idx ? "ring-2 ring-sol-blue ring-offset-1 ring-offset-sol-bg" : ""}`}>
                         <img src={img.previewUrl} alt="Pasted" className="h-full w-full object-cover" />
                         {img.uploading && (
                           <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
@@ -5143,14 +5227,42 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                           </div>
                         )}
                       </div>
-                      <button type="button" onClick={() => clearImage(idx)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-sol-bg-alt border border-sol-border flex items-center justify-center text-sol-text-secondary hover:text-sol-text transition-colors opacity-0 group-hover:opacity-100">
+                      <button type="button" onClick={(e) => { e.stopPropagation(); clearImage(idx); if (selectedImageIndex === idx) { setSelectedImageIndex(null); setLightboxImageIndex(null); } }} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-sol-bg-alt border border-sol-border flex items-center justify-center text-sol-text-secondary hover:text-sol-text transition-colors opacity-0 group-hover:opacity-100">
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                         </svg>
                       </button>
                     </div>
                   ))}
+                  {selectedImageIndex !== null && (
+                    <span className="text-[10px] text-sol-text-dim ml-1 flex items-center gap-2">
+                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">&larr;&rarr;</kbd> navigate</span>
+                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Space</kbd> preview</span>
+                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Del</kbd> remove</span>
+                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Esc</kbd> exit</span>
+                    </span>
+                  )}
                 </div>
+              )}
+              {lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && createPortal(
+                <div className="fixed inset-0 z-[9998] flex items-center justify-center pointer-events-none" style={{ bottom: "120px" }}>
+                  <div className="absolute inset-0 bg-black/80 pointer-events-auto" onClick={() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }} />
+                  <div className="relative pointer-events-auto" onClick={(e) => e.stopPropagation()}>
+                    <img
+                      src={pastedImages[lightboxImageIndex].previewUrl}
+                      alt="Image preview"
+                      className="max-w-[85vw] max-h-[70vh] object-contain rounded-lg shadow-2xl"
+                    />
+                    {pastedImages.length > 1 && (
+                      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
+                        {pastedImages.map((_, i) => (
+                          <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors ${i === lightboxImageIndex ? "bg-white" : "bg-white/30"}`} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>,
+                document.body
               )}
               <div className="flex items-end gap-2">
                 <textarea
@@ -5226,7 +5338,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent }, ref) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, highlightQuery, onClearHighlight, embedded, showMessageInput = true, targetMessageId, isOwner = true, onSendAndAdvance, autoFocusInput, fallbackStickyContent, onBack }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
   const userScrolledRef = useRef(false);
@@ -6688,6 +6800,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
+  const isSessionDisconnected = !!conversation && conversation.status === "active" && managedSession !== undefined && managedSession.managed === false && !isSessionConnected;
 
   useEffect(() => {
     if (conversation) {
@@ -7032,13 +7145,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           <div className="flex items-center gap-2 min-w-0">
             <Link
               href={backHref}
+              onClick={onBack ? (e: React.MouseEvent) => { e.preventDefault(); onBack(); } : undefined}
               className="text-sol-text-dim hover:text-sol-text-secondary transition-colors text-sm sm:text-xs flex-shrink-0 p-1 -m-1 sm:p-0 sm:m-0"
             >
               &larr;
             </Link>
             <h1 className="text-xs sm:text-sm font-medium text-sol-text-secondary truncate min-w-0 flex-1 cursor-default" title={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}>{truncatedTitle}</h1>
 
-            {(managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || (!managedSession?.agent_status && isConversationLive)) && (
+            {isSessionDisconnected ? (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/30" />
+                <span className="hidden sm:inline">Disconnected</span>
+                <span className="sm:hidden">Disc</span>
+              </span>
+            ) : null}
+
+            {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || (!managedSession?.agent_status && isConversationLive)) && (
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 ${
                 managedSession?.agent_status === "thinking" ? "bg-sol-violet/10 text-sol-violet border border-sol-violet/30" :
                 managedSession?.agent_status === "compacting" ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" :
@@ -7639,7 +7761,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <AgentSwitcher conversation={conversation} />
             </div>
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}
