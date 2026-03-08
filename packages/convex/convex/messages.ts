@@ -9,6 +9,26 @@ import { shouldGenerateTitle } from "./titleGeneration";
 import { canTeamMemberAccess } from "./privacy";
 import { redactSecrets } from "./redact";
 
+function classifyDocContent(content: string): "plan" | "design" | "spec" | "investigation" | "handoff" | "note" {
+  const first2k = content.slice(0, 2000).toLowerCase();
+  if (/implementation\s+plan|## phases?\b|## milestones?\b|## timeline/i.test(first2k)) return "plan";
+  if (/design\s+doc|architecture|## design|## approach|system\s+design/i.test(first2k)) return "design";
+  if (/## spec|specification|## requirements|## api\b|## endpoints/i.test(first2k)) return "spec";
+  if (/investigation|root\s+cause|## findings|## analysis|debugging/i.test(first2k)) return "investigation";
+  if (/handoff|## status|## context|## next\s+steps/i.test(first2k)) return "handoff";
+  return "note";
+}
+
+function extractTitleFromContent(content: string): string {
+  const h1 = content.match(/^#\s+(.+)/m);
+  if (h1) return h1[1].slice(0, 200);
+  const h2 = content.match(/^##\s+(.+)/m);
+  if (h2) return h2[1].slice(0, 200);
+  const firstLine = content.split("\n").find((l) => l.trim().length > 10);
+  if (firstLine) return firstLine.replace(/^[#*\->\s]+/, "").slice(0, 200);
+  return "Untitled Document";
+}
+
 export const getMessageTimestamp = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -429,6 +449,77 @@ export const addMessages = mutation({
           await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
             conversation_id: args.conversation_id,
           });
+        }
+      }
+
+      // Inline doc extraction: check for doc-worthy content in this batch
+      for (const msg of args.messages) {
+        // Large structured assistant messages (inline plans/designs/etc)
+        if (msg.role === "assistant" && msg.content && msg.content.length > 5000) {
+          const headingCount = (msg.content.match(/^#{1,3}\s/gm) || []).length;
+          if (headingCount >= 3) {
+            const msgRecord = ids.length > 0 ? await ctx.db.get(ids[ids.length - 1]) : null;
+            const syntheticPath = `inline://${args.conversation_id}/${msgRecord?._id || "unknown"}`;
+            const existing = await ctx.db
+              .query("docs")
+              .withIndex("by_source_file", (q) => q.eq("source_file", syntheticPath))
+              .first();
+            if (!existing) {
+              await ctx.db.insert("docs", {
+                user_id: conversation.user_id,
+                team_id: conversation.team_id,
+                title: extractTitleFromContent(msg.content),
+                content: msg.content,
+                doc_type: classifyDocContent(msg.content),
+                source: "inline_extract",
+                source_file: syntheticPath,
+                conversation_id: args.conversation_id,
+                project_path: conversation.project_path,
+                is_private: conversation.is_private,
+                team_visibility: conversation.team_visibility,
+                created_at: msg.timestamp || Date.now(),
+                updated_at: msg.timestamp || Date.now(),
+              });
+            }
+          }
+        }
+        // Write tool calls to .md files
+        if (msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            if (tc.name !== "Write") continue;
+            let input: any;
+            try { input = JSON.parse(tc.input); } catch { continue; }
+            const filePath: string = input.file_path || "";
+            if (!filePath.endsWith(".md")) continue;
+            const content: string = input.content || "";
+            if (content.length < 200) continue;
+            const existing = await ctx.db
+              .query("docs")
+              .withIndex("by_source_file", (q) => q.eq("source_file", filePath))
+              .first();
+            if (!existing) {
+              const fileName = filePath.split("/").pop() || filePath;
+              const docType = fileName.toLowerCase().includes("plan") ? "plan" as const
+                : fileName.toLowerCase().includes("design") ? "design" as const
+                : fileName.toLowerCase().includes("spec") ? "spec" as const
+                : classifyDocContent(content);
+              await ctx.db.insert("docs", {
+                user_id: conversation.user_id,
+                team_id: conversation.team_id,
+                title: extractTitleFromContent(content),
+                content,
+                doc_type: docType,
+                source: "file_sync",
+                source_file: filePath,
+                conversation_id: args.conversation_id,
+                project_path: conversation.project_path,
+                is_private: conversation.is_private,
+                team_visibility: conversation.team_visibility,
+                created_at: msg.timestamp || Date.now(),
+                updated_at: msg.timestamp || Date.now(),
+              });
+            }
+          }
         }
       }
     }
