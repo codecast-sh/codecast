@@ -1515,13 +1515,18 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
 }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [isZoomed, setIsZoomed] = useState(false);
+  const [isLandscape, setIsLandscape] = useState(false);
   const flatListRef = useRef<FlatList>(null);
-  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const { width: deviceWidth, height: deviceHeight } = useWindowDimensions();
+
+  const screenWidth = isLandscape ? deviceHeight : deviceWidth;
+  const screenHeight = isLandscape ? deviceWidth : deviceHeight;
 
   useEffect(() => {
     if (visible) {
       setCurrentIndex(initialIndex);
       setIsZoomed(false);
+      setIsLandscape(false);
       setTimeout(() => flatListRef.current?.scrollToIndex({ index: initialIndex, animated: false }), 50);
     }
   }, [visible, initialIndex]);
@@ -1530,31 +1535,41 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
     setIsZoomed(zoomed);
   }, []);
 
+  const toggleLandscape = useCallback(() => {
+    setIsLandscape(prev => !prev);
+    setIsZoomed(false);
+  }, []);
+
   if (!visible) return null;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
       <RNView style={styles.fullscreenOverlay}>
+        <RNView style={[styles.galleryContent, isLandscape && { transform: [{ rotate: '90deg' }], width: deviceHeight, height: deviceWidth }]}>
+          <FlatList
+            ref={flatListRef}
+            data={images}
+            horizontal
+            pagingEnabled
+            scrollEnabled={!isZoomed}
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(_, i) => String(i)}
+            renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} onZoomChange={handleZoomChange} />}
+            onMomentumScrollEnd={(e) => {
+              const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
+              setCurrentIndex(idx);
+            }}
+            getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
+            initialScrollIndex={initialIndex}
+          />
+        </RNView>
         <TouchableOpacity style={styles.fullscreenClose} onPress={onClose} activeOpacity={0.7}>
           <FontAwesome name="close" size={20} color="#fff" />
         </TouchableOpacity>
+        <TouchableOpacity style={styles.landscapeToggle} onPress={toggleLandscape} activeOpacity={0.7}>
+          <FontAwesome name="rotate-right" size={18} color={isLandscape ? Theme.accent : '#fff'} />
+        </TouchableOpacity>
         <RNText style={styles.galleryCounter}>{currentIndex + 1} / {images.length}</RNText>
-        <FlatList
-          ref={flatListRef}
-          data={images}
-          horizontal
-          pagingEnabled
-          scrollEnabled={!isZoomed}
-          showsHorizontalScrollIndicator={false}
-          keyExtractor={(_, i) => String(i)}
-          renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} onZoomChange={handleZoomChange} />}
-          onMomentumScrollEnd={(e) => {
-            const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
-            setCurrentIndex(idx);
-          }}
-          getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
-          initialScrollIndex={initialIndex}
-        />
       </RNView>
     </Modal>
   );
@@ -5630,6 +5645,18 @@ const styles = StyleSheet.create({
     right: 20,
     zIndex: 10,
     padding: 8,
+  },
+  landscapeToggle: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    zIndex: 10,
+    padding: 8,
+  },
+  galleryContent: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   // Thinking label
   thinkingLabel: {

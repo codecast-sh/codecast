@@ -34,7 +34,6 @@
     "expo-local-authentication": "^17.0.8",
     "expo-notifications": "^0.32.15",
     "expo-router": "~6.0.20",
-    "expo-screen-orientation": "^55.0.8",
     "expo-secure-store": "^15.0.8",
     "expo-splash-screen": "~31.0.12",
     "expo-status-bar": "~3.0.9",
