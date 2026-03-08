@@ -90,6 +90,14 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="sessions"
+        options={{
+          title: 'Sessions',
+          headerShown: false,
+          tabBarIcon: ({ color }) => <TabBarIcon name="list" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="team"
         options={{
           title: 'Team',
