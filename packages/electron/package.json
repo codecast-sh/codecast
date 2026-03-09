@@ -12,6 +12,9 @@
     "build:local": "electron-builder -m --config.mac.target=dir --config.mac.identity=null",
     "install:local": "npm run build:local && pkill -f Codecast.app 2>/dev/null; sleep 1 && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && xattr -cr /Applications/Codecast.app && echo 'Installed to /Applications'"
   },
+  "dependencies": {
+    "electron-updater": "^6.3.0"
+  },
   "devDependencies": {
     "@electron/notarize": "^3.1.1",
     "electron": "^33.0.0",
@@ -49,6 +52,10 @@
         "name": "Codecast",
         "schemes": ["codecast"]
       }
-    ]
+    ],
+    "publish": {
+      "provider": "generic",
+      "url": "https://dl.codecast.sh/desktop"
+    }
   }
 }

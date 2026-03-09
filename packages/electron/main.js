@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const path = require("path");
 
 const PROD_URL = "https://codecast.sh";
@@ -164,6 +165,7 @@ function buildAppMenu() {
 ipcMain.handle("get-app-version", () => app.getVersion());
 ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
+ipcMain.handle("restart-for-update", () => autoUpdater.quitAndInstall());
 
 app.whenReady().then(() => {
   createWindow();
@@ -181,8 +183,25 @@ app.whenReady().then(() => {
     }
   });
 
-  // Global shortcut: Cmd+Ctrl+Shift+F9 to toggle local/prod
-  globalShortcut.register("CommandOrControl+Shift+Alt+0", () => {
+  // Auto-update
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("update-available", (info) => {
+    mainWindow?.webContents.send("update-status", { status: "available", version: info.version });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    mainWindow?.webContents.send("update-status", { status: "downloading", percent: Math.round(progress.percent) });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    mainWindow?.webContents.send("update-status", { status: "ready", version: info.version });
+  });
+  autoUpdater.on("error", (err) => {
+    console.error("Auto-update error:", err.message);
+  });
+  autoUpdater.checkForUpdatesAndNotify();
+
+  // Global shortcut: Cmd+Option+L to toggle local/prod
+  globalShortcut.register("CommandOrControl+Alt+L", () => {
     if (!mainWindow) return;
     currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
     const env = currentBaseUrl === PROD_URL ? "prod" : "local";
