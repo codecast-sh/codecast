@@ -164,9 +164,19 @@ else
     DMG_NAME="Codecast-${ELECTRON_VERSION}-arm64.dmg"
     echo "   Uploading DMG to R2..."
     npx wrangler r2 object put "codecast/$DMG_NAME" --file "$DMG_FILE" --remote
-    echo "   Uploading zip to R2 (fallback)..."
-    ditto -c -k --keepParent dist/mac-arm64/Codecast.app /tmp/Codecast-mac-arm64.zip
-    npx wrangler r2 object put codecast/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip --remote
+    echo "   Uploading auto-update artifacts to R2..."
+    ZIP_FILE=$(find dist -name "*.zip" -maxdepth 1 | head -1)
+    YML_FILE="dist/latest-mac.yml"
+    if [ -n "$ZIP_FILE" ] && [ -f "$YML_FILE" ]; then
+      ZIP_NAME=$(basename "$ZIP_FILE")
+      npx wrangler r2 object put "codecast/desktop/$ZIP_NAME" --file "$ZIP_FILE" --remote
+      npx wrangler r2 object put "codecast/desktop/latest-mac.yml" --file "$YML_FILE" --remote
+      echo "   ✓ Auto-update artifacts uploaded (desktop/$ZIP_NAME + latest-mac.yml)"
+    else
+      echo "   WARNING: Auto-update artifacts not found, uploading manual zip fallback"
+      ditto -c -k --keepParent dist/mac-arm64/Codecast.app /tmp/Codecast-mac-arm64.zip
+      npx wrangler r2 object put codecast/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip --remote
+    fi
     cd ../..
     echo "$LAST_DESKTOP_UPDATE" > "$LAST_DESKTOP_MARKER"
     # Update download route to point to new DMG
