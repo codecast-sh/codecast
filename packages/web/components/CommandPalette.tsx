@@ -7,6 +7,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { useInboxStore } from "../store/inboxStore";
+import { isElectron } from "../lib/desktop";
 
 const NAV_PAGES = [
   { label: "Dashboard", path: "/dashboard", icon: "grid", keywords: "home sessions main" },
@@ -70,8 +71,8 @@ function getShortPath(p: string): string {
   return parts.length ? parts[parts.length - 1] : p;
 }
 
-export function CommandPalette() {
-  const [open, setOpen] = useState(false);
+export function CommandPalette({ standalone = false }: { standalone?: boolean }) {
+  const [open, setOpen] = useState(standalone);
   const [query, setQuery] = useState("");
   const router = useRouter();
   const pathname = usePathname();
@@ -101,6 +102,7 @@ export function CommandPalette() {
   }, [recentConversations]);
 
   useEffect(() => {
+    if (standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
@@ -113,16 +115,46 @@ export function CommandPalette() {
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [open]);
+  }, [open, standalone]);
 
   useEffect(() => {
-    if (!open) {
+    if (!standalone) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (isElectron()) {
+          window.__CODECAST_ELECTRON__!.paletteHide();
+        }
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [standalone]);
+
+  useEffect(() => {
+    if (!open && !standalone) {
       setQuery("");
     }
-  }, [open]);
+  }, [open, standalone]);
+
+  useEffect(() => {
+    if (!standalone || !isElectron()) return;
+    const unsub = window.__CODECAST_ELECTRON__!.onPaletteShow(() => {
+      setQuery("");
+      setTimeout(() => {
+        const input = document.querySelector<HTMLInputElement>("[cmdk-input]");
+        input?.focus();
+      }, 50);
+    });
+    return unsub;
+  }, [standalone]);
 
   const navigate = useCallback(
     (path: string) => {
+      if (standalone && isElectron()) {
+        window.__CODECAST_ELECTRON__!.paletteNavigate(path);
+        return;
+      }
       const inboxMatch = path.match(/^\/inbox\?s=(.+)$/);
       if (inboxMatch && pathname === "/inbox") {
         const sessionId = inboxMatch[1];
@@ -133,7 +165,7 @@ export function CommandPalette() {
       }
       setOpen(false);
     },
-    [router, pathname]
+    [router, pathname, standalone]
   );
 
   const showFavorites = favorites && favorites.length > 0;
@@ -141,7 +173,159 @@ export function CommandPalette() {
   const showProjects = projects.length > 0;
   const showRecent = recentConversations && recentConversations.length > 0;
 
-  if (!open) return null;
+  if (!open && !standalone) return null;
+
+  const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
+  const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
+
+  const paletteContent = (
+    <CommandPrimitive
+      className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
+      filter={(value, search) => {
+        const idx = value.indexOf("|||");
+        const searchable = idx >= 0 ? value.slice(0, idx) : value;
+        return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
+      }}
+      loop
+    >
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border/60">
+        <div className="text-sol-text-dim">
+          <NavIcon type="search" className="w-[18px] h-[18px]" />
+        </div>
+        <CommandPrimitive.Input
+          value={query}
+          onValueChange={setQuery}
+          placeholder="Jump to..."
+          className="flex-1 bg-transparent text-[15px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
+          autoFocus
+        />
+        <kbd className="px-1.5 py-0.5 text-[10px] font-medium text-sol-text-dim bg-sol-bg-alt rounded border border-sol-border/80 tracking-wide">
+          ESC
+        </kbd>
+      </div>
+
+      <CommandPrimitive.List className="max-h-[min(60vh,480px)] overflow-y-auto overscroll-contain py-1.5 scroll-smooth">
+        <CommandPrimitive.Empty className="py-10 text-center text-sm text-sol-text-dim">
+          No results found.
+        </CommandPrimitive.Empty>
+
+        <CommandPrimitive.Group heading="Pages" className={groupClass}>
+          {NAV_PAGES.map((page) => (
+            <CommandPrimitive.Item
+              key={page.path + page.label}
+              value={`${page.label} ${page.keywords}`}
+              onSelect={() => navigate(page.path)}
+              className={itemClass}
+            >
+              <span className="text-sol-text-dim data-[selected=true]:text-sol-cyan flex-shrink-0">
+                <NavIcon type={page.icon} />
+              </span>
+              <span className="truncate">{page.label}</span>
+            </CommandPrimitive.Item>
+          ))}
+        </CommandPrimitive.Group>
+
+        {showFavorites && (
+          <CommandPrimitive.Group heading="Favorites" className={groupClass}>
+            {(query ? favorites! : favorites!.slice(0, 5)).map((fav) => (
+              <CommandPrimitive.Item
+                key={`fav-${fav._id}`}
+                value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
+                onSelect={() => navigate(`/conversation/${fav._id}`)}
+                className={itemClass}
+              >
+                <span className="text-amber-400 flex-shrink-0">
+                  <NavIcon type="star" />
+                </span>
+                <span className="truncate flex-1">{cleanTitle(fav.title || "New Session")}</span>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {showBookmarks && (
+          <CommandPrimitive.Group heading="Bookmarks" className={groupClass}>
+            {(query ? bookmarks! : bookmarks!.slice(0, 6)).map((bm) => (
+              <CommandPrimitive.Item
+                key={`bm-${bm._id}`}
+                value={`bookmark ${bm.message_preview || bm.conversation_title || ""}|||${bm._id}`}
+                onSelect={() => navigate(`/conversation/${bm.conversation_id}#msg-${bm.message_id}`)}
+                className={itemClass}
+              >
+                <span className="text-sol-cyan flex-shrink-0">
+                  <NavIcon type="bookmark" />
+                </span>
+                <span className="truncate flex-1">{bm.message_preview || bm.conversation_title}</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {showProjects && (
+          <CommandPrimitive.Group heading="Projects" className={groupClass}>
+            {projects.map((dir) => (
+              <CommandPrimitive.Item
+                key={`proj-${dir}`}
+                value={`project ${getShortPath(dir)} ${dir}`}
+                onSelect={() => navigate(`/dashboard?dir=${encodeURIComponent(dir)}`)}
+                className={itemClass}
+              >
+                <span className="text-sol-text-dim flex-shrink-0">
+                  <NavIcon type="folder" />
+                </span>
+                <span className="truncate">{getShortPath(dir)}</span>
+                <span className="text-[10px] text-sol-text-dim truncate ml-auto max-w-[200px]">{dir}</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {showRecent && (
+          <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
+            {(query ? recentConversations! : recentConversations!.slice(0, 20)).map((conv) => (
+              <CommandPrimitive.Item
+                key={`recent-${conv._id}`}
+                value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
+                onSelect={() => navigate(`/conversation/${conv._id}`)}
+                className={`${itemClass} group`}
+              >
+                <span className="text-sol-text-dim flex-shrink-0">
+                  <NavIcon type="session" />
+                </span>
+                <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(conv.updated_at)}</span>
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+      </CommandPrimitive.List>
+
+      <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8593;</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8595;</kbd>
+            navigate
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#9166;</kbd>
+            open
+          </span>
+        </div>
+        <span className="flex items-center gap-1">
+          <kbd className="inline-flex items-center gap-0.5 px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">
+            <span className="text-xs">&#8984;</span>K
+          </kbd>
+          toggle
+        </span>
+      </div>
+    </CommandPrimitive>
+  );
+
+  if (standalone) {
+    return paletteContent;
+  }
 
   return (
     <div className="fixed inset-0 z-[9999]">
@@ -150,165 +334,7 @@ export function CommandPalette() {
         onClick={() => setOpen(false)}
       />
       <div className="absolute inset-0 flex items-start justify-center pt-[min(20vh,160px)]">
-        <CommandPrimitive
-          className="w-[580px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
-          filter={(value, search) => {
-            const idx = value.indexOf("|||");
-            const searchable = idx >= 0 ? value.slice(0, idx) : value;
-            return searchable.toLowerCase().includes(search.toLowerCase()) ? 1 : 0;
-          }}
-          loop
-        >
-          <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border/60">
-            <div className="text-sol-text-dim">
-              <NavIcon type="search" className="w-[18px] h-[18px]" />
-            </div>
-            <CommandPrimitive.Input
-              value={query}
-              onValueChange={setQuery}
-              placeholder="Jump to..."
-              className="flex-1 bg-transparent text-[15px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
-              autoFocus
-            />
-            <kbd className="px-1.5 py-0.5 text-[10px] font-medium text-sol-text-dim bg-sol-bg-alt rounded border border-sol-border/80 tracking-wide">
-              ESC
-            </kbd>
-          </div>
-
-          <CommandPrimitive.List
-            className="max-h-[min(60vh,480px)] overflow-y-auto overscroll-contain py-1.5 scroll-smooth"
-          >
-            <CommandPrimitive.Empty className="py-10 text-center text-sm text-sol-text-dim">
-              No results found.
-            </CommandPrimitive.Empty>
-
-            <CommandPrimitive.Group
-              heading="Pages"
-              className="px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70"
-            >
-              {NAV_PAGES.map((page) => (
-                <CommandPrimitive.Item
-                  key={page.path + page.label}
-                  value={`${page.label} ${page.keywords}`}
-                  onSelect={() => navigate(page.path)}
-                  className="flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text"
-                >
-                  <span className="text-sol-text-dim data-[selected=true]:text-sol-cyan flex-shrink-0">
-                    <NavIcon type={page.icon} />
-                  </span>
-                  <span className="truncate">{page.label}</span>
-                </CommandPrimitive.Item>
-              ))}
-            </CommandPrimitive.Group>
-
-            {showFavorites && (
-              <CommandPrimitive.Group
-                heading="Favorites"
-                className="px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70"
-              >
-                {(query ? favorites! : favorites!.slice(0, 5)).map((fav) => (
-                  <CommandPrimitive.Item
-                    key={`fav-${fav._id}`}
-                    value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
-                    onSelect={() => navigate(`/conversation/${fav._id}`)}
-                    className="flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text"
-                  >
-                    <span className="text-amber-400 flex-shrink-0">
-                      <NavIcon type="star" />
-                    </span>
-                    <span className="truncate flex-1">{cleanTitle(fav.title || "New Session")}</span>
-                    <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
-                  </CommandPrimitive.Item>
-                ))}
-              </CommandPrimitive.Group>
-            )}
-
-            {showBookmarks && (
-              <CommandPrimitive.Group
-                heading="Bookmarks"
-                className="px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70"
-              >
-                {(query ? bookmarks! : bookmarks!.slice(0, 6)).map((bm) => (
-                  <CommandPrimitive.Item
-                    key={`bm-${bm._id}`}
-                    value={`bookmark ${bm.message_preview || bm.conversation_title || ""}|||${bm._id}`}
-                    onSelect={() => navigate(`/conversation/${bm.conversation_id}#msg-${bm.message_id}`)}
-                    className="flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text"
-                  >
-                    <span className="text-sol-cyan flex-shrink-0">
-                      <NavIcon type="bookmark" />
-                    </span>
-                    <span className="truncate flex-1">{bm.message_preview || bm.conversation_title}</span>
-                  </CommandPrimitive.Item>
-                ))}
-              </CommandPrimitive.Group>
-            )}
-
-            {showProjects && (
-              <CommandPrimitive.Group
-                heading="Projects"
-                className="px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70"
-              >
-                {projects.map((dir) => (
-                  <CommandPrimitive.Item
-                    key={`proj-${dir}`}
-                    value={`project ${getShortPath(dir)} ${dir}`}
-                    onSelect={() => navigate(`/dashboard?dir=${encodeURIComponent(dir)}`)}
-                    className="flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text"
-                  >
-                    <span className="text-sol-text-dim flex-shrink-0">
-                      <NavIcon type="folder" />
-                    </span>
-                    <span className="truncate">{getShortPath(dir)}</span>
-                    <span className="text-[10px] text-sol-text-dim truncate ml-auto max-w-[200px]">{dir}</span>
-                  </CommandPrimitive.Item>
-                ))}
-              </CommandPrimitive.Group>
-            )}
-
-            {showRecent && (
-              <CommandPrimitive.Group
-                heading="Recent Sessions"
-                className="px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70"
-              >
-                {(query ? recentConversations! : recentConversations!.slice(0, 20)).map((conv) => (
-                  <CommandPrimitive.Item
-                    key={`recent-${conv._id}`}
-                    value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
-                    onSelect={() => navigate(`/conversation/${conv._id}`)}
-                    className="flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text group"
-                  >
-                    <span className="text-sol-text-dim flex-shrink-0">
-                      <NavIcon type="session" />
-                    </span>
-                    <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
-                    <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(conv.updated_at)}</span>
-                  </CommandPrimitive.Item>
-                ))}
-              </CommandPrimitive.Group>
-            )}
-          </CommandPrimitive.List>
-
-          <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
-            <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1">
-                <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8593;</kbd>
-                <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8595;</kbd>
-                navigate
-              </span>
-              <span className="flex items-center gap-1">
-                <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#9166;</kbd>
-                open
-              </span>
-            </div>
-            <span className="flex items-center gap-1">
-              <kbd className="inline-flex items-center gap-0.5 px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">
-                <span className="text-xs">&#8984;</span>K
-              </kbd>
-              toggle
-            </span>
-          </div>
-        </CommandPrimitive>
+        {paletteContent}
       </div>
     </div>
   );

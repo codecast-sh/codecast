@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 
@@ -7,6 +7,7 @@ const LOCAL_URL = "http://local.codecast.sh";
 const BASE_URL = process.env.CODECAST_URL || PROD_URL;
 
 let mainWindow = null;
+let paletteWindow = null;
 let tray = null;
 let deepLinkUrl = null;
 let currentBaseUrl = BASE_URL;
@@ -98,6 +99,88 @@ function createWindow() {
   });
 }
 
+function createPaletteWindow() {
+  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  const winWidth = 620;
+  const winHeight = 520;
+
+  paletteWindow = new BrowserWindow({
+    width: winWidth,
+    height: winHeight,
+    x: Math.round((screenWidth - winWidth) / 2),
+    y: Math.round(screenHeight * 0.18),
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    hasShadow: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  paletteWindow.loadURL(`${currentBaseUrl}/palette`);
+
+  paletteWindow.webContents.on("did-finish-load", () => {
+    paletteWindow.webContents.executeJavaScript(
+      "document.documentElement.classList.add('electron-desktop')"
+    );
+  });
+
+  paletteWindow.on("blur", () => {
+    hidePalette();
+  });
+
+  paletteWindow.on("closed", () => {
+    paletteWindow = null;
+  });
+}
+
+function togglePalette() {
+  if (!paletteWindow) {
+    createPaletteWindow();
+    paletteWindow.once("ready-to-show", () => {
+      showPalette();
+    });
+    return;
+  }
+
+  if (paletteWindow.isVisible()) {
+    hidePalette();
+  } else {
+    showPalette();
+  }
+}
+
+function showPalette() {
+  if (!paletteWindow) return;
+  // Reposition to center of current display
+  const cursor = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const { width: sw, height: sh } = display.workAreaSize;
+  const { x: dx, y: dy } = display.workArea;
+  const [winWidth, winHeight] = paletteWindow.getSize();
+  paletteWindow.setPosition(
+    Math.round(dx + (sw - winWidth) / 2),
+    Math.round(dy + sh * 0.18)
+  );
+  paletteWindow.show();
+  paletteWindow.focus();
+  paletteWindow.webContents.send("palette-show");
+}
+
+function hidePalette() {
+  if (!paletteWindow || !paletteWindow.isVisible()) return;
+  paletteWindow.hide();
+}
+
 function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, "assets", "tray.png"));
   tray = new Tray(icon.resize({ width: 18, height: 18 }));
@@ -167,10 +250,29 @@ ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 ipcMain.handle("restart-for-update", () => autoUpdater.quitAndInstall());
 
+// Palette IPC
+ipcMain.on("palette-navigate", (_e, navPath) => {
+  hidePalette();
+  if (mainWindow) {
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.executeJavaScript(
+      `window.location.href = ${JSON.stringify(navPath)}`
+    );
+  }
+});
+
+ipcMain.on("palette-hide", () => {
+  hidePalette();
+});
+
 app.whenReady().then(() => {
   createWindow();
   createTray();
   buildAppMenu();
+
+  // Pre-create palette window so it's ready instantly
+  createPaletteWindow();
 
   // Global shortcut: Cmd+Option+Space to toggle window
   globalShortcut.register("CommandOrControl+Alt+Space", () => {
@@ -181,6 +283,11 @@ app.whenReady().then(() => {
       mainWindow.show();
       mainWindow.focus();
     }
+  });
+
+  // Global shortcut: Cmd+Shift+Space to toggle palette
+  globalShortcut.register("CommandOrControl+Shift+Space", () => {
+    togglePalette();
   });
 
   // Auto-update
@@ -214,6 +321,12 @@ app.whenReady().then(() => {
         `document.title = '[${env.toUpperCase()}] ' + document.title`
       );
     });
+    // Recreate palette window with new URL
+    if (paletteWindow) {
+      paletteWindow.close();
+      paletteWindow = null;
+    }
+    createPaletteWindow();
   });
 });
 

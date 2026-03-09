@@ -7,6 +7,9 @@ declare global {
       onDeepLink: (cb: (url: string) => void) => void;
       onUpdateStatus: (cb: (status: { status: string; version?: string; percent?: number }) => void) => void;
       restartForUpdate: () => Promise<void>;
+      paletteNavigate: (path: string) => void;
+      paletteHide: () => void;
+      onPaletteShow: (cb: () => void) => () => void;
       platform: string;
     };
   }
