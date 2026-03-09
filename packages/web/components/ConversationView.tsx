@@ -272,6 +272,16 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       if (isInInbox) {
         const store = useInboxStore.getState();
         const oldId = storeSession?._id || conversation._id;
+        const storedDraft = store.getDraft(oldId);
+        const liveText = (document.querySelector('[data-draft-conv="' + oldId + '"]') as HTMLTextAreaElement)?.value;
+        const draftMessage = liveText ?? storedDraft?.draft_message ?? null;
+        if (draftMessage || storedDraft?.draft_image_storage_ids) {
+          store.setDraft(sessionId, { ...storedDraft, draft_message: draftMessage });
+          store.clearDraft(oldId);
+        }
+        if (isConvexId(oldId)) {
+          store.markKilling(oldId);
+        }
         const newSession: InboxSession = {
           _id: sessionId,
           session_id: sessionId,
@@ -333,7 +343,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   return (
     <TooltipProvider delayDuration={200}>
     <div className="flex flex-col items-center gap-3 mt-16">
-        <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath}>
+        <div className="flex items-center gap-2 text-sol-text-muted text-xs cursor-default" title={currentPath || undefined}>
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
           </svg>
@@ -1000,7 +1010,7 @@ function TaskToolBlock({ tool, result, childConversationId, childConversations }
 
   const subagentColors: Record<string, { bg: string; border: string; text: string }> = {
     Explore: { bg: "bg-sol-green/20", border: "border-sol-green/50", text: "text-sol-green" },
-    Plan: { bg: "bg-sol-blue/20", border: "border-sol-blue/50", text: "text-sol-blue" },
+    Plan: { bg: "bg-sol-cyan/20", border: "border-sol-cyan/50", text: "text-sol-cyan" },
     implementor: { bg: "bg-sol-yellow/20", border: "border-sol-yellow/50", text: "text-sol-yellow" },
     "general-purpose": { bg: "bg-sol-bg-alt/60", border: "border-sol-border/50", text: "text-sol-text-secondary" },
     "claude-code-guide": { bg: "bg-sol-violet/20", border: "border-sol-violet/50", text: "text-sol-violet" },
@@ -1315,6 +1325,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const [viewMode, setViewMode] = useState<'raw' | 'rendered'>(isMarkdown ? 'rendered' : 'raw');
   const [mdExpanded, setMdExpanded] = useState(false);
   const [mdFullscreen, setMdFullscreen] = useState(false);
+  const [codeFullscreen, setCodeFullscreen] = useState(false);
   const mdContainerRef = useRef<HTMLDivElement>(null);
   const [mdOverflowing, setMdOverflowing] = useState(false);
   const MD_COLLAPSED_HEIGHT = 600;
@@ -1336,6 +1347,14 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     document.body.style.overflow = 'hidden';
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [mdFullscreen]);
+
+  useEffect(() => {
+    if (!codeFullscreen) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setCodeFullscreen(false); };
+    document.addEventListener('keydown', handleKey);
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
+  }, [codeFullscreen]);
 
   const getToolSummary = () => {
     if (isStandardEdit || isRead) return relativePath;
@@ -1522,6 +1541,15 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
 
   // Extract starting line number from Edit result (format: "   42→content")
   const getStartLine = () => {
+    if (isRead) {
+      const offset = parsedInput.offset;
+      if (offset && typeof offset === 'number') return offset;
+      if (result?.content) {
+        const match = result.content.match(/^\s*(\d+)\t/m);
+        if (match) return parseInt(match[1], 10);
+      }
+      return 1;
+    }
     if (!isStandardEdit || !result) return 1;
     const match = result.content.match(/^\s*(\d+)→/m);
     return match ? parseInt(match[1], 10) : 1;
@@ -1782,7 +1810,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                   )}
                 </div>
                 {mdFullscreen && createPortal(
-                  <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setMdFullscreen(false)}>
+                  <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setMdFullscreen(false)}>
                     <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-between mb-6">
                         <span className="text-sol-text-secondary text-sm font-medium">{filePath.split('/').pop()}</span>
@@ -1855,13 +1883,53 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 <div className="p-2 text-xs text-sol-text-dim">No output</div>
               )}
             </div>
+          ) : isRead && language && processedContent && processedContent.trim() ? (
+            <>
+              <DiffView
+                oldStr={processedContent}
+                newStr={processedContent}
+                startLine={startLine}
+                language={language}
+              />
+              <div className="flex items-center gap-3 px-3 py-1.5 border-t border-sol-border/20">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setCodeFullscreen(true); }}
+                  className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
+                >
+                  Fullscreen
+                </button>
+              </div>
+              {codeFullscreen && createPortal(
+                <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setCodeFullscreen(false)}>
+                  <div className="max-w-6xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="text-sol-text-secondary text-sm font-mono">{relativePath}</span>
+                      <button
+                        onClick={() => setCodeFullscreen(false)}
+                        className="text-sol-text-dim hover:text-sol-text-muted transition-colors p-1"
+                        title="Close (Esc)"
+                      >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="rounded border border-sol-border/30 bg-sol-bg-alt">
+                      <DiffView
+                        oldStr={processedContent}
+                        newStr={processedContent}
+                        startLine={startLine}
+                        maxLines={99999}
+                        language={language}
+                      />
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+            </>
           ) : processedContent && processedContent.trim() ? (
             <div className="max-h-80 overflow-auto">
-              {!isMarkdown && language && (
-                <div className="text-[10px] px-2 py-1 border-b border-sol-border/20 text-sol-text-dim">
-                  {language}
-                </div>
-              )}
               {isMarkdown && viewMode === 'rendered' ? (
                 <div className="p-3">
                   <MarkdownRenderer content={processedContent} filePath={filePath} />
@@ -1871,9 +1939,16 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} /> }}>{processedContent}</ReactMarkdown>
                 </div>
               ) : (
-                <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
-                  {processedContent}
-                </pre>
+                <>
+                  {!isMarkdown && language && (
+                    <div className="text-[10px] px-2 py-1 border-b border-sol-border/20 text-sol-text-dim">
+                      {language}
+                    </div>
+                  )}
+                  <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
+                    {processedContent}
+                  </pre>
+                </>
               )}
             </div>
           ) : (
@@ -2474,6 +2549,41 @@ function ThinkingBlock({ content, showContent = true }: { content: string; showC
 
 const IMAGE_COLLAPSED_HEIGHT = 100;
 
+function useSwipeToDismiss(onDismiss: () => void) {
+  const [swipeY, setSwipeY] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+  const startY = useRef(0);
+
+  const handlers = useMemo(() => ({
+    onTouchStart: (e: React.TouchEvent) => {
+      startY.current = e.touches[0].clientY;
+      setSwiping(true);
+      setSwipeY(0);
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      if (!swiping) return;
+      const dy = e.touches[0].clientY - startY.current;
+      setSwipeY(Math.max(0, dy));
+    },
+    onTouchEnd: () => {
+      if (swipeY > 120) {
+        onDismiss();
+      }
+      setSwipeY(0);
+      setSwiping(false);
+    },
+  }), [swiping, swipeY, onDismiss]);
+
+  const style = useMemo(() => swipeY > 0 ? {
+    transform: `translateY(${swipeY}px)`,
+    transition: swiping ? 'none' : 'transform 0.2s ease-out',
+  } : undefined, [swipeY, swiping]);
+
+  const backdropOpacity = swipeY > 0 ? Math.max(0.2, 1 - swipeY / 300) : 1;
+
+  return { handlers, style, backdropOpacity, swipeY };
+}
+
 function ImageBlock({ image }: { image: ImageData }) {
   const storageUrl = useQuery(
     api.images.getImageUrl,
@@ -2481,6 +2591,8 @@ function ImageBlock({ image }: { image: ImageData }) {
   );
   const [fullscreen, setFullscreen] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const dismiss = useCallback(() => setFullscreen(false), []);
+  const swipe = useSwipeToDismiss(dismiss);
 
   useEffect(() => {
     if (!fullscreen) return;
@@ -2535,7 +2647,7 @@ function ImageBlock({ image }: { image: ImageData }) {
         )}
       </div>
       {fullscreen && createPortal(
-        <div className="fixed inset-0 z-[9999] bg-black/90 flex items-center justify-center" onClick={() => setFullscreen(false)}>
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center" onClick={() => setFullscreen(false)} style={{ backgroundColor: `rgba(0,0,0,${0.9 * swipe.backdropOpacity})` }}>
           <button
             onClick={() => setFullscreen(false)}
             className="absolute top-4 right-4 text-white/70 hover:text-white p-2 transition-colors"
@@ -2550,6 +2662,8 @@ function ImageBlock({ image }: { image: ImageData }) {
             alt="User provided image"
             className="max-w-[90vw] max-h-[90vh] object-contain rounded"
             onClick={e => e.stopPropagation()}
+            style={swipe.style}
+            {...swipe.handlers}
           />
         </div>,
         document.body
@@ -3254,7 +3368,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
       )}
 
       {fullscreen && createPortal(
-        <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
+        <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
           <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-6">
               <span className="text-sol-text-secondary text-sm font-medium">{userName || "You"}</span>
@@ -3720,7 +3834,7 @@ function AssistantBlock({
         )}
 
         {fullscreen && createPortal(
-          <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
+          <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
             <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-6">
                 <span className="text-sol-text-secondary text-sm font-medium">Message</span>
@@ -4086,7 +4200,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
       </div>
 
       {fullscreen && createPortal(
-        <div className="fixed inset-0 z-[9999] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
+        <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setFullscreen(false)}>
           <div className="max-w-4xl mx-auto px-8 py-12" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
@@ -4597,6 +4711,8 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const escapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [lightboxImageIndex, setLightboxImageIndex] = useState<number | null>(null);
+  const dismissLightbox = useCallback(() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }, []);
+  const lightboxSwipe = useSwipeToDismiss(dismissLightbox);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   pastedImagesRef.current = pastedImages;
@@ -5040,11 +5156,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
   return (
     <div className="shrink-0 z-[10000] pointer-events-none sticky bottom-0">
-      <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />
-      <div className="bg-sol-bg pb-4 pointer-events-auto">
+      {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
+      <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
           {(isFocused || shortcutTooltip || showStuckBanner || isInactive || isSessionDisconnected || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
-            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+            <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "max-w-4xl" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
                 {showStuckBanner && sessionId ? (
                   isResuming ? (
@@ -5196,7 +5312,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             </div>
           )}
           <form onSubmit={handleSubmit} className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
-            <div className={`flex flex-col bg-sol-bg-alt border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : "border-sol-border"}`}>
+            <div className={`flex flex-col border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"} bg-sol-bg-alt ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
                   <span className="font-medium">Rewriting message</span>
@@ -5244,28 +5360,10 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   )}
                 </div>
               )}
-              {lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && (
-                <div className="fixed inset-0 z-[-1] flex items-center justify-center">
-                  <div className="absolute inset-0 bg-black/80" onClick={() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }} />
-                  <div className="relative" onClick={(e) => e.stopPropagation()}>
-                    <img
-                      src={pastedImages[lightboxImageIndex].previewUrl}
-                      alt="Image preview"
-                      className="max-w-[85vw] max-h-[70vh] object-contain rounded-lg shadow-2xl"
-                    />
-                    {pastedImages.length > 1 && (
-                      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
-                        {pastedImages.map((_, i) => (
-                          <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors ${i === lightboxImageIndex ? "bg-white" : "bg-white/30"}`} />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
               <div className="flex items-end gap-2">
                 <textarea
                   ref={textareaRef}
+                  data-draft-conv={conversationId}
                   value={message}
                   onChange={(e) => handleMessageChange(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -5329,6 +5427,26 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
             <ShortcutHint keys={["Enter"]} label="Send message" />
           </div>
         </div>
+      )}
+      {lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && createPortal(
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center" style={{ backgroundColor: `rgba(0,0,0,${0.8 * lightboxSwipe.backdropOpacity})` }}>
+          <div className="absolute inset-0" onClick={dismissLightbox} />
+          <div className="relative" onClick={(e) => e.stopPropagation()} style={lightboxSwipe.style} {...lightboxSwipe.handlers}>
+            <img
+              src={pastedImages[lightboxImageIndex].previewUrl}
+              alt="Image preview"
+              className="max-w-[85vw] max-h-[70vh] object-contain rounded-lg shadow-2xl"
+            />
+            {pastedImages.length > 1 && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
+                {pastedImages.map((_, i) => (
+                  <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors ${i === lightboxImageIndex ? "bg-white" : "bg-white/30"}`} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -6457,7 +6575,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       setIsNearTop(scrollTop < 300);
 
       const scrolledDown = scrollTop > lastScrollTopRef.current + 2;
+      const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
       lastScrollTopRef.current = scrollTop;
+
+      // Detect user scrolling up (works for touch and wheel).
+      // Skip during pagination cooldown since scroll position is being restored.
+      if (scrolledUp && !isNearBottom && !paginationCooldownRef.current) {
+        setUserScrolled(true);
+      }
 
       // Only clear userScrolled when the user actively scrolls DOWN to
       // the bottom. This prevents small wheel-up events (still near bottom)
@@ -7141,7 +7266,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
       <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass}`}>
         <div className="max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 py-0.5 sm:py-1">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 select-none">
             <Link
               href={backHref}
               onClick={onBack ? (e: React.MouseEvent) => { e.preventDefault(); onBack(); } : undefined}
@@ -7671,10 +7796,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <div className={`max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {content}
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
-                        <div className="flex items-center gap-3 mt-3 mb-1">
-                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to right, transparent, var(--sol-border))' }} />
-                          <span className="text-[11px] text-sol-text-dim">{formatRelativeTime(lastActivityAt)}</span>
-                          <div className="flex-1 h-px" style={{ background: 'linear-gradient(to left, transparent, var(--sol-border))' }} />
+                        <div className="flex items-center gap-3 mt-5 mb-1">
+                          <div className="flex-1 h-px opacity-40" style={{ background: 'linear-gradient(to right, transparent, var(--sol-border))' }} />
+                          <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
+                          <div className="flex-1 h-px opacity-40" style={{ background: 'linear-gradient(to left, transparent, var(--sol-border))' }} />
                         </div>
                       )}
                     </div>
