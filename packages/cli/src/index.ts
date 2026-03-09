@@ -221,6 +221,47 @@ const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
+const WATCHDOG_SCRIPT_PATH = path.join(CONFIG_DIR, "watchdog.sh");
+
+const WATCHDOG_SHELL_SCRIPT = `#!/bin/sh
+LOGFILE="\${HOME}/.codecast/watchdog-shell.log"
+log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
+
+CODECAST="\${HOME}/.local/bin/codecast"
+[ ! -x "\$CODECAST" ] && CODECAST="\$(command -v codecast 2>/dev/null || true)"
+if [ -z "\$CODECAST" ] || [ ! -x "\$CODECAST" ]; then
+  log "No codecast binary found, attempting download"
+else
+  "\$CODECAST" -- _watchdog 2>>"\$LOGFILE" && exit 0
+  log "Watchdog failed (exit \$?), checking for update"
+fi
+
+DL_HOST="https://dl.codecast.sh"
+LATEST="\$(curl -fsSL "\$DL_HOST/latest.json" 2>/dev/null)" || { log "Failed to fetch latest.json"; exit 1; }
+VERSION="\$(printf '%s' "\$LATEST" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')"
+[ -z "\$VERSION" ] && { log "Could not parse version"; exit 1; }
+
+LAST_DL_FILE="\${HOME}/.codecast/last_download_version"
+LAST_DL="\$(cat "\$LAST_DL_FILE" 2>/dev/null || true)"
+if [ "\$VERSION" = "\$LAST_DL" ]; then
+  log "v\$VERSION already tried and failed, waiting for new release"
+  exit 1
+fi
+
+OS="\$(uname -s)"; ARCH="\$(uname -m)"
+case "\$OS" in Darwin*) P="darwin";; Linux*) P="linux";; *) log "Unsupported OS: \$OS"; exit 1;; esac
+case "\$ARCH" in x86_64|amd64) A="x64";; arm64|aarch64) A="arm64";; *) log "Unsupported arch: \$ARCH"; exit 1;; esac
+
+DIR="\${HOME}/.local/bin"; mkdir -p "\$DIR"
+TMP="\$(mktemp)"
+log "Downloading codecast v\$VERSION (\$P-\$A)"
+curl -fsSL "\$DL_HOST/codecast-\$P-\$A" -o "\$TMP" 2>>"\$LOGFILE" || { rm -f "\$TMP"; log "Download failed"; exit 1; }
+mv "\$TMP" "\$DIR/codecast" && chmod +x "\$DIR/codecast"
+printf '%s' "\$VERSION" > "\$LAST_DL_FILE"
+log "Installed v\$VERSION, retrying watchdog"
+
+"\$DIR/codecast" -- _watchdog 2>>"\$LOGFILE" || { log "Still failed after update"; exit 1; }
+`;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -4493,22 +4534,25 @@ program
   });
 
 function getExecutableInfo(command = "_daemon"): { executablePath: string; args: string[] } {
-  const isBundle = __filename.includes("/dist/") || __filename.includes("/build/");
-  const isBinary = !__filename.endsWith(".ts") && !__filename.endsWith(".js");
+  const execPath = process.execPath;
+  const isBinary = !execPath.endsWith("/bun") && !execPath.endsWith("/node") && !execPath.includes("node_modules");
 
   if (isBinary) {
-    return { executablePath: process.argv[0], args: ["--", command] };
-  } else if (isBundle) {
-    const script = command === "_watchdog"
-      ? path.resolve(__dirname, "index.js")
-      : path.resolve(__dirname, "daemon.js");
-    return { executablePath: process.execPath, args: [script, command] };
+    return { executablePath: execPath, args: ["--", command] };
   } else {
-    const script = command === "_watchdog"
-      ? path.resolve(__dirname, "index.ts")
-      : path.resolve(__dirname, "daemon.ts");
-    return { executablePath: process.execPath, args: [script, command] };
+    const isBundle = __filename.includes("/dist/") || __filename.includes("/build/");
+    const script = isBundle
+      ? path.resolve(__dirname, command === "_watchdog" ? "index.js" : "daemon.js")
+      : path.resolve(__dirname, command === "_watchdog" ? "index.ts" : "daemon.ts");
+    return { executablePath: execPath, args: [script, command] };
   }
+}
+
+function installWatchdogScript(): void {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  fs.writeFileSync(WATCHDOG_SCRIPT_PATH, WATCHDOG_SHELL_SCRIPT, { mode: 0o755 });
 }
 
 function setupMacOS(disable: boolean): void {
@@ -4575,12 +4619,8 @@ ${programArgs}
   spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
   console.log("Daemon LaunchAgent installed");
 
-  // Watchdog plist (runs every 5 minutes, independent of daemon)
-  const wdInfo = getExecutableInfo("_watchdog");
-  const wdArgs = [wdInfo.executablePath, ...wdInfo.args]
-    .map((arg) => `    <string>${arg}</string>`)
-    .join("\n");
-
+  // Watchdog plist (runs every 5 minutes via shell wrapper for self-healing)
+  installWatchdogScript();
   const watchdogPlistContent = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -4589,7 +4629,8 @@ ${programArgs}
   <string>sh.codecast.watchdog</string>
   <key>ProgramArguments</key>
   <array>
-${wdArgs}
+    <string>/bin/sh</string>
+    <string>${WATCHDOG_SCRIPT_PATH}</string>
   </array>
   <key>StartInterval</key>
   <integer>300</integer>
@@ -4605,7 +4646,7 @@ ${wdArgs}
 
   spawnSync("launchctl", ["bootout", uid, watchdogPlistPath], { stdio: "ignore" });
   fs.writeFileSync(watchdogPlistPath, watchdogPlistContent, { mode: 0o644 });
-  const wdResult = spawnSync("launchctl", ["bootstrap", uid, watchdogPlistPath], { stdio: "ignore" });
+  spawnSync("launchctl", ["bootstrap", uid, watchdogPlistPath], { stdio: "ignore" });
   console.log("Watchdog LaunchAgent installed (checks every 5min)");
 
   console.log(`\nDaemon: ${executablePath} ${args.join(" ")}`);
@@ -4686,13 +4727,41 @@ function ensureAutostart(): boolean {
       const uid = `gui/${process.getuid!()}`;
       const daemonExists = fs.existsSync(plistPath);
       const watchdogExists = fs.existsSync(watchdogPlistPath);
-      if (daemonExists && watchdogExists) return true;
+
+      const plistNeedsRepair = (ppath: string): boolean => {
+        try {
+          const content = fs.readFileSync(ppath, "utf-8");
+          return content.includes("<string>bun</string>") || content.includes("<string>node</string>");
+        } catch { return false; }
+      };
+      const watchdogNeedsUpgrade = (ppath: string): boolean => {
+        try {
+          const content = fs.readFileSync(ppath, "utf-8");
+          return !content.includes("/bin/sh");
+        } catch { return false; }
+      };
+      const daemonBroken = daemonExists && plistNeedsRepair(plistPath);
+      const watchdogBroken = watchdogExists && (plistNeedsRepair(watchdogPlistPath) || watchdogNeedsUpgrade(watchdogPlistPath));
+
+      installWatchdogScript();
+
+      if (daemonBroken) {
+        spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
+        fs.unlinkSync(plistPath);
+      }
+      if (watchdogBroken) {
+        spawnSync("launchctl", ["bootout", uid, watchdogPlistPath], { stdio: "ignore" });
+        fs.unlinkSync(watchdogPlistPath);
+      }
+      if (!daemonBroken && !watchdogBroken && daemonExists && watchdogExists) {
+        return true;
+      }
 
       if (!fs.existsSync(launchAgentsDir)) {
         fs.mkdirSync(launchAgentsDir, { recursive: true });
       }
 
-      if (!daemonExists) {
+      if (!fs.existsSync(plistPath)) {
         const { executablePath, args } = getExecutableInfo();
         const programArgs = [executablePath, ...args].map((arg) => `    <string>${arg}</string>`).join("\n");
         const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
@@ -4722,9 +4791,7 @@ ${programArgs}
         spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
       }
 
-      if (!watchdogExists) {
-        const wdInfo = getExecutableInfo("_watchdog");
-        const wdArgs = [wdInfo.executablePath, ...wdInfo.args].map((arg) => `    <string>${arg}</string>`).join("\n");
+      if (!fs.existsSync(watchdogPlistPath)) {
         const wdContent = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -4733,7 +4800,8 @@ ${programArgs}
   <string>sh.codecast.watchdog</string>
   <key>ProgramArguments</key>
   <array>
-${wdArgs}
+    <string>/bin/sh</string>
+    <string>${WATCHDOG_SCRIPT_PATH}</string>
   </array>
   <key>StartInterval</key>
   <integer>300</integer>
