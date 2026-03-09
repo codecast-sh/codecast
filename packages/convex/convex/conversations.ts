@@ -5366,6 +5366,7 @@ export const listIdleSessions = query({
           : !recentlyUpdated;
 
       const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
+      const pinned = !!conv.inbox_pinned_at;
 
       let implementationSession: { _id: string; title?: string } | undefined;
       if (conv.message_count > 0) {
@@ -5404,6 +5405,7 @@ export const listIdleSessions = query({
         is_connected: !!daemonAlive,
         has_pending: hasPending,
         is_deferred: !!deferred,
+        is_pinned: pinned,
         agent_status: agentStatus,
         last_user_message: lastUserMessage,
         session_error: conv.session_error,
@@ -5412,6 +5414,7 @@ export const listIdleSessions = query({
     }
 
     results.sort((a, b) => {
+      if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
       const aNew = a.message_count === 0;
       const bNew = b.message_count === 0;
       if (aNew !== bNew) return aNew ? -1 : 1;

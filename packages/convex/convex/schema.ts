@@ -171,6 +171,7 @@ export default defineSchema({
     idle_summary: v.optional(v.string()),
     inbox_dismissed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
+    inbox_pinned_at: v.optional(v.number()),
     draft_message: v.optional(v.string()),
     last_user_message_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
