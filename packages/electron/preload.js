@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
     ipcRenderer.on("update-status", (_e, status) => cb(status));
   },
   restartForUpdate: () => ipcRenderer.invoke("restart-for-update"),
+  getShortcuts: () => ipcRenderer.invoke("get-shortcuts"),
+  setShortcut: (key, accelerator) => ipcRenderer.invoke("set-shortcut", key, accelerator),
   paletteNavigate: (path) => ipcRenderer.send("palette-navigate", path),
   paletteHide: () => ipcRenderer.send("palette-hide"),
   onPaletteShow: (cb) => {

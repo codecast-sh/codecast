@@ -5,10 +5,11 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { Button } from "../../components/ui/button";
 import {
-  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug,
+  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor,
 } from "lucide-react";
+import { useIsDesktop } from "../../lib/desktop";
 
-const tabs = [
+const baseTabs = [
   { name: "CLI", path: "/settings/cli", icon: Terminal },
   { name: "Agents", path: "/settings/agents", icon: Bot },
   { name: "Sync & Privacy", path: "/settings/sync", icon: RefreshCw },
@@ -18,6 +19,8 @@ const tabs = [
   { name: "Integrations", path: "/settings/integrations/github-app", icon: Plug },
 ];
 
+const desktopTab = { name: "Desktop", path: "/settings/desktop", icon: Monitor };
+
 export default function SettingsLayout({
   children,
 }: {
@@ -25,6 +28,8 @@ export default function SettingsLayout({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const isDesktop = useIsDesktop();
+  const tabs = isDesktop ? [...baseTabs, desktopTab] : baseTabs;
 
   return (
     <AuthGuard>

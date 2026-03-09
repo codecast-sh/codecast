@@ -1,16 +1,44 @@
 const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
+const fs = require("fs");
 
 const PROD_URL = "https://codecast.sh";
 const LOCAL_URL = "http://local.codecast.sh";
 const BASE_URL = process.env.CODECAST_URL || PROD_URL;
+
+const DEFAULT_SHORTCUTS = {
+  toggleWindow: "CommandOrControl+Alt+Space",
+  togglePalette: "Control+Alt+Space",
+  toggleEnv: "CommandOrControl+Alt+L",
+};
 
 let mainWindow = null;
 let paletteWindow = null;
 let tray = null;
 let deepLinkUrl = null;
 let currentBaseUrl = BASE_URL;
+
+function getSettingsPath() {
+  return path.join(app.getPath("userData"), "settings.json");
+}
+
+function loadSettings() {
+  try {
+    const data = fs.readFileSync(getSettingsPath(), "utf8");
+    return { ...DEFAULT_SHORTCUTS, ...JSON.parse(data).shortcuts };
+  } catch {
+    return { ...DEFAULT_SHORTCUTS };
+  }
+}
+
+function saveSettings(shortcuts) {
+  const settingsPath = getSettingsPath();
+  let existing = {};
+  try { existing = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+  existing.shortcuts = shortcuts;
+  fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
+}
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -266,29 +294,67 @@ ipcMain.on("palette-hide", () => {
   hidePalette();
 });
 
+// Settings IPC
+ipcMain.handle("get-shortcuts", () => loadSettings());
+ipcMain.handle("set-shortcut", (_e, key, accelerator) => {
+  const shortcuts = loadSettings();
+  shortcuts[key] = accelerator;
+  saveSettings(shortcuts);
+  registerShortcuts();
+  return shortcuts;
+});
+
+function registerShortcuts() {
+  globalShortcut.unregisterAll();
+  const shortcuts = loadSettings();
+
+  if (shortcuts.toggleWindow) {
+    globalShortcut.register(shortcuts.toggleWindow, () => {
+      if (!mainWindow) return;
+      if (mainWindow.isVisible() && mainWindow.isFocused()) {
+        mainWindow.hide();
+      } else {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+  }
+
+  if (shortcuts.togglePalette) {
+    globalShortcut.register(shortcuts.togglePalette, () => {
+      togglePalette();
+    });
+  }
+
+  if (shortcuts.toggleEnv) {
+    globalShortcut.register(shortcuts.toggleEnv, () => {
+      if (!mainWindow) return;
+      currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
+      const env = currentBaseUrl === PROD_URL ? "prod" : "local";
+      mainWindow.loadURL(currentBaseUrl);
+      mainWindow.webContents.once("did-finish-load", () => {
+        mainWindow.webContents.executeJavaScript(
+          "document.documentElement.classList.add('electron-desktop')"
+        );
+        mainWindow.webContents.executeJavaScript(
+          `document.title = '[${env.toUpperCase()}] ' + document.title`
+        );
+      });
+      if (paletteWindow) {
+        paletteWindow.close();
+        paletteWindow = null;
+      }
+      createPaletteWindow();
+    });
+  }
+}
+
 app.whenReady().then(() => {
   createWindow();
   createTray();
   buildAppMenu();
-
-  // Pre-create palette window so it's ready instantly
   createPaletteWindow();
-
-  // Global shortcut: Cmd+Option+Space to toggle window
-  globalShortcut.register("CommandOrControl+Alt+Space", () => {
-    if (!mainWindow) return;
-    if (mainWindow.isVisible() && mainWindow.isFocused()) {
-      mainWindow.hide();
-    } else {
-      mainWindow.show();
-      mainWindow.focus();
-    }
-  });
-
-  // Global shortcut: Cmd+Shift+Space to toggle palette
-  globalShortcut.register("CommandOrControl+Shift+Space", () => {
-    togglePalette();
-  });
+  registerShortcuts();
 
   // Auto-update
   autoUpdater.autoDownload = true;
@@ -306,28 +372,6 @@ app.whenReady().then(() => {
     console.error("Auto-update error:", err.message);
   });
   autoUpdater.checkForUpdatesAndNotify();
-
-  // Global shortcut: Cmd+Option+L to toggle local/prod
-  globalShortcut.register("CommandOrControl+Alt+L", () => {
-    if (!mainWindow) return;
-    currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
-    const env = currentBaseUrl === PROD_URL ? "prod" : "local";
-    mainWindow.loadURL(currentBaseUrl);
-    mainWindow.webContents.once("did-finish-load", () => {
-      mainWindow.webContents.executeJavaScript(
-        "document.documentElement.classList.add('electron-desktop')"
-      );
-      mainWindow.webContents.executeJavaScript(
-        `document.title = '[${env.toUpperCase()}] ' + document.title`
-      );
-    });
-    // Recreate palette window with new URL
-    if (paletteWindow) {
-      paletteWindow.close();
-      paletteWindow = null;
-    }
-    createPaletteWindow();
-  });
 });
 
 app.on("activate", () => {
