@@ -31,7 +31,7 @@ function TerminalOutput({ content, type }: { content: string; type: 'stdout' | '
       {shouldCollapse && (
         <button
           onClick={() => setExpanded(!expanded)}
-          className="mt-2 text-xs text-blue-500 hover:text-blue-400 transition-colors"
+          className="mt-2 text-xs text-blue-500 hover:text-blue-400 transition-colors select-none"
         >
           {expanded ? "Show less" : `Show all ${lineCount} lines`}
         </button>

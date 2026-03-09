@@ -25,7 +25,7 @@ export function ToolCallDisplay({ name, input, output, timestamp }: ToolCallDisp
     <div className="my-2 border border-border rounded-lg overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-2 bg-muted/30 flex items-center justify-between text-left hover:bg-muted/50 transition-colors"
+        className="w-full px-4 py-2 bg-muted/30 flex items-center justify-between text-left hover:bg-muted/50 transition-colors select-none"
       >
         <div className="flex items-center gap-3">
           <div className={`p-1.5 rounded border ${colorClasses}`}>

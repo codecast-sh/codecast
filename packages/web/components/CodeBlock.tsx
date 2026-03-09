@@ -2,6 +2,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";
+import { Copy, Check } from "lucide-react";
 import Prism from "prismjs";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-javascript";
@@ -59,10 +60,13 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
     setMaxExpand(Math.max(0, rightSpace));
   }, []);
 
+  const [copied, setCopied] = useState(false);
+
   const handleCopy = async () => {
     try {
       await copyToClipboard(code);
-      toast.success("Copied!");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       toast.error("Failed to copy");
     }
@@ -104,7 +108,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
         {isExpanded && (
           <button
             onClick={() => setExtraWidth(0)}
-            className="px-2 py-1 text-xs bg-sol-bg-highlight text-sol-text-secondary rounded hover:bg-sol-border/50"
+            className="px-2 py-1 text-xs bg-sol-bg-highlight text-sol-text-secondary rounded hover:bg-sol-border/50 select-none"
             title="Reset width"
           >
             Reset
@@ -112,14 +116,14 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
         )}
         <button
           onClick={handleCopy}
-          className="px-2 py-1 text-xs bg-sol-bg-highlight text-sol-text-secondary rounded hover:bg-sol-border/50"
+          className="p-1.5 text-sol-text-secondary rounded hover:bg-sol-border/50 select-none"
           title="Copy code"
         >
-          Copy
+          {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
       </div>
       {language && (
-        <div className="text-xs px-3 py-1 text-sol-text-dim bg-sol-bg-highlight/50 border-b border-sol-border/20 rounded-t-md">
+        <div className="text-xs px-3 py-1 text-sol-text-dim bg-sol-bg-highlight/50 border-b border-sol-border/20 rounded-t-md select-none">
           {language}{code.split('\n').length > 1 ? ` \u00b7 ${code.split('\n').length} lines` : ''}
         </div>
       )}

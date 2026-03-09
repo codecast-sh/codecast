@@ -9,7 +9,7 @@ export function useSyncDocs(typeFilter?: string, searchQuery?: string, projectFi
   const result = useQuery(
     searchQuery ? api.docs.webSearch : api.docs.webList,
     searchQuery
-      ? { query: searchQuery, doc_type: typeFilter || undefined }
+      ? { query: searchQuery, doc_type: typeFilter || undefined, scope: scope || undefined }
       : { doc_type: typeFilter || undefined, project_path: projectFilter || undefined, scope: scope || undefined }
   );
   const syncDocs = useInboxStore((s) => s.syncDocs);

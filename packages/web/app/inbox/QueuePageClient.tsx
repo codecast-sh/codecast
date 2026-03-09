@@ -261,40 +261,13 @@ function SessionCard({
         onClick={() => onSelect(globalIndex)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
         className={`w-full text-left cursor-pointer ${
-          isDismissed && isSubagent ? "px-2 py-1 pr-6" : "px-2.5 sm:px-3 py-1.5 sm:py-2 pr-7 sm:pr-8"
+          isDismissed && isSubagent ? "px-2 py-1" : "px-2.5 sm:px-3 py-1.5 sm:py-2"
         }`}
       >
-        <div className="flex items-center justify-between gap-2">
-          <div className={`truncate leading-tight ${
-            isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed && isSubagent ? "text-xs text-sol-text-muted" : "text-sm text-sol-text"
-          }`}>
-            {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
-          </div>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            {isSubagent && (
-              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/30 text-violet-400/70 border border-violet-600/30">
-                sub
-              </span>
-            )}
-            {session.session_error && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
-            )}
-            {session.is_unresponsive && !session.session_error && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
-            )}
-            {session.has_pending && !session.is_unresponsive && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
-            )}
-            {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session ended" />
-            )}
-            {isWorking && (
-              <span className="relative flex h-2 w-2" title="Working">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
-              </span>
-            )}
-          </div>
+        <div className={`truncate leading-tight ${
+          isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed && isSubagent ? "text-xs text-sol-text-muted" : "text-sm text-sol-text"
+        }`}>
+          {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
         </div>
         {(session.idle_summary || session.subtitle) && !session.implementation_session && (
           <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
@@ -336,9 +309,34 @@ function SessionCard({
               {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
             </span>
           )}
-          <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0 ml-auto">
-            {formatIdleDuration(session.updated_at)}
-          </span>
+          <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+            {isSubagent && (
+              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-violet-900/30 text-violet-400/70 border border-violet-600/30">
+                sub
+              </span>
+            )}
+            {session.session_error && (
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
+            )}
+            {session.is_unresponsive && !session.session_error && (
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
+            )}
+            {session.has_pending && !session.is_unresponsive && (
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
+            )}
+            {!isWorking && !isDismissed && session.is_idle && !session.is_connected && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session ended" />
+            )}
+            {isWorking && (
+              <span className="relative flex h-2 w-2" title="Working">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
+              </span>
+            )}
+            <span className="text-[10px] text-sol-text-dim tabular-nums">
+              {formatIdleDuration(session.updated_at)}
+            </span>
+          </div>
         </div>
         {session.implementation_session && (
           <div
@@ -358,7 +356,7 @@ function SessionCard({
         )}
       </div>
       {(onDismiss || onDefer) && (
-        <div className="absolute top-1.5 right-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg/95 backdrop-blur-sm rounded-md shadow-sm border border-sol-border/30 px-0.5">
           {onDismiss && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
@@ -401,7 +399,7 @@ function SessionCard({
             <TooltipTrigger asChild>
               <button
                 onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-                className="absolute top-2 right-1.5 p-1 rounded text-sol-text-dim hover:text-sol-cyan opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute bottom-1.5 right-1.5 p-1 rounded-md text-sol-text-dim hover:text-sol-cyan opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />

@@ -5,6 +5,8 @@ declare global {
       getVersion: () => Promise<string>;
       setBadgeCount: (count: number) => Promise<void>;
       onDeepLink: (cb: (url: string) => void) => void;
+      onUpdateStatus: (cb: (status: { status: string; version?: string; percent?: number }) => void) => void;
+      restartForUpdate: () => Promise<void>;
       platform: string;
     };
   }
@@ -54,6 +56,19 @@ export async function checkForUpdates() {
     if (update) {
       await update.downloadAndInstall();
     }
+  }
+  // Electron auto-update is handled in main process -- see main.js
+}
+
+export function onUpdateStatus(cb: (status: { status: string; version?: string; percent?: number }) => void) {
+  if (isElectron()) {
+    window.__CODECAST_ELECTRON__!.onUpdateStatus(cb);
+  }
+}
+
+export function restartForUpdate() {
+  if (isElectron()) {
+    window.__CODECAST_ELECTRON__!.restartForUpdate();
   }
 }
 

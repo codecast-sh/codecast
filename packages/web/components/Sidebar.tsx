@@ -67,7 +67,7 @@ function RecentSessions({
     <div className="mt-4">
       <button
         onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-center justify-between text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 hover:text-sol-text-muted transition-colors"
+        className="w-full flex items-center justify-between text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 hover:text-sol-text-muted transition-colors select-none"
       >
         <span>Recent Sessions</span>
         <svg
@@ -457,7 +457,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   return (
     <nav
       className={`
-        h-full w-full py-3 sm:py-4 flex flex-col bg-sol-bg-alt
+        h-full w-full py-3 sm:py-4 flex flex-col bg-sol-bg-alt select-none
         ${isMobileOpen ? 'shadow-xl' : 'hidden md:flex'}
       `}
     >

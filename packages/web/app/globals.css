@@ -263,9 +263,9 @@
 
 }
 
-/* Code block horizontal scrollbar - always visible, solarized */
+/* Code block horizontal scrollbar - solarized */
 .cb-hscroll {
-  overflow-x: scroll;
+  overflow-x: auto;
 }
 .cb-hscroll::-webkit-scrollbar {
   height: 8px;

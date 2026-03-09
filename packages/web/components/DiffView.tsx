@@ -194,11 +194,16 @@ function diffToDisplayItems(
     }
   }
 
+  const hasChanges = allLines.some(l => l.type !== 'context');
   const showLine = new Set<number>();
-  for (let i = 0; i < allLines.length; i++) {
-    if (allLines[i].type !== 'context') {
-      for (let j = Math.max(0, i - contextLines); j <= Math.min(allLines.length - 1, i + contextLines); j++) {
-        showLine.add(j);
+  if (!hasChanges) {
+    for (let i = 0; i < allLines.length; i++) showLine.add(i);
+  } else {
+    for (let i = 0; i < allLines.length; i++) {
+      if (allLines[i].type !== 'context') {
+        for (let j = Math.max(0, i - contextLines); j <= Math.min(allLines.length - 1, i + contextLines); j++) {
+          showLine.add(j);
+        }
       }
     }
   }

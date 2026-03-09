@@ -124,7 +124,7 @@ export function DiffPane({ filePath, oldContent, newContent }: DiffPaneProps) {
       <div className="border-b border-border p-4 bg-muted/50">
         <div className="flex items-center justify-between">
           <div className="font-mono text-sm font-semibold">{filePath}</div>
-          <div className="flex items-center gap-4 text-xs">
+          <div className="flex items-center gap-4 text-xs select-none">
             {stats.additions > 0 && (
               <span className="text-emerald-500 font-semibold">+{stats.additions}</span>
             )}

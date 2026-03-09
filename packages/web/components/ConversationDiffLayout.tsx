@@ -474,7 +474,7 @@ function ChangesBar({ changes }: { changes: FileChange[] }) {
   return (
     <button
       onClick={() => setDiffPanelOpen(true)}
-      className="absolute top-full right-0 mt-2 mr-3 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-bg-alt/80 backdrop-blur-sm border border-sol-border/40 shadow-sm hover:border-sol-border/70 hover:bg-sol-bg-alt/95 transition-all group cursor-pointer"
+      className="absolute top-full right-0 mt-2 mr-3 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-bg-alt/80 backdrop-blur-sm border border-sol-border/40 shadow-sm hover:border-sol-border/70 hover:bg-sol-bg-alt/95 transition-all group cursor-pointer select-none"
     >
       <div className="flex items-center gap-1">
         {displayFiles.map((f) => (

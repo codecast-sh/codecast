@@ -29,7 +29,7 @@ function CollapsibleContent({ content, label }: { content: string; label: string
       {shouldCollapse && (
         <button
           onClick={() => setContentExpanded(!contentExpanded)}
-          className="mt-2 text-xs text-blue-500 hover:text-blue-400 transition-colors"
+          className="mt-2 text-xs text-blue-500 hover:text-blue-400 transition-colors select-none"
         >
           {contentExpanded ? "Show less" : "Show more"}
         </button>

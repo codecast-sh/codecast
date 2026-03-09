@@ -1102,14 +1102,14 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             {cleanTitle(conv.title || "Untitled")}
                           </span>
                           {conv.is_active && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50 shrink-0">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50 shrink-0 select-none">
                               <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
                               <span className="text-[10px] text-sol-green font-semibold">LIVE</span>
                             </span>
                           )}
                         </div>
                         <div
-                          className="flex items-center gap-1.5 shrink-0"
+                          className="flex items-center gap-1.5 shrink-0 select-none"
                           onClick={(e) => e.stopPropagation()}
                         >
                           {filter === "team" && hasTeam && conv.is_own && (
@@ -1235,7 +1235,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                       })()}
 
 
-                      <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-muted0">
+                      <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-muted0 select-none">
                         {(filter === "team" || !conv.is_own) && (
                           <span className="flex items-center gap-1.5 font-medium">
                             {conv.author_avatar ? (
