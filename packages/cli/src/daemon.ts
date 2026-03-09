@@ -1056,6 +1056,12 @@ async function executeRemoteCommand(
           break;
         }
         const projectPath = parsed.project_path;
+        // Skip if a resume is already in flight for this session
+        if (resumeInFlight.has(sessionId)) {
+          log(`[REMOTE] Resume already in flight for ${sessionId.slice(0, 8)}, skipping`);
+          result = JSON.stringify({ skipped: true, reason: "resume_in_flight" });
+          break;
+        }
         restartingSessionIds.set(sessionId, Date.now());
         log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
         let resumed = await autoResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
@@ -3316,7 +3322,7 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
   if (!normalizedInput) return false;
   const lines = paneContent.split("\n");
   const recent = lines.slice(-80).join("\n");
-  const lastPromptIndex = recent.lastIndexOf("❯");
+  const lastPromptIndex = Math.max(recent.lastIndexOf("❯"), recent.lastIndexOf("›"));
   if (lastPromptIndex === -1) return false;
   const fromPrompt = recent.slice(lastPromptIndex);
   return normalizePromptText(fromPrompt).includes(normalizedInput);
@@ -3375,10 +3381,16 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   // Check if there's a blocking dialog and dismiss it first
   try {
     const { stdout: preCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -5`);
-    if (/Press enter to continue|Update available/i.test(preCheck) && !/❯/.test(preCheck.split("\n").slice(-5).join("\n"))) {
+    const hasBlockingWarning = /Press enter to continue|Update available|⚠|recorded with model|weekly limit/i.test(preCheck);
+    const promptVisible = /[❯›]/.test(preCheck.split("\n").slice(-5).join("\n"));
+    if (hasBlockingWarning && !promptVisible) {
       log(`Clearing blocking dialog before inject to ${target}`);
       await execAsync(`tmux send-keys -t '${target}' Enter`);
       await new Promise(resolve => setTimeout(resolve, 1000));
+    } else if (hasBlockingWarning && promptVisible) {
+      // Prompt is visible but warnings are present -- send Escape to clear any overlay
+      await execAsync(`tmux send-keys -t '${target}' Escape`);
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   } catch {}
 
@@ -3426,16 +3438,16 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       } else {
         // Also check if we can see any sign of activity (prompt gone or spinner visible)
         const lastLines = postCheck.split("\n").slice(-5).join("\n");
-        const hasPrompt = /❯/.test(lastLines);
+        const hasPrompt = /[❯›]/.test(lastLines);
         const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
         if (hasActivity || !hasPrompt) {
           break;
         }
         // Prompt visible but no text - could mean submitted or could mean text scrolled off
-        // If the prompt is clean (no text after ❯), likely submitted
-        const promptLine = lastLines.split("\n").find(l => l.includes("❯"));
+        const promptLine = lastLines.split("\n").find(l => /[❯›]/.test(l));
         if (promptLine) {
-          const afterPrompt = promptLine.slice(promptLine.indexOf("❯") + 1).trim();
+          const promptMatch = promptLine.match(/[❯›]/);
+          const afterPrompt = promptMatch ? promptLine.slice(promptMatch.index! + 1).trim() : "";
           if (!afterPrompt) break;
         }
         break;
@@ -3709,6 +3721,9 @@ const STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
 const restartingSessionIds = new Map<string, number>();
 const RESTART_GUARD_TTL_MS = 60_000;
 
+// Prevent concurrent resume attempts on the same session
+const resumeInFlight = new Map<string, Promise<boolean>>();
+
 const UUID_JSONL_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
 
 async function discoverAndLinkSession(
@@ -3829,6 +3844,31 @@ function slugify(text: string, maxLen = 30): string {
 }
 
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, nonInteractive = false, cwdOverride?: string, conversationId?: string): Promise<boolean> {
+  // Deduplicate concurrent resume attempts on the same session
+  const existing = resumeInFlight.get(sessionId);
+  if (existing) {
+    logDelivery(`Resume already in flight for ${sessionId.slice(0, 8)}, waiting...`);
+    const result = await existing;
+    // If the existing resume succeeded and we have content to inject, inject it now
+    if (result && content) {
+      const tmuxSession = resumeSessionCache.get(sessionId);
+      if (tmuxSession) {
+        await injectViaTmux(tmuxSession + ":0.0", content);
+        log(`Injected message to already-resumed session ${sessionId.slice(0, 8)}`);
+      }
+    }
+    return result;
+  }
+  const promise = autoResumeSessionInner(sessionId, content, titleCache, nonInteractive, cwdOverride, conversationId);
+  resumeInFlight.set(sessionId, promise);
+  try {
+    return await promise;
+  } finally {
+    resumeInFlight.delete(sessionId);
+  }
+}
+
+async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, nonInteractive = false, cwdOverride?: string, conversationId?: string): Promise<boolean> {
   if (!hasTmux()) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
     return false;
@@ -3955,7 +3995,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
     }
 
     // Poll for agent readiness - check every 250ms, bail on fatal errors
-    // Must see the input prompt (❯) to know the TUI is ready for input
+    // Must see the input prompt (❯ for Claude, › for Codex) to know the TUI is ready
     const fatalErrors = [
       "cannot be launched inside another",
       "command not found",
@@ -3965,7 +4005,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       "is not an object",
       "ENOENT",
     ];
-    const promptPattern = /❯/;
+    const promptPattern = /[❯›]/;
     const startTime = Date.now();
     let ready = false;
 
@@ -3987,6 +4027,28 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
     }
     if (!ready) {
       logDelivery(`Agent ${shortId} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
+    }
+
+    // Dismiss startup warnings (model mismatch, rate limit) before injection
+    // These warnings block the prompt -- send Escape then Enter to clear them
+    if (ready || !content) {
+      try {
+        const { stdout: preInjectPane } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -15`);
+        const warningPatterns = /⚠|recorded with model|weekly limit|Update available|Press enter to continue/;
+        if (warningPatterns.test(preInjectPane)) {
+          logDelivery(`Clearing startup warnings for ${shortId} before injection`);
+          await execAsync(`tmux send-keys -t '${tmuxSession}' Escape`);
+          await new Promise(resolve => setTimeout(resolve, 300));
+          // Wait for the prompt to appear after clearing warnings
+          for (let w = 0; w < 20; w++) {
+            await new Promise(resolve => setTimeout(resolve, 250));
+            try {
+              const { stdout: cleared } = await execAsync(`tmux capture-pane -p -J -t '${tmuxSession}' -S -5`);
+              if (promptPattern.test(cleared.split("\n").slice(-3).join("\n"))) break;
+            } catch {}
+          }
+        }
+      } catch {}
     }
 
     // Inject the message (skip if empty — resume-only mode)
@@ -4155,6 +4217,17 @@ async function postDeliveryHealthCheck(
   conversationCache: ConversationCache
 ): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 15000));
+
+  // Skip health check if a resume is already in flight (remote or auto)
+  if (resumeInFlight.has(sessionId)) {
+    log(`Health check: skipping for ${sessionId.slice(0, 8)}, resume in flight`);
+    return;
+  }
+  const restartTs = restartingSessionIds.get(sessionId);
+  if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
+    log(`Health check: skipping for ${sessionId.slice(0, 8)}, restart in progress`);
+    return;
+  }
 
   const tmuxSession = resumeSessionCache.get(sessionId);
   if (!tmuxSession) return;
@@ -4630,8 +4703,8 @@ async function isTmuxAgentAlive(tmuxSession: string): Promise<boolean> {
         // If we see crash indicators, agent is dead
         if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
         // Agent-agnostic: look for signs of an active TUI
-        // Claude: ❯ ⏵, active work indicators, permission prompts
-        if (/❯|⏵|thinking|Thinking|working|Running|bypass permissions|permission/.test(trimmed)) {
+        // Claude: ❯ ⏵, Codex: ›, active work indicators, permission prompts
+        if (/[❯›]|⏵|thinking|Thinking|working|Running|bypass permissions|permission/.test(trimmed)) {
           return true;
         }
       } catch {}
@@ -6857,11 +6930,12 @@ export async function runWatchdog(): Promise<void> {
 }
 
 function getDaemonExecInfo(): { executablePath: string; args: string[] } {
-  const isBinary = !__filename.endsWith(".ts") && !__filename.endsWith(".js");
+  const execPath = process.execPath;
+  const isBinary = !execPath.endsWith("/bun") && !execPath.endsWith("/node") && !execPath.includes("node_modules");
   if (isBinary) {
-    return { executablePath: process.argv[0], args: ["--", "_daemon"] };
+    return { executablePath: execPath, args: ["--", "_daemon"] };
   }
-  return { executablePath: process.execPath, args: [path.resolve(__dirname, "daemon.js")] };
+  return { executablePath: execPath, args: [path.resolve(__dirname, "daemon.js")] };
 }
 
 // Only run directly if executed as the main module (not when imported)

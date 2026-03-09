@@ -6,6 +6,9 @@ cd "$(dirname "$0")/.."
 OUTPUT_DIR="../web/binaries"
 mkdir -p "$OUTPUT_DIR"
 
+echo "Rebuilding daemon.js from source..."
+bun build src/daemon.ts --outfile src/daemon.js --target node
+
 echo "Building codecast binaries..."
 
 # Build for each platform
