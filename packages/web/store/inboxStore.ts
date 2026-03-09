@@ -196,6 +196,7 @@ interface InboxStoreState {
   dismissedSessions: InboxSession[];
   currentIndex: number;
   dismissedIds: Set<string>;
+  killingIds: Set<string>;
   showDismissed: boolean;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
@@ -254,6 +255,7 @@ interface InboxStoreState {
   patchSession: (id: string, fields: Partial<InboxSession>) => void;
   navigateToSession: (id: string) => void;
   touchMru: (id: string) => void;
+  markKilling: (id: string) => void;
 
   // -- Message actions --
   setMessages: (convId: string, msgs: Message[], meta?: Partial<PaginationState>) => void;
@@ -344,6 +346,7 @@ export const useInboxStore = create<InboxStoreState>(
   dismissedSessions: [],
   currentIndex: 0,
   dismissedIds: new Set(),
+  killingIds: new Set(),
   showDismissed: false,
   viewingDismissedId: null,
   pendingNavigateId: null,
@@ -489,22 +492,34 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   syncSessionsFromConvex: (incoming: InboxSession[]) => {
-    const { dismissedIds, currentIndex, sessions: prev } = get();
+    const { dismissedIds, killingIds, currentIndex, sessions: prev } = get();
 
     const incomingById = new Map(incoming.map((s) => [s._id, s]));
     const incomingBySessionId = new Map(incoming.map((s) => [s.session_id, s]));
 
-    // dismissedIds is purely optimistic — clear any ID the server returned as active.
+    // dismissedIds is purely optimistic — clear entries the server already processed
+    // (i.e. no longer in the active list). Keep entries that ARE still in the active
+    // list so the optimistic hide holds until the server catches up.
     let dismissedChanged = false;
     for (const id of dismissedIds) {
-      if (incomingById.has(id)) {
+      if (!incomingById.has(id)) {
         dismissedIds.delete(id);
         dismissedChanged = true;
       }
     }
     if (dismissedChanged) set({ dismissedIds: new Set(dismissedIds) });
 
-    const visibleIncoming = incoming.filter((s) => !dismissedIds.has(s._id));
+    // Clear killingIds for sessions the server no longer returns (kill completed).
+    let killingChanged = false;
+    for (const id of killingIds) {
+      if (!incomingById.has(id)) {
+        killingIds.delete(id);
+        killingChanged = true;
+      }
+    }
+    if (killingChanged) set({ killingIds: new Set(killingIds) });
+
+    const visibleIncoming = incoming.filter((s) => !dismissedIds.has(s._id) && !killingIds.has(s._id));
 
     const newConversations = { ...get().conversations };
     for (const s of incoming) {
@@ -539,6 +554,7 @@ export const useInboxStore = create<InboxStoreState>(
         continue;
       }
       if (seen.has(old._id)) continue;
+      if (killingIds.has(old._id)) continue;
       const fresh = incomingById.get(old._id);
       if (fresh && !dismissedIds.has(old._id)) {
         merged.push(fresh);
@@ -684,6 +700,20 @@ export const useInboxStore = create<InboxStoreState>(
     const { mruStack } = get();
     const filtered = mruStack.filter((s: string) => s !== id);
     set({ mruStack: [id, ...filtered] });
+  },
+
+  markKilling: (id: string) => {
+    const killing = new Set(get().killingIds);
+    killing.add(id);
+    set({ killingIds: killing });
+    setTimeout(() => {
+      const current = get().killingIds;
+      if (current.has(id)) {
+        const next = new Set(current);
+        next.delete(id);
+        set({ killingIds: next });
+      }
+    }, 10_000);
   },
 
 
