@@ -37,8 +37,8 @@ export const generateTitle = internalAction({
 
     const { messages } = conversation;
 
-    const firstSlice = messages.slice(0, 6);
-    const lastSlice = messages.length > 15 ? messages.slice(-9) : [];
+    const firstSlice = messages.slice(0, 4);
+    const lastSlice = messages.length > 10 ? messages.slice(-12) : [];
 
     const selectedMessages = [...firstSlice];
     for (const msg of lastSlice) {
@@ -138,19 +138,34 @@ export const getConversationForTitle = internalQuery({
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return null;
 
-    const messages = await ctx.db
+    const filterMsg = (m: { role: string; content?: string | null; tool_results?: unknown[] | null }) =>
+      (m.role === "user" || m.role === "assistant") && m.content && !m.tool_results?.length;
+
+    const earliest = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q) =>
         q.eq("conversation_id", args.conversation_id)
       )
       .order("asc")
-      .take(100);
+      .take(30);
 
-    const filteredMessages = messages.filter(m =>
-      (m.role === "user" || m.role === "assistant") &&
-      m.content &&
-      !m.tool_results?.length
-    );
+    const latest = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_id", (q) =>
+        q.eq("conversation_id", args.conversation_id)
+      )
+      .order("desc")
+      .take(50);
+
+    const seenIds = new Set(earliest.map(m => m._id));
+    const combined = [...earliest];
+    for (const m of latest.reverse()) {
+      if (!seenIds.has(m._id)) {
+        combined.push(m);
+      }
+    }
+
+    const filteredMessages = combined.filter(filterMsg);
 
     return {
       ...conversation,
@@ -161,6 +176,7 @@ export const getConversationForTitle = internalQuery({
 
 export function shouldGenerateTitle(messageCount: number): boolean {
   if (messageCount === 2) return true;
-  if (messageCount > 2 && (messageCount - 2) % 15 === 0) return true;
-  return false;
+  if (messageCount <= 20) return messageCount % 5 === 0;
+  if (messageCount <= 60) return messageCount % 10 === 0;
+  return messageCount % 20 === 0;
 }

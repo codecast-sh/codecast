@@ -59,7 +59,6 @@ export const getImageUrls = query({
 export const debugMessagesWithImages = query({
   args: {},
   handler: async (ctx) => {
-    // Check more messages
     const messages = await ctx.db.query("messages").order("desc").take(2000);
     const withImages = messages.filter(m => m.images && m.images.length > 0);
     const hasImagesField = messages.filter(m => m.images !== undefined);

@@ -22,7 +22,7 @@ export const create = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const userTeamId = user?.active_team_id || user?.team_id;
     const now = Date.now();
 
     // Check for existing doc by source_file (for upsert on plan sync)
@@ -42,12 +42,16 @@ export const create = mutation({
     }
 
     let conversation_id = undefined;
+    let team_id = userTeamId;
     if (args.conversation_id) {
       const conv = await ctx.db
         .query("conversations")
         .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
         .first();
-      if (conv) conversation_id = conv._id;
+      if (conv) {
+        conversation_id = conv._id;
+        team_id = (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+      }
     }
 
     const id = await ctx.db.insert("docs", {
@@ -218,31 +222,71 @@ export const webList = query({
     let docs;
     let projectPaths: string[] = [];
 
-    if (args.scope === "projects" || args.project_path) {
-      const userDocs = await ctx.db
+    const resolveConvTeamId = (d: any, convMap: Map<string, any>) => {
+      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
+      const conv = cid ? convMap.get(String(cid)) : undefined;
+      if (conv) {
+        return (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+      }
+      return d.team_id;
+    };
+
+    const userDocs = await ctx.db
+      .query("docs")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+
+    let teamDocs: typeof userDocs = [];
+    if (team_id) {
+      teamDocs = await ctx.db
         .query("docs")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
         .collect();
+    }
+
+    const allDocs = [...userDocs];
+    for (const td of teamDocs) {
+      if (!allDocs.some((d) => d._id === td._id)) allDocs.push(td);
+    }
+
+    const allConvIds = new Set<string>();
+    for (const d of allDocs) {
+      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
+      if (cid) allConvIds.add(String(cid));
+    }
+    const convMap = new Map<string, any>();
+    for (const cid of allConvIds) {
+      const conv = await ctx.db.get(cid as Id<"conversations">);
+      if (conv) convMap.set(cid, conv);
+    }
+
+    if (args.scope === "projects" || args.project_path) {
       if (args.scope === "projects") {
-        docs = userDocs.filter((d) => !d.team_id);
+        docs = userDocs.filter((d) => {
+          const effectiveTeamId = resolveConvTeamId(d, convMap);
+          return !effectiveTeamId;
+        });
         if (args.project_path) {
           docs = docs.filter((d) => d.project_path?.includes(args.project_path!));
         }
       } else {
         docs = userDocs.filter((d) => d.project_path?.includes(args.project_path!));
       }
-      const unscopedDocs = userDocs.filter((d) => !d.team_id && !d.archived_at && !isNoiseDoc(d));
+      const unscopedDocs = userDocs.filter((d) => {
+        const effectiveTeamId = resolveConvTeamId(d, convMap);
+        return !effectiveTeamId && !d.archived_at && !isNoiseDoc(d);
+      });
       projectPaths = [...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[];
     } else if (team_id) {
-      docs = await ctx.db
-        .query("docs")
-        .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
-        .collect();
+      docs = allDocs.filter((d) => {
+        const effectiveTeamId = resolveConvTeamId(d, convMap);
+        return String(effectiveTeamId) === String(team_id);
+      });
     } else {
-      docs = await ctx.db
-        .query("docs")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
+      docs = userDocs.filter((d) => {
+        const effectiveTeamId = resolveConvTeamId(d, convMap);
+        return !effectiveTeamId;
+      });
     }
 
     if (args.doc_type) {
@@ -251,21 +295,9 @@ export const webList = query({
 
     docs = docs.filter((d) => !d.archived_at && !isNoiseDoc(d));
 
-    // Batch-load conversation dates for origination enrichment
-    const convIds = new Set<string>();
-    for (const d of docs) {
-      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
-      if (cid) convIds.add(cid);
-    }
-    const convMap = new Map<string, any>();
-    for (const cid of convIds) {
-      const conv = await ctx.db.get(cid as Id<"conversations">);
-      if (conv) convMap.set(cid, conv);
-    }
-
     const enriched = docs.map((d) => {
       const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
-      const conv = cid ? convMap.get(cid) : undefined;
+      const conv = cid ? convMap.get(String(cid)) : undefined;
       if (conv?.started_at) return { ...d, originated_at: conv.started_at };
       return d;
     });
@@ -344,10 +376,14 @@ export const webSearch = query({
     query: v.string(),
     doc_type: v.optional(v.string()),
     limit: v.optional(v.number()),
+    scope: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+
+    const user = await ctx.db.get(userId);
+    const team_id = user?.active_team_id || (user as any)?.team_id;
 
     const results = await ctx.db
       .query("docs")
@@ -356,9 +392,38 @@ export const webSearch = query({
         if (args.doc_type) search = search.eq("doc_type", args.doc_type as any);
         return search;
       })
-      .take(args.limit || 20);
+      .take((args.limit || 20) * 3);
 
-    return results.filter((d) => !d.archived_at);
+    let filtered = results.filter((d) => !d.archived_at);
+
+    const convIds = new Set<string>();
+    for (const d of filtered) {
+      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
+      if (cid) convIds.add(String(cid));
+    }
+    const convMap = new Map<string, any>();
+    for (const cid of convIds) {
+      const conv = await ctx.db.get(cid as Id<"conversations">);
+      if (conv) convMap.set(cid, conv);
+    }
+
+    const resolveTeam = (d: any) => {
+      const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
+      const conv = cid ? convMap.get(String(cid)) : undefined;
+      if (conv) return (!conv.is_private || conv.auto_shared) ? conv.team_id : undefined;
+      return d.team_id;
+    };
+
+    if (args.scope === "projects") {
+      filtered = filtered.filter((d) => !resolveTeam(d));
+    } else if (team_id) {
+      filtered = filtered.filter((d) => {
+        const effectiveTeamId = resolveTeam(d);
+        return String(effectiveTeamId) === String(team_id);
+      });
+    }
+
+    return filtered.slice(0, args.limit || 20);
   },
 });
 
