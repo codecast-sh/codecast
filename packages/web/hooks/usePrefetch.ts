@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useQuery } from "convex/react";
 import { usePathname } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, TaskItem, DocItem } from "../store/inboxStore";
+import { useInboxStore } from "../store/inboxStore";
 
 const api = _api as any;
 
@@ -13,17 +13,16 @@ export function usePrefetch() {
 
   const tasks = useQuery(api.tasks.webList, isOnTasksPage ? "skip" : {});
   const docsResult = useQuery(api.docs.webList, isOnDocsPage ? "skip" : {});
-  const syncTasks = useInboxStore((s) => s.syncTasks);
-  const syncDocs = useInboxStore((s) => s.syncDocs);
+  const syncTable = useInboxStore((s) => s.syncTable);
 
   useEffect(() => {
-    if (tasks) syncTasks(tasks as unknown as TaskItem[]);
-  }, [tasks, syncTasks]);
+    if (tasks) syncTable("tasks", tasks as any);
+  }, [tasks, syncTable]);
 
   useEffect(() => {
     if (docsResult) {
       const { docs, projectPaths } = docsResult as any;
-      syncDocs(docs as unknown as DocItem[], projectPaths);
+      syncTable("docs", docs as any, { docProjectPaths: projectPaths });
     }
-  }, [docsResult, syncDocs]);
+  }, [docsResult, syncTable]);
 }

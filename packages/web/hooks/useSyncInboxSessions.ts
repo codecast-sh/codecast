@@ -32,8 +32,7 @@ export function useSyncInboxSessions(showAll: boolean) {
     }
   );
 
-  const syncSessionsFromConvex = useInboxStore((s) => s.syncSessionsFromConvex);
-  const syncDismissedFromConvex = useInboxStore((s) => s.syncDismissedFromConvex);
+  const syncTable = useInboxStore((s) => s.syncTable);
   const _setDispatch = useInboxStore((s) => s._setDispatch);
 
   const prevActiveIdsRef = useRef<Set<string> | null>(null);
@@ -44,15 +43,15 @@ export function useSyncInboxSessions(showAll: boolean) {
 
   useEffect(() => {
     if (activeSessions) {
-      syncSessionsFromConvex(activeSessions as unknown as InboxSession[]);
+      syncTable("sessions", activeSessions as unknown as InboxSession[]);
     }
-  }, [activeSessions, syncSessionsFromConvex]);
+  }, [activeSessions, syncTable]);
 
   useEffect(() => {
     if (dismissedQuery) {
-      syncDismissedFromConvex(dismissedQuery as unknown as InboxSession[]);
+      syncTable("dismissedSessions", dismissedQuery as unknown as InboxSession[]);
     }
-  }, [dismissedQuery, syncDismissedFromConvex]);
+  }, [dismissedQuery, syncTable]);
 
   useEffect(() => {
     if (clientState) {
@@ -65,9 +64,12 @@ export function useSyncInboxSessions(showAll: boolean) {
     const activeIds = new Set(activeSessions.map((s) => s._id.toString()));
     const prev = prevActiveIdsRef.current;
     if (prev) {
-      const currentSession = useInboxStore.getState().getCurrentSession();
+      const currentSessionId = useInboxStore.getState().currentSessionId;
+      const sessions = useInboxStore.getState().sessions;
+      const currentSession = currentSessionId ? sessions[currentSessionId] : null;
       if (currentSession && prev.has(currentSession._id) && !activeIds.has(currentSession._id)) {
-        const dismissed = dismissedQuery.find((s) => s._id.toString() === currentSession._id);
+        const dismissedSessions = useInboxStore.getState().dismissedSessions;
+        const dismissed = Object.values(dismissedSessions).find((s) => s._id === currentSession._id);
         if (dismissed?.implementation_session) {
           useInboxStore.getState().navigateToSession(dismissed.implementation_session._id);
         }

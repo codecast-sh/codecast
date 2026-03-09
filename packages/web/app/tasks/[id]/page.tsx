@@ -198,7 +198,7 @@ export default function TaskDetailPage() {
   useSyncTaskDetail(id);
 
   const detail = useInboxStore((s) => s.taskDetails[id]) as TaskDetail | undefined;
-  const listItem = useInboxStore((s) => s.tasks.find((t) => t._id === id));
+  const listItem = useInboxStore((s) => s.tasks[id]);
   const data = detail || (listItem as TaskDetail | undefined);
   const updateTask = useInboxStore((s) => s.updateTask);
   const addTaskComment = useInboxStore((s) => s.addTaskComment);

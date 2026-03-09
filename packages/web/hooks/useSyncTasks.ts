@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, TaskItem, TaskDetail } from "../store/inboxStore";
+import { useInboxStore, TaskDetail } from "../store/inboxStore";
 
 const api = _api as any;
 
@@ -9,13 +9,13 @@ export function useSyncTasks(statusFilter?: string) {
   const tasks = useQuery(api.tasks.webList, {
     status: statusFilter || undefined,
   });
-  const syncTasks = useInboxStore((s) => s.syncTasks);
+  const syncTable = useInboxStore((s) => s.syncTable);
 
   useEffect(() => {
     if (tasks) {
-      syncTasks(tasks as unknown as TaskItem[]);
+      syncTable("tasks", tasks as any);
     }
-  }, [tasks, syncTasks]);
+  }, [tasks, syncTable]);
 }
 
 export function useSyncTaskDetail(id?: string) {

@@ -1,5 +1,8 @@
 import { create } from "zustand";
 import { mutativeMiddleware, action } from "./mutativeMiddleware";
+import { applySyncTable, type PendingEntry } from "./syncProtocol";
+
+export type { PendingEntry } from "./syncProtocol";
 
 export interface SessionContext {
   projectPath?: string;
@@ -34,6 +37,7 @@ export type InboxSession = {
   has_pending: boolean;
   agent_status?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected";
   is_deferred?: boolean;
+  is_pinned?: boolean;
   last_user_message?: string | null;
   session_error?: string;
   implementation_session?: { _id: string; title?: string };
@@ -189,14 +193,30 @@ export type ClientState = {
 
 type Draft = InboxStoreState;
 
+// -- Helpers --
+
+export function sortSessions(sessions: Record<string, InboxSession>): InboxSession[] {
+  const list = Object.values(sessions);
+  list.sort((a, b) => {
+    if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+    if (a.is_deferred !== b.is_deferred) return a.is_deferred ? 1 : -1;
+    if (!isConvexId(a._id) !== !isConvexId(b._id)) return !isConvexId(a._id) ? -1 : 1;
+    const aNew = a.message_count === 0;
+    const bNew = b.message_count === 0;
+    if (aNew !== bNew) return aNew ? -1 : 1;
+    if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
+    return 0;
+  });
+  return list;
+}
+
 // -- Store interface --
 
 interface InboxStoreState {
-  sessions: InboxSession[];
-  dismissedSessions: InboxSession[];
-  currentIndex: number;
-  dismissedIds: Set<string>;
-  killingIds: Set<string>;
+  sessions: Record<string, InboxSession>;
+  dismissedSessions: Record<string, InboxSession>;
+  pending: Record<string, PendingEntry>;
+  currentSessionId: string | null;
   showDismissed: boolean;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
@@ -232,20 +252,26 @@ interface InboxStoreState {
   stashSession: (id: string) => void;
   unstashSession: (id: string) => void;
   deferSession: (id: string) => void;
+  pinSession: (id: string) => void;
   switchProject: (convId: string, path: string) => void;
   sendMessage: (convId: string, content: string, imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) => Promise<any>;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string }) => Promise<any>;
 
-  // -- Local actions --
-  advanceToNext: () => void;
-  syncSessionsFromConvex: (incoming: InboxSession[]) => void;
-  syncDismissedFromConvex: (incoming: InboxSession[]) => void;
+  // -- Generic sync --
+  syncTable: (tableName: string, incoming: Array<{ _id: string; [k: string]: any }>, extra?: Record<string, any>) => void;
+  syncRecord: (tableName: string, id: string, record: any) => void;
   syncClientState: (state: any) => void;
+  addPending: (key: string, entry: PendingEntry) => void;
+  clearPending: (key: string) => void;
+  sortedSessions: () => InboxSession[];
+
+  // -- Navigation --
+  advanceToNext: () => void;
   navigateUp: () => void;
   navigateDown: () => void;
-  setCurrentIndex: (index: number) => void;
+  setCurrentSession: (id: string) => void;
   clearSelection: () => void;
   setShowDismissed: (show: boolean) => void;
   setViewingDismissedId: (id: string | null) => void;
@@ -294,17 +320,15 @@ interface InboxStoreState {
   updateClientDismissed: (key: keyof ClientDismissed, value: any) => void;
 
   // -- Task / Doc state --
-  tasks: TaskItem[];
-  docs: DocItem[];
+  tasks: Record<string, TaskItem>;
+  docs: Record<string, DocItem>;
   docProjectPaths: string[];
   taskDetails: Record<string, TaskDetail>;
   docDetails: Record<string, DocDetail>;
   taskFilter: { status: string };
   docFilter: { type: string; query: string; project: string; scope: string };
 
-  // -- Task / Doc sync (local) --
-  syncTasks: (tasks: TaskItem[]) => void;
-  syncDocs: (docs: DocItem[], projectPaths?: string[]) => void;
+  // -- Task / Doc detail sync --
   syncTaskDetail: (id: string, detail: TaskDetail) => void;
   syncDocDetail: (id: string, detail: DocDetail) => void;
   setTaskFilter: (filter: Partial<{ status: string }>) => void;
@@ -342,11 +366,10 @@ function stripImageRef(s: string): string {
 export const useInboxStore = create<InboxStoreState>(
   mutativeMiddleware((set: any, get: any) => ({
   // -- Initial state --
-  sessions: [],
-  dismissedSessions: [],
-  currentIndex: 0,
-  dismissedIds: new Set(),
-  killingIds: new Set(),
+  sessions: {},
+  dismissedSessions: {},
+  pending: {},
+  currentSessionId: null,
   showDismissed: false,
   viewingDismissedId: null,
   pendingNavigateId: null,
@@ -380,26 +403,28 @@ export const useInboxStore = create<InboxStoreState>(
 
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
-  // Mark with action() to opt in. `this` is a mutative draft.
   // =====================
 
   stashSession: (id: string) => {
-    const { sessions, dismissedIds, currentIndex, conversations } = get();
-    const newDismissed = new Set(dismissedIds);
-    newDismissed.add(id);
-    const newSessions = sessions.filter((s: InboxSession) => s._id !== id);
-    const newConversations = { ...conversations };
+    const state = get();
+    const newSessions = { ...state.sessions };
+    delete newSessions[id];
+    const newPending = { ...state.pending };
+    newPending[`sessions:${id}`] = { type: "exclude", expiresAt: Date.now() + 15_000 };
+    const newConversations = { ...state.conversations };
     if (newConversations[id]) {
       newConversations[id] = { ...newConversations[id], inbox_dismissed_at: Date.now() };
     }
-    const newIndex = currentIndex >= newSessions.length
-      ? Math.max(0, newSessions.length - 1)
-      : currentIndex;
+    let newSessionId = state.currentSessionId;
+    if (state.currentSessionId === id) {
+      const sorted = sortSessions(newSessions);
+      newSessionId = sorted[0]?._id ?? null;
+    }
     set({
       sessions: newSessions,
-      dismissedIds: newDismissed,
-      currentIndex: newIndex,
+      pending: newPending,
       conversations: newConversations,
+      currentSessionId: newSessionId,
     });
     get()._dispatch("patch", [], {
       conversations: { [id]: { inbox_dismissed_at: Date.now() } },
@@ -410,29 +435,32 @@ export const useInboxStore = create<InboxStoreState>(
     if (this.conversations[id]) {
       this.conversations[id].inbox_dismissed_at = null;
     }
-    this.dismissedIds.delete(id);
+    delete this.pending[`sessions:${id}`];
   }),
 
   deferSession: action(function (this: Draft, id: string) {
     if (this.conversations[id]) {
       this.conversations[id].inbox_deferred_at = Date.now();
     }
-    const idx = this.sessions.findIndex((s: InboxSession) => s._id === id);
-    if (idx < 0 || this.sessions.length <= 1) return;
-    const session = { ...this.sessions[idx], is_deferred: true };
-    this.sessions.splice(idx, 1);
-    this.sessions.push(session as any);
-    if (idx < this.currentIndex) this.currentIndex--;
-    if (this.currentIndex >= this.sessions.length) {
-      this.currentIndex = Math.max(0, this.sessions.length - 1);
+    if (this.sessions[id]) {
+      this.sessions[id].is_deferred = true;
+    }
+  }),
+
+  pinSession: action(function (this: Draft, id: string) {
+    const isPinned = this.sessions[id]?.is_pinned;
+    if (this.conversations[id]) {
+      this.conversations[id].inbox_pinned_at = isPinned ? null : Date.now();
+    }
+    if (this.sessions[id]) {
+      this.sessions[id].is_pinned = !isPinned;
     }
   }),
 
   switchProject: action(function (this: Draft, convId: string, path: string) {
-    const idx = this.sessions.findIndex((s: InboxSession) => s._id === convId);
-    if (idx >= 0) {
-      this.sessions[idx].project_path = path;
-      this.sessions[idx].git_root = path;
+    if (this.sessions[convId]) {
+      this.sessions[convId].project_path = path;
+      this.sessions[convId].git_root = path;
     }
     if (!this.conversations[convId]) {
       this.conversations[convId] = { _id: convId } as any;
@@ -476,128 +504,52 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   // =====================
-  // LOCAL METHODS (plain set/get, NOT wrapped by middleware)
+  // GENERIC SYNC
   // =====================
 
-  advanceToNext: () => {
-    const { sessions, currentIndex } = get();
-    const idleSessions = sessions.filter((s: InboxSession) => s.is_idle);
-    const currentId = sessions[currentIndex]?._id;
-    const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
-    const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
-    if (nextIdle && nextIdle._id !== currentId) {
-      const globalIdx = sessions.findIndex((s: InboxSession) => s._id === nextIdle._id);
-      if (globalIdx >= 0) set({ currentIndex: globalIdx });
-    }
-  },
+  syncTable: (tableName: string, incoming: Array<{ _id: string; [k: string]: any }>, extra?: Record<string, any>) => {
+    const state = get();
+    const { table, pending } = applySyncTable(tableName, incoming as any, state.pending);
 
-  syncSessionsFromConvex: (incoming: InboxSession[]) => {
-    const { dismissedIds, killingIds, currentIndex, sessions: prev } = get();
-
-    const incomingById = new Map(incoming.map((s) => [s._id, s]));
-    const incomingBySessionId = new Map(incoming.map((s) => [s.session_id, s]));
-
-    // dismissedIds is purely optimistic — clear entries the server already processed
-    // (i.e. no longer in the active list). Keep entries that ARE still in the active
-    // list so the optimistic hide holds until the server catches up.
-    let dismissedChanged = false;
-    for (const id of dismissedIds) {
-      if (!incomingById.has(id)) {
-        dismissedIds.delete(id);
-        dismissedChanged = true;
+    if (tableName === "sessions") {
+      const prev = state.sessions as Record<string, InboxSession>;
+      const incomingBySessionId = new Map(incoming.map((s: any) => [s.session_id, s]));
+      for (const [oldId, oldSession] of Object.entries(prev)) {
+        if (isConvexId(oldId)) continue;
+        const match = incomingBySessionId.get((oldSession as InboxSession).session_id || oldId);
+        if (match) {
+          get().resolveSessionId(oldId, match._id);
+          if (state.currentSessionId === oldId) {
+            set({ currentSessionId: match._id });
+          }
+        } else if (!table[oldId]) {
+          table[oldId] = oldSession as any;
+        }
       }
-    }
-    if (dismissedChanged) set({ dismissedIds: new Set(dismissedIds) });
-
-    // Clear killingIds for sessions the server no longer returns (kill completed).
-    let killingChanged = false;
-    for (const id of killingIds) {
-      if (!incomingById.has(id)) {
-        killingIds.delete(id);
-        killingChanged = true;
+      const newConversations = { ...state.conversations };
+      for (const s of incoming) {
+        if (!newConversations[s._id]) {
+          newConversations[s._id] = { _id: s._id };
+        }
       }
-    }
-    if (killingChanged) set({ killingIds: new Set(killingIds) });
-
-    const visibleIncoming = incoming.filter((s) => !dismissedIds.has(s._id) && !killingIds.has(s._id));
-
-    const newConversations = { ...get().conversations };
-    for (const s of incoming) {
-      if (!newConversations[s._id]) {
-        newConversations[s._id] = { _id: s._id };
+      if (!state.currentSessionId && Object.keys(table).length > 0) {
+        const sorted = sortSessions(table as Record<string, InboxSession>);
+        set({ sessions: table, pending, conversations: newConversations, currentSessionId: sorted[0]?._id ?? null });
+      } else {
+        set({ sessions: table, pending, conversations: newConversations });
       }
-    }
-
-    if (prev.length === 0) {
-      const clampedIndex = Math.min(currentIndex, Math.max(0, visibleIncoming.length - 1));
-      set({ sessions: visibleIncoming, currentIndex: clampedIndex, conversations: newConversations });
       return;
     }
 
-    const currentSession = prev[currentIndex];
-    const merged: InboxSession[] = [];
-    const seen = new Set<string>();
-
-    for (const old of prev) {
-      if (!isConvexId(old._id)) {
-        const serverMatch = incomingBySessionId.get(old.session_id || old._id);
-        if (serverMatch) {
-          if (seen.has(serverMatch._id)) continue;
-          get().resolveSessionId(old._id, serverMatch._id);
-          merged.push(serverMatch);
-          seen.add(serverMatch._id);
-        } else {
-          if (seen.has(old._id)) continue;
-          merged.push(old);
-          seen.add(old._id);
-        }
-        continue;
-      }
-      if (seen.has(old._id)) continue;
-      if (killingIds.has(old._id)) continue;
-      const fresh = incomingById.get(old._id);
-      if (fresh && !dismissedIds.has(old._id)) {
-        merged.push(fresh);
-        seen.add(old._id);
-      } else if (old._id === currentSession?._id && !dismissedIds.has(old._id)) {
-        merged.push(old);
-        seen.add(old._id);
-      }
-    }
-
-    for (const s of visibleIncoming) {
-      if (!seen.has(s._id)) {
-        merged.push(s);
-      }
-    }
-
-    merged.sort((a, b) => {
-      if (!isConvexId(a._id) !== !isConvexId(b._id)) {
-        return !isConvexId(a._id) ? -1 : 1;
-      }
-      const aNew = a.message_count === 0;
-      const bNew = b.message_count === 0;
-      if (aNew !== bNew) return aNew ? -1 : 1;
-      if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
-      return 0;
-    });
-
-    let newIndex = currentIndex;
-    if (currentSession) {
-      const matchId = isConvexId(currentSession._id)
-        ? currentSession._id
-        : incomingBySessionId.get(currentSession.session_id || currentSession._id)?._id || currentSession._id;
-      const idx = merged.findIndex((s) => s._id === matchId);
-      newIndex = idx >= 0 ? idx : Math.min(currentIndex, Math.max(0, merged.length - 1));
-    } else {
-      newIndex = Math.min(currentIndex, Math.max(0, merged.length - 1));
-    }
-
-    set({ sessions: merged, currentIndex: newIndex, conversations: newConversations });
+    const updates: any = { [tableName]: table, pending };
+    if (extra) Object.assign(updates, extra);
+    set(updates);
   },
 
-  syncDismissedFromConvex: (incoming: InboxSession[]) => {
-    set({ dismissedSessions: incoming });
+  syncRecord: (tableName: string, id: string, record: any) => {
+    set((s: InboxStoreState) => ({
+      [tableName]: { ...(s as any)[tableName], [id]: record },
+    }));
   },
 
   syncClientState: (serverState: any) => {
@@ -619,27 +571,63 @@ export const useInboxStore = create<InboxStoreState>(
     set({ clientState: cs, clientStateInitialized: true });
   },
 
-  navigateUp: () => {
-    const { sessions, currentIndex } = get();
-    if (sessions.length === 0) return;
-    set({ currentIndex: (currentIndex - 1 + sessions.length) % sessions.length });
+  addPending: (key: string, entry: PendingEntry) => {
+    set((s: InboxStoreState) => ({
+      pending: { ...s.pending, [key]: entry },
+    }));
   },
 
-  navigateDown: () => {
-    const { sessions, currentIndex } = get();
-    if (sessions.length === 0) return;
-    set({ currentIndex: (currentIndex + 1) % sessions.length });
+  clearPending: (key: string) => {
+    set((s: InboxStoreState) => {
+      const next = { ...s.pending };
+      delete next[key];
+      return { pending: next };
+    });
   },
 
-  setCurrentIndex: (index: number) => {
-    const { sessions } = get();
-    if (index >= 0 && index < sessions.length) {
-      set({ currentIndex: index, viewingDismissedId: null });
+  sortedSessions: () => {
+    return sortSessions(get().sessions);
+  },
+
+  // =====================
+  // NAVIGATION
+  // =====================
+
+  advanceToNext: () => {
+    const sorted = get().sortedSessions();
+    const currentId = get().currentSessionId;
+    const idleSessions = sorted.filter((s: InboxSession) => s.is_idle);
+    const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
+    const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
+    if (nextIdle && nextIdle._id !== currentId) {
+      set({ currentSessionId: nextIdle._id });
     }
   },
 
+  navigateUp: () => {
+    const sorted = get().sortedSessions();
+    if (sorted.length === 0) return;
+    const currentId = get().currentSessionId;
+    const idx = sorted.findIndex((s: InboxSession) => s._id === currentId);
+    const newIdx = (idx - 1 + sorted.length) % sorted.length;
+    set({ currentSessionId: sorted[newIdx]._id });
+  },
+
+  navigateDown: () => {
+    const sorted = get().sortedSessions();
+    if (sorted.length === 0) return;
+    const currentId = get().currentSessionId;
+    const idx = sorted.findIndex((s: InboxSession) => s._id === currentId);
+    const newIdx = (idx + 1) % sorted.length;
+    set({ currentSessionId: sorted[newIdx]._id });
+  },
+
+  setCurrentSession: (id: string) => {
+    set({ currentSessionId: id, viewingDismissedId: null });
+  },
+
   clearSelection: () => {
-    set({ currentIndex: -1, viewingDismissedId: null });
+    set({ currentSessionId: null, viewingDismissedId: null });
   },
 
   setShowDismissed: (show: boolean) => {
@@ -651,46 +639,50 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   getCurrentSession: () => {
-    const { sessions, currentIndex } = get();
-    return sessions[currentIndex] ?? null;
+    const { sessions, currentSessionId } = get();
+    if (!currentSessionId) return null;
+    return sessions[currentSessionId] ?? null;
   },
 
   injectSession: (session: InboxSession) => {
-    const { sessions, dismissedIds } = get();
-    const newDismissed = new Set(dismissedIds);
-    if (newDismissed.delete(session._id)) {
+    const state = get();
+    const newPending = { ...state.pending };
+    const excludeKey = `sessions:${session._id}`;
+    if (newPending[excludeKey]) {
+      delete newPending[excludeKey];
       get()._dispatch("patch", [], { conversations: { [session._id]: { inbox_dismissed_at: null } } }).catch(() => {});
     }
-    const filtered = sessions.filter((s: InboxSession) => s._id !== session._id);
-    set({ sessions: [session, ...filtered], currentIndex: 0, dismissedIds: newDismissed, viewingDismissedId: null });
+    set({
+      sessions: { ...state.sessions, [session._id]: session },
+      currentSessionId: session._id,
+      pending: newPending,
+      viewingDismissedId: null,
+    });
   },
 
   updateSessionProject: (id: string, projectPath: string) => {
     const { sessions } = get();
-    const updated = sessions.map((s: InboxSession) =>
-      s._id === id ? { ...s, project_path: projectPath, git_root: projectPath } : s
-    );
-    set({ sessions: updated });
+    if (!sessions[id]) return;
+    set({ sessions: { ...sessions, [id]: { ...sessions[id], project_path: projectPath, git_root: projectPath } } });
   },
 
   patchSession: (id: string, fields: Partial<InboxSession>) => {
     const { sessions } = get();
-    const updated = sessions.map((s: InboxSession) =>
-      s._id === id ? { ...s, ...fields } : s
-    );
-    set({ sessions: updated });
+    if (!sessions[id]) return;
+    set({ sessions: { ...sessions, [id]: { ...sessions[id], ...fields } } });
   },
 
   navigateToSession: (id: string) => {
-    const { sessions, dismissedIds } = get();
-    const newDismissed = new Set(dismissedIds);
-    if (newDismissed.delete(id)) {
+    const state = get();
+    const newPending = { ...state.pending };
+    const excludeKey = `sessions:${id}`;
+    if (newPending[excludeKey]) {
+      delete newPending[excludeKey];
       get()._dispatch("patch", [], { conversations: { [id]: { inbox_dismissed_at: null } } }).catch(() => {});
-      set({ dismissedIds: newDismissed });
+      set({ pending: newPending });
     }
-    const idx = sessions.findIndex((s: InboxSession) => s._id === id);
-    if (idx >= 0) {
-      set({ currentIndex: idx, viewingDismissedId: null });
+    if (state.sessions[id]) {
+      set({ currentSessionId: id, viewingDismissedId: null });
     } else {
       set({ pendingNavigateId: id, viewingDismissedId: null });
     }
@@ -703,17 +695,17 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   markKilling: (id: string) => {
-    const killing = new Set(get().killingIds);
-    killing.add(id);
-    set({ killingIds: killing });
-    setTimeout(() => {
-      const current = get().killingIds;
-      if (current.has(id)) {
-        const next = new Set(current);
-        next.delete(id);
-        set({ killingIds: next });
-      }
-    }, 10_000);
+    const state = get();
+    const newSessions = { ...state.sessions };
+    delete newSessions[id];
+    const newPending = { ...state.pending };
+    newPending[`sessions:${id}`] = { type: "exclude", expiresAt: Date.now() + 10_000 };
+    let newSessionId = state.currentSessionId;
+    if (state.currentSessionId === id) {
+      const sorted = sortSessions(newSessions);
+      newSessionId = sorted[0]?._id ?? null;
+    }
+    set({ sessions: newSessions, pending: newPending, currentSessionId: newSessionId });
   },
 
 
@@ -898,7 +890,8 @@ export const useInboxStore = create<InboxStoreState>(
 
   getConvexId: (id: string) => {
     if (isConvexId(id)) return id;
-    const session = get().sessions.find((s: InboxSession) => s.session_id === id || s._id === id);
+    const sessions = get().sessions as Record<string, InboxSession>;
+    const session = Object.values(sessions).find((s) => s.session_id === id || s._id === id);
     return session && isConvexId(session._id) ? session._id : undefined;
   },
 
@@ -966,23 +959,13 @@ export const useInboxStore = create<InboxStoreState>(
   // TASK / DOC STATE
   // =====================
 
-  tasks: [],
-  docs: [],
+  tasks: {},
+  docs: {},
   taskDetails: {},
   docDetails: {},
   taskFilter: { status: "" },
   docFilter: { type: "", query: "", project: "", scope: "" },
   docProjectPaths: [],
-
-  syncTasks: (incoming: TaskItem[]) => {
-    set({ tasks: incoming });
-  },
-
-  syncDocs: (incoming: DocItem[], projectPaths?: string[]) => {
-    const update: any = { docs: incoming };
-    if (projectPaths) update.docProjectPaths = projectPaths;
-    set(update);
-  },
 
   syncTaskDetail: (id: string, detail: TaskDetail) => {
     set((s: InboxStoreState) => ({
@@ -1008,18 +991,18 @@ export const useInboxStore = create<InboxStoreState>(
     }));
   },
 
-  // Task mutations via dispatch side effects
   updateTaskStatus: action(function (this: Draft, shortId: string, status: string) {
-    // Optimistic: update in tasks list
-    const idx = this.tasks.findIndex((t: TaskItem) => t.short_id === shortId);
-    if (idx >= 0) {
-      this.tasks[idx].status = status;
-      this.tasks[idx].updated_at = Date.now();
+    const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as TaskItem | undefined;
+    if (task) {
+      task.status = status;
+      task.updated_at = Date.now();
       if (status === "done" || status === "dropped") {
-        (this.tasks[idx] as any).closed_at = Date.now();
+        (task as any).closed_at = Date.now();
       }
+      this.pending[`tasks:${task._id}:status`] = {
+        type: "field", field: "status", value: status, expiresAt: Date.now() + 15_000,
+      };
     }
-    // Optimistic: update in detail cache
     for (const detail of Object.values(this.taskDetails)) {
       if ((detail as TaskDetail).short_id === shortId) {
         (detail as TaskDetail).status = status;
@@ -1032,9 +1015,9 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   updateTask: action(function (this: Draft, shortId: string, fields: Record<string, any>) {
-    const idx = this.tasks.findIndex((t: TaskItem) => t.short_id === shortId);
-    if (idx >= 0) {
-      Object.assign(this.tasks[idx], fields, { updated_at: Date.now() });
+    const task = Object.values(this.tasks).find((t: any) => t.short_id === shortId) as TaskItem | undefined;
+    if (task) {
+      Object.assign(task, fields, { updated_at: Date.now() });
     }
     for (const detail of Object.values(this.taskDetails)) {
       if ((detail as TaskDetail).short_id === shortId) {
@@ -1046,7 +1029,7 @@ export const useInboxStore = create<InboxStoreState>(
   createTask: action(function (this: Draft, opts: any) {
     const tempId = `temp_${Date.now()}`;
     const tempShortId = `ct-new`;
-    this.tasks.unshift({
+    this.tasks[tempId] = {
       _id: tempId,
       short_id: tempShortId,
       title: opts.title,
@@ -1058,7 +1041,7 @@ export const useInboxStore = create<InboxStoreState>(
       labels: opts.labels,
       created_at: Date.now(),
       updated_at: Date.now(),
-    } as TaskItem);
+    } as TaskItem;
   }),
 
   addTaskComment: action(function (this: Draft, shortId: string, text: string, commentType?: string) {
@@ -1076,13 +1059,12 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   pinDoc: action(function (this: Draft, id: string, pinned: boolean) {
-    const idx = this.docs.findIndex((d: DocItem) => d._id === id);
-    if (idx >= 0) this.docs[idx].pinned = pinned;
+    if (this.docs[id]) this.docs[id].pinned = pinned;
     if (this.docDetails[id]) (this.docDetails[id] as any).pinned = pinned;
   }),
 
   archiveDoc: action(function (this: Draft, id: string) {
-    this.docs = this.docs.filter((d: DocItem) => d._id !== id);
+    delete this.docs[id];
     delete this.docDetails[id];
   }),
 
@@ -1092,7 +1074,7 @@ export const useInboxStore = create<InboxStoreState>(
 
   getSession: (id: string) => {
     const { sessions, dismissedSessions } = get();
-    return sessions.find((s: InboxSession) => s._id === id) || dismissedSessions.find((s: InboxSession) => s._id === id);
+    return sessions[id] || dismissedSessions[id];
   },
 
 })) as any);

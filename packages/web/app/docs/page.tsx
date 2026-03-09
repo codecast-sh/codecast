@@ -144,10 +144,12 @@ export default function DocsPage() {
 
   useSyncDocs(docFilter.type || undefined, docFilter.query || undefined, docFilter.project || undefined, docFilter.scope || undefined);
 
+  const docsList = Object.values(docs);
+
   // Group docs by date
   const grouped: { key: string; docs: DocItem[] }[] = [];
   let currentKey = "";
-  for (const doc of docs) {
+  for (const doc of docsList) {
     const effectiveDate = (doc as any).originated_at || doc.created_at;
     const key = dateKey(effectiveDate);
     if (key !== currentKey) {
@@ -245,7 +247,7 @@ export default function DocsPage() {
           </div>
 
           <div className="flex-1 overflow-y-auto px-4 py-2">
-            {docs.length === 0 ? (
+            {docsList.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-sol-text-dim">
                 <FileText className="w-8 h-8 mb-2 opacity-30" />
                 <p className="text-sm">No documents found</p>

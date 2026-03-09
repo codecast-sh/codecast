@@ -12,7 +12,7 @@ export type SwitcherState = {
 const CLOSED: SwitcherState = { open: false, selectedIndex: 0, mruSessions: [] };
 
 export function useSessionSwitcher() {
-  const setCurrentIndex = useInboxStore((s) => s.setCurrentIndex);
+  const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
   const touchMru = useInboxStore((s) => s.touchMru);
 
   const [renderState, setRenderState] = useState<SwitcherState>(CLOSED);
@@ -26,15 +26,14 @@ export function useSessionSwitcher() {
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getMruSessions = useCallback((): InboxSession[] => {
-    const { sessions, mruStack } = useInboxStore.getState();
-    const byId = new Map(sessions.map((s) => [s._id, s]));
+    const { sessions, mruStack, sortedSessions } = useInboxStore.getState();
     const ordered: InboxSession[] = [];
     const seen = new Set<string>();
     for (const id of mruStack) {
-      const s = byId.get(id);
+      const s = sessions[id];
       if (s) { ordered.push(s); seen.add(id); }
     }
-    for (const s of sessions) {
+    for (const s of sortedSessions()) {
       if (!seen.has(s._id)) ordered.push(s);
     }
     return ordered;
@@ -45,8 +44,7 @@ export function useSessionSwitcher() {
     const target = sessions[idx];
     if (target) {
       const { sessions: all } = useInboxStore.getState();
-      const gi = all.findIndex((s) => s._id === target._id);
-      if (gi >= 0) { setCurrentIndex(gi); touchMru(target._id); }
+      if (all[target._id]) { setCurrentSession(target._id); touchMru(target._id); }
     }
     overlayOpen.current = false;
     selectedIdx.current = 0;
@@ -55,7 +53,7 @@ export function useSessionSwitcher() {
     pending.current = false;
     ctrlHeld.current = false;
     setRenderState(CLOSED);
-  }, [setCurrentIndex, touchMru]);
+  }, [setCurrentSession, touchMru]);
 
   const updateRender = useCallback(() => {
     setRenderState({

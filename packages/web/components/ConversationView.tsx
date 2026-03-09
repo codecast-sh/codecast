@@ -241,7 +241,7 @@ export interface ConversationViewHandle {
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
   const storeSession = useInboxStore((s) =>
-    s.sessions.find((sess) => sess._id === conversation._id)
+    s.sessions[conversation._id]
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
@@ -295,13 +295,15 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
           has_pending: false,
           last_user_message: null,
         };
-        const newDismissed = new Set(store.dismissedIds);
-        newDismissed.delete(sessionId);
-        const filtered = store.sessions.filter((s) => s._id !== oldId && s._id !== sessionId);
+        const newSessions = { ...store.sessions };
+        delete newSessions[oldId];
+        newSessions[sessionId] = newSession;
+        const newPending = { ...store.pending };
+        delete newPending[`sessions:${sessionId}`];
         useInboxStore.setState({
-          sessions: [newSession, ...filtered],
-          currentIndex: 0,
-          dismissedIds: newDismissed,
+          sessions: newSessions,
+          currentSessionId: sessionId,
+          pending: newPending,
           viewingDismissedId: null,
           conversations: {
             ...store.conversations,
@@ -387,7 +389,7 @@ function AgentSwitcher({ conversation }: { conversation: ConversationData }) {
   const switchAgent = useMutation(api.conversations.switchSessionAgent);
   const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
   const storeSession = useInboxStore((s) =>
-    s.sessions.find((sess) => sess._id === conversation._id)
+    s.sessions[conversation._id]
   );
   const resolvedId = storeSession?._id || conversation._id;
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;

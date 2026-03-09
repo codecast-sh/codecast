@@ -26,7 +26,7 @@ export function DesktopProvider() {
 
   useEffect(() => {
     if (!isDesktop()) return;
-    const pending = sessions.filter((s) => s.has_pending || s.is_idle).length;
+    const pending = Object.values(sessions).filter((s) => s.has_pending || s.is_idle).length;
     updateBadge(pending);
     prevCountRef.current = pending;
   }, [sessions]);

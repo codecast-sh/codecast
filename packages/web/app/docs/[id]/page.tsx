@@ -72,7 +72,7 @@ export default function DocDetailPage() {
   useSyncDocDetail(id);
 
   const detail = useInboxStore((s) => s.docDetails[id]) as DocDetail | undefined;
-  const listItem = useInboxStore((s) => s.docs.find((d) => d._id === id));
+  const listItem = useInboxStore((s) => s.docs[id]);
   const data = detail || (listItem as DocDetail | undefined);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const archiveDoc = useInboxStore((s) => s.archiveDoc);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, memo } from "react";
+import { useState, useEffect, useCallback, useRef, memo, useMemo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Panel, Group, Separator } from "react-resizable-panels";
@@ -10,7 +10,7 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, InboxSession, isConvexId } from "../../store/inboxStore";
+import { useInboxStore, InboxSession, isConvexId, sortSessions } from "../../store/inboxStore";
 import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
 import { useSessionSwitcher } from "../../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
@@ -219,6 +219,7 @@ function SessionCard({
   onSelect,
   onDismiss,
   onDefer,
+  onPin,
   onRestore,
   onNavigateToSession,
   variant = "default",
@@ -229,6 +230,7 @@ function SessionCard({
   onSelect: (index: number) => void;
   onDismiss?: (id: string) => void;
   onDefer?: (id: string) => void;
+  onPin?: (id: string) => void;
   onRestore?: (id: string) => void;
   onNavigateToSession?: (id: string) => void;
   variant?: "default" | "working" | "dismissed";
@@ -355,8 +357,25 @@ function SessionCard({
           </div>
         )}
       </div>
-      {(onDismiss || onDefer) && (
+      {(onDismiss || onDefer || onPin) && (
         <div className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg/95 backdrop-blur-sm rounded-md shadow-sm border border-sol-border/30 px-0.5">
+          {onPin && (
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
+                    className={`p-1 rounded transition-colors ${session.is_pinned ? 'text-sol-magenta' : 'text-sol-text-dim hover:text-sol-magenta'}`}
+                  >
+                    <svg className="w-3.5 h-3.5" fill={session.is_pinned ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                    </svg>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">{session.is_pinned ? "Unpin" : "Pin"}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
           {onDismiss && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
@@ -424,51 +443,49 @@ function InboxSessionPanel({
   dismissedSessions: InboxSession[];
 }) {
   const sessions = useInboxStore((s) => s.sessions);
-  const currentIndex = useInboxStore((s) => s.currentIndex);
+  const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
+  const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const stashSession = useInboxStore((s) => s.stashSession);
   const deferSession = useInboxStore((s) => s.deferSession);
+  const pinSession = useInboxStore((s) => s.pinSession);
   const unstashSession = useInboxStore((s) => s.unstashSession);
   const showDismissed = useInboxStore((s) => s.showDismissed);
   const setShowDismissed = useInboxStore((s) => s.setShowDismissed);
   const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
 
-  const setCurrentIndex = useInboxStore((s) => s.setCurrentIndex);
+  const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
   const showMySessions = useInboxStore((s) => s.showMySessions);
   const setShowMySessions = useInboxStore((s) => s.setShowMySessions);
 
   const handleSelectSession = useCallback((session: InboxSession) => {
-    const idx = sessions.findIndex((s) => s._id === session._id);
-    if (idx >= 0) {
-      setCurrentIndex(idx);
+    if (sessions[session._id]) {
+      setCurrentSession(session._id);
       if (showMySessions) setShowMySessions(false);
     } else {
       useInboxStore.setState({ pendingNavigateId: session._id, showMySessions: false });
     }
-  }, [sessions, setCurrentIndex, showMySessions, setShowMySessions]);
+  }, [sessions, setCurrentSession, showMySessions, setShowMySessions]);
 
   const handleNavigateToSession = useCallback((targetId: string) => {
-    const idx = sessions.findIndex((s) => s._id === targetId);
-    if (idx >= 0) {
-      setCurrentIndex(idx);
+    if (sessions[targetId]) {
+      setCurrentSession(targetId);
       if (showMySessions) setShowMySessions(false);
     } else {
       useInboxStore.setState({ pendingNavigateId: targetId, showMySessions: false });
     }
-  }, [sessions, setCurrentIndex, showMySessions, setShowMySessions]);
+  }, [sessions, setCurrentSession, showMySessions, setShowMySessions]);
 
-  const newSessions = sessions.filter((s) => s.message_count === 0);
-  const needsInput = sessions.filter((s) => s.is_idle && s.message_count > 0);
-  const working = sessions.filter((s) => !s.is_idle && s.message_count > 0);
-
-  const getGlobalIndex = (session: InboxSession) =>
-    sessions.findIndex((s) => s._id === session._id);
+  const pinned = sortedSessions.filter((s) => s.is_pinned);
+  const newSessions = sortedSessions.filter((s) => s.message_count === 0 && !s.is_pinned);
+  const needsInput = sortedSessions.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned);
+  const working = sortedSessions.filter((s) => !s.is_idle && s.message_count > 0 && !s.is_pinned);
 
   return (
     <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       <div className="px-3 py-3 border-b border-sol-border/50 flex-shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
-            {sessions.length} Session{sessions.length !== 1 ? "s" : ""}
+            {sortedSessions.length} Session{sortedSessions.length !== 1 ? "s" : ""}
           </span>
           <button
             onClick={onToggleShowAll}
@@ -479,6 +496,29 @@ function InboxSessionPanel({
         </div>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
+        {pinned.length > 0 && (
+          <div>
+            <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-magenta">
+                Pinned ({pinned.length})
+              </span>
+            </div>
+            {pinned.map((session) => (
+              <SessionCard
+                key={session._id}
+                session={session}
+                isActive={!viewingDismissedId && session._id === currentSessionId}
+                globalIndex={0}
+                onSelect={() => handleSelectSession(session)}
+                onDismiss={stashSession}
+                onDefer={deferSession}
+                onPin={pinSession}
+                onNavigateToSession={handleNavigateToSession}
+              />
+            ))}
+          </div>
+        )}
+
         {newSessions.length > 0 && (
           <div>
             <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
@@ -490,11 +530,12 @@ function InboxSessionPanel({
               <SessionCard
                 key={session._id}
                 session={session}
-                isActive={!viewingDismissedId && getGlobalIndex(session) === currentIndex}
-                globalIndex={getGlobalIndex(session)}
+                isActive={!viewingDismissedId && session._id === currentSessionId}
+                globalIndex={0}
                 onSelect={() => handleSelectSession(session)}
                 onDismiss={stashSession}
                 onDefer={deferSession}
+                onPin={pinSession}
                 onNavigateToSession={handleNavigateToSession}
               />
             ))}
@@ -512,11 +553,12 @@ function InboxSessionPanel({
               <SessionCard
                 key={session._id}
                 session={session}
-                isActive={!viewingDismissedId && getGlobalIndex(session) === currentIndex}
-                globalIndex={getGlobalIndex(session)}
+                isActive={!viewingDismissedId && session._id === currentSessionId}
+                globalIndex={0}
                 onSelect={() => handleSelectSession(session)}
                 onDismiss={stashSession}
                 onDefer={deferSession}
+                onPin={pinSession}
                 onNavigateToSession={handleNavigateToSession}
               />
             ))}
@@ -534,11 +576,12 @@ function InboxSessionPanel({
               <SessionCard
                 key={session._id}
                 session={session}
-                isActive={!viewingDismissedId && getGlobalIndex(session) === currentIndex}
-                globalIndex={getGlobalIndex(session)}
+                isActive={!viewingDismissedId && session._id === currentSessionId}
+                globalIndex={0}
                 onSelect={() => handleSelectSession(session)}
                 onDismiss={stashSession}
                 onDefer={deferSession}
+                onPin={pinSession}
                 onNavigateToSession={handleNavigateToSession}
                 variant="working"
               />
@@ -546,7 +589,7 @@ function InboxSessionPanel({
           </div>
         )}
 
-        {sessions.length === 0 && (
+        {sortedSessions.length === 0 && (
           <div className="px-3 py-8 text-center text-sm text-sol-text-dim">
             No active sessions
           </div>
@@ -607,18 +650,20 @@ export function QueuePageClient() {
   const { activeSessions } = useSyncInboxSessions(showAll);
   const sessions = useInboxStore((s) => s.sessions);
   const dismissedSessions = useInboxStore((s) => s.dismissedSessions);
-  const currentIndex = useInboxStore((s) => s.currentIndex);
+  const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
   const navigateUp = useInboxStore((s) => s.navigateUp);
   const navigateDown = useInboxStore((s) => s.navigateDown);
   const stashSession = useInboxStore((s) => s.stashSession);
   const deferSession = useInboxStore((s) => s.deferSession);
-  const rawSetCurrentIndex = useInboxStore((s) => s.setCurrentIndex);
+  const pinSession = useInboxStore((s) => s.pinSession);
+  const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
   const viewingDismissedId = useInboxStore((s) => s.viewingDismissedId);
   const setViewingDismissedId = useInboxStore((s) => s.setViewingDismissedId);
   const touchMru = useInboxStore((s) => s.touchMru);
   const showMySessions = useInboxStore((s) => s.showMySessions);
   const setShowMySessions = useInboxStore((s) => s.setShowMySessions);
+  const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
 
   const switcherState = useSessionSwitcher();
 
@@ -642,10 +687,6 @@ export function QueuePageClient() {
   const paramProcessedRef = useRef(!searchParams.get("s"));
 
   const injectSession = useInboxStore((s) => s.injectSession);
-  const setCurrentIndex = useCallback((idx: number) => {
-    if (showMySessions) setShowMySessions(false);
-    rawSetCurrentIndex(idx);
-  }, [rawSetCurrentIndex, showMySessions, setShowMySessions]);
 
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
@@ -662,24 +703,22 @@ export function QueuePageClient() {
   const paramSessionId = searchParams.get("s");
   useEffect(() => {
     if (!paramSessionId || paramSessionId === lastAppliedParamId.current) return;
-    if (sessions.length === 0 && activeSessions === undefined) return;
+    if (Object.keys(sessions).length === 0 && activeSessions === undefined) return;
     lastAppliedParamId.current = paramSessionId;
-    const idx = sessions.findIndex((s) => s._id === paramSessionId);
-    if (idx >= 0) {
-      rawSetCurrentIndex(idx);
+    if (sessions[paramSessionId]) {
+      setCurrentSession(paramSessionId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
     } else {
       setPendingInjectId(paramSessionId);
     }
-  }, [paramSessionId, sessions, rawSetCurrentIndex, activeSessions]);
+  }, [paramSessionId, sessions, setCurrentSession, activeSessions]);
 
   // Once we have the conversation data, inject it into the queue
   useEffect(() => {
     if (!pendingInjectId) return;
-    const already = sessions.findIndex((s) => s._id === pendingInjectId);
-    if (already >= 0) {
-      rawSetCurrentIndex(already);
+    if (sessions[pendingInjectId]) {
+      setCurrentSession(pendingInjectId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       return;
@@ -713,35 +752,36 @@ export function QueuePageClient() {
     });
     setPendingInjectId(null);
     paramProcessedRef.current = true;
-  }, [pendingInjectId, directConv, sessions, rawSetCurrentIndex, injectSession]);
+  }, [pendingInjectId, directConv, sessions, setCurrentSession, injectSession]);
 
   // Handle store-based navigation (from CommandPalette when already on /inbox)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
   useEffect(() => {
     if (!pendingNavigateId) return;
     useInboxStore.setState({ pendingNavigateId: null, showMySessions: false });
-    const idx = sessions.findIndex((s) => s._id === pendingNavigateId);
-    if (idx >= 0) {
+    if (sessions[pendingNavigateId]) {
       setPendingInjectId(null);
-      rawSetCurrentIndex(idx);
+      setCurrentSession(pendingNavigateId);
     } else {
       setPendingInjectId(pendingNavigateId);
     }
-  }, [pendingNavigateId, sessions, rawSetCurrentIndex]);
+  }, [pendingNavigateId, sessions, setCurrentSession]);
 
   const handleDismiss = useCallback((id: string) => {
     stashSession(id);
   }, [stashSession]);
 
   const handleDismissCurrent = useCallback(() => {
-    const current = sessions[currentIndex];
-    if (current) handleDismiss(current._id);
-  }, [sessions, currentIndex, handleDismiss]);
+    if (currentSessionId) handleDismiss(currentSessionId);
+  }, [currentSessionId, handleDismiss]);
 
   const handleDeferCurrent = useCallback(() => {
-    const current = sessions[currentIndex];
-    if (current) deferSession(current._id);
-  }, [sessions, currentIndex, deferSession]);
+    if (currentSessionId) deferSession(currentSessionId);
+  }, [currentSessionId, deferSession]);
+
+  const handlePinCurrent = useCallback(() => {
+    if (currentSessionId) pinSession(currentSessionId);
+  }, [currentSessionId, pinSession]);
 
   const handleSendAndAdvance = useCallback(() => {
     advanceToNext();
@@ -752,12 +792,12 @@ export function QueuePageClient() {
   }, []);
 
   const viewingDismissedSession = viewingDismissedId
-    ? dismissedSessions.find((s) => s._id === viewingDismissedId) ?? null
+    ? dismissedSessions[viewingDismissedId] ?? null
     : null;
 
   const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
 
-  const rawCurrentSession = sessions[currentIndex];
+  const rawCurrentSession = currentSessionId ? sessions[currentSessionId] : undefined;
   const currentSession = pendingInjectId && rawCurrentSession && rawCurrentSession._id !== pendingInjectId
     ? undefined
     : rawCurrentSession;
@@ -800,15 +840,15 @@ export function QueuePageClient() {
         || url.searchParams.get("s")
         || url.pathname.match(/^\/conversation\/([a-z0-9]{32})$/)?.[1];
       if (!id) return;
-      const idx = sessions.findIndex((s) => s._id === id);
-      if (idx >= 0) {
+      if (sessions[id]) {
         isPopstateRef.current = true;
-        setCurrentIndex(idx);
+        setCurrentSession(id);
+        if (showMySessions) setShowMySessions(false);
       }
     };
     window.addEventListener("popstate", onPopstate);
     return () => window.removeEventListener("popstate", onPopstate);
-  }, [sessions, setCurrentIndex]);
+  }, [sessions, setCurrentSession, showMySessions, setShowMySessions]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -845,22 +885,28 @@ export function QueuePageClient() {
       if (e.ctrlKey && e.key === "i") {
         e.preventDefault();
         e.stopImmediatePropagation();
-        const firstNeedsInput = sessions.findIndex((s) => s.is_idle && s.message_count > 0);
-        if (firstNeedsInput >= 0) {
-          setCurrentIndex(firstNeedsInput);
+        const firstNeedsInput = sortedSessions.find((s) => s.is_idle && s.message_count > 0);
+        if (firstNeedsInput) {
+          setCurrentSession(firstNeedsInput._id);
         }
+        return;
+      }
+      if (e.ctrlKey && e.key === "p") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        handlePinCurrent();
         return;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [navigateDown, navigateUp, handleDismissCurrent, handleDeferCurrent, toggleShortcuts, sessions, setCurrentIndex]);
+  }, [navigateDown, navigateUp, handleDismissCurrent, handleDeferCurrent, handlePinCurrent, toggleShortcuts, sortedSessions, setCurrentSession]);
 
   const prefetchIds: string[] = [];
   const seen = new Set<string>();
   if (currentSession) seen.add(currentSession._id);
-  for (const s of sessions) {
+  for (const s of sortedSessions) {
     if (!seen.has(s._id)) {
       seen.add(s._id);
       prefetchIds.push(s._id);
@@ -868,14 +914,13 @@ export function QueuePageClient() {
   }
 
   const handleNavigateToConversation = useCallback((conversationId: string) => {
-    const idx = sessions.findIndex((s) => s._id === conversationId);
-    if (idx >= 0) {
-      rawSetCurrentIndex(idx);
+    if (sessions[conversationId]) {
+      setCurrentSession(conversationId);
     } else {
       useInboxStore.setState({ pendingNavigateId: conversationId });
     }
     if (showMySessions) setShowMySessions(false);
-  }, [sessions, rawSetCurrentIndex, showMySessions, setShowMySessions]);
+  }, [sessions, setCurrentSession, showMySessions, setShowMySessions]);
 
   const handleBack = useCallback(() => {
     setShowMySessions(true);
@@ -958,13 +1003,13 @@ export function QueuePageClient() {
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
             </svg>
-            {sessions.length}
+            {sortedSessions.length}
           </button>
           {mobileSessionsOpen && (
             <>
               <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setMobileSessionsOpen(false)} />
               <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
-                <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={dismissedSessions} />
+                <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={Object.values(dismissedSessions)} />
               </div>
             </>
           )}
@@ -976,7 +1021,7 @@ export function QueuePageClient() {
           </Panel>
           <Separator className="relative w-px bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
           <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
-            <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={dismissedSessions} />
+            <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={Object.values(dismissedSessions)} />
           </Panel>
         </Group>
       )}
@@ -991,6 +1036,11 @@ export function QueuePageClient() {
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">I</kbd>
             needs input
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">P</kbd>
+            pin
           </span>
           <span className="flex items-center gap-1">
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Shift</kbd>

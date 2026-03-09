@@ -291,7 +291,7 @@ function CreateTaskModal({ onClose }: { onClose: () => void }) {
 function TaskPreviewPanel({ taskId, onClose, onOpen }: { taskId: string; onClose: () => void; onOpen: () => void }) {
   useSyncTaskDetail(taskId);
   const detail = useInboxStore((s) => s.taskDetails[taskId]);
-  const listItem = useInboxStore((s) => s.tasks.find((t) => t._id === taskId));
+  const listItem = useInboxStore((s) => s.tasks[taskId]);
   const data = detail || listItem;
 
   if (!data) return null;
@@ -395,16 +395,18 @@ export default function TasksPage() {
 
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
+  const tasksList = useMemo(() => Object.values(tasks), [tasks]);
+
   const flatTasks = useMemo(() => {
     if (sortBy !== "status") {
-      const sorted = [...tasks];
+      const sorted = [...tasksList];
       if (sortBy === "priority") sorted.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3));
       else if (sortBy === "created") sorted.sort((a, b) => b.created_at - a.created_at);
       else if (sortBy === "updated") sorted.sort((a, b) => b.updated_at - a.updated_at);
       return sorted;
     }
-    if (statusFilter) return tasks;
-    const grouped = tasks.reduce((acc: Record<string, TaskItem[]>, t) => {
+    if (statusFilter) return tasksList;
+    const grouped = tasksList.reduce((acc: Record<string, TaskItem[]>, t) => {
       const s = t.status as string;
       if (!acc[s]) acc[s] = [];
       acc[s].push(t);
@@ -413,7 +415,7 @@ export default function TasksPage() {
     return STATUS_ORDER.flatMap((s) =>
       collapsedGroups.has(s) ? [] : (grouped[s] || [])
     );
-  }, [tasks, statusFilter, collapsedGroups, sortBy]);
+  }, [tasksList, statusFilter, collapsedGroups, sortBy]);
 
   const focusedTask = flatTasks[focusIndex] || null;
 
@@ -657,7 +659,7 @@ export default function TasksPage() {
     }
   }, [focusIndex]);
 
-  const grouped = tasks.reduce((acc: Record<string, TaskItem[]>, t) => {
+  const grouped = tasksList.reduce((acc: Record<string, TaskItem[]>, t) => {
     const s = t.status as string;
     if (!acc[s]) acc[s] = [];
     acc[s].push(t);
@@ -666,12 +668,12 @@ export default function TasksPage() {
 
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0 };
-    for (const t of tasks) {
+    for (const t of tasksList) {
       counts[t.status] = (counts[t.status] || 0) + 1;
       if (t.status !== "done" && t.status !== "dropped") counts.active++;
     }
     return counts;
-  }, [tasks]);
+  }, [tasksList]);
 
   // Track flat index across status groups for rendering
   let flatIndex = 0;
@@ -740,7 +742,7 @@ export default function TasksPage() {
 
           <div className="flex-1 flex overflow-hidden">
           <div className="flex-1 overflow-y-auto">
-            {tasks.length === 0 ? (
+            {tasksList.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-sol-text-dim">
                 <Circle className="w-8 h-8 mb-2 opacity-30" />
                 <p className="text-sm">No tasks found</p>
