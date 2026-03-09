@@ -4160,7 +4160,7 @@ export default function SessionDetailScreen() {
           showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={16}
-          maintainVisibleContentPosition={undefined}
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
         />
 
         <RNView>

@@ -84,17 +84,17 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Inbox',
-          headerShown: false,
-          tabBarIcon: ({ color }) => <TabBarIcon name="inbox" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="sessions"
-        options={{
           title: 'Sessions',
           headerShown: false,
           tabBarIcon: ({ color }) => <TabBarIcon name="list" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="inbox"
+        options={{
+          title: 'Inbox',
+          headerShown: false,
+          tabBarIcon: ({ color }) => <TabBarIcon name="inbox" color={color} />,
         }}
       />
       <Tabs.Screen

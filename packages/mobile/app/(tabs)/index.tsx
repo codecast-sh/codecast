@@ -1,556 +1,115 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, View as RNView, Text as RNText } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'expo-router';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
-import {
-  SessionData, SwipeableSessionItem, cleanTitle, agentLabel, agentColor,
-  formatRelativeTime, projectName, styles as sessionStyles,
-} from '@/components/SessionItem';
+import { SessionData, SessionItem } from '@/components/SessionItem';
 
-type InboxSession = SessionData & { session_id: string };
-
-type DismissedSession = SessionData & { is_subagent?: boolean };
-
-function DismissedItem({ session, onPress }: { session: DismissedSession; onPress: () => void }) {
-  const project = projectName(session);
-  const agent = agentLabel(session.agent_type ?? "");
-
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      style={styles.dismissedItem}
-      activeOpacity={0.6}
-    >
-      <RNView style={sessionStyles.conversationHeader}>
-        <RNView style={sessionStyles.titleRow}>
-          <FontAwesome name="archive" size={10} color={Theme.textMuted0} style={{ marginRight: 6 }} />
-          <RNText style={styles.dismissedTitle} numberOfLines={1}>
-            {cleanTitle(session.title)}
-          </RNText>
-        </RNView>
-        <RNText style={sessionStyles.messageCount}>{session.message_count}</RNText>
-      </RNView>
-      <RNView style={sessionStyles.conversationMeta}>
-        {agent ? (
-          <>
-            <RNText style={[sessionStyles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>
-              {agent}
-            </RNText>
-            <RNText style={sessionStyles.metaSeparator}>·</RNText>
-          </>
-        ) : null}
-        <RNText style={sessionStyles.metaText}>{formatRelativeTime(session.updated_at)}</RNText>
-        {project && (
-          <>
-            <RNText style={sessionStyles.metaSeparator}>·</RNText>
-            <RNText style={sessionStyles.projectText} numberOfLines={1}>{project}</RNText>
-          </>
-        )}
-      </RNView>
-    </TouchableOpacity>
-  );
+function getDateGroup(timestamp: number, now: number): string {
+  const diffMs = now - timestamp;
+  const diffHours = diffMs / 3600000;
+  const diffDays = diffMs / 86400000;
+  if (diffHours < 1) return "Last Hour";
+  if (diffHours < 6) return "Last 6 Hours";
+  if (diffDays < 1) return "Today";
+  if (diffDays < 2) return "Yesterday";
+  if (diffDays < 7) return "This Week";
+  if (diffDays < 30) return "This Month";
+  return "Older";
 }
 
-type AgentType = "claude" | "codex" | "gemini";
+const GROUP_ORDER = ["Last Hour", "Last 6 Hours", "Today", "Yesterday", "This Week", "This Month", "Older"];
 
-const agentLogoSources = {
-  claude: require('@/assets/images/agents/claude.png'),
-  codex: require('@/assets/images/agents/codex.png'),
-  gemini: require('@/assets/images/agents/gemini.png'),
-};
+type SectionItem = { type: 'header'; group: string } | { type: 'session'; session: SessionData };
 
-function AgentLogo({ type, size = 20, bgColor }: { type: AgentType; size?: number; bgColor: string }) {
-  const iconSize = size * 0.85;
-  return (
-    <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bgColor, alignItems: 'center', justifyContent: 'center' }}>
-      <Image source={agentLogoSources[type]} style={{ width: iconSize, height: iconSize }} resizeMode="contain" />
-    </RNView>
-  );
-}
-
-function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: boolean; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
-  const [agentType, setAgentType] = useState<AgentType>("claude");
-  const [projectPath, setProjectPath] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const startSession = useMutation(api.users.startSession);
-  const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 6 });
-
-  useEffect(() => {
-    if (visible && !projectPath && recentProjects?.length) {
-      setProjectPath(recentProjects[0].path);
-    }
-  }, [visible, recentProjects]);
-
-  const handleSubmit = async () => {
-    setSubmitting(true);
-    try {
-      const result = await startSession({
-        agent_type: agentType,
-        project_path: projectPath || undefined,
-      });
-      onClose();
-      setProjectPath("");
-      onSessionCreated(result.conversation_id);
-    } catch (err) {
-      Alert.alert("Error", err instanceof Error ? err.message : "Failed to start session");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const agents: { type: AgentType; label: string; color: string; bgColor: string }[] = [
-    { type: "claude", label: "Claude", color: Theme.orange, bgColor: "#b58900" },
-    { type: "codex", label: "Codex", color: Theme.green, bgColor: "#0f0f0f" },
-    { type: "gemini", label: "Gemini", color: Theme.blue, bgColor: "#1a73e8" },
-  ];
-
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <RNView style={modalStyles.header}>
-          <RNText style={modalStyles.title}>New Session</RNText>
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <FontAwesome name="times" size={20} color={Theme.textMuted} />
-          </TouchableOpacity>
-        </RNView>
-
-        <ScrollView style={modalStyles.body} keyboardShouldPersistTaps="handled">
-          <RNText style={modalStyles.label}>Agent</RNText>
-          <RNView style={modalStyles.agentRow}>
-            {agents.map((a) => (
-              <TouchableOpacity
-                key={a.type}
-                style={[modalStyles.agentBtn, agentType === a.type && { borderColor: a.color, backgroundColor: a.color + "20" }]}
-                onPress={() => setAgentType(a.type)}
-                activeOpacity={0.7}
-              >
-                <AgentLogo type={a.type} size={20} bgColor={agentType === a.type ? a.bgColor : Theme.textMuted0} />
-                <RNText style={[modalStyles.agentBtnText, agentType === a.type && { color: a.color }]}>
-                  {a.label}
-                </RNText>
-              </TouchableOpacity>
-            ))}
-          </RNView>
-
-          <RNText style={modalStyles.label}>Project directory</RNText>
-          <TextInput
-            style={modalStyles.input}
-            value={projectPath}
-            onChangeText={setProjectPath}
-            placeholder="~/src/my-project"
-            placeholderTextColor={Theme.textMuted0}
-            autoCorrect={false}
-            autoCapitalize="none"
-          />
-          {recentProjects && recentProjects.length > 0 && (
-            <RNView style={modalStyles.recentRow}>
-              {recentProjects.slice(0, 4).map((p) => (
-                <TouchableOpacity
-                  key={p.path}
-                  style={[modalStyles.recentChip, projectPath === p.path && { borderColor: Theme.accent, backgroundColor: Theme.accent + "20" }]}
-                  onPress={() => setProjectPath(p.path)}
-                  activeOpacity={0.7}
-                >
-                  <RNText style={[modalStyles.recentChipText, projectPath === p.path && { color: Theme.accent }]} numberOfLines={1}>
-                    {p.path.split("/").pop()}
-                  </RNText>
-                </TouchableOpacity>
-              ))}
-            </RNView>
-          )}
-        </ScrollView>
-
-        <RNView style={modalStyles.footer}>
-          <TouchableOpacity style={modalStyles.cancelBtn} onPress={onClose} activeOpacity={0.7}>
-            <RNText style={modalStyles.cancelBtnText}>Cancel</RNText>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[modalStyles.submitBtn, submitting && { opacity: 0.5 }]}
-            onPress={handleSubmit}
-            disabled={submitting}
-            activeOpacity={0.7}
-          >
-            <RNText style={modalStyles.submitBtnText}>{submitting ? "Starting..." : "Start Session"}</RNText>
-          </TouchableOpacity>
-        </RNView>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
-
-const modalStyles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Theme.bg },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
-  },
-  title: { fontSize: 18, fontWeight: "600", color: Theme.text },
-  body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
-  label: { fontSize: 13, fontWeight: "600", color: Theme.textMuted, marginBottom: 6, marginTop: Spacing.md },
-  agentRow: { flexDirection: "row", gap: 10 },
-  agentBtn: {
-    flex: 1,
-    flexDirection: "row",
-    gap: 6,
-    justifyContent: "center",
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: Theme.borderLight,
-    alignItems: "center",
-  },
-  agentBtnText: { fontSize: 14, fontWeight: "600", color: Theme.textMuted },
-  input: {
-    backgroundColor: Theme.bgAlt,
-    borderRadius: 10,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: Theme.text,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-  },
-  recentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
-  recentChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    maxWidth: 140,
-  },
-  recentChipText: { fontSize: 12, color: Theme.textMuted, fontWeight: "500" },
-  footer: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 10,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Theme.borderLight,
-  },
-  cancelBtn: { paddingHorizontal: 16, paddingVertical: 10 },
-  cancelBtnText: { fontSize: 15, color: Theme.textMuted },
-  submitBtn: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: Theme.accent,
-  },
-  submitBtnText: { fontSize: 15, fontWeight: "600", color: Theme.bg },
-});
-
-type SearchResult = {
-  conversationId: string;
-  title: string;
-  matches: Array<{
-    messageId: string;
-    content: string;
-    role: string;
-    timestamp: number;
-  }>;
-  updatedAt: number;
-  authorName: string;
-  isOwn: boolean;
-  messageCount: number;
-};
-
-function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: () => void }) {
-  const firstMatch = result.matches[0];
-  return (
-    <TouchableOpacity onPress={onPress} style={styles.searchResultItem} activeOpacity={0.6}>
-      <RNView style={styles.searchResultHeader}>
-        <RNText style={styles.searchResultTitle} numberOfLines={1}>{result.title}</RNText>
-        <RNText style={styles.searchResultCount}>{result.matches.length} match{result.matches.length !== 1 ? 'es' : ''}</RNText>
-      </RNView>
-      {firstMatch && (
-        <RNText style={styles.searchResultSnippet} numberOfLines={2}>
-          {firstMatch.content}
-        </RNText>
-      )}
-      <RNView style={styles.conversationMeta}>
-        <RNText style={styles.metaText}>{formatRelativeTime(result.updatedAt)}</RNText>
-        <RNText style={styles.metaSeparator}>·</RNText>
-        <RNText style={styles.metaText}>{result.messageCount} msgs</RNText>
-        {!result.isOwn && (
-          <>
-            <RNText style={styles.metaSeparator}>·</RNText>
-            <RNText style={styles.metaText}>{result.authorName}</RNText>
-          </>
-        )}
-      </RNView>
-    </TouchableOpacity>
-  );
-}
-
-export default function InboxScreen() {
-  const [showNewSession, setShowNewSession] = useState(false);
-  const [showDismissed, setShowDismissed] = useState(false);
+export default function SessionsScreen() {
   const [refreshing, setRefreshing] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [userOnly, setUserOnly] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
-  const isSearching = debouncedQuery.length >= 2;
 
-  const searchResults = useQuery(
-    api.conversations.searchConversations,
-    isSearching ? { query: debouncedQuery, limit: 30, userOnly } : "skip"
-  );
+  const conversations = useQuery(api.conversations.listConversations, {
+    filter: "my" as const,
+    limit: 100,
+    include_message_previews: true,
+  });
 
-  const handleSearchChange = useCallback((text: string) => {
-    setSearchQuery(text);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      setDebouncedQuery(text.trim());
-    }, 300);
-  }, []);
+  const sections = useMemo(() => {
+    if (!conversations?.conversations) return [];
+    const now = Date.now();
+    const grouped: Record<string, SessionData[]> = {};
 
-  const clearSearch = useCallback(() => {
-    setSearchQuery('');
-    setDebouncedQuery('');
-  }, []);
+    for (const c of conversations.conversations as any[]) {
+      const session: SessionData = {
+        ...c,
+        last_user_message: c.first_user_message || null,
+        idle_summary: c.idle_summary || c.subtitle || null,
+      };
+      const group = getDateGroup(c.updated_at, now);
+      if (!grouped[group]) grouped[group] = [];
+      grouped[group].push(session);
+    }
 
-  const inboxSessions = useQuery(api.conversations.listIdleSessions, { show_all: true });
-  const dismissedSessions = useQuery(
-    api.conversations.listDismissedSessions,
-    showDismissed ? {} : "skip"
-  );
-
-  const dismissFromInbox = useMutation(api.conversations.dismissFromInbox);
-  const patchConversation = useMutation(api.conversations.patchConversation);
-
-  const handleDismiss = useCallback(async (conversationId: string) => {
-    try {
-      await dismissFromInbox({ conversation_id: conversationId as Id<"conversations"> });
-    } catch {}
-  }, [dismissFromInbox]);
-
-  const handleUndismiss = useCallback(async (conversationId: string) => {
-    try {
-      await patchConversation({
-        id: conversationId as Id<"conversations">,
-        fields: { inbox_dismissed_at: null },
-      });
-    } catch {}
-  }, [patchConversation]);
+    const items: SectionItem[] = [];
+    for (const group of GROUP_ORDER) {
+      const sessions = grouped[group];
+      if (!sessions?.length) continue;
+      items.push({ type: 'header', group });
+      for (const s of sessions) {
+        items.push({ type: 'session', session: s });
+      }
+    }
+    return items;
+  }, [conversations]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 1000);
   }, []);
 
-  const activeSessions = useMemo(() => {
-    if (!inboxSessions) return [];
-    return inboxSessions.filter(s => !s.is_deferred);
-  }, [inboxSessions]);
-
-  const deferredSessions = useMemo(() => {
-    if (!inboxSessions) return [];
-    return inboxSessions.filter(s => s.is_deferred);
-  }, [inboxSessions]);
-
-  const renderInboxItem = useCallback(({ item }: { item: InboxSession }) => (
-    <SwipeableSessionItem
-      session={item}
-      onPress={() => router.push(`/session/${item._id}`)}
-      onDismiss={() => handleDismiss(item._id)}
-    />
-  ), [router, handleDismiss]);
-
-  const renderDismissedItem = useCallback(({ item }: { item: DismissedSession }) => (
-    <DismissedItem
-      session={item}
-      onPress={() => {
-        handleUndismiss(item._id);
-      }}
-    />
-  ), [handleUndismiss]);
-
-  const ListHeader = useMemo(() => {
-    if (!activeSessions.length && inboxSessions !== undefined) {
+  const renderItem = useCallback(({ item }: { item: SectionItem }) => {
+    if (item.type === 'header') {
       return (
-        <RNView style={styles.emptyInbox}>
-          <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
-          <RNText style={styles.emptyText}>Inbox zero</RNText>
-          <RNText style={styles.emptySubtext}>All sessions dismissed or idle</RNText>
+        <RNView style={styles.sectionHeader}>
+          <RNText style={styles.sectionHeaderText}>{item.group}</RNText>
         </RNView>
       );
     }
-    return null;
-  }, [activeSessions.length, inboxSessions]);
+    return (
+      <SessionItem
+        session={item.session}
+        onPress={() => router.push(`/session/${item.session._id}`)}
+      />
+    );
+  }, [router]);
 
-  const ListFooter = useMemo(() => (
-    <RNView>
-      {deferredSessions.length > 0 && (
-        <RNView style={styles.sectionContainer}>
-          <RNView style={styles.sectionHeader}>
-            <FontAwesome name="clock-o" size={12} color={Theme.textMuted0} />
-            <RNText style={styles.sectionTitle}>Deferred ({deferredSessions.length})</RNText>
-          </RNView>
-          {deferredSessions.map(s => (
-            <SwipeableSessionItem
-              key={s._id}
-              session={s}
-              onPress={() => router.push(`/session/${s._id}`)}
-              onDismiss={() => handleDismiss(s._id)}
-            />
-          ))}
-        </RNView>
-      )}
-
-      <TouchableOpacity
-        style={styles.dismissedToggle}
-        onPress={() => setShowDismissed(prev => !prev)}
-        activeOpacity={0.7}
-      >
-        <FontAwesome name={showDismissed ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
-        <RNText style={styles.dismissedToggleText}>
-          {showDismissed ? "Hide dismissed" : "Show dismissed"}
-        </RNText>
-      </TouchableOpacity>
-
-      {showDismissed && dismissedSessions && (
-        <RNView style={styles.dismissedSection}>
-          {dismissedSessions.length === 0 ? (
-            <RNText style={styles.dismissedEmpty}>No dismissed sessions</RNText>
-          ) : (
-            dismissedSessions.map(s => (
-              <DismissedItem
-                key={s._id}
-                session={s as DismissedSession}
-                onPress={() => handleUndismiss(s._id)}
-              />
-            ))
-          )}
-        </RNView>
-      )}
-      <RNView style={{ height: 80 }} />
-    </RNView>
-  ), [deferredSessions, showDismissed, dismissedSessions, router, handleDismiss, handleUndismiss]);
-
-  const searchResultsList = useMemo(() => {
-    if (!searchResults) return [];
-    return 'results' in searchResults ? searchResults.results : (searchResults as SearchResult[]);
-  }, [searchResults]);
+  const keyExtractor = useCallback((item: SectionItem) => {
+    return item.type === 'header' ? `header-${item.group}` : (item as any).session._id;
+  }, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <RNView style={styles.header}>
-        <RNText style={styles.headerTitle}>Inbox</RNText>
-        {activeSessions.length > 0 && !isSearching && (
-          <RNView style={styles.countBadge}>
-            <RNText style={styles.countBadgeText}>{activeSessions.length}</RNText>
-          </RNView>
-        )}
+        <RNText style={styles.headerTitle}>Sessions</RNText>
       </RNView>
 
-      <RNView style={styles.searchContainer}>
-        <RNView style={styles.searchInputRow}>
-          <FontAwesome name="search" size={14} color={Theme.textMuted0} style={{ marginRight: 8 }} />
-          <TextInput
-            style={styles.searchInput}
-            value={searchQuery}
-            onChangeText={handleSearchChange}
-            placeholder="Search all conversations..."
-            placeholderTextColor={Theme.textMuted0}
-            returnKeyType="search"
-            autoCorrect={false}
-            autoCapitalize="none"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={clearSearch} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <FontAwesome name="times-circle" size={16} color={Theme.textMuted0} />
-            </TouchableOpacity>
-          )}
-        </RNView>
-        {isSearching && (
-          <TouchableOpacity
-            style={[styles.userOnlyToggle, userOnly && styles.userOnlyToggleActive]}
-            onPress={() => setUserOnly(prev => !prev)}
-            activeOpacity={0.7}
-          >
-            <RNText style={[styles.userOnlyText, userOnly && styles.userOnlyTextActive]}>
-              User messages only
-            </RNText>
-          </TouchableOpacity>
-        )}
-      </RNView>
-
-      {isSearching ? (
-        <FlatList
-          data={searchResultsList}
-          renderItem={({ item }) => (
-            <SearchResultItem
-              result={item}
-              onPress={() => router.push(`/session/${item.conversationId}`)}
-            />
-          )}
-          keyExtractor={(item) => item.conversationId}
-          contentContainerStyle={searchResultsList.length === 0 ? styles.emptyList : styles.listContent}
-          ListEmptyComponent={
-            searchResults === undefined ? (
-              <RNView style={styles.emptyInbox}>
-                <ActivityIndicator size="small" color={Theme.textMuted} />
-              </RNView>
-            ) : (
-              <RNView style={styles.emptyInbox}>
-                <RNText style={styles.emptyText}>No results for "{debouncedQuery}"</RNText>
-              </RNView>
-            )
-          }
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        />
-      ) : (
-        <FlatList
-          data={activeSessions}
-          renderItem={renderInboxItem}
-          keyExtractor={(item) => item._id}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={Theme.textMuted}
-            />
-          }
-          ListHeaderComponent={ListHeader}
-          ListFooterComponent={ListFooter}
-          contentContainerStyle={activeSessions.length === 0 ? styles.emptyList : styles.listContent}
-          showsVerticalScrollIndicator={false}
-        />
-      )}
-
-      <NewSessionModal
-        visible={showNewSession}
-        onClose={() => setShowNewSession(false)}
-        onSessionCreated={(conversationId) => {
-          router.push(`/session/${conversationId}`);
-        }}
+      <FlatList
+        data={sections}
+        renderItem={renderItem}
+        keyExtractor={keyExtractor}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Theme.textMuted} />
+        }
+        ListEmptyComponent={
+          conversations === undefined ? null : (
+            <RNView style={styles.emptyContainer}>
+              <RNText style={styles.emptySubtitle}>No sessions yet</RNText>
+            </RNView>
+          )
+        }
+        contentContainerStyle={sections.length === 0 ? styles.emptyList : styles.listContent}
+        showsVerticalScrollIndicator={false}
       />
-
-      <RNView style={styles.fabContainer} pointerEvents="box-none">
-        <TouchableOpacity
-          style={styles.fab}
-          onPress={() => setShowNewSession(true)}
-          activeOpacity={0.8}
-        >
-          <FontAwesome name="plus" size={16} color={Theme.textMuted} />
-        </TouchableOpacity>
-      </RNView>
     </SafeAreaView>
   );
 }
@@ -561,206 +120,46 @@ const styles = StyleSheet.create({
     backgroundColor: Theme.bg,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
     backgroundColor: Theme.bgAlt,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: 1,
     borderBottomColor: Theme.borderLight,
-    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   headerTitle: {
     fontSize: 20,
     fontWeight: '700',
     color: Theme.text,
   },
-  countBadge: {
-    backgroundColor: Theme.accent,
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    minWidth: 22,
-    alignItems: 'center',
-  },
-  countBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Theme.bg,
-  },
-  listContent: {
-    paddingBottom: Spacing.xl,
-  },
-  emptyList: {
-    flexGrow: 1,
-  },
-  emptyInbox: {
-    alignItems: 'center',
-    paddingVertical: 60,
-    gap: 8,
-  },
-  emptyText: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: Theme.textMuted,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: Theme.textMuted0,
-  },
-  sectionContainer: {
-    borderTopWidth: 1,
-    borderTopColor: Theme.bgHighlight,
-    marginTop: Spacing.sm,
-  },
   sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    backgroundColor: Theme.bgAlt,
+    paddingTop: 16,
+    paddingBottom: 6,
+    backgroundColor: Theme.bg,
   },
-  sectionTitle: {
-    fontSize: 12,
+  sectionHeaderText: {
+    fontSize: 11,
     fontWeight: '600',
     color: Theme.textMuted0,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
   },
-  dismissedToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  listContent: {
+    paddingBottom: 20,
+  },
+  emptyContainer: {
+    flex: 1,
     justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 14,
-    borderTopWidth: 1,
-    borderTopColor: Theme.bgHighlight,
-    marginTop: Spacing.sm,
+    alignItems: 'center',
+    padding: 32,
+    gap: 12,
   },
-  dismissedToggleText: {
-    fontSize: 13,
-    color: Theme.textMuted0,
-    fontWeight: '500',
-  },
-  dismissedSection: {
-    backgroundColor: Theme.bgAlt,
-  },
-  dismissedEmpty: {
-    fontSize: 13,
-    color: Theme.textMuted0,
+  emptySubtitle: {
+    fontSize: 15,
+    color: Theme.textMuted,
     textAlign: 'center',
-    paddingVertical: 20,
   },
-  dismissedItem: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
-    opacity: 0.7,
-  },
-  dismissedTitle: {
-    fontSize: 14,
-    fontWeight: '400',
-    color: Theme.textMuted,
+  emptyList: {
     flex: 1,
-  },
-  searchContainer: {
-    backgroundColor: Theme.bgAlt,
-    paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.xs,
-    paddingBottom: Spacing.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
-  },
-  searchInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Theme.bg,
-    borderRadius: 10,
-    paddingHorizontal: Spacing.md,
-    height: 34,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    color: Theme.text,
-    paddingVertical: 0,
-  },
-  userOnlyToggle: {
-    alignSelf: 'flex-start',
-    marginTop: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Theme.borderLight,
-  },
-  userOnlyToggleActive: {
-    backgroundColor: Theme.accent + '20',
-    borderColor: Theme.accent,
-  },
-  userOnlyText: {
-    fontSize: 12,
-    color: Theme.textMuted,
-    fontWeight: '500',
-  },
-  userOnlyTextActive: {
-    color: Theme.accent,
-  },
-  searchResultItem: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.bgHighlight,
-    backgroundColor: Theme.bg,
-  },
-  searchResultHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  searchResultTitle: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: Theme.text,
-    flex: 1,
-    marginRight: Spacing.sm,
-  },
-  searchResultCount: {
-    fontSize: 11,
-    color: Theme.accent,
-    fontWeight: '600',
-  },
-  searchResultSnippet: {
-    fontSize: 13,
-    color: Theme.textMuted,
-    lineHeight: 18,
-    marginBottom: 4,
-  },
-  fabContainer: {
-    position: 'absolute',
-    bottom: 24,
-    right: 20,
-    zIndex: 100,
-    elevation: 100,
-  },
-  fab: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Theme.bgAlt,
-    borderWidth: 1,
-    borderColor: Theme.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 4,
   },
 });
