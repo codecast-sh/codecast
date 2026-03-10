@@ -359,34 +359,31 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
   };
 
   return (
-    <RNView style={styles.codeBlock}>
-      <RNView style={styles.codeHeader}>
-        <RNText style={styles.codeLanguage}>{lang}</RNText>
-        <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <FontAwesome name="expand" size={10} color={Theme.textDim} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleCopy} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            {copied ? <FontAwesome name="check" size={10} color={Theme.green} /> : <FontAwesome name="clipboard" size={11} color={Theme.textDim} />}
-          </TouchableOpacity>
-        </RNView>
-      </RNView>
-      <ScrollView horizontal showsHorizontalScrollIndicator style={styles.hScroll}>
-        <RNView style={{ padding: 6 }}>
+    <RNView style={{ marginVertical: 4 }}>
+      <ScrollView horizontal showsHorizontalScrollIndicator>
+        <RNView style={{ paddingVertical: 2 }}>
           {oldLines.map((line, i) => (
-            <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '15' }}>
-              <RNText style={[styles.diffLineNum, { width: 18 }]}>-</RNText>
-              <HighlightedCodeText content={line} style={{ fontSize: 12, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+            <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+              <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
+              <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
             </RNView>
           ))}
           {newLines.map((line, i) => (
-            <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '15' }}>
-              <RNText style={[styles.diffLineNum, { width: 18 }]}>+</RNText>
-              <HighlightedCodeText content={line} style={{ fontSize: 12, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+            <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+              <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
+              <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
             </RNView>
           ))}
         </RNView>
       </ScrollView>
+      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
+        <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <FontAwesome name="expand" size={10} color={Theme.textDim} />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={handleCopy} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          {copied ? <FontAwesome name="check" size={10} color={Theme.green} /> : <FontAwesome name="clipboard" size={11} color={Theme.textDim} />}
+        </TouchableOpacity>
+      </RNView>
       <CodeBlockFullscreen content={unifiedContent} language={lang} visible={fullscreen} onClose={() => setFullscreen(false)} />
     </RNView>
   );
@@ -406,41 +403,33 @@ function CodeBlockWithCopy({ content, language }: { content: string; language: s
   const showLineNumbers = lines.length > 3;
 
   return (
-    <RNView style={styles.codeBlock}>
-      <RNView style={styles.codeHeader}>
-        <RNText style={styles.codeLanguage}>{language}{lines.length > 1 ? ` \u00b7 ${lines.length} lines` : ''}</RNText>
-        <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <FontAwesome name="expand" size={10} color={Theme.textDim} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleCopy} style={styles.codeCopyButton} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            {copied ? (
-              <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                <FontAwesome name="check" size={10} color={Theme.green} />
-                <RNText style={{ fontSize: 9, color: Theme.green, fontFamily: 'SpaceMono' }}>Copied</RNText>
+    <RNView style={{ marginVertical: 4 }}>
+      <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden' }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator>
+          <RNView style={{ padding: 8 }}>
+            {showLineNumbers ? (
+              <RNView style={{ flexDirection: 'row' }}>
+                <RNView style={{ paddingRight: 8, marginRight: 8, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: Theme.borderLight }}>
+                  {lines.map((_, i) => (
+                    <RNText key={i} style={{ fontSize: 10, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textDim, textAlign: 'right', minWidth: 20 }}>{i + 1}</RNText>
+                  ))}
+                </RNView>
+                <HighlightedCodeText content={content} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
               </RNView>
             ) : (
-              <FontAwesome name="clipboard" size={11} color={Theme.textDim} />
+              <HighlightedCodeText content={content} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
             )}
-          </TouchableOpacity>
-        </RNView>
+          </RNView>
+        </ScrollView>
       </RNView>
-      <ScrollView horizontal showsHorizontalScrollIndicator style={styles.hScroll}>
-        <RNView style={styles.codeContent}>
-          {showLineNumbers ? (
-            <RNView style={{ flexDirection: 'row' }}>
-              <RNView style={styles.lineNumberGutter}>
-                {lines.map((_, i) => (
-                  <RNText key={i} style={styles.lineNumber}>{i + 1}</RNText>
-                ))}
-              </RNView>
-              <HighlightedCodeText content={content} style={styles.codeText} />
-            </RNView>
-          ) : (
-            <HighlightedCodeText content={content} style={styles.codeText} />
-          )}
-        </RNView>
-      </ScrollView>
+      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
+        <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <FontAwesome name="expand" size={10} color={Theme.textDim} />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={handleCopy} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          {copied ? <FontAwesome name="check" size={10} color={Theme.green} /> : <FontAwesome name="clipboard" size={11} color={Theme.textDim} />}
+        </TouchableOpacity>
+      </RNView>
       <CodeBlockFullscreen content={content} language={language} visible={fullscreen} onClose={() => setFullscreen(false)} />
     </RNView>
   );
