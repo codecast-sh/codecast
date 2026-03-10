@@ -3348,7 +3348,7 @@ function parseInteractivePrompt(text: string): InteractivePrompt | null {
 
   const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx)
     .map(l => l.trim())
-    .filter(l => l.length > 0 && !/^[❯>]/.test(l));
+    .filter(l => l.length > 0 && !/^[❯>]/.test(l) && !/^[─━═─\-_]{5,}$/.test(l));
   const question = headerLines[0] || "Select an option";
 
   return { question, options };
