@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
-import { ensureTmux, tryInstallTmux } from "./tmux.js";
+import { ensureTmux, hasTmux, tryInstallTmux } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -1096,8 +1096,10 @@ async function runLogin(setupToken: string): Promise<void> {
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       if (response.status === 401) {
-        console.error("Invalid or expired token.");
-        console.error("Generate a new token at: codecast.sh/cli");
+        console.error("Invalid or expired setup token.");
+        console.error("\nTo fix this:");
+        console.error("  1. Generate a new token at: https://codecast.sh/settings/cli");
+        console.error("  2. Or authenticate via browser: codecast auth");
       } else {
         console.error(`Error: ${error.error || response.statusText}`);
       }
@@ -1134,7 +1136,8 @@ async function runLogin(setupToken: string): Promise<void> {
     console.log(`API Token: ${maskToken(config.auth_token || "")}`);
     console.log(`Config: ${CONFIG_FILE}\n`);
 
-    if (!ensureTmux()) {
+    if (!hasTmux()) {
+      console.log("tmux is recommended for full functionality (auto-resume, session management).\n");
       try {
         const shouldInstall = await confirm({ message: "Install tmux now?", default: true });
         if (shouldInstall) {
