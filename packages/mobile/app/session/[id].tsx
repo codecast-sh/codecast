@@ -257,8 +257,156 @@ function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUs
   return result;
 }
 
+const SYNTAX_PATTERNS: Array<{ regex: RegExp; color: string }> = [
+  { regex: /\/\/.*$/gm, color: '#586e75' },
+  { regex: /\/\*[\s\S]*?\*\//gm, color: '#586e75' },
+  { regex: /#.*$/gm, color: '#586e75' },
+  { regex: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, color: '#2aa198' },
+  { regex: /\b(import|export|from|default|return|if|else|for|while|do|switch|case|break|continue|function|const|let|var|class|extends|new|this|try|catch|finally|throw|async|await|yield|typeof|instanceof|in|of|void|delete|true|false|null|undefined|enum|interface|type|implements|abstract|static|public|private|protected|readonly|override|declare|namespace|module|require|super|as|is)\b/g, color: '#859900' },
+  { regex: /\b\d+(\.\d+)?\b/g, color: '#d33682' },
+  { regex: /[{}()[\]]/g, color: '#657b83' },
+  { regex: /=&gt;|=>|===|!==|==|!=|<=|>=|&&|\|\||[+\-*/%=<>!&|^~?:]/g, color: '#cb4b16' },
+];
+
+function highlightSyntax(code: string): Array<{ text: string; color?: string }> {
+  const spans: Array<{ start: number; end: number; color: string }> = [];
+  for (const { regex, color } of SYNTAX_PATTERNS) {
+    regex.lastIndex = 0;
+    let m;
+    while ((m = regex.exec(code)) !== null) {
+      spans.push({ start: m.index, end: m.index + m[0].length, color });
+    }
+  }
+  spans.sort((a, b) => a.start - b.start);
+  const merged: typeof spans = [];
+  for (const s of spans) {
+    if (merged.length && s.start < merged[merged.length - 1].end) continue;
+    merged.push(s);
+  }
+  const result: Array<{ text: string; color?: string }> = [];
+  let pos = 0;
+  for (const s of merged) {
+    if (s.start > pos) result.push({ text: code.slice(pos, s.start) });
+    result.push({ text: code.slice(s.start, s.end), color: s.color });
+    pos = s.end;
+  }
+  if (pos < code.length) result.push({ text: code.slice(pos) });
+  return result;
+}
+
+function HighlightedCodeText({ content, style }: { content: string; style: any }) {
+  const parts = useMemo(() => highlightSyntax(content), [content]);
+  return (
+    <RNText style={style} selectable>
+      {parts.map((p, i) => p.color ? <RNText key={i} style={{ color: p.color }}>{p.text}</RNText> : p.text)}
+    </RNText>
+  );
+}
+
+function CodeBlockFullscreen({ content, language, visible, onClose }: { content: string; language: string; visible: boolean; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const lines = content.split('\n');
+  if (!visible) return null;
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <RNView style={{ flex: 1, backgroundColor: '#002b36' }}>
+        <RNView style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 60, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.1)' }}>
+          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <RNText style={{ fontSize: 12, color: '#93a1a1', fontFamily: 'SpaceMono', fontWeight: '500' }}>{language}</RNText>
+            <RNText style={{ fontSize: 10, color: '#657b83' }}>{lines.length} lines</RNText>
+          </RNView>
+          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <TouchableOpacity onPress={() => { Clipboard.setString(content); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCopied(true); setTimeout(() => setCopied(false), 1500); }} activeOpacity={0.6}>
+              {copied ? <FontAwesome name="check" size={14} color={Theme.green} /> : <FontAwesome name="clipboard" size={14} color="#657b83" />}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onClose} activeOpacity={0.6}>
+              <FontAwesome name="close" size={16} color="#93a1a1" />
+            </TouchableOpacity>
+          </RNView>
+        </RNView>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12 }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator>
+            <RNView style={{ flexDirection: 'row' }}>
+              <RNView style={styles.lineNumberGutter}>
+                {lines.map((_, i) => (
+                  <RNText key={i} style={[styles.lineNumber, { lineHeight: 20, color: '#657b83' }]}>{i + 1}</RNText>
+                ))}
+              </RNView>
+              <HighlightedCodeText content={content} style={[styles.codeText, { lineHeight: 20 }]} />
+            </RNView>
+          </ScrollView>
+        </ScrollView>
+      </RNView>
+    </Modal>
+  );
+}
+
+function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath: string }) {
+  const [fullscreenSection, setFullscreenSection] = useState<'old' | 'new' | null>(null);
+  const [copiedSection, setCopiedSection] = useState<'old' | 'new' | null>(null);
+  const oldLines = oldStr.split('\n');
+  const newLines = newStr.split('\n');
+
+  const handleCopy = (text: string, section: 'old' | 'new') => {
+    Clipboard.setString(text);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCopiedSection(section);
+    setTimeout(() => setCopiedSection(null), 1500);
+  };
+
+  const renderSection = (content: string, lines: string[], type: 'old' | 'new') => {
+    const isOld = type === 'old';
+    const bgColor = isOld ? Theme.red + '12' : Theme.green + '12';
+    const labelColor = isOld ? Theme.red : Theme.green;
+    const label = isOld ? 'Removed' : 'Added';
+    const prefix = isOld ? '-' : '+';
+    const isCopied = copiedSection === type;
+
+    return (
+      <RNView style={{ backgroundColor: bgColor, borderRadius: 3, overflow: 'hidden' }}>
+        <RNView style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8, paddingVertical: 3, backgroundColor: 'rgba(0,0,0,0.05)' }}>
+          <RNText style={{ fontSize: 10, color: labelColor, fontFamily: 'SpaceMono', fontWeight: '600' }}>{prefix} {label} ({lines.length} lines)</RNText>
+          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TouchableOpacity onPress={() => setFullscreenSection(type)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <FontAwesome name="expand" size={9} color={labelColor} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => handleCopy(content, type)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              {isCopied ? <FontAwesome name="check" size={9} color={Theme.green} /> : <FontAwesome name="clipboard" size={9} color={labelColor} />}
+            </TouchableOpacity>
+          </RNView>
+        </RNView>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
+          <RNView style={{ flexDirection: 'row', padding: 6 }}>
+            <RNView style={styles.diffLineNumbers}>
+              {lines.map((_, i) => (
+                <RNText key={i} style={styles.diffLineNum}>{i + 1}</RNText>
+              ))}
+            </RNView>
+            <HighlightedCodeText content={content} style={{ fontSize: 12, fontFamily: 'SpaceMono', lineHeight: 16, color: '#93a1a1' }} />
+          </RNView>
+        </ScrollView>
+      </RNView>
+    );
+  };
+
+  const fsContent = fullscreenSection === 'old' ? oldStr : newStr;
+  const fsLabel = fullscreenSection === 'old' ? 'Removed' : 'Added';
+  const lang = filePath ? (getFileExtension(filePath) || 'diff') : 'diff';
+
+  return (
+    <RNView style={styles.diffSection}>
+      {renderSection(oldStr, oldLines, 'old')}
+      {renderSection(newStr, newLines, 'new')}
+      {fullscreenSection && (
+        <CodeBlockFullscreen content={fsContent} language={`${lang} (${fsLabel})`} visible={!!fullscreenSection} onClose={() => setFullscreenSection(null)} />
+      )}
+    </RNView>
+  );
+}
+
 function CodeBlockWithCopy({ content, language }: { content: string; language: string }) {
   const [copied, setCopied] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const handleCopy = () => {
     Clipboard.setString(content);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -273,16 +421,21 @@ function CodeBlockWithCopy({ content, language }: { content: string; language: s
     <RNView style={styles.codeBlock}>
       <RNView style={styles.codeHeader}>
         <RNText style={styles.codeLanguage}>{language}{lines.length > 1 ? ` \u00b7 ${lines.length} lines` : ''}</RNText>
-        <TouchableOpacity onPress={handleCopy} style={styles.codeCopyButton} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          {copied ? (
-            <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-              <FontAwesome name="check" size={10} color={Theme.green} />
-              <RNText style={{ fontSize: 9, color: Theme.green, fontFamily: 'SpaceMono' }}>Copied</RNText>
-            </RNView>
-          ) : (
-            <FontAwesome name="clipboard" size={11} color={Theme.textDim} />
-          )}
-        </TouchableOpacity>
+        <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <FontAwesome name="expand" size={10} color={Theme.textDim} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleCopy} style={styles.codeCopyButton} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            {copied ? (
+              <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                <FontAwesome name="check" size={10} color={Theme.green} />
+                <RNText style={{ fontSize: 9, color: Theme.green, fontFamily: 'SpaceMono' }}>Copied</RNText>
+              </RNView>
+            ) : (
+              <FontAwesome name="clipboard" size={11} color={Theme.textDim} />
+            )}
+          </TouchableOpacity>
+        </RNView>
       </RNView>
       <ScrollView horizontal showsHorizontalScrollIndicator style={styles.hScroll}>
         <RNView style={styles.codeContent}>
@@ -293,13 +446,14 @@ function CodeBlockWithCopy({ content, language }: { content: string; language: s
                   <RNText key={i} style={styles.lineNumber}>{i + 1}</RNText>
                 ))}
               </RNView>
-              <RNText style={styles.codeText} selectable>{content}</RNText>
+              <HighlightedCodeText content={content} style={styles.codeText} />
             </RNView>
           ) : (
-            <RNText style={styles.codeText} selectable>{content}</RNText>
+            <HighlightedCodeText content={content} style={styles.codeText} />
           )}
         </RNView>
       </ScrollView>
+      <CodeBlockFullscreen content={content} language={language} visible={fullscreen} onClose={() => setFullscreen(false)} />
     </RNView>
   );
 }
@@ -2110,36 +2264,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
             </RNView>
           ) : null}
           {isEdit && parsedInput.old_string && parsedInput.new_string ? (
-            <RNView style={styles.diffSection}>
-              <RNView style={styles.diffOld}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
-                  <RNView style={{ flexDirection: 'row' }}>
-                    <RNView style={styles.diffLineNumbers}>
-                      {String(parsedInput.old_string).split('\n').map((_, i) => (
-                        <RNText key={i} style={styles.diffLineNum}>{i + 1}</RNText>
-                      ))}
-                    </RNView>
-                    <RNText style={styles.diffOldText} selectable>
-                      {String(parsedInput.old_string).split('\n').map(l => `- ${l}`).join('\n')}
-                    </RNText>
-                  </RNView>
-                </ScrollView>
-              </RNView>
-              <RNView style={styles.diffNew}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
-                  <RNView style={{ flexDirection: 'row' }}>
-                    <RNView style={styles.diffLineNumbers}>
-                      {String(parsedInput.new_string).split('\n').map((_, i) => (
-                        <RNText key={i} style={styles.diffLineNum}>{i + 1}</RNText>
-                      ))}
-                    </RNView>
-                    <RNText style={styles.diffNewText} selectable>
-                      {String(parsedInput.new_string).split('\n').map(l => `+ ${l}`).join('\n')}
-                    </RNText>
-                  </RNView>
-                </ScrollView>
-              </RNView>
-            </RNView>
+            <DiffBlock oldStr={String(parsedInput.old_string)} newStr={String(parsedInput.new_string)} filePath={filePath} />
           ) : isWrite && parsedInput.content ? (
             isMarkdownFile && viewMode === 'rendered' ? (
               <>
@@ -2164,27 +2289,20 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
                 )}
               </>
             ) : (
-              <RNView style={styles.diffSection}>
-                <RNView style={styles.diffNew}>
-                  <RNText style={styles.diffNewText} selectable>{String(parsedInput.content)}</RNText>
-                </RNView>
-              </RNView>
+              <CodeBlockWithCopy content={String(parsedInput.content)} language={language || 'plaintext'} />
             )
           ) : toolCall.name === 'apply_patch' && (parsedInput.input || parsedInput.patch) ? (
-            <RNView style={styles.toolResultBox}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
-                <RNText style={styles.toolCodeText} selectable>{String(parsedInput.input || parsedInput.patch)}</RNText>
-              </ScrollView>
-            </RNView>
+            <CodeBlockWithCopy content={String(parsedInput.input || parsedInput.patch)} language="diff" />
           ) : null}
           {result && resultDisplay && resultDisplay.trim() ? (
             <RNView style={styles.toolResultBox}>
               {canToggleViewMode && viewMode === 'rendered' ? (
                 <MarkdownContent text={stripLineNumbers(resultDisplay)} baseStyle={styles.toolCallResult} isUser={false} />
               ) : isCodeResult ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
-                  <RNText style={[styles.toolCodeText, result.is_error && { color: Theme.red }]} selectable>{resultDisplay}</RNText>
-                </ScrollView>
+                <CodeBlockWithCopy
+                  content={resultDisplay}
+                  language={result.is_error ? 'error' : (isBash ? 'bash' : (isRead || isWrite || isEdit ? (language || 'plaintext') : 'plaintext'))}
+                />
               ) : isMarkdownResult ? (
                 <MarkdownContent text={resultDisplay} baseStyle={styles.toolCallResult} isUser={false} />
               ) : (
