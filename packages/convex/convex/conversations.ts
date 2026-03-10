@@ -10,10 +10,10 @@ import {
   isTeamMember,
   canTeamMemberAccess,
   checkConversationAccess,
-  isConversationVisibleInFeed,
   isConversationTeamVisible,
+  isConversationTeamVisibleSync,
+  isPathMappedToTeam,
   resolveVisibilityMode,
-  type VisibilityMode,
 } from "./privacy";
 
 async function getAuthenticatedUserId(
@@ -701,10 +701,8 @@ export const getConversations = query({
       const isOwn = c.user_id.toString() === args.user_id.toString();
       if (isOwn) return true;
       if (!c.team_id || !userTeamIds.has(c.team_id.toString())) return false;
-      if (c.is_private === false) return true;
-      if (c.team_visibility && c.team_visibility !== "private") return true;
       const ownerVis = ownerVisMap.get(c.user_id.toString()) || "summary";
-      return ownerVis !== "hidden" && ownerVis !== "activity";
+      return isConversationTeamVisibleSync(c, ownerVis);
     });
     return filtered.sort((a, b) => b.updated_at - a.updated_at);
   },
@@ -1501,28 +1499,10 @@ export const listConversations = query({
           .collect()
       : [];
 
-    // Build a map of users who have explicit directory mappings
     const userHasMappings = new Map<string, boolean>();
     for (const m of allMappings) {
       userHasMappings.set(m.user_id.toString(), true);
     }
-
-    // Helper to check if a project should show in team feed
-    // - If user has no mappings: show all their conversations (permissive default)
-    // - If user has mappings: only show conversations from mapped paths
-    const isProjectVisibleToTeam = (userId: string, projectPath: string | undefined): boolean => {
-      const hasMappings = userHasMappings.get(userId);
-      if (!hasMappings) {
-        // No mappings configured - show all conversations from this user
-        return true;
-      }
-      // User has mappings - check if this project is mapped
-      if (!projectPath) return false;
-      return allMappings.some(
-        m => m.user_id.toString() === userId &&
-             (projectPath === m.path_prefix || projectPath.startsWith(m.path_prefix + "/"))
-      );
-    };
 
     const normalizeToRoot = (path: string): string => {
       const parts = path.split('/');
@@ -1639,7 +1619,11 @@ export const listConversations = query({
         )
         .order("desc");
 
-      const memberHasMappings = userHasMappings.get(args.memberId!.toString());
+      const memberVis = membershipVisibilityMap.get(args.memberId!.toString()) || "summary";
+      const isVisible = (c: any): boolean => {
+        if (!isConversationTeamVisibleSync(c, memberVis)) return false;
+        return isPathMappedToTeam(c.user_id.toString(), c.git_root || c.project_path, allMappings, userHasMappings);
+      };
       if (needsBatchScan) {
         const results: any[] = [];
         let memberScanCursor = cursorTimestamp;
@@ -1656,9 +1640,7 @@ export const listConversations = query({
             .take(memberBatchSize);
           if (batch.length === 0) break;
           for (const c of batch) {
-            if (!isConversationVisibleInFeed(c, !!memberHasMappings)) continue;
-            const projectPath = c.git_root || c.project_path;
-            if (!isProjectVisibleToTeam(c.user_id.toString(), projectPath)) continue;
+            if (!isVisible(c)) continue;
             if (!matchesFilters(c)) continue;
             results.push(c);
             if (results.length >= limit + 1) break;
@@ -1670,9 +1652,8 @@ export const listConversations = query({
       } else {
         const fetched = await query.take((limit + 1) * 2);
         conversations = fetched.filter((c) => {
-          if (!isConversationVisibleInFeed(c, !!memberHasMappings)) return false;
-          const projectPath = c.git_root || c.project_path;
-          return isProjectVisibleToTeam(c.user_id.toString(), projectPath);
+          if (!isVisible(c)) return false;
+          return matchesFilters(c);
         }).slice(0, limit + 1);
       }
     } else {
@@ -1702,11 +1683,10 @@ export const listConversations = query({
             .order("desc");
 
           const convs = await query.take(perMemberFetch);
-          const memberHasMappings = userHasMappings.get(member.user_id.toString());
+          const memberVis = membershipVisibilityMap.get(member.user_id.toString()) || "summary";
           return convs.filter((c) => {
-            if (!isConversationVisibleInFeed(c, !!memberHasMappings)) return false;
-            const projectPath = c.git_root || c.project_path;
-            if (!isProjectVisibleToTeam(c.user_id.toString(), projectPath)) return false;
+            if (!isConversationTeamVisibleSync(c, memberVis)) return false;
+            if (!isPathMappedToTeam(c.user_id.toString(), c.git_root || c.project_path, allMappings, userHasMappings)) return false;
             if (!matchesFilters(c)) return false;
             return true;
           }).slice(0, perMemberLimit);
@@ -4787,17 +4767,6 @@ export const getTeamUnreadCount = query({
       userHasMappings.set(m.user_id.toString(), true);
     }
 
-    const isProjectVisibleToTeam = (convUserId: string, projectPath: string | undefined): boolean => {
-      if (!userHasMappings.get(convUserId)) {
-        return true; // No mappings = show all conversations
-      }
-      if (!projectPath) return false;
-      return teamMappings.some(
-        m => m.user_id.toString() === convUserId &&
-             (projectPath === m.path_prefix || projectPath.startsWith(m.path_prefix + "/"))
-      );
-    };
-
     const lastSeen = user.team_conversations_last_seen || 0;
 
     const recentConversations = await ctx.db
@@ -4809,8 +4778,7 @@ export const getTeamUnreadCount = query({
     let count = 0;
     for (const conv of recentConversations) {
       if (conv.updated_at > lastSeen && conv.user_id.toString() !== userId.toString()) {
-        const projectPath = conv.git_root || conv.project_path;
-        if (isProjectVisibleToTeam(conv.user_id.toString(), projectPath)) {
+        if (isPathMappedToTeam(conv.user_id.toString(), conv.git_root || conv.project_path, teamMappings, userHasMappings)) {
           count++;
         }
       }
@@ -5342,7 +5310,8 @@ export const listIdleSessions = query({
         }
       }
 
-      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending) continue;
+      const pinned = !!conv.inbox_pinned_at;
+      if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) continue;
 
       const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
       if (dismissed) continue;
@@ -5366,7 +5335,6 @@ export const listIdleSessions = query({
           : !recentlyUpdated;
 
       const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
-      const pinned = !!conv.inbox_pinned_at;
 
       let implementationSession: { _id: string; title?: string } | undefined;
       if (conv.message_count > 0) {

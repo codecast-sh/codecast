@@ -44,6 +44,8 @@ function isVisibilityShareable(visibility: string): boolean {
   return visibility !== "hidden" && visibility !== "activity";
 }
 
+// Single source of truth: is this conversation visible to team members?
+// Checks (in order): team_visibility override, is_private flag, owner's membership visibility.
 export async function isConversationTeamVisible(
   ctx: DbCtx,
   conversation: ConversationForAccess
@@ -60,6 +62,18 @@ export async function isConversationTeamVisible(
   return isVisibilityShareable(ownerVisibility);
 }
 
+// Sync version for batch filtering when owner membership visibility is pre-fetched.
+export function isConversationTeamVisibleSync(
+  conversation: { is_private: boolean; team_visibility?: string; team_id?: any; user_id: any },
+  ownerMembershipVisibility: string
+): boolean {
+  if (!conversation.team_id) return false;
+  if (conversation.is_private === false) return true;
+  if (conversation.team_visibility && conversation.team_visibility !== "private")
+    return true;
+  return isVisibilityShareable(ownerMembershipVisibility);
+}
+
 export async function canTeamMemberAccess(
   ctx: DbCtx,
   viewerId: Id<"users">,
@@ -67,15 +81,7 @@ export async function canTeamMemberAccess(
 ): Promise<boolean> {
   if (!conversation.team_id) return false;
   if (!(await isTeamMember(ctx, viewerId, conversation.team_id))) return false;
-  if (conversation.is_private === false) return true;
-  if (conversation.team_visibility && conversation.team_visibility !== "private")
-    return true;
-  const ownerVisibility = await getOwnerTeamVisibility(
-    ctx,
-    conversation.user_id,
-    conversation.team_id
-  );
-  return isVisibilityShareable(ownerVisibility);
+  return isConversationTeamVisible(ctx, conversation);
 }
 
 export async function checkConversationAccess(
@@ -91,13 +97,20 @@ export async function checkConversationAccess(
   return "denied";
 }
 
-export function isConversationVisibleInFeed(
-  conversation: { team_visibility?: string; is_private: boolean },
-  ownerHasMappings: boolean
+// Directory mapping path filter for feed views.
+// Separate concern from privacy: controls which projects a user shares with a team.
+export function isPathMappedToTeam(
+  userId: string,
+  projectPath: string | undefined,
+  mappings: Array<{ user_id: { toString(): string }; path_prefix: string }>,
+  userHasMappings: Map<string, boolean>
 ): boolean {
-  if (conversation.team_visibility === "private") return false;
-  if (ownerHasMappings && conversation.is_private !== false) return false;
-  return true;
+  if (!userHasMappings.get(userId)) return true;
+  if (!projectPath) return false;
+  return mappings.some(
+    m => m.user_id.toString() === userId &&
+         (projectPath === m.path_prefix || projectPath.startsWith(m.path_prefix + "/"))
+  );
 }
 
 export type VisibilityMode = "full" | "detailed" | "summary" | "minimal";
