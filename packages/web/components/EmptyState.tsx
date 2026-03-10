@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { copyToClipboard } from "../lib/utils";
@@ -146,7 +146,15 @@ function SetupTokenCommand() {
     }
   };
 
-  const isTokenExpired = tokenExpiry ? Date.now() > tokenExpiry : false;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!tokenExpiry) return;
+    const remaining = tokenExpiry - Date.now();
+    if (remaining <= 0) return;
+    const timer = setTimeout(() => setNow(Date.now()), remaining + 100);
+    return () => clearTimeout(timer);
+  }, [tokenExpiry]);
+  const isTokenExpired = tokenExpiry ? now > tokenExpiry : false;
   const hasValidToken = setupToken && !isTokenExpired;
   const installCommand = hasValidToken
     ? `curl -fsSL codecast.sh/install | sh -s -- ${setupToken}`
@@ -200,7 +208,7 @@ function SetupTokenCommand() {
         </div>
       </div>
       <p className="text-xs text-sol-text-dim text-center">
-        Token expires in 15 minutes
+        Token expires in 60 minutes
       </p>
     </div>
   );

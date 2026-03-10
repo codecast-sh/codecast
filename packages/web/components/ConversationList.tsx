@@ -543,9 +543,9 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
         project_path: projectPath || undefined,
         git_root: projectPath || undefined,
       });
+      router.push(`/conversation/${conversationId}?focus=1`);
       onClose();
       setProjectPath("");
-      router.push(`/conversation/${conversationId}?focus=1`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create session");
     } finally {

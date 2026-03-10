@@ -2,7 +2,7 @@
 
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { copyToClipboard } from "../../../lib/utils";
 
 export default function CliSettingsPage() {
@@ -35,7 +35,15 @@ export default function CliSettingsPage() {
     }
   };
 
-  const isTokenExpired = tokenExpiry ? Date.now() > tokenExpiry : false;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!tokenExpiry) return;
+    const remaining = tokenExpiry - Date.now();
+    if (remaining <= 0) return;
+    const timer = setTimeout(() => setNow(Date.now()), remaining + 100);
+    return () => clearTimeout(timer);
+  }, [tokenExpiry]);
+  const isTokenExpired = tokenExpiry ? now > tokenExpiry : false;
 
   if (!currentUser) {
     return (
@@ -64,7 +72,7 @@ export default function CliSettingsPage() {
         ) : (
           <div className="space-y-3">
             <p className="text-sol-text-dim text-xs">
-              Token expires in 15 minutes:
+              Token expires in 60 minutes:
             </p>
             <div className="relative">
               <code className="block bg-sol-bg rounded-lg p-4 text-sm text-green-400 overflow-x-auto pr-20 break-all">

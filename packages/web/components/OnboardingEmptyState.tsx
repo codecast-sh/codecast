@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { copyToClipboard } from "../lib/utils";
@@ -30,7 +30,15 @@ export function OnboardingEmptyState() {
     }
   };
 
-  const isTokenExpired = tokenExpiry ? Date.now() > tokenExpiry : false;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!tokenExpiry) return;
+    const remaining = tokenExpiry - Date.now();
+    if (remaining <= 0) return;
+    const timer = setTimeout(() => setNow(Date.now()), remaining + 100);
+    return () => clearTimeout(timer);
+  }, [tokenExpiry]);
+  const isTokenExpired = tokenExpiry ? now > tokenExpiry : false;
 
   return (
     <div className="flex flex-col items-center justify-center py-12 px-4">
@@ -79,7 +87,7 @@ export function OnboardingEmptyState() {
         ) : (
           <div className="space-y-4">
             <p className="text-sol-text-dim text-sm text-center">
-              Token expires in 15 minutes
+              Token expires in 60 minutes
             </p>
             <div className="relative">
               <code className="block bg-sol-bg rounded-xl p-5 text-sm text-green-400 overflow-x-auto pr-24 break-all font-mono">
