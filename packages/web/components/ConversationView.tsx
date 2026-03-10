@@ -686,7 +686,7 @@ type UserMessageKind =
   | { kind: 'empty' }
   | { kind: 'teammate_events' };
 
-const STICKY_NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "<task-notification>", "Your task is to create a detailed summary"];
+const STICKY_NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:"];
 
 function classifyUserMessage(
   msg: Message,
@@ -708,18 +708,20 @@ function classifyUserMessage(
   if (isSkillExpansion(t)) return { kind: 'skill_expansion' };
   if (isTaskNotification(t)) {
     const stripped = t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
-    if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:')) return { kind: 'task_notification' };
+    if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:') || stripped.startsWith('Full transcript available at:')) return { kind: 'task_notification' };
   }
   if (immediatePrev?.role === 'assistant' && immediatePrev?.tool_calls?.some(tc => tc.name === 'Task' || tc.name === 'Agent')) {
     return { kind: 'task_prompt' };
   }
   if (isCompactionPromptMessage(t)) return { kind: 'compaction_prompt' };
-  if (t.startsWith('Read the output file to retrieve the result:')) return { kind: 'noise' };
+  if (t.startsWith('Read the output file to retrieve the result:') || t.startsWith('Full transcript available at:')) return { kind: 'noise' };
   if (immediatePrev?.role === 'user' && immediatePrev?.content && isCommandMessage(immediatePrev.content) && t.length > 200) {
     const cmdMatch = immediatePrev.content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
     return { kind: 'skill_expansion', cmdName: cmdMatch?.[1]?.replace(/^\//, "") };
   }
   if (contextPrev?.role === 'system' && contextPrev?.subtype === 'compact_boundary') {
+    const stripped = stripSystemTags(t).trim();
+    if (!stripped) return { kind: 'noise' };
     return { kind: 'compaction_summary' };
   }
   if (t.includes('<teammate-message') && !t.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim()) {
@@ -1778,9 +1780,12 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 <div
                   ref={mdContainerRef}
                   className="relative p-3"
-                  style={!mdExpanded && mdOverflowing ? { maxHeight: MD_COLLAPSED_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
+                  style={!mdExpanded && mdOverflowing ? { maxHeight: MD_COLLAPSED_HEIGHT, overflow: 'hidden' } : undefined}
                 >
                   <MarkdownRenderer content={String(parsedInput.content)} filePath={filePath} />
+                  {!mdExpanded && mdOverflowing && (
+                    <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
+                  )}
                 </div>
                 <div className="flex items-center gap-3 px-3 pb-2">
                   {(mdOverflowing || mdExpanded) && (
@@ -2880,6 +2885,65 @@ function parseSkillBlocks(text: string): { parts: Array<{ type: 'text' | 'skill'
   return { parts };
 }
 
+type InsightPart = { type: 'text'; content: string } | { type: 'insight'; label: string; content: string };
+
+function parseInsightBlocks(text: string): InsightPart[] {
+  if (!text || typeof text !== 'string') {
+    return [{ type: 'text', content: String(text || '') }];
+  }
+  const insightRegex = /`([★✦⭐☆\*])\s+([\w\s]+?)\s*─+`([\s\S]*?)`─+`/g;
+  const parts: InsightPart[] = [];
+  let lastIndex = 0;
+  let match;
+  while ((match = insightRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      const before = text.slice(lastIndex, match.index).trim();
+      if (before) parts.push({ type: 'text', content: before });
+    }
+    parts.push({
+      type: 'insight',
+      label: match[2].trim(),
+      content: match[3].trim(),
+    });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    const remaining = text.slice(lastIndex).trim();
+    if (remaining) parts.push({ type: 'text', content: remaining });
+  }
+  if (parts.length === 0) parts.push({ type: 'text', content: text });
+  return parts;
+}
+
+function InsightCard({ label, content }: { label: string; content: string }) {
+  return (
+    <div className="my-3 rounded-lg overflow-hidden border border-sol-violet/30 bg-gradient-to-br from-sol-bg-alt via-sol-bg-alt to-sol-violet/5">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-violet/20 bg-sol-violet/8">
+        <svg className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z" />
+        </svg>
+        <span className="text-xs font-semibold tracking-wide uppercase text-sol-violet">{label}</span>
+      </div>
+      <div className="px-4 py-3 text-sm text-sol-text-secondary leading-relaxed prose prose-invert prose-sm max-w-none">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
+          components={{
+            pre: ({ node, children, ...props }) => {
+              const codeElement = node?.children?.[0];
+              if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                const className = codeElement.properties?.className as string[] | undefined;
+                const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                const code = extractTextFromHast(codeElement);
+                if (code) return <CodeBlock code={code} language={language} />;
+              }
+              return <pre {...props}>{children}</pre>;
+            },
+          }}
+        >{content}</ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
 function SkillCard({ name, description, path }: { name?: string; description?: string; path?: string }) {
   const shortPath = path ? path.replace(/^\/Users\/[^/]+\//, "~/") : undefined;
   return (
@@ -3238,7 +3302,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
       {displayContent ? <div
         ref={contentRef}
         className={`text-sol-text text-sm pl-8 break-words relative ${effectivelyCollapsed ? "line-clamp-2 whitespace-pre-wrap" : isMarkdown ? "prose prose-invert prose-sm max-w-none" : "whitespace-pre-wrap"}`}
-        style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
+        style={!effectivelyCollapsed && !contentExpanded && isOverflowing ? { maxHeight: USER_CONTENT_MAX_HEIGHT, overflow: 'hidden' } : undefined}
       >
         {(() => {
           const hasTeammate = displayContent.includes('<teammate-message');
@@ -3320,6 +3384,9 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
             >{displayContent}</ReactMarkdown>
           ) : displayContent;
         })()}
+        {!effectivelyCollapsed && !contentExpanded && isOverflowing && (
+          <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
+        )}
       </div> : null}
       {!effectivelyCollapsed && images && images.length > 0 && (
         <div className="pl-8 mt-2">
@@ -3522,6 +3589,11 @@ function AssistantBlock({
     ? linkifyMentions(strippedContent, agentNameToChildMap)
     : strippedContent;
   const parsedApiError = useMemo(() => parseApiErrorContent(displayContent), [displayContent]);
+  const insightParts = useMemo(() => {
+    if (!displayContent) return null;
+    const parts = parseInsightBlocks(displayContent);
+    return parts.some(p => p.type === 'insight') ? parts : null;
+  }, [displayContent]);
   const hasContent = displayContent && displayContent.trim().length > 0;
   const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
@@ -3771,37 +3843,67 @@ function AssistantBlock({
               {parsedApiError ? (
                 <ApiErrorCard error={parsedApiError} compact={!!collapsed} />
               ) : collapsed ? (
-                <div className="relative overflow-hidden" style={lines.length > COLLAPSED_LINES ? { maskImage: 'linear-gradient(to bottom, black 50%, transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black 50%, transparent)' } : undefined}>
+                <div className="relative overflow-hidden">
                   <span>{truncatedContent}</span>
+                  {lines.length > COLLAPSED_LINES && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[1.4em] pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
+                  )}
                 </div>
               ) : (
                 <div
                   ref={contentRef}
                   className="relative"
-                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 2rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 2rem), transparent)' } : undefined}
+                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflow: 'hidden' } : undefined}
                 >
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[rehypeHighlight]}
-                    components={{
-                      img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                      pre: ({ node, children, ...props }) => {
-                        const codeElement = node?.children?.[0];
-                        if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                          const className = codeElement.properties?.className as string[] | undefined;
-                          const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                          const code = extractTextFromHast(codeElement);
-
-                          if (code) {
-                            return <CodeBlock code={code} language={language} />;
+                  {insightParts ? (
+                    <div className="space-y-2">
+                      {insightParts.map((part, i) => part.type === 'insight' ? (
+                        <InsightCard key={i} label={part.label} content={part.content} />
+                      ) : (
+                        <ReactMarkdown
+                          key={i}
+                          remarkPlugins={[remarkGfm]}
+                          rehypePlugins={[rehypeHighlight]}
+                          components={{
+                            img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
+                            pre: ({ node, children, ...props }) => {
+                              const codeElement = node?.children?.[0];
+                              if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                                const className = codeElement.properties?.className as string[] | undefined;
+                                const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                                const code = extractTextFromHast(codeElement);
+                                if (code) return <CodeBlock code={code} language={language} />;
+                              }
+                              return <pre {...props}>{children}</pre>;
+                            },
+                          }}
+                        >{part.content}</ReactMarkdown>
+                      ))}
+                    </div>
+                  ) : (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={[rehypeHighlight]}
+                      components={{
+                        img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
+                        pre: ({ node, children, ...props }) => {
+                          const codeElement = node?.children?.[0];
+                          if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
+                            const className = codeElement.properties?.className as string[] | undefined;
+                            const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
+                            const code = extractTextFromHast(codeElement);
+                            if (code) return <CodeBlock code={code} language={language} />;
                           }
-                        }
-                        return <pre {...props}>{children}</pre>;
-                      },
-                    }}
-                  >
-                    {displayContent}
-                  </ReactMarkdown>
+                          return <pre {...props}>{children}</pre>;
+                        },
+                      }}
+                    >
+                      {displayContent}
+                    </ReactMarkdown>
+                  )}
+                  {!contentExpanded && isOverflowing && (
+                    <div className="absolute bottom-0 left-0 right-0 h-8 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
+                  )}
                 </div>
               )}
             </div>
@@ -4159,7 +4261,7 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
         <div
           ref={contentRef}
           className="relative prose prose-invert prose-sm max-w-none"
-          style={!isExpanded && isOverflowing ? { maxHeight: PLAN_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
+          style={!isExpanded && isOverflowing ? { maxHeight: PLAN_MAX_HEIGHT, overflow: 'hidden' } : undefined}
         >
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
@@ -4182,6 +4284,9 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
           >
             {content}
           </ReactMarkdown>
+          {!isExpanded && isOverflowing && (
+            <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
+          )}
         </div>
         {(isOverflowing || isExpanded) && (
           <div className="flex items-center gap-3 mt-2 pt-2 border-t border-sol-border/30">
@@ -4618,7 +4723,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -4714,6 +4819,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [lightboxImageIndex, setLightboxImageIndex] = useState<number | null>(null);
   const dismissLightbox = useCallback(() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }, []);
+  useEffect(() => { onLightboxChange?.(lightboxImageIndex !== null); }, [lightboxImageIndex, onLightboxChange]);
   const lightboxSwipe = useSwipeToDismiss(dismissLightbox);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -5157,7 +5263,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const canSubmit = hasContent && !isWaitingForUpload;
 
   return (
-    <div className="shrink-0 z-[10000] pointer-events-none sticky bottom-0">
+    <div className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-[10000]"}`}>
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
@@ -5487,6 +5593,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [shareSelectionMode, setShareSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
+  const [isImageLightboxActive, setIsImageLightboxActive] = useState(false);
   const [stickyMsgVisible, setStickyMsgVisible] = useState(false);
   const prevStickyMsgIdRef = useRef<string | null>(null);
   const prevStickyIdxRef = useRef<number | null>(null);
@@ -7266,7 +7373,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
-      <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass}`}>
+      <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass} ${isImageLightboxActive ? "invisible" : ""}`}>
         <div className="max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
             <Link
@@ -7699,7 +7806,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         />
       )}
 
-      <div className="flex-1 min-h-0 relative flex">
+      <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
       <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col">
         {!conversation ? (
@@ -7887,7 +7994,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <AgentSwitcher conversation={conversation} />
             </div>
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}

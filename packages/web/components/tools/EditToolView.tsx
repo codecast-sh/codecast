@@ -164,9 +164,12 @@ export function EditToolView({ input, output }: ToolViewProps) {
               <div
                 ref={mdRef}
                 className="relative p-4"
-                style={!mdExpanded && mdOverflowing ? { maxHeight: MD_MAX_HEIGHT, overflow: 'hidden', maskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 5rem), transparent)' } : undefined}
+                style={!mdExpanded && mdOverflowing ? { maxHeight: MD_MAX_HEIGHT, overflow: 'hidden' } : undefined}
               >
                 <MarkdownRenderer content={content} filePath={filePath} />
+                {!mdExpanded && mdOverflowing && (
+                  <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
+                )}
               </div>
             </div>
             {(mdOverflowing || mdExpanded) && (
