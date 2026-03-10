@@ -3394,30 +3394,47 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
     }
   } catch {}
 
-  const id = `cc-${process.pid}-${Date.now()}`;
-  const tmpFile = `/tmp/${id}`;
-  try {
-    fs.writeFileSync(tmpFile, sanitized);
-    await execAsync(`tmux load-buffer -b '${id}' '${tmpFile}'`);
-    await execAsync(`tmux paste-buffer -t '${target}' -b '${id}' -d`);
-  } catch (err) {
-    const escaped = sanitized.replace(/'/g, "'\\''");
-    await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
-  } finally {
-    try { fs.unlinkSync(tmpFile); } catch {}
-  }
-
-  // Scale capture range based on message length (long messages wrap many lines)
   const captureLines = Math.max(30, Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
 
-  // Wait for paste to appear in the pane
-  for (let attempt = 0; attempt < 12; attempt++) {
+  // Retry paste up to 4 times with increasing delays if text doesn't appear in pane.
+  // Claude Code may show the prompt before its input handler is fully ready, causing
+  // early paste attempts to be silently discarded.
+  let pasteConfirmed = false;
+  for (let pasteRetry = 0; pasteRetry < 4; pasteRetry++) {
+    if (pasteRetry > 0) {
+      log(`Paste retry ${pasteRetry} for ${target} (text not appearing in pane)`);
+      await new Promise(resolve => setTimeout(resolve, 500 * pasteRetry));
+    }
+
+    const id = `cc-${process.pid}-${Date.now()}`;
+    const tmpFile = `/tmp/${id}`;
     try {
-      const { stdout: echoCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
-      if (tmuxPromptStillHasInput(echoCheck, contentPrefix)) break;
-    } catch {}
-    await new Promise(resolve => setTimeout(resolve, 150));
+      fs.writeFileSync(tmpFile, sanitized);
+      await execAsync(`tmux load-buffer -b '${id}' '${tmpFile}'`);
+      await execAsync(`tmux paste-buffer -t '${target}' -b '${id}' -d`);
+    } catch (err) {
+      const escaped = sanitized.replace(/'/g, "'\\''");
+      await execAsync(`tmux send-keys -t '${target}' -l '${escaped}'`);
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch {}
+    }
+
+    for (let attempt = 0; attempt < 12; attempt++) {
+      try {
+        const { stdout: echoCheck } = await execAsync(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
+        if (tmuxPromptStillHasInput(echoCheck, contentPrefix)) {
+          pasteConfirmed = true;
+          break;
+        }
+      } catch {}
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+    if (pasteConfirmed) break;
+  }
+
+  if (!pasteConfirmed) {
+    log(`WARNING: paste text never appeared in pane ${target} after 4 retries`);
   }
 
   // Scale delay before Enter based on message length
@@ -3455,7 +3472,11 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
     } catch { break; }
   }
 
-  log(`Injected via tmux to ${target}`);
+  if (pasteConfirmed) {
+    log(`Injected via tmux to ${target}`);
+  } else {
+    log(`WARNING: Injection to ${target} completed but paste was never confirmed`);
+  }
 }
 
 async function injectViaIterm(tty: string, content: string): Promise<void> {
@@ -4399,6 +4420,7 @@ async function deliverMessage(
         ];
         let ready = false;
         const startTime = Date.now();
+        const trustPromptPatterns = /trust this folder|safety check|Is this a project/i;
         for (let i = 0; i < 60; i++) {
           await new Promise(resolve => setTimeout(resolve, 250));
           try {
@@ -4408,7 +4430,17 @@ async function deliverMessage(
               startedSessionTmux.delete(conversationId);
               return false;
             }
+            // Dismiss workspace trust prompt if detected (shows ❯ but isn't the input prompt)
+            if (trustPromptPatterns.test(paneContent)) {
+              log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
+              await execAsync(`tmux send-keys -t '${entry.tmuxSession}' Enter`);
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              continue;
+            }
             if (promptPattern.test(paneContent)) {
+              // Verify it's the actual input prompt, not the trust prompt's ❯
+              const lastLines = paneContent.split("\n").slice(-10).join("\n");
+              if (trustPromptPatterns.test(lastLines)) continue;
               log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
               ready = true;
               break;
@@ -4418,6 +4450,9 @@ async function deliverMessage(
         if (!ready) {
           log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
         }
+        // Extra settle time: Claude Code's input handler may not be ready immediately
+        // after the prompt is visible. Wait to avoid silent paste drops.
+        await new Promise(resolve => setTimeout(resolve, 1500));
         await injectViaTmux(entry.tmuxSession + ":0.0", content);
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         log(`Delivered message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
