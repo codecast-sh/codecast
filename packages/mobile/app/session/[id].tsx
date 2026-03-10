@@ -2328,7 +2328,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
           ) : toolCall.name === 'apply_patch' && (parsedInput.input || parsedInput.patch) ? (
             <CodeBlockWithCopy content={String(parsedInput.input || parsedInput.patch)} language="diff" />
           ) : null}
-          {result && resultDisplay && resultDisplay.trim() ? (
+          {result && resultDisplay && resultDisplay.trim() && !(isEdit && parsedInput.old_string && parsedInput.new_string && !result.is_error) ? (
             <RNView style={styles.toolResultBox}>
               {canToggleViewMode && viewMode === 'rendered' ? (
                 <MarkdownContent text={stripLineNumbers(resultDisplay)} baseStyle={styles.toolCallResult} isUser={false} />
