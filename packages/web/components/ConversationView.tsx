@@ -785,11 +785,11 @@ function stripLineNumbers(content: string): string {
 
 function ClaudeIcon() {
   return (
-    <div className="w-6 h-6 rounded bg-sol-yellow flex items-center justify-center shrink-0">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" fill="white"/>
+    <span className="w-6 h-6 rounded bg-sol-yellow flex items-center justify-center shrink-0">
+      <svg className="w-3.5 h-3.5 text-sol-bg" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
       </svg>
-    </div>
+    </span>
   );
 }
 
@@ -2379,7 +2379,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
               )}
             </div>
             <div className="text-xs text-sol-text-muted">{q.question}</div>
-            <div className="flex flex-wrap gap-1">
+            <div className={q.options.some(o => o.description) ? "flex flex-col gap-1" : "flex flex-wrap gap-1"}>
               {q.options.map((opt, j) => {
                 const cleanLabel = opt.label.replace(" (Recommended)", "");
                 const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
@@ -2408,6 +2408,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                       </svg>
                     )}
                     {opt.label}
+                    {opt.description && <span className="text-sol-text-dim ml-1">{opt.description}</span>}
                   </button>
                 ) : (
                   <span
@@ -2424,6 +2425,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                       </svg>
                     )}
                     {opt.label}
+                    {opt.description && <span className="text-sol-text-dim ml-1">{opt.description}</span>}
                   </span>
                 );
               })}

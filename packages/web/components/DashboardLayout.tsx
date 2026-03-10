@@ -187,7 +187,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
       {/* Header spans full width */}
-      <header ref={headerRef} className={`flex-shrink-0 border-b border-sol-border bg-sol-bg/95 backdrop-blur-sm z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""}`}>
+      <header ref={headerRef} className={`flex-shrink-0 border-b border-sol-border bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""}`}>
         <div className="px-2 sm:px-4 py-1.5 sm:py-3 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Logo + toggle */}
           <div className="flex items-center gap-1.5 flex-shrink-0">

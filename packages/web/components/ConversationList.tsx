@@ -509,12 +509,14 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   useEffect(() => {
     if (isOpen && context.projectPath) {
       setProjectPath(context.projectPath);
+    } else if (isOpen && !context.projectPath && recentProjects?.length) {
+      setProjectPath(recentProjects[0].path);
     }
     if (isOpen && context.agentType) {
       const mapped = context.agentType === "claude_code" ? "claude" : context.agentType === "codex" ? "codex" : "gemini";
       setAgentType(mapped as "claude" | "codex" | "gemini");
     }
-  }, [isOpen, context]);
+  }, [isOpen, context, recentProjects]);
 
   useEffect(() => {
     if (!isOpen) return;

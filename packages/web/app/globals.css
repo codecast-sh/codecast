@@ -63,7 +63,7 @@
   }
 
   .sol-header {
-    @apply border-b border-sol-border bg-sol-bg-alt backdrop-blur;
+    @apply border-b border-sol-border bg-sol-bg-alt;
   }
 
   .sol-sidebar {
