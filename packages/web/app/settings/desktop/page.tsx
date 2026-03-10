@@ -45,8 +45,16 @@ function ShortcutRecorder({
         return;
       }
 
-      const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
       if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) return;
+
+      let key: string;
+      if (e.code === "Space") {
+        key = "Space";
+      } else if (e.key.length === 1 || e.key === "\u00A0") {
+        key = e.code.replace(/^Key/, "").replace(/^Digit/, "");
+      } else {
+        key = e.key;
+      }
 
       const parts: string[] = [];
       if (e.ctrlKey && !e.metaKey) parts.push("Control");
