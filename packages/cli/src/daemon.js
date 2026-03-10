@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @bun
 var __defProp = Object.defineProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -24,9 +25,9 @@ import { EventEmitter } from "events";
 import * as sysPath2 from "path";
 
 // node_modules/.pnpm/readdirp@4.1.2/node_modules/readdirp/esm/index.js
-import { stat, lstat, readdir, realpath } from "node:fs/promises";
-import { Readable } from "node:stream";
-import { resolve as presolve, relative as prelative, join as pjoin, sep as psep } from "node:path";
+import { stat, lstat, readdir, realpath } from "fs/promises";
+import { Readable } from "stream";
+import { resolve as presolve, relative as prelative, join as pjoin, sep as psep } from "path";
 var EntryTypes = {
   FILE_TYPE: "files",
   DIR_TYPE: "directories",
@@ -10821,7 +10822,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.63";
+var VERSION = "1.0.64";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -12002,6 +12003,7 @@ var lastErrorNotification = new Map;
 var lastWorkingStatusSent = new Map;
 var WORKING_STATUS_THROTTLE_MS = 1e4;
 var lastHookStatus = new Map;
+var pendingInteractivePrompts = new Map;
 var AGENT_STATUS_DIR = path13.join(process.env.HOME || "", ".codecast", "agent-status");
 function sendAgentStatus(syncService2, conversationId, sessionId, status, clientTs, permissionMode) {
   if (status === "working" && !permissionMode) {
@@ -12523,9 +12525,9 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
           break;
         }
-        const PROMPT_RE = /[❯›]/;
-        const PROMPT_EMPTY_RE = /[❯›]\s*(\n|$)/;
-        const BUSY_RE = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Wandering|Vibing|Coasting|Working|thinking/;
+        const PROMPT_RE = /[\u276F\u203A]/;
+        const PROMPT_EMPTY_RE = /[\u276F\u203A]\s*(\n|$)/;
+        const BUSY_RE = /\u280B|\u2819|\u2839|\u2838|\u283C|\u2834|\u2826|\u2827|\u2807|\u280F|Wandering|Vibing|Coasting|Working|thinking/;
         const captureLast = async () => {
           const { stdout } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxTarget}' -S -8`);
           return stdout.split(`
@@ -12594,9 +12596,22 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           error = `Key '${invalidKey}' not in allowlist`;
           break;
         }
-        const cache = readConversationCache();
-        const reverse = buildReverseConversationCache(cache);
-        const sessionId = reverse[conversationId];
+        let sessionId;
+        {
+          const cache = readConversationCache();
+          const reverse = buildReverseConversationCache(cache);
+          sessionId = reverse[conversationId];
+        }
+        if (!sessionId) {
+          for (let i = 0;i < 10; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            const freshCache = readConversationCache();
+            const freshReverse = buildReverseConversationCache(freshCache);
+            sessionId = freshReverse[conversationId];
+            if (sessionId)
+              break;
+          }
+        }
         if (!sessionId) {
           error = `No session found for conversation ${conversationId}`;
           break;
@@ -12824,7 +12839,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             }
           }
         } else {
-          error = `Failed to resume session ${sessionId.slice(0, 8)} — session file may not exist locally`;
+          error = `Failed to resume session ${sessionId.slice(0, 8)} \u2014 session file may not exist locally`;
         }
         break;
       }
@@ -13421,7 +13436,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             setPosition(filePath, stats.size);
             return;
           }
@@ -13479,7 +13494,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
     }
     const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -13712,7 +13727,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
     } catch (err) {
       if (err instanceof AuthExpiredError) {
         if (handleAuthFailure()) {
-          log("⚠️  Authentication expired - sync paused");
+          log("\u26A0\uFE0F  Authentication expired - sync paused");
           setPosition(dbPath, totalCount);
           return;
         }
@@ -13752,7 +13767,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
   }
   const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
   if (batchResult.authExpired) {
-    log("⚠️  Authentication expired - sync paused");
+    log("\u26A0\uFE0F  Authentication expired - sync paused");
     return;
   }
   if (batchResult.conversationNotFound) {
@@ -13858,7 +13873,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             setPosition(filePath, stats.size);
             return;
           }
@@ -13899,7 +13914,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
     }
     const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -14097,7 +14112,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             setPosition(filePath, stats.size);
             return;
           }
@@ -14139,7 +14154,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
     }
     const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -14239,7 +14254,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             geminiSyncedCounts.set(filePath, allMessages.length);
             return;
           }
@@ -14280,7 +14295,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
     }
     const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -14695,6 +14710,31 @@ async function findTmuxPaneForTty(tty) {
     return null;
   }
 }
+function parseInteractivePrompt(text) {
+  const lines = text.split(`
+`);
+  const optionPattern = /^\s*[>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
+  const options = [];
+  let firstOptionIdx = -1;
+  for (let i = 0;i < lines.length; i++) {
+    const m = lines[i].match(optionPattern);
+    if (m) {
+      if (firstOptionIdx < 0)
+        firstOptionIdx = i;
+      const label = m[2].replace(/\s*[\u2713\u2717]\s*/, "").trim();
+      const description = m[3]?.trim() || undefined;
+      if (label)
+        options.push({ label, description });
+    } else if (options.length > 0) {
+      break;
+    }
+  }
+  if (options.length < 2 || firstOptionIdx < 0)
+    return null;
+  const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx).map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith(">"));
+  const question = headerLines[0] || "Select an option";
+  return { question, options };
+}
 function parsePollMessage(content) {
   try {
     const parsed = JSON.parse(content);
@@ -14703,6 +14743,51 @@ function parsePollMessage(content) {
   } catch {
   }
   return null;
+}
+async function checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService2) {
+  if (pendingInteractivePrompts.has(sessionId)) {
+    log(`Skipping prompt check: pending prompt exists for ${sessionId.slice(0, 8)}`);
+    return;
+  }
+  const hookEntry = lastHookStatus.get(sessionId);
+  if (hookEntry && hookEntry.status === "working" && Date.now() / 1000 - hookEntry.ts < 10) {
+    log(`Skipping prompt check: session ${sessionId.slice(0, 8)} is working`);
+    return;
+  }
+  await new Promise((resolve4) => setTimeout(resolve4, 2000));
+  try {
+    const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxTarget}' -S -50`);
+    const prompt = parseInteractivePrompt(paneContent);
+    if (!prompt) {
+      log(`No interactive prompt found in ${tmuxTarget} for session ${sessionId.slice(0, 8)}`);
+      return;
+    }
+    log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options`);
+    const now = Date.now();
+    pendingInteractivePrompts.set(sessionId, now);
+    await syncService2.addMessages({
+      conversationId,
+      messages: [{
+        messageUuid: `interactive-prompt-${sessionId}-${now}`,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        toolCalls: [{
+          id: `prompt-${now}`,
+          name: "AskUserQuestion",
+          input: {
+            questions: [{
+              question: prompt.question,
+              options: prompt.options
+            }]
+          }
+        }]
+      }]
+    });
+    log(`Synced interactive prompt as AskUserQuestion for session ${sessionId.slice(0, 8)}`);
+  } catch (err) {
+    log(`Interactive prompt check failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 function normalizePromptText(value) {
   return value.replace(/\s+/g, " ").trim();
@@ -14715,7 +14800,7 @@ function tmuxPromptStillHasInput(paneContent, input) {
 `);
   const recent = lines.slice(-80).join(`
 `);
-  const lastPromptIndex = Math.max(recent.lastIndexOf("❯"), recent.lastIndexOf("›"));
+  const lastPromptIndex = Math.max(recent.lastIndexOf("\u276F"), recent.lastIndexOf("\u203A"));
   if (lastPromptIndex === -1)
     return false;
   const fromPrompt = recent.slice(lastPromptIndex);
@@ -14771,8 +14856,8 @@ async function injectViaTmuxInner(target, content) {
   const sanitized = content.replace(/\r?\n/g, " ");
   try {
     const { stdout: preCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -5`);
-    const hasBlockingWarning = /Press enter to continue|Update available|⚠|recorded with model|weekly limit/i.test(preCheck);
-    const promptVisible = /[❯›]/.test(preCheck.split(`
+    const hasBlockingWarning = /Press enter to continue|Update available|\u26A0|recorded with model|weekly limit/i.test(preCheck);
+    const promptVisible = /[\u276F\u203A]/.test(preCheck.split(`
 `).slice(-5).join(`
 `));
     if (hasBlockingWarning && !promptVisible) {
@@ -14785,31 +14870,45 @@ async function injectViaTmuxInner(target, content) {
     }
   } catch {
   }
-  const id = `cc-${process.pid}-${Date.now()}`;
-  const tmpFile = `/tmp/${id}`;
-  try {
-    fs14.writeFileSync(tmpFile, sanitized);
-    await execAsync2(`tmux load-buffer -b '${id}' '${tmpFile}'`);
-    await execAsync2(`tmux paste-buffer -t '${target}' -b '${id}' -d`);
-  } catch (err) {
-    const escaped = sanitized.replace(/'/g, "'\\''");
-    await execAsync2(`tmux send-keys -t '${target}' -l '${escaped}'`);
-  } finally {
-    try {
-      fs14.unlinkSync(tmpFile);
-    } catch {
-    }
-  }
   const captureLines = Math.max(30, Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
-  for (let attempt = 0;attempt < 12; attempt++) {
-    try {
-      const { stdout: echoCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
-      if (tmuxPromptStillHasInput(echoCheck, contentPrefix))
-        break;
-    } catch {
+  let pasteConfirmed = false;
+  for (let pasteRetry = 0;pasteRetry < 4; pasteRetry++) {
+    if (pasteRetry > 0) {
+      log(`Paste retry ${pasteRetry} for ${target} (text not appearing in pane)`);
+      await new Promise((resolve4) => setTimeout(resolve4, 500 * pasteRetry));
     }
-    await new Promise((resolve4) => setTimeout(resolve4, 150));
+    const id = `cc-${process.pid}-${Date.now()}`;
+    const tmpFile = `/tmp/${id}`;
+    try {
+      fs14.writeFileSync(tmpFile, sanitized);
+      await execAsync2(`tmux load-buffer -b '${id}' '${tmpFile}'`);
+      await execAsync2(`tmux paste-buffer -t '${target}' -b '${id}' -d`);
+    } catch (err) {
+      const escaped = sanitized.replace(/'/g, "'\\''");
+      await execAsync2(`tmux send-keys -t '${target}' -l '${escaped}'`);
+    } finally {
+      try {
+        fs14.unlinkSync(tmpFile);
+      } catch {
+      }
+    }
+    for (let attempt = 0;attempt < 12; attempt++) {
+      try {
+        const { stdout: echoCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
+        if (tmuxPromptStillHasInput(echoCheck, contentPrefix)) {
+          pasteConfirmed = true;
+          break;
+        }
+      } catch {
+      }
+      await new Promise((resolve4) => setTimeout(resolve4, 150));
+    }
+    if (pasteConfirmed)
+      break;
+  }
+  if (!pasteConfirmed) {
+    log(`WARNING: paste text never appeared in pane ${target} after 4 retries`);
   }
   const enterDelay = Math.max(200, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
   await new Promise((resolve4) => setTimeout(resolve4, enterDelay));
@@ -14825,15 +14924,15 @@ async function injectViaTmuxInner(target, content) {
         const lastLines = postCheck.split(`
 `).slice(-5).join(`
 `);
-        const hasPrompt = /[❯›]/.test(lastLines);
-        const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
+        const hasPrompt = /[\u276F\u203A]/.test(lastLines);
+        const hasActivity = /\u280B|\u2819|\u2839|\u2838|\u283C|\u2834|\u2826|\u2827|\u2807|\u280F|\u25CF|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
         if (hasActivity || !hasPrompt) {
           break;
         }
         const promptLine = lastLines.split(`
-`).find((l) => /[❯›]/.test(l));
+`).find((l) => /[\u276F\u203A]/.test(l));
         if (promptLine) {
-          const promptMatch = promptLine.match(/[❯›]/);
+          const promptMatch = promptLine.match(/[\u276F\u203A]/);
           const afterPrompt = promptMatch ? promptLine.slice(promptMatch.index + 1).trim() : "";
           if (!afterPrompt)
             break;
@@ -14844,7 +14943,11 @@ async function injectViaTmuxInner(target, content) {
       break;
     }
   }
-  log(`Injected via tmux to ${target}`);
+  if (pasteConfirmed) {
+    log(`Injected via tmux to ${target}`);
+  } else {
+    log(`WARNING: Injection to ${target} completed but paste was never confirmed`);
+  }
 }
 async function injectViaIterm(tty, content) {
   const normalizedTty = normalizeTty(tty);
@@ -15341,7 +15444,7 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
       "is not an object",
       "ENOENT"
     ];
-    const promptPattern = /[❯›]/;
+    const promptPattern = /[\u276F\u203A]/;
     const startTime = Date.now();
     let ready = false;
     for (let i = 0;i < 60; i++) {
@@ -15370,7 +15473,7 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     if (ready || !content) {
       try {
         const { stdout: preInjectPane } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -15`);
-        const warningPatterns = /⚠|recorded with model|weekly limit|Update available|Press enter to continue/;
+        const warningPatterns = /\u26A0|recorded with model|weekly limit|Update available|Press enter to continue/;
         if (warningPatterns.test(preInjectPane)) {
           logDelivery(`Clearing startup warnings for ${shortId} before injection`);
           await execAsync2(`tmux send-keys -t '${tmuxSession}' Escape`);
@@ -15546,7 +15649,7 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
       log(`Health check: repair failed for ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
         await syncService2.retryMessage(messageId);
-        await syncService2.setSessionError(conversationId, "Session crashed — retrying message delivery");
+        await syncService2.setSessionError(conversationId, "Session crashed \u2014 retrying message delivery");
       } catch {
       }
     }
@@ -15577,7 +15680,7 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
       log(`Health check: repair failed for crashed session ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
         await syncService2.retryMessage(messageId);
-        await syncService2.setSessionError(conversationId, "Session crashed — retrying message delivery");
+        await syncService2.setSessionError(conversationId, "Session crashed \u2014 retrying message delivery");
       } catch {
       }
     }
@@ -15668,12 +15771,13 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
   }
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
+  pendingInteractivePrompts.delete(sessionId || conversationId);
   if (!sessionId) {
     logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, trying fallback strategies`);
     const tryStartedTmux = async (entry) => {
       try {
         await execAsync2(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
-        const promptPattern = entry.agentType === "codex" ? />\s*$/ : entry.agentType === "gemini" ? />\s*$|gemini/i : /❯|⏵/;
+        const promptPattern = entry.agentType === "codex" ? />\s*$/ : entry.agentType === "gemini" ? />\s*$|gemini/i : /\u276F|\u23F5/;
         const fatalErrors = [
           "cannot be launched inside another",
           "command not found",
@@ -15682,6 +15786,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         ];
         let ready = false;
         const startTime = Date.now();
+        const trustPromptPatterns = /trust this folder|safety check|Is this a project/i;
         for (let i = 0;i < 60; i++) {
           await new Promise((resolve4) => setTimeout(resolve4, 250));
           try {
@@ -15691,7 +15796,18 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
               startedSessionTmux.delete(conversationId);
               return false;
             }
+            if (trustPromptPatterns.test(paneContent)) {
+              log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
+              await execAsync2(`tmux send-keys -t '${entry.tmuxSession}' Enter`);
+              await new Promise((resolve4) => setTimeout(resolve4, 2000));
+              continue;
+            }
             if (promptPattern.test(paneContent)) {
+              const lastLines = paneContent.split(`
+`).slice(-10).join(`
+`);
+              if (trustPromptPatterns.test(lastLines))
+                continue;
               log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
               ready = true;
               break;
@@ -15702,9 +15818,15 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         if (!ready) {
           log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
         }
-        await injectViaTmux(entry.tmuxSession + ":0.0", content);
+        await new Promise((resolve4) => setTimeout(resolve4, 1500));
+        const startedTmuxTarget = entry.tmuxSession + ":0.0";
+        await injectViaTmux(startedTmuxTarget, content);
         await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         log(`Delivered message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+        if (content.trimStart().startsWith("/")) {
+          checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService2).catch(() => {
+          });
+        }
         return true;
       } catch (err) {
         log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
@@ -15793,6 +15915,10 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         syncService2.setSessionError(conversationId).catch(() => {
         });
+        if (content.trimStart().startsWith("/")) {
+          checkForInteractivePrompt(cachedTmux, sessionId, conversationId, syncService2).catch(() => {
+          });
+        }
         return true;
       }
     } catch {
@@ -15821,6 +15947,10 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
           await injectViaTmux(tmuxTarget, content);
           await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
           logDelivery(`Delivered via tmux ${tmuxTarget}`);
+          if (content.trimStart().startsWith("/")) {
+            checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService2).catch(() => {
+            });
+          }
           return true;
         } catch (err) {
           logDelivery(`tmux injection failed for ${tmuxTarget}: ${err instanceof Error ? err.message : String(err)}`);
@@ -15952,7 +16082,7 @@ async function isTmuxAgentAlive(tmuxSession) {
           return false;
         if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed))
           return false;
-        if (/[❯›]|⏵|thinking|Thinking|working|Running|bypass permissions|permission/.test(trimmed)) {
+        if (/[\u276F\u203A]|\u23F5|thinking|Thinking|working|Running|bypass permissions|permission/.test(trimmed)) {
           return true;
         }
       } catch {
@@ -16712,7 +16842,7 @@ async function main() {
   sendLogImmediate("info", `[LIFECYCLE] daemon_start: ${startMsg}`, { error_code: "daemon_start" });
   log(`PID: ${process.pid}`);
   if (isSyncPaused()) {
-    log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
+    log("\u26A0\uFE0F  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
   }
   saveDaemonState({ connected: false, runtimeVersion: getVersion() });
   const { config, convexUrl } = await waitForConfig();
@@ -16877,7 +17007,7 @@ async function main() {
       if (data.status === "stopped" && statusChanged) {
         const restartTs = restartingSessionIds.get(sessionId);
         if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
-          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress — skipping completion`);
+          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress \u2014 skipping completion`);
           try {
             fs14.unlinkSync(filePath);
           } catch {

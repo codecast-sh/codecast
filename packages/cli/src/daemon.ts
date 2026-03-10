@@ -268,6 +268,7 @@ type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "t
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
 type HookStatusData = { status: AgentStatus; ts: number; permission_mode?: PermissionMode; message?: string; transcript_path?: string };
 const lastHookStatus = new Map<string, HookStatusData>();
+const pendingInteractivePrompts = new Map<string, number>();
 const AGENT_STATUS_DIR = path.join(process.env.HOME || "", ".codecast", "agent-status");
 
 function sendAgentStatus(
@@ -919,9 +920,21 @@ async function executeRemoteCommand(
           error = `Key '${invalidKey}' not in allowlist`;
           break;
         }
-        const cache = readConversationCache();
-        const reverse = buildReverseConversationCache(cache);
-        const sessionId = reverse[conversationId];
+        let sessionId: string | undefined;
+        {
+          const cache = readConversationCache();
+          const reverse = buildReverseConversationCache(cache);
+          sessionId = reverse[conversationId];
+        }
+        if (!sessionId) {
+          for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 500));
+            const freshCache = readConversationCache();
+            const freshReverse = buildReverseConversationCache(freshCache);
+            sessionId = freshReverse[conversationId];
+            if (sessionId) break;
+          }
+        }
         if (!sessionId) {
           error = `No session found for conversation ${conversationId}`;
           break;
@@ -3303,6 +3316,44 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   }
 }
 
+type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }> };
+
+function parseInteractivePrompt(text: string): InteractivePrompt | null {
+  const lines = text.split("\n");
+  const optionPattern = /^\s*[❯>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
+  const options: Array<{ label: string; description?: string }> = [];
+  let firstOptionIdx = -1;
+  let gapCount = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(optionPattern);
+    if (m) {
+      if (firstOptionIdx < 0) firstOptionIdx = i;
+      const label = m[2].replace(/\s*[✓✗✔☑]\s*/g, "").trim();
+      const description = m[3]?.trim() || undefined;
+      if (label) options.push({ label, description });
+      gapCount = 0;
+    } else if (options.length > 0) {
+      const trimmed = lines[i].trim();
+      if (!trimmed || /^\s{10,}/.test(lines[i])) {
+        gapCount++;
+        if (gapCount > 3) break;
+      } else if (/^\s*[❯>]\s*$/.test(lines[i]) || /confirm|exit|adjust|effort/i.test(trimmed)) {
+        break;
+      }
+    }
+  }
+
+  if (options.length < 2 || firstOptionIdx < 0) return null;
+
+  const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx)
+    .map(l => l.trim())
+    .filter(l => l.length > 0 && !/^[❯>]/.test(l));
+  const question = headerLines[0] || "Select an option";
+
+  return { question, options };
+}
+
 type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string };
 
 function parsePollMessage(content: string): PollMessage | null {
@@ -3311,6 +3362,58 @@ function parsePollMessage(content: string): PollMessage | null {
     if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps))) return parsed;
   } catch {}
   return null;
+}
+
+async function checkForInteractivePrompt(
+  tmuxTarget: string,
+  sessionId: string,
+  conversationId: string,
+  syncService: SyncService,
+): Promise<void> {
+  if (pendingInteractivePrompts.has(sessionId)) { log(`Skipping prompt check: pending prompt exists for ${sessionId.slice(0, 8)}`); return; }
+
+  const hookEntry = lastHookStatus.get(sessionId);
+  if (hookEntry && hookEntry.status === "working" && (Date.now() / 1000 - hookEntry.ts) < 10) { log(`Skipping prompt check: session ${sessionId.slice(0, 8)} is working`); return; }
+
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  try {
+    const { stdout: paneContent } = await execAsync(`tmux capture-pane -p -J -t '${tmuxTarget}' -S -50`);
+    const prompt = parseInteractivePrompt(paneContent);
+    if (!prompt) {
+      log(`No interactive prompt found in ${tmuxTarget} for session ${sessionId.slice(0, 8)}`);
+      return;
+    }
+
+    log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options`);
+
+    const now = Date.now();
+    pendingInteractivePrompts.set(sessionId, now);
+
+    await syncService.addMessages({
+      conversationId,
+      messages: [{
+        messageUuid: `interactive-prompt-${sessionId}-${now}`,
+        role: "assistant" as const,
+        content: "",
+        timestamp: now,
+        toolCalls: [{
+          id: `prompt-${now}`,
+          name: "AskUserQuestion",
+          input: {
+            questions: [{
+              question: prompt.question,
+              options: prompt.options,
+            }],
+          },
+        }],
+      }],
+    });
+
+    log(`Synced interactive prompt as AskUserQuestion for session ${sessionId.slice(0, 8)}`);
+  } catch (err) {
+    log(`Interactive prompt check failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 function normalizePromptText(value: string): string {
@@ -4403,6 +4506,8 @@ async function deliverMessage(
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
 
+  pendingInteractivePrompts.delete(sessionId || conversationId);
+
   if (!sessionId) {
     logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, trying fallback strategies`);
     // Try delivering via a recently started tmux session (from start_session command)
@@ -4453,9 +4558,13 @@ async function deliverMessage(
         // Extra settle time: Claude Code's input handler may not be ready immediately
         // after the prompt is visible. Wait to avoid silent paste drops.
         await new Promise(resolve => setTimeout(resolve, 1500));
-        await injectViaTmux(entry.tmuxSession + ":0.0", content);
+        const startedTmuxTarget = entry.tmuxSession + ":0.0";
+        await injectViaTmux(startedTmuxTarget, content);
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         log(`Delivered message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+        if (content.trimStart().startsWith("/")) {
+          checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService).catch(() => {});
+        }
         return true;
       } catch (err) {
         log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
@@ -4547,6 +4656,9 @@ async function deliverMessage(
         await injectViaTmux(cachedTmux, content);
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         syncService.setSessionError(conversationId).catch(() => {});
+        if (content.trimStart().startsWith("/")) {
+          checkForInteractivePrompt(cachedTmux, sessionId, conversationId, syncService).catch(() => {});
+        }
         return true;
       }
     } catch {
@@ -4578,6 +4690,9 @@ async function deliverMessage(
           await injectViaTmux(tmuxTarget, content);
           await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
           logDelivery(`Delivered via tmux ${tmuxTarget}`);
+          if (content.trimStart().startsWith("/")) {
+            checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService).catch(() => {});
+          }
           return true;
         } catch (err) {
           logDelivery(`tmux injection failed for ${tmuxTarget}: ${err instanceof Error ? err.message : String(err)}`);
