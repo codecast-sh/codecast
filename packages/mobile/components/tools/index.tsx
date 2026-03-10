@@ -476,8 +476,8 @@ const styles = StyleSheet.create({
   },
   content: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.1)',
-    backgroundColor: 'rgba(0,0,0,0.15)',
+    borderTopColor: Theme.borderLight,
+    backgroundColor: Theme.bgAlt,
   },
 });
 
@@ -502,7 +502,7 @@ const contentStyles = StyleSheet.create({
   },
   code: {
     fontSize: 10,
-    color: Theme.assistantBubbleText,
+    color: Theme.textSecondary,
     fontFamily: 'SpaceMono',
     lineHeight: 15,
   },
@@ -519,27 +519,27 @@ const diffStyles = StyleSheet.create({
   removedLabel: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#ef4444',
+    color: Theme.red,
     marginBottom: 4,
   },
   addedLabel: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#10b981',
+    color: Theme.green,
     marginBottom: 4,
   },
   removedBox: {
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    backgroundColor: Theme.red + '18',
     borderLeftWidth: 2,
-    borderLeftColor: '#ef4444',
+    borderLeftColor: Theme.red,
     borderRadius: 4,
     padding: 8,
     minWidth: 200,
   },
   addedBox: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    backgroundColor: Theme.green + '18',
     borderLeftWidth: 2,
-    borderLeftColor: '#10b981',
+    borderLeftColor: Theme.green,
     borderRadius: 4,
     padding: 8,
     minWidth: 200,
@@ -549,7 +549,7 @@ const diffStyles = StyleSheet.create({
   },
   lineNum: {
     fontSize: 10,
-    color: 'rgba(255,255,255,0.3)',
+    color: Theme.textDim,
     width: 24,
     textAlign: 'right',
     marginRight: 8,
@@ -557,23 +557,23 @@ const diffStyles = StyleSheet.create({
   },
   removedText: {
     fontSize: 11,
-    color: '#fca5a5',
+    color: Theme.red,
     fontFamily: 'SpaceMono',
   },
   addedText: {
     fontSize: 11,
-    color: '#6ee7b7',
+    color: Theme.green,
     fontFamily: 'SpaceMono',
   },
   moreLines: {
     fontSize: 10,
-    color: 'rgba(255,255,255,0.4)',
+    color: Theme.textDim,
     marginTop: 4,
     fontStyle: 'italic',
   },
   emptyText: {
     fontSize: 12,
-    color: 'rgba(255,255,255,0.4)',
+    color: Theme.textDim,
     fontStyle: 'italic',
   },
   expandBtnContainer: {
@@ -588,7 +588,7 @@ const diffStyles = StyleSheet.create({
 
 const bashStyles = StyleSheet.create({
   commandBox: {
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    backgroundColor: Theme.bgHighlight,
     borderRadius: 6,
     padding: 10,
     flexDirection: 'row',
@@ -603,7 +603,7 @@ const bashStyles = StyleSheet.create({
   },
   command: {
     fontSize: 12,
-    color: '#6ee7b7',
+    color: Theme.green,
     fontFamily: 'SpaceMono',
   },
 });
@@ -643,7 +643,7 @@ const todoStyles = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.3)',
+    borderColor: Theme.borderLight,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 2,
@@ -662,7 +662,7 @@ const todoStyles = StyleSheet.create({
   },
   text: {
     fontSize: 12,
-    color: Theme.assistantBubbleText,
+    color: Theme.textSecondary,
     flex: 1,
   },
   textCompleted: {
@@ -677,11 +677,11 @@ const todoStyles = StyleSheet.create({
 const mcpStyles = StyleSheet.create({
   label: {
     fontSize: 12,
-    color: Theme.assistantBubbleText,
+    color: Theme.textSecondary,
     marginBottom: 6,
   },
   detailBox: {
-    backgroundColor: 'rgba(0,0,0,0.2)',
+    backgroundColor: Theme.bgAlt,
     borderRadius: 4,
     padding: 8,
   },
