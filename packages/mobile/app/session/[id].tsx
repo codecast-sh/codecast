@@ -327,7 +327,7 @@ function CodeBlockFullscreen({ content, language, visible, onClose }: { content:
           </RNView>
         </RNView>
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12 }}>
-          <ScrollView horizontal showsHorizontalScrollIndicator>
+          <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
             <RNView style={{ flexDirection: 'row' }}>
               <RNView style={styles.lineNumberGutter}>
                 {lines.map((_, i) => (
@@ -360,7 +360,7 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
 
   return (
     <RNView style={{ marginVertical: 4 }}>
-      <ScrollView horizontal showsHorizontalScrollIndicator>
+      <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
         <RNView style={{ paddingVertical: 2 }}>
           {oldLines.map((line, i) => (
             <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
@@ -405,7 +405,7 @@ function CodeBlockWithCopy({ content, language }: { content: string; language: s
   return (
     <RNView style={{ marginVertical: 4 }}>
       <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden' }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator>
+        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
           <RNView style={{ padding: 8 }}>
             {showLineNumbers ? (
               <RNView style={{ flexDirection: 'row' }}>
