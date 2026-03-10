@@ -1,5 +1,5 @@
 import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, Animated as RNAnimated } from 'react-native';
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
 
@@ -20,6 +20,7 @@ export type SessionData = {
   has_pending?: boolean;
   agent_status?: string;
   is_deferred?: boolean;
+  is_pinned?: boolean;
   last_user_message?: string | null;
   idle_summary?: string | null;
   session_error?: string;
@@ -109,7 +110,29 @@ export function projectName(conv: { git_root?: string | null; project_path?: str
   return path.split('/').pop() || null;
 }
 
-export function SessionItem({ session, onPress }: { session: SessionData; onPress: () => void }) {
+function PulsingDot({ color }: { color: string }) {
+  const opacity = useRef(new RNAnimated.Value(1)).current;
+  useEffect(() => {
+    const animation = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(opacity, { toValue: 0.3, duration: 800, useNativeDriver: true }),
+        RNAnimated.timing(opacity, { toValue: 1, duration: 800, useNativeDriver: true }),
+      ])
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [opacity]);
+  return <RNAnimated.View style={[styles.statusDot, { backgroundColor: color, opacity }]} />;
+}
+
+function StatusDot({ session }: { session: SessionData }) {
+  const color = statusColor(session);
+  const isAnimated = session.agent_status === "working" || session.agent_status === "thinking" || session.has_pending;
+  if (isAnimated) return <PulsingDot color={color} />;
+  return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
+}
+
+export function SessionItem({ session, onPress, onPin }: { session: SessionData; onPress: () => void; onPin?: () => void }) {
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
   const durationMs = session.updated_at - (session.started_at ?? session.updated_at);
@@ -121,8 +144,11 @@ export function SessionItem({ session, onPress }: { session: SessionData; onPres
     <TouchableOpacity onPress={onPress} style={styles.conversationContent} activeOpacity={0.6}>
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
-          <RNView style={[styles.statusDot, { backgroundColor: sColor }]} />
-          <RNText style={styles.conversationTitle} numberOfLines={1}>
+          <StatusDot session={session} />
+          {session.is_pinned && (
+            <FontAwesome name="thumb-tack" size={10} color={Theme.magenta} style={{ marginRight: 4 }} />
+          )}
+          <RNText style={[styles.conversationTitle, session.is_pinned && { color: Theme.magenta }]} numberOfLines={1}>
             {cleanTitle(session.title)}
           </RNText>
         </RNView>
@@ -176,10 +202,11 @@ export function SessionItem({ session, onPress }: { session: SessionData; onPres
   );
 }
 
-export function SwipeableSessionItem({ session, onPress, onDismiss }: {
+export function SwipeableSessionItem({ session, onPress, onDismiss, onPin }: {
   session: SessionData;
   onPress: () => void;
   onDismiss: () => void;
+  onPin?: () => void;
 }) {
   const translateX = useRef(new RNAnimated.Value(0)).current;
   const panStartX = useRef(0);
@@ -193,6 +220,7 @@ export function SwipeableSessionItem({ session, onPress, onDismiss }: {
   const handleTouchMove = useCallback((e: any) => {
     const dx = e.nativeEvent.pageX - panStartX.current;
     if (dx < 0) translateX.setValue(dx);
+    if (dx > 0) translateX.setValue(dx);
   }, [translateX]);
 
   const handleTouchEnd = useCallback(() => {
@@ -204,6 +232,13 @@ export function SwipeableSessionItem({ session, onPress, onDismiss }: {
         duration: 200,
         useNativeDriver: true,
       }).start(() => onDismiss());
+    } else if (currentValue > 80 && onPin) {
+      RNAnimated.spring(translateX, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 100,
+        friction: 10,
+      }).start(() => onPin());
     } else {
       RNAnimated.spring(translateX, {
         toValue: 0,
@@ -212,7 +247,7 @@ export function SwipeableSessionItem({ session, onPress, onDismiss }: {
         friction: 10,
       }).start();
     }
-  }, [translateX, onDismiss]);
+  }, [translateX, onDismiss, onPin]);
 
   return (
     <RNView style={styles.swipeContainer}>
@@ -220,13 +255,17 @@ export function SwipeableSessionItem({ session, onPress, onDismiss }: {
         <FontAwesome name="archive" size={16} color="#fff" />
         <RNText style={styles.swipeBehindText}>Dismiss</RNText>
       </RNView>
+      <RNView style={styles.swipeBehindPin}>
+        <FontAwesome name="thumb-tack" size={16} color="#fff" />
+        <RNText style={styles.swipeBehindText}>{session.is_pinned ? "Unpin" : "Pin"}</RNText>
+      </RNView>
       <RNAnimated.View
         style={[styles.conversationItem, { transform: [{ translateX }] }]}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
-        <SessionItem session={session} onPress={onPress} />
+        <SessionItem session={session} onPress={onPress} onPin={onPin} />
       </RNAnimated.View>
     </RNView>
   );
@@ -247,6 +286,19 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
     paddingRight: 20,
+    gap: 8,
+  },
+  swipeBehindPin: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    right: 0,
+    left: 0,
+    backgroundColor: Theme.magenta,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingLeft: 20,
     gap: 8,
   },
   swipeBehindText: {

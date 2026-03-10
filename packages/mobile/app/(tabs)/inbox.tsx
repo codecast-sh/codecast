@@ -1,22 +1,20 @@
 import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useQuery, useMutation } from 'convex/react';
+import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import {
   SessionData, SwipeableSessionItem, cleanTitle, agentLabel, agentColor,
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
+import { useInboxStore, type InboxSession, sortSessions } from '@codecast/web/store/inboxStore';
+import { useSyncInboxSessions } from '@/hooks/useSyncInboxSessions';
+import { useQuery } from 'convex/react';
 
-type InboxSession = SessionData & { session_id: string };
-
-type DismissedSession = SessionData & { is_subagent?: boolean };
-
-function DismissedItem({ session, onPress }: { session: DismissedSession; onPress: () => void }) {
+function DismissedItem({ session, onPress }: { session: SessionData; onPress: () => void }) {
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
 
@@ -306,6 +304,23 @@ export default function InboxScreen() {
   const router = useRouter();
   const isSearching = debouncedQuery.length >= 2;
 
+  useSyncInboxSessions();
+
+  const sessions = useInboxStore((s) => s.sessions);
+  const dismissedSessionsMap = useInboxStore((s) => s.dismissedSessions);
+  const stashSession = useInboxStore((s) => s.stashSession);
+  const unstashSession = useInboxStore((s) => s.unstashSession);
+  const pinSession = useInboxStore((s) => s.pinSession);
+
+  const sorted = useMemo(() => sortSessions(sessions), [sessions]);
+  const activeSessions = useMemo(() => sorted.filter((s) => !s.is_deferred), [sorted]);
+  const pinned = useMemo(() => activeSessions.filter((s) => s.is_pinned), [activeSessions]);
+  const newSessions = useMemo(() => activeSessions.filter((s) => s.message_count === 0 && !s.is_pinned), [activeSessions]);
+  const needsInput = useMemo(() => activeSessions.filter((s) => s.is_idle && s.message_count > 0 && !s.is_pinned), [activeSessions]);
+  const working = useMemo(() => activeSessions.filter((s) => !s.is_idle && s.message_count > 0 && !s.is_pinned), [activeSessions]);
+  const deferred = useMemo(() => sorted.filter((s) => s.is_deferred), [sorted]);
+  const dismissedSessions = useMemo(() => Object.values(dismissedSessionsMap), [dismissedSessionsMap]);
+
   const searchResults = useQuery(
     api.conversations.searchConversations,
     isSearching ? { query: debouncedQuery, limit: 30, userOnly } : "skip"
@@ -324,89 +339,78 @@ export default function InboxScreen() {
     setDebouncedQuery('');
   }, []);
 
-  const inboxSessions = useQuery(api.conversations.listIdleSessions, { show_all: true });
-  const dismissedSessions = useQuery(
-    api.conversations.listDismissedSessions,
-    showDismissed ? {} : "skip"
-  );
+  const handleDismiss = useCallback((conversationId: string) => {
+    stashSession(conversationId);
+  }, [stashSession]);
 
-  const dismissFromInbox = useMutation(api.conversations.dismissFromInbox);
-  const patchConversation = useMutation(api.conversations.patchConversation);
+  const handleUndismiss = useCallback((conversationId: string) => {
+    unstashSession(conversationId);
+  }, [unstashSession]);
 
-  const handleDismiss = useCallback(async (conversationId: string) => {
-    try {
-      await dismissFromInbox({ conversation_id: conversationId as Id<"conversations"> });
-    } catch {}
-  }, [dismissFromInbox]);
-
-  const handleUndismiss = useCallback(async (conversationId: string) => {
-    try {
-      await patchConversation({
-        id: conversationId as Id<"conversations">,
-        fields: { inbox_dismissed_at: null },
-      });
-    } catch {}
-  }, [patchConversation]);
+  const handlePin = useCallback((conversationId: string) => {
+    pinSession(conversationId);
+  }, [pinSession]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 1000);
   }, []);
 
-  const activeSessions = useMemo(() => {
-    if (!inboxSessions) return [];
-    return inboxSessions.filter(s => !s.is_deferred);
-  }, [inboxSessions]);
-
-  const deferredSessions = useMemo(() => {
-    if (!inboxSessions) return [];
-    return inboxSessions.filter(s => s.is_deferred);
-  }, [inboxSessions]);
-
-  const renderInboxItem = useCallback(({ item }: { item: InboxSession }) => (
+  const renderSessionItem = useCallback((s: InboxSession) => (
     <SwipeableSessionItem
-      session={item}
-      onPress={() => router.push(`/session/${item._id}`)}
-      onDismiss={() => handleDismiss(item._id)}
+      key={s._id}
+      session={s as SessionData}
+      onPress={() => router.push(`/session/${s._id}`)}
+      onDismiss={() => handleDismiss(s._id)}
+      onPin={() => handlePin(s._id)}
     />
-  ), [router, handleDismiss]);
+  ), [router, handleDismiss, handlePin]);
 
-  const renderDismissedItem = useCallback(({ item }: { item: DismissedSession }) => (
-    <DismissedItem
-      session={item}
-      onPress={() => {
-        handleUndismiss(item._id);
-      }}
-    />
-  ), [handleUndismiss]);
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string) => {
+    if (items.length === 0) return null;
+    return (
+      <RNView key={label}>
+        <RNView style={styles.sectionHeader}>
+          <RNText style={[styles.sectionTitle, color ? { color } : undefined]}>{label} ({items.length})</RNText>
+        </RNView>
+        {items.map(renderSessionItem)}
+      </RNView>
+    );
+  }, [renderSessionItem]);
 
-  const ListHeader = useMemo(() => {
-    if (!activeSessions.length && inboxSessions !== undefined) {
-      return (
-        <RNView style={styles.emptyInbox}>
+  const listData = useMemo(() => {
+    const sections: React.ReactNode[] = [];
+    if (activeSessions.length === 0 && Object.keys(sessions).length > 0) {
+      return [(
+        <RNView key="empty" style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
           <RNText style={styles.emptyText}>Inbox zero</RNText>
           <RNText style={styles.emptySubtext}>All sessions dismissed or idle</RNText>
         </RNView>
-      );
+      )];
     }
-    return null;
-  }, [activeSessions.length, inboxSessions]);
+    sections.push(renderSection("Pinned", pinned, Theme.magenta));
+    sections.push(renderSection("Needs Input", needsInput, Theme.accent));
+    sections.push(renderSection("Working", working, Theme.greenBright));
+    sections.push(renderSection("New", newSessions));
+    return sections.filter(Boolean);
+  }, [activeSessions, sessions, pinned, working, needsInput, newSessions, renderSection]);
 
   const ListFooter = useMemo(() => (
     <RNView>
-      {deferredSessions.length > 0 && (
+      {deferred.length > 0 && (
         <RNView style={styles.sectionContainer}>
           <RNView style={styles.sectionHeader}>
             <FontAwesome name="clock-o" size={12} color={Theme.textMuted0} />
-            <RNText style={styles.sectionTitle}>Deferred ({deferredSessions.length})</RNText>
+            <RNText style={styles.sectionTitle}>Deferred ({deferred.length})</RNText>
           </RNView>
-          {deferredSessions.map(s => (
+          {deferred.map(s => (
             <SwipeableSessionItem
               key={s._id}
-              session={s}
+              session={s as SessionData}
               onPress={() => router.push(`/session/${s._id}`)}
               onDismiss={() => handleDismiss(s._id)}
+              onPin={() => handlePin(s._id)}
             />
           ))}
         </RNView>
@@ -423,7 +427,7 @@ export default function InboxScreen() {
         </RNText>
       </TouchableOpacity>
 
-      {showDismissed && dismissedSessions && (
+      {showDismissed && (
         <RNView style={styles.dismissedSection}>
           {dismissedSessions.length === 0 ? (
             <RNText style={styles.dismissedEmpty}>No dismissed sessions</RNText>
@@ -431,7 +435,7 @@ export default function InboxScreen() {
             dismissedSessions.map(s => (
               <DismissedItem
                 key={s._id}
-                session={s as DismissedSession}
+                session={s as SessionData}
                 onPress={() => handleUndismiss(s._id)}
               />
             ))
@@ -440,7 +444,7 @@ export default function InboxScreen() {
       )}
       <RNView style={{ height: 80 }} />
     </RNView>
-  ), [deferredSessions, showDismissed, dismissedSessions, router, handleDismiss, handleUndismiss]);
+  ), [deferred, showDismissed, dismissedSessions, router, handleDismiss, handleUndismiss, handlePin]);
 
   const searchResultsList = useMemo(() => {
     if (!searchResults) return [];
@@ -516,10 +520,7 @@ export default function InboxScreen() {
           keyboardShouldPersistTaps="handled"
         />
       ) : (
-        <FlatList
-          data={activeSessions}
-          renderItem={renderInboxItem}
-          keyExtractor={(item) => item._id}
+        <ScrollView
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -527,11 +528,12 @@ export default function InboxScreen() {
               tintColor={Theme.textMuted}
             />
           }
-          ListHeaderComponent={ListHeader}
-          ListFooterComponent={ListFooter}
           contentContainerStyle={activeSessions.length === 0 ? styles.emptyList : styles.listContent}
           showsVerticalScrollIndicator={false}
-        />
+        >
+          {listData}
+          {ListFooter}
+        </ScrollView>
       )}
 
       <NewSessionModal
@@ -740,6 +742,19 @@ const styles = StyleSheet.create({
     color: Theme.textMuted,
     lineHeight: 18,
     marginBottom: 4,
+  },
+  conversationMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  metaText: {
+    fontSize: 12,
+    color: Theme.textMuted,
+  },
+  metaSeparator: {
+    color: Theme.textMuted0,
+    marginHorizontal: 4,
+    fontSize: 12,
   },
   fabContainer: {
     position: 'absolute',
