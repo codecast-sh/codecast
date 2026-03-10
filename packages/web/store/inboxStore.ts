@@ -418,7 +418,7 @@ export const useInboxStore = create<InboxStoreState>(
     let newSessionId = state.currentSessionId;
     if (state.currentSessionId === id) {
       const sorted = sortSessions(newSessions);
-      newSessionId = sorted[0]?._id ?? null;
+      newSessionId = sorted.find((s) => !s.is_pinned)?._id ?? sorted[0]?._id ?? null;
     }
     set({
       sessions: newSessions,
@@ -596,7 +596,7 @@ export const useInboxStore = create<InboxStoreState>(
   advanceToNext: () => {
     const sorted = get().sortedSessions();
     const currentId = get().currentSessionId;
-    const idleSessions = sorted.filter((s: InboxSession) => s.is_idle);
+    const idleSessions = sorted.filter((s: InboxSession) => s.is_idle && !s.is_pinned);
     const currentIdleIdx = idleSessions.findIndex((s: InboxSession) => s._id === currentId);
     const nextIdle = idleSessions[currentIdleIdx + 1] || idleSessions[0];
     if (nextIdle && nextIdle._id !== currentId) {
@@ -703,7 +703,7 @@ export const useInboxStore = create<InboxStoreState>(
     let newSessionId = state.currentSessionId;
     if (state.currentSessionId === id) {
       const sorted = sortSessions(newSessions);
-      newSessionId = sorted[0]?._id ?? null;
+      newSessionId = sorted.find((s) => !s.is_pinned)?._id ?? sorted[0]?._id ?? null;
     }
     set({ sessions: newSessions, pending: newPending, currentSessionId: newSessionId });
   },

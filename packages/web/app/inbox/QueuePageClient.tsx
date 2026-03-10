@@ -357,8 +357,28 @@ function SessionCard({
           </div>
         )}
       </div>
+      {onPin && session.is_pinned && (
+        <div className="absolute top-0 right-0 pl-10 pr-2 pt-1 bg-gradient-to-r from-transparent to-sol-bg-alt/80 group-hover:opacity-0 transition-opacity">
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
+                  className="p-1 rounded text-sol-magenta transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 17v5" />
+                    <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
+                  </svg>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Unpin</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+      )}
       {(onDismiss || onDefer || onPin) && (
-        <div className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg/95 backdrop-blur-sm rounded-md shadow-sm border border-sol-border/30 px-0.5">
+        <div className="absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt">
           {onPin && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
@@ -367,29 +387,13 @@ function SessionCard({
                     onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
                     className={`p-1 rounded transition-colors ${session.is_pinned ? 'text-sol-magenta' : 'text-sol-text-dim hover:text-sol-magenta'}`}
                   >
-                    <svg className="w-3.5 h-3.5" fill={session.is_pinned ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill={session.is_pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 17v5" />
+                      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
                     </svg>
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="left">{session.is_pinned ? "Unpin" : "Pin"}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-          {onDismiss && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                    className="p-1 rounded text-sol-text-dim hover:text-sol-red transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">Dismiss</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -407,6 +411,23 @@ function SessionCard({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="left">Defer</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {onDismiss && (
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
+                    className="p-1 rounded text-sol-text-dim hover:text-sol-red transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
+                    </svg>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Dismiss</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -646,6 +667,7 @@ export function QueuePageClient() {
     }
   }, [searchParams, router]);
 
+  const [isMac] = useState(() => typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC"));
   const [showAll, setShowAll] = useState(false);
   const { activeSessions } = useSyncInboxSessions(showAll);
   const sessions = useInboxStore((s) => s.sessions);
@@ -885,13 +907,23 @@ export function QueuePageClient() {
       if (e.ctrlKey && e.key === "i") {
         e.preventDefault();
         e.stopImmediatePropagation();
-        const firstNeedsInput = sortedSessions.find((s) => s.is_idle && s.message_count > 0);
+        const firstNeedsInput = sortedSessions.find((s) => s.is_idle && s.message_count > 0 && !s.is_pinned);
         if (firstNeedsInput) {
           setCurrentSession(firstNeedsInput._id);
         }
         return;
       }
-      if (e.ctrlKey && e.key === "p") {
+      const isMac = navigator.platform.toUpperCase().includes("MAC");
+      if ((isMac ? e.ctrlKey && !e.shiftKey && e.key === "p" : e.altKey && !e.shiftKey && e.key === "p")) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const firstPinned = sortedSessions.find((s) => s.is_pinned);
+        if (firstPinned) {
+          setCurrentSession(firstPinned._id);
+        }
+        return;
+      }
+      if (e.ctrlKey && e.shiftKey && e.key === "P") {
         e.preventDefault();
         e.stopImmediatePropagation();
         handlePinCurrent();
@@ -1038,7 +1070,12 @@ export function QueuePageClient() {
             needs input
           </span>
           <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">{isMac ? "Ctrl" : "Alt"}</kbd>
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">P</kbd>
+            pinned
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">Ctrl+Shift</kbd>
             <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80">P</kbd>
             pin
           </span>
