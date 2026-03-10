@@ -2265,7 +2265,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
       )}
       {expanded && (
         <RNView style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError]}>
-          {language && !isBash && (
+          {language && !isBash && !(isEdit && parsedInput.old_string && parsedInput.new_string) && (
             <RNView style={styles.languageLabelRow}>
               <RNText style={styles.languageLabel}>{language}</RNText>
               {isPlan && (
