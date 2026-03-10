@@ -139,6 +139,7 @@ function createPaletteWindow() {
     y: Math.round(screenHeight * 0.18),
     frame: false,
     transparent: true,
+    backgroundColor: "#00000000",
     resizable: false,
     movable: false,
     minimizable: false,
@@ -146,7 +147,7 @@ function createPaletteWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     show: false,
-    hasShadow: true,
+    hasShadow: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
