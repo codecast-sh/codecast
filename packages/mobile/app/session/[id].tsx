@@ -1782,7 +1782,7 @@ function CompactionSummaryBlock({ content }: { content: string }) {
 function GitDiffView({ diff }: { diff: string }) {
   const lines = diff.split('\n');
   return (
-    <ScrollView horizontal style={styles.hScroll}>
+    <ScrollView horizontal style={styles.hScroll} nestedScrollEnabled>
       <RNView style={{ padding: 8 }}>
         {lines.map((line, i) => {
           let color = Theme.textMuted;

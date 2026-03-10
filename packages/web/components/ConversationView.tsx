@@ -3766,7 +3766,7 @@ function AssistantBlock({
       )}
 
       {shouldShowHeader && (
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center gap-2 mb-2 mt-4">
           <AssistantIcon agentType={agentType} />
           <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
           {model && (
