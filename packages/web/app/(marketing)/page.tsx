@@ -934,7 +934,6 @@ export default function LandingPage() {
               <h4 className="font-semibold text-[#002b36] mb-3 text-sm">Company</h4>
               <ul className="space-y-2 text-sm text-[#657b83]">
                 <li><Link href="/about" className="hover:text-[#073642]">About</Link></li>
-                <li><Link href="/blog" className="hover:text-[#073642]">Blog</Link></li>
                 <li><Link href="/privacy" className="hover:text-[#073642]">Privacy</Link></li>
               </ul>
             </div>

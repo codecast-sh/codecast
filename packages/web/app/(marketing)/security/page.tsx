@@ -520,7 +520,6 @@ const encrypted = await encryptAESGCM(message, sessionKey);
               <h4 className="font-semibold text-stone-900 mb-3 text-sm">Company</h4>
               <ul className="space-y-2 text-sm text-stone-500">
                 <li><Link href="/about" className="hover:text-stone-900">About</Link></li>
-                <li><Link href="/blog" className="hover:text-stone-900">Blog</Link></li>
                 <li><Link href="/privacy" className="hover:text-stone-900">Privacy</Link></li>
               </ul>
             </div>
