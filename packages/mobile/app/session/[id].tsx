@@ -8,6 +8,8 @@ import * as Haptics from 'expo-haptics';
 let ImagePicker: typeof import('expo-image-picker') | null = null;
 try { ImagePicker = require('expo-image-picker'); } catch {}
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import Feather from '@expo/vector-icons/Feather';
+import Svg, { Path } from 'react-native-svg';
 import { PermissionCard } from '@/components/PermissionCard';
 import { Theme, Spacing } from '@/constants/Theme';
 const LinearGradient = ({ colors, style, children, pointerEvents }: { colors: string[]; style?: any; children?: any; pointerEvents?: string }) => {
@@ -342,64 +344,50 @@ function CodeBlockFullscreen({ content, language, visible, onClose }: { content:
 }
 
 function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath: string }) {
-  const [fullscreenSection, setFullscreenSection] = useState<'old' | 'new' | null>(null);
-  const [copiedSection, setCopiedSection] = useState<'old' | 'new' | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const oldLines = oldStr.split('\n');
   const newLines = newStr.split('\n');
-
-  const handleCopy = (text: string, section: 'old' | 'new') => {
-    Clipboard.setString(text);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setCopiedSection(section);
-    setTimeout(() => setCopiedSection(null), 1500);
-  };
-
-  const renderSection = (content: string, lines: string[], type: 'old' | 'new') => {
-    const isOld = type === 'old';
-    const bgColor = isOld ? Theme.red + '12' : Theme.green + '12';
-    const labelColor = isOld ? Theme.red : Theme.green;
-    const label = isOld ? 'Removed' : 'Added';
-    const prefix = isOld ? '-' : '+';
-    const isCopied = copiedSection === type;
-
-    return (
-      <RNView style={{ backgroundColor: bgColor, borderRadius: 3, overflow: 'hidden' }}>
-        <RNView style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8, paddingVertical: 3, backgroundColor: 'rgba(0,0,0,0.05)' }}>
-          <RNText style={{ fontSize: 10, color: labelColor, fontFamily: 'SpaceMono', fontWeight: '600' }}>{prefix} {label} ({lines.length} lines)</RNText>
-          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <TouchableOpacity onPress={() => setFullscreenSection(type)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <FontAwesome name="expand" size={9} color={labelColor} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => handleCopy(content, type)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              {isCopied ? <FontAwesome name="check" size={9} color={Theme.green} /> : <FontAwesome name="clipboard" size={9} color={labelColor} />}
-            </TouchableOpacity>
-          </RNView>
-        </RNView>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
-          <RNView style={{ flexDirection: 'row', padding: 6 }}>
-            <RNView style={styles.diffLineNumbers}>
-              {lines.map((_, i) => (
-                <RNText key={i} style={styles.diffLineNum}>{i + 1}</RNText>
-              ))}
-            </RNView>
-            <HighlightedCodeText content={content} style={{ fontSize: 12, fontFamily: 'SpaceMono', lineHeight: 16, color: '#93a1a1' }} />
-          </RNView>
-        </ScrollView>
-      </RNView>
-    );
-  };
-
-  const fsContent = fullscreenSection === 'old' ? oldStr : newStr;
-  const fsLabel = fullscreenSection === 'old' ? 'Removed' : 'Added';
   const lang = filePath ? (getFileExtension(filePath) || 'diff') : 'diff';
+  const unifiedContent = oldLines.map(l => `- ${l}`).join('\n') + '\n' + newLines.map(l => `+ ${l}`).join('\n');
+
+  const handleCopy = () => {
+    Clipboard.setString(newStr);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
 
   return (
-    <RNView style={styles.diffSection}>
-      {renderSection(oldStr, oldLines, 'old')}
-      {renderSection(newStr, newLines, 'new')}
-      {fullscreenSection && (
-        <CodeBlockFullscreen content={fsContent} language={`${lang} (${fsLabel})`} visible={!!fullscreenSection} onClose={() => setFullscreenSection(null)} />
-      )}
+    <RNView style={styles.codeBlock}>
+      <RNView style={styles.codeHeader}>
+        <RNText style={styles.codeLanguage}>{lang}</RNText>
+        <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <FontAwesome name="expand" size={10} color={Theme.textDim} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleCopy} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            {copied ? <FontAwesome name="check" size={10} color={Theme.green} /> : <FontAwesome name="clipboard" size={11} color={Theme.textDim} />}
+          </TouchableOpacity>
+        </RNView>
+      </RNView>
+      <ScrollView horizontal showsHorizontalScrollIndicator style={styles.hScroll}>
+        <RNView style={{ padding: 6 }}>
+          {oldLines.map((line, i) => (
+            <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '15' }}>
+              <RNText style={[styles.diffLineNum, { width: 18 }]}>-</RNText>
+              <HighlightedCodeText content={line} style={{ fontSize: 12, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+            </RNView>
+          ))}
+          {newLines.map((line, i) => (
+            <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '15' }}>
+              <RNText style={[styles.diffLineNum, { width: 18 }]}>+</RNText>
+              <HighlightedCodeText content={line} style={{ fontSize: 12, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+            </RNView>
+          ))}
+        </RNView>
+      </ScrollView>
+      <CodeBlockFullscreen content={unifiedContent} language={lang} visible={fullscreen} onClose={() => setFullscreen(false)} />
     </RNView>
   );
 }
@@ -694,7 +682,7 @@ function formatModel(model?: string): string {
 
 function formatAgentType(agentType?: string): string {
   if (!agentType) return 'Unknown';
-  if (agentType === 'claude_code') return 'Claude Code';
+  if (agentType === 'claude_code') return 'Claude';
   if (agentType === 'codex') return 'Codex';
   if (agentType === 'cursor') return 'Cursor';
   if (agentType === 'gemini') return 'Gemini';
@@ -713,6 +701,52 @@ function agentTypeIcon(agentType?: string): string {
   if (agentType === 'cursor') return 'mouse-pointer';
   if (agentType === 'gemini') return 'star';
   return 'bolt';
+}
+
+function agentLogoBg(agentType?: string): string {
+  if (agentType === 'codex') return '#0f0f0f';
+  if (agentType === 'cursor') return '#1a1a2e';
+  if (agentType === 'gemini') return '#1a73e8';
+  return Theme.accent;
+}
+
+function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; size?: number }) {
+  const bg = agentLogoBg(agentType);
+  const iconSize = size * 0.6;
+  if (agentType === 'codex') {
+    return (
+      <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none">
+          <Path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729z" fill="white" />
+        </Svg>
+      </RNView>
+    );
+  }
+  if (agentType === 'cursor') {
+    return (
+      <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none">
+          <Path d="M4 4l16 6-8 2-2 8z" stroke="white" strokeWidth={2} />
+        </Svg>
+      </RNView>
+    );
+  }
+  if (agentType === 'gemini') {
+    return (
+      <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={iconSize} height={iconSize} viewBox="0 0 28 28">
+          <Path d="M12 0C12 0 12 6.268 8.134 10.134C4.268 14 0 14 0 14C0 14 6.268 14 10.134 17.866C14 21.732 14 28 14 28C14 28 14 21.732 17.866 17.866C21.732 14 28 14 28 14C28 14 21.732 14 17.866 10.134C14 6.268 14 0 14 0" fill="white" />
+        </Svg>
+      </RNView>
+    );
+  }
+  return (
+    <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none">
+        <Path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" fill="white" />
+      </Svg>
+    </RNView>
+  );
 }
 
 function formatDuration(startTs: number): string {
@@ -3075,13 +3109,6 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           ))}
         </ScrollView>
       )}
-      {!isActive && (
-        <RNView style={styles.inactiveSessionBanner}>
-          <RNText style={styles.inactiveSessionCompactText} numberOfLines={1}>
-            Session inactive. Send to auto-resume.
-          </RNText>
-        </RNView>
-      )}
       {managedSession?.managed && (managedSession.agent_status === "working" || managedSession.agent_status === "thinking" || managedSession.agent_status === "compacting" || managedSession.agent_status === "permission_blocked" || managedSession.agent_status === "connected") && (
         <RNView style={[styles.agentStatusBar, {
           backgroundColor: managedSession.agent_status === "thinking" ? 'rgba(108,113,196,0.12)' :
@@ -3158,6 +3185,13 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           )}
         </TouchableOpacity>
       </RNView>
+      {!isActive && (
+        <RNView style={styles.inactiveSessionBanner}>
+          <RNText style={styles.inactiveSessionCompactText} numberOfLines={1}>
+            Session inactive. Send to auto-resume.
+          </RNText>
+        </RNView>
+      )}
     </RNView>
   );
 }
@@ -3832,7 +3866,8 @@ export default function SessionDetailScreen() {
       const nextOffset = Math.max(0, Math.min(floatingHeaderOffsetRef.current + deltaY, maxOffset));
       if (Math.abs(nextOffset - floatingHeaderOffsetRef.current) > 0.1) {
         floatingHeaderOffsetRef.current = nextOffset;
-        floatingHeaderY.setValue(-nextOffset);
+        const snapped = nextOffset < maxOffset * 0.5 ? 0 : -maxOffset;
+        floatingHeaderY.setValue(snapped);
       }
     }
 
@@ -3927,30 +3962,61 @@ export default function SessionDetailScreen() {
           onLayout={(event) => handleFloatingHeaderLayout(event.nativeEvent.layout.height)}
         >
             <RNView style={styles.floatingSessionCard}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.headerToolbar}
+            >
+              <TouchableOpacity onPress={handleToggleFavorite} style={[styles.toolbarButton, conversation.is_favorite && styles.toolbarButtonActive]} activeOpacity={0.7}>
+                <Feather name="star" size={15} color={conversation.is_favorite ? Theme.accent : Theme.textMuted} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleShareConversation} style={styles.toolbarButton} activeOpacity={0.7}>
+                <Feather name="share-2" size={15} color={Theme.textMuted} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setSearchVisible(v => !v)} style={styles.toolbarButton} activeOpacity={0.7}>
+                <Feather name="search" size={15} color={searchVisible ? Theme.cyan : Theme.textMuted} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleCopyMenu} style={[styles.toolbarButton, shareSelectionMode && styles.toolbarButtonActive]} activeOpacity={0.7}>
+                <Feather name="clipboard" size={15} color={Theme.textMuted} />
+              </TouchableOpacity>
+              {conversation.session_id && (
+                <TouchableOpacity onPress={handleCopyResume} style={styles.toolbarButton} activeOpacity={0.7}>
+                  <Feather name="terminal" size={15} color={Theme.textMuted} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={() => setCollapsed(c => !c)} style={[styles.toolbarButton, collapsed && styles.toolbarButtonActive]} activeOpacity={0.7}>
+                <Feather name={collapsed ? "maximize-2" : "minimize-2"} size={15} color={collapsed ? Theme.cyan : Theme.textMuted} />
+              </TouchableOpacity>
+              {conversation.git_branch && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
+                <TouchableOpacity onPress={() => setDiffExpanded(d => !d)} style={[styles.toolbarButton, diffExpanded && styles.toolbarButtonActive]} activeOpacity={0.7}>
+                  <Feather name="git-commit" size={15} color={diffExpanded ? Theme.green : Theme.textMuted} />
+                </TouchableOpacity>
+              )}
+              {treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0 && (
+                <TouchableOpacity onPress={() => setTreeModalVisible(true)} style={styles.toolbarButton} activeOpacity={0.7}>
+                  <Feather name="git-branch" size={15} color={Theme.violet} />
+                </TouchableOpacity>
+              )}
+            </ScrollView>
+            <RNView style={styles.toolbarDivider} />
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.sessionMeta}
               >
                 {conversation.agent_type && (
-                  <RNView style={[styles.metaBadgeIcon, { borderColor: agentTypeColor(conversation.agent_type) + '80' }]}>
-                    <FontAwesome name={agentTypeIcon(conversation.agent_type) as any} size={9} color={agentTypeColor(conversation.agent_type)} />
-                  <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
-                    {formatAgentType(conversation.agent_type)}
-                  </RNText>
-                </RNView>
-                )}
-                {conversation.model && (
-                  <RNText style={styles.metaBadgeModel}>{formatModel(conversation.model)}</RNText>
+                  <RNView style={styles.metaBadgeIcon}>
+                    <AgentLogoSvg agentType={conversation.agent_type} size={16} />
+                    <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
+                      {formatAgentType(conversation.agent_type)}
+                    </RNText>
+                  </RNView>
                 )}
                 {activityAt > 0 && (
-                  <RNText style={styles.messageCountText}>{formatRelativeTime(activityAt)}</RNText>
+                  <RNText style={styles.messageCountText}>{conversation.agent_type ? '\u00B7 ' : ''}{formatRelativeTime(activityAt)}</RNText>
                 )}
                 {isActive && (
-                  <RNView style={styles.activeIndicator}>
-                    <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
-                    <RNText style={styles.activeText}>Live</RNText>
-                  </RNView>
+                  <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
                 )}
                 {(conversation.fork_count ?? 0) > 0 && (
                   <Pressable onPress={() => setTreeModalVisible(true)} style={styles.forkBadge}>
@@ -4008,42 +4074,6 @@ export default function SessionDetailScreen() {
                   </Pressable>
                 )}
               </ScrollView>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.headerToolbar}
-            >
-              <TouchableOpacity onPress={handleToggleFavorite} style={[styles.toolbarButton, conversation.is_favorite && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                <FontAwesome name={conversation.is_favorite ? "star" : "star-o"} size={13} color={conversation.is_favorite ? Theme.accent : Theme.textDim} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleShareConversation} style={styles.toolbarButton} activeOpacity={0.7}>
-                <FontAwesome name="share-alt" size={12} color={Theme.textDim} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setSearchVisible(v => !v)} style={styles.toolbarButton} activeOpacity={0.7}>
-                <FontAwesome name="search" size={12} color={searchVisible ? Theme.cyan : Theme.textDim} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleCopyMenu} style={[styles.toolbarButton, shareSelectionMode && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                <FontAwesome name="clipboard" size={13} color={Theme.textDim} />
-              </TouchableOpacity>
-              {conversation.session_id && (
-                <TouchableOpacity onPress={handleCopyResume} style={styles.toolbarButton} activeOpacity={0.7}>
-                  <FontAwesome name="terminal" size={12} color={Theme.textDim} />
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity onPress={() => setCollapsed(c => !c)} style={[styles.toolbarButton, collapsed && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                <FontAwesome name={collapsed ? "expand" : "compress"} size={13} color={collapsed ? Theme.cyan : Theme.textDim} />
-              </TouchableOpacity>
-              {conversation.git_branch && (conversation.git_diff?.trim() || conversation.git_diff_staged?.trim()) && (
-                <TouchableOpacity onPress={() => setDiffExpanded(d => !d)} style={[styles.toolbarButton, diffExpanded && styles.toolbarButtonActive]} activeOpacity={0.7}>
-                  <FontAwesome name="code" size={12} color={diffExpanded ? Theme.green : Theme.textDim} />
-                </TouchableOpacity>
-              )}
-              {treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0 && (
-                <TouchableOpacity onPress={() => setTreeModalVisible(true)} style={styles.toolbarButton} activeOpacity={0.7}>
-                  <FontAwesome name="sitemap" size={12} color={Theme.violet} />
-                </TouchableOpacity>
-              )}
-            </ScrollView>
             {searchVisible && (
               <RNView style={[styles.searchBar, styles.floatingSearchBar]}>
                 <FontAwesome name="search" size={12} color={Theme.textDim} style={{ marginRight: 8 }} />
@@ -4432,28 +4462,19 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 60,
-    paddingHorizontal: 0,
-    paddingTop: 0,
+    backgroundColor: Theme.bgAlt,
   },
   floatingSessionCard: {
-    backgroundColor: Theme.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.border,
-    borderRadius: 0,
-    borderBottomLeftRadius: 12,
-    borderBottomRightRadius: 12,
+    backgroundColor: Theme.bgAlt,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.borderLight,
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    paddingVertical: 6,
   },
   sessionMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 6,
     flexWrap: 'nowrap',
     marginBottom: 2,
     paddingRight: 8,
@@ -5026,12 +5047,10 @@ const styles = StyleSheet.create({
   },
   inactiveSessionBanner: {
     marginHorizontal: 12,
-    marginBottom: 4,
+    marginBottom: 2,
     paddingHorizontal: 4,
-    paddingTop: 6,
-    paddingBottom: 2,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Theme.borderLight,
+    paddingTop: 2,
+    paddingBottom: 4,
   },
   inactiveSessionCompactText: {
     fontSize: 11,
@@ -5899,11 +5918,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    backgroundColor: Theme.bgAlt,
-    borderRadius: 4,
-    borderWidth: StyleSheet.hairlineWidth,
   },
   durationBadge: {
     fontSize: 10,
@@ -5988,6 +6002,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Theme.cyan,
   },
+  toolbarDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: Theme.borderLight + '80',
+    marginHorizontal: 8,
+    marginTop: 4,
+  },
   headerToolbar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -6002,18 +6022,14 @@ const styles = StyleSheet.create({
   toolbarButton: {
     flexBasis: 0,
     flexGrow: 1,
-    minWidth: 42,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: Theme.bgHighlight,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
+    minWidth: 32,
+    height: 30,
+    borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
   },
   toolbarButtonActive: {
-    backgroundColor: Theme.cyan + '16',
-    borderColor: Theme.cyan + '70',
+    backgroundColor: Theme.cyan + '14',
   },
   gitBranchBadge: {
     flexDirection: 'row',
