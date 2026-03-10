@@ -10821,7 +10821,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.65";
+var VERSION = "1.0.66";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -11039,10 +11039,26 @@ async function performReconciliation(syncService2, log, maxFiles = 50) {
 }
 async function repairDiscrepancies(discrepancies, log) {
   let repaired = 0;
+  const MAX_RESYNC_BYTES = 5 * 1024 * 1024;
   for (const d of discrepancies) {
+    if (d.status === "count_mismatch" && d.backendCount >= d.localCount) {
+      log(`Skipping repair for ${d.sessionId.slice(0, 8)}... backend already has >= local messages (backend: ${d.backendCount}, local: ${d.localCount})`);
+      continue;
+    }
     if (d.status === "missing_backend" || d.status === "count_mismatch") {
-      setPosition(d.filePath, 0);
-      log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to trigger re-sync`);
+      let fileSize = 0;
+      try {
+        fileSize = fs11.statSync(d.filePath).size;
+      } catch {
+      }
+      if (fileSize > MAX_RESYNC_BYTES) {
+        const newPosition = Math.max(0, fileSize - MAX_RESYNC_BYTES);
+        setPosition(d.filePath, newPosition);
+        log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to ${newPosition} (tail ${MAX_RESYNC_BYTES} bytes of ${fileSize} byte file)`);
+      } else {
+        setPosition(d.filePath, 0);
+        log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to trigger full re-sync`);
+      }
       repaired++;
     }
   }
@@ -12214,6 +12230,36 @@ function isAutostartEnabled() {
     return fs14.existsSync(servicePath);
   }
   return false;
+}
+async function pollDaemonCommands() {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.convex_url)
+    return;
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const response = await fetch(`${siteUrl}/cli/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        version: daemonVersion || "unknown",
+        platform: platform2,
+        pid: process.pid,
+        autostart_enabled: isAutostartEnabled(),
+        has_tmux: hasTmux()
+      })
+    });
+    if (!response.ok)
+      return;
+    const data = await response.json();
+    if (data.commands && data.commands.length > 0) {
+      log(`Received ${data.commands.length} remote command(s)`);
+      for (const cmd of data.commands) {
+        await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
+      }
+    }
+  } catch {
+  }
 }
 async function sendHeartbeat() {
   const config = readConfig();
@@ -15988,6 +16034,13 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
     materializedSessions.delete(sessionId);
     await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via auto-resume for session=${sessionId.slice(0, 8)}`);
+    if (content.trimStart().startsWith("/")) {
+      const resumeTmux = resumeSessionCache.get(sessionId);
+      if (resumeTmux) {
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService2).catch(() => {
+        });
+      }
+    }
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService2, titleCache, conversationCache).catch((err) => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -15999,6 +16052,13 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
     materializedSessions.delete(sessionId);
     await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via repair+resume for session=${sessionId.slice(0, 8)}`);
+    if (content.trimStart().startsWith("/")) {
+      const resumeTmux = resumeSessionCache.get(sessionId);
+      if (resumeTmux) {
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService2).catch(() => {
+        });
+      }
+    }
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService2, titleCache, conversationCache).catch((err) => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -16889,6 +16949,10 @@ async function main() {
     });
     checkDiskVersionMismatch();
   }, HEALTH_REPORT_INTERVAL_MS);
+  setInterval(() => {
+    pollDaemonCommands().catch(() => {
+    });
+  }, 1e4);
   sendHeartbeat().catch(() => {
   });
   const taskScheduler = new TaskScheduler({

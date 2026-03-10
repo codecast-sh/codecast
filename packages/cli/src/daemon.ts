@@ -509,6 +509,34 @@ function isAutostartEnabled(): boolean {
   return false;
 }
 
+async function pollDaemonCommands(): Promise<void> {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.convex_url) return;
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const response = await fetch(`${siteUrl}/cli/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        version: daemonVersion || "unknown",
+        platform,
+        pid: process.pid,
+        autostart_enabled: isAutostartEnabled(),
+        has_tmux: hasTmux(),
+      }),
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data.commands && data.commands.length > 0) {
+      log(`Received ${data.commands.length} remote command(s)`);
+      for (const cmd of data.commands) {
+        await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
+      }
+    }
+  } catch {}
+}
+
 async function sendHeartbeat(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
@@ -4727,6 +4755,12 @@ async function deliverMessage(
     materializedSessions.delete(sessionId);
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via auto-resume for session=${sessionId.slice(0, 8)}`);
+    if (content.trimStart().startsWith("/")) {
+      const resumeTmux = resumeSessionCache.get(sessionId);
+      if (resumeTmux) {
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService).catch(() => {});
+      }
+    }
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -4740,6 +4774,12 @@ async function deliverMessage(
     materializedSessions.delete(sessionId);
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via repair+resume for session=${sessionId.slice(0, 8)}`);
+    if (content.trimStart().startsWith("/")) {
+      const resumeTmux = resumeSessionCache.get(sessionId);
+      if (resumeTmux) {
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService).catch(() => {});
+      }
+    }
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService, titleCache, conversationCache).catch(err => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -5836,6 +5876,10 @@ async function main(): Promise<void> {
     sendHeartbeat().catch(() => {});
     checkDiskVersionMismatch();
   }, HEALTH_REPORT_INTERVAL_MS);
+
+  setInterval(() => {
+    pollDaemonCommands().catch(() => {});
+  }, 10_000);
 
   // Send initial heartbeat
   sendHeartbeat().catch(() => {});
