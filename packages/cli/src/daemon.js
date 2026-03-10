@@ -10821,7 +10821,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.66";
+var VERSION = "1.0.67";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -12253,7 +12253,7 @@ async function pollDaemonCommands() {
       return;
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
-      log(`Received ${data.commands.length} remote command(s)`);
+      log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c) => c.command).join(", ")}`);
       for (const cmd of data.commands) {
         await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
       }
@@ -15769,7 +15769,7 @@ async function materializeSession(conversationId, conversationCache, titleCache,
       logDelivery(`Materializing session for conv=${conversationId.slice(0, 12)}...`);
       const exportData = await fetchExport(siteUrl, config.auth_token, conversationId);
       if (exportData.messages.length === 0) {
-        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages`);
+        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages (session_id=${exportData.conversation?.session_id?.slice(0, 8) || "none"})`);
         return null;
       }
       const TOKEN_BUDGET = 1e5;
@@ -15827,7 +15827,9 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
   let sessionId = reverseCache[conversationId];
   pendingInteractivePrompts.delete(sessionId || conversationId);
   if (!sessionId) {
-    logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, trying fallback strategies`);
+    const cacheKeys = Object.keys(conversationCache);
+    const reverseKeys = Object.keys(reverseCache);
+    logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, cache has ${cacheKeys.length} sessions/${reverseKeys.length} convs, startedTmux has ${startedSessionTmux.size} entries`);
     const tryStartedTmux = async (entry) => {
       try {
         await execAsync2(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
@@ -15898,6 +15900,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
       conversationCache[sessionId] = conversationId;
       log(`Found session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} via disk cache refresh`);
     } else if (!started) {
+      logDelivery(`Waiting up to 12s for start_session to populate startedSessionTmux for conv=${conversationId.slice(0, 12)}`);
       for (let i = 0;i < 24; i++) {
         await new Promise((r) => setTimeout(r, 500));
         const justStarted = startedSessionTmux.get(conversationId);

@@ -529,7 +529,7 @@ async function pollDaemonCommands(): Promise<void> {
     if (!response.ok) return;
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
-      log(`Received ${data.commands.length} remote command(s)`);
+      log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c: any) => c.command).join(", ")}`);
       for (const cmd of data.commands) {
         await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
       }
@@ -4462,7 +4462,7 @@ async function materializeSession(
       logDelivery(`Materializing session for conv=${conversationId.slice(0, 12)}...`);
       const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
       if (exportData.messages.length === 0) {
-        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages`);
+        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages (session_id=${exportData.conversation?.session_id?.slice(0, 8) || "none"})`);
         return null;
       }
 
@@ -4537,7 +4537,9 @@ async function deliverMessage(
   pendingInteractivePrompts.delete(sessionId || conversationId);
 
   if (!sessionId) {
-    logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, trying fallback strategies`);
+    const cacheKeys = Object.keys(conversationCache);
+    const reverseKeys = Object.keys(reverseCache);
+    logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, cache has ${cacheKeys.length} sessions/${reverseKeys.length} convs, startedTmux has ${startedSessionTmux.size} entries`);
     // Try delivering via a recently started tmux session (from start_session command)
     const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
       try {
@@ -4611,7 +4613,7 @@ async function deliverMessage(
       conversationCache[sessionId] = conversationId;
       log(`Found session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} via disk cache refresh`);
     } else if (!started) {
-      // No session in any cache - wait for start_session command to populate startedSessionTmux
+      logDelivery(`Waiting up to 12s for start_session to populate startedSessionTmux for conv=${conversationId.slice(0, 12)}`);
       for (let i = 0; i < 24; i++) {
         await new Promise(r => setTimeout(r, 500));
         const justStarted = startedSessionTmux.get(conversationId);
