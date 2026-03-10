@@ -225,10 +225,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (clientId) {
       const existing = await ctx.db
         .query("pending_messages")
-        .withIndex("by_conversation_status", (q) =>
+        .withIndex("by_conversation_status", (q: any) =>
           q.eq("conversation_id", convId as Id<"conversations">)
         )
-        .filter((q) => q.eq(q.field("client_id"), clientId))
+        .filter((q: any) => q.eq(q.field("client_id"), clientId))
         .first();
       if (existing) return existing._id;
     }

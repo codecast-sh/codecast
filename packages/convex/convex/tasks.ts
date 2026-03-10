@@ -227,7 +227,7 @@ export const list = query({
     const user = await ctx.db.get(auth.userId);
     const team_id = user?.active_team_id || user?.team_id;
 
-    let tasks;
+    let tasks: any[];
     if (args.project_id) {
       tasks = await ctx.db
         .query("tasks")
@@ -254,23 +254,23 @@ export const list = query({
 
     // Filter out done/dropped unless explicitly requested
     if (!args.status) {
-      tasks = tasks.filter((t) => t.status !== "done" && t.status !== "dropped");
+      tasks = tasks.filter((t: any) => t.status !== "done" && t.status !== "dropped");
     }
 
     // By default, exclude unpromoted insight-sourced tasks (derived noise)
     if (!args.include_derived) {
-      tasks = tasks.filter((t) => t.source !== "insight" || t.promoted === true);
+      tasks = tasks.filter((t: any) => t.source !== "insight" || t.promoted === true);
     }
 
     // Ready = open + no blockers
     if (args.ready) {
-      const allShortIds = new Set(tasks.map((t) => t.short_id));
-      tasks = tasks.filter((t) => {
+      const allShortIds = new Set(tasks.map((t: any) => t.short_id));
+      tasks = tasks.filter((t: any) => {
         if (t.status !== "open") return false;
         if (!t.blocked_by || t.blocked_by.length === 0) return true;
         // Check if all blockers are done
-        return t.blocked_by.every((bid) => {
-          const blocker = tasks.find((bt) => bt.short_id === bid);
+        return t.blocked_by.every((bid: string) => {
+          const blocker = tasks.find((bt: any) => bt.short_id === bid);
           return blocker && (blocker.status === "done" || blocker.status === "dropped");
         });
       });

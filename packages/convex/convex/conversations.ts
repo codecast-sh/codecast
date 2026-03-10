@@ -1807,38 +1807,15 @@ export const listConversations = query({
           };
         }
 
-        // Only fetch messages for full/detailed visibility
-        const msgLimit = args.filter === "team" ? 3 : 5;
-        const firstMessages = await ctx.db
+        // Only fetch first few messages for previews (keep reads minimal to stay under 16MB limit)
+        const msgLimit = 3;
+        const messages = await ctx.db
           .query("messages")
           .withIndex("by_conversation_id", (q) =>
             q.eq("conversation_id", c._id)
           )
           .order("asc")
           .take(msgLimit);
-
-        const recentMessages = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_id", (q) =>
-            q.eq("conversation_id", c._id)
-          )
-          .order("desc")
-          .take(msgLimit);
-
-        const messageIds = new Set<string>();
-        const messages = [];
-        for (const m of firstMessages) {
-          if (!messageIds.has(m._id)) {
-            messageIds.add(m._id);
-            messages.push(m);
-          }
-        }
-        for (const m of recentMessages) {
-          if (!messageIds.has(m._id)) {
-            messageIds.add(m._id);
-            messages.push(m);
-          }
-        }
 
         let toolCallCount = 0;
         const toolNames: string[] = [];
@@ -5250,7 +5227,7 @@ export const listIdleSessions = query({
     );
 
     const AGENT_STATUS_FRESH_MS = 5 * 60 * 1000;
-    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected">();
+    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped">();
     for (const s of managedSessions) {
       if (s.conversation_id && s.agent_status && s.agent_status_updated_at &&
           (now - s.agent_status_updated_at) < AGENT_STATUS_FRESH_MS) {
