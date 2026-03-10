@@ -352,6 +352,21 @@ interface DiscoveredProject {
   lastModified: Date;
 }
 
+function readProjectPathFromSession(sessionFilePath: string): string | null {
+  try {
+    const fd = fs.openSync(sessionFilePath, "r");
+    const buf = Buffer.alloc(4096);
+    const bytesRead = fs.readSync(fd, buf, 0, 4096, 0);
+    fs.closeSync(fd);
+    const firstLine = buf.toString("utf-8", 0, bytesRead).split("\n")[0];
+    if (!firstLine) return null;
+    const parsed = JSON.parse(firstLine);
+    return parsed.cwd || parsed.project_path || null;
+  } catch {
+    return null;
+  }
+}
+
 function discoverProjects(): DiscoveredProject[] {
   const projectsPath = path.join(process.env.HOME || "", ".claude", "projects");
   if (!fs.existsSync(projectsPath)) {
@@ -365,7 +380,6 @@ function discoverProjects(): DiscoveredProject[] {
     if (!entry.isDirectory()) continue;
 
     const dirPath = path.join(projectsPath, entry.name);
-    const projectPath = "/" + entry.name.replace(/-/g, "/").slice(1);
 
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/;
     const sessionFiles = fs.readdirSync(dirPath).filter(f => uuidPattern.test(f));
@@ -373,11 +387,21 @@ function discoverProjects(): DiscoveredProject[] {
     if (sessionFiles.length === 0) continue;
 
     let lastModified = new Date(0);
+    let projectPath: string | null = null;
     for (const file of sessionFiles) {
-      const stats = fs.statSync(path.join(dirPath, file));
+      const filePath = path.join(dirPath, file);
+      const stats = fs.statSync(filePath);
       if (stats.mtime > lastModified) {
         lastModified = stats.mtime;
       }
+      if (!projectPath) {
+        projectPath = readProjectPathFromSession(filePath);
+      }
+    }
+
+    if (!projectPath) {
+      // Fallback to lossy decode if no session file has a path
+      projectPath = "/" + entry.name.replace(/-/g, "/").slice(1);
     }
 
     projects.push({
@@ -1938,7 +1962,7 @@ async function runSync(): Promise<void> {
 
       const sessionId = path.basename(file.path, ".jsonl");
       const projectDir = path.basename(path.dirname(file.path));
-      const projectPath = projectDir.replace(/-/g, "/");
+      const projectPath = readProjectPathFromSession(file.path) || ("/" + projectDir.slice(1).replace(/-/g, "/"));
       const slug = extractSlug(content);
 
       let conversationId: string | null = null;
@@ -2026,7 +2050,7 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
     });
 
     let conversationId: string | null = null;
-    const actualProjectPath = "/" + projectDir.slice(1).replace(/-/g, "/");
+    const actualProjectPath = readProjectPathFromSession(sessionFile) || ("/" + projectDir.slice(1).replace(/-/g, "/"));
 
     try {
       conversationId = await syncService.createConversation({
