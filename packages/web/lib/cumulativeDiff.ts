@@ -28,23 +28,49 @@ export function computeCumulativeDiff(changes: FileChange[]): CumulativeDiff[] {
   for (const [filePath, fileChanges] of fileGroups.entries()) {
     fileChanges.sort((a, b) => a.sequenceIndex - b.sequenceIndex);
 
-    let currentContent = fileChanges[0].oldContent;
+    let currentContent: string | undefined;
+    let originalContent: string | undefined;
+    let hasFullContent = false;
 
     for (const change of fileChanges) {
       if (change.changeType === 'write') {
         currentContent = change.newContent;
-      } else {
-        currentContent = change.newContent;
+        hasFullContent = true;
+      } else if (change.changeType === 'edit') {
+        if (hasFullContent && currentContent !== undefined && change.oldContent) {
+          const idx = currentContent.indexOf(change.oldContent);
+          if (idx !== -1) {
+            currentContent =
+              currentContent.slice(0, idx) +
+              change.newContent +
+              currentContent.slice(idx + change.oldContent.length);
+          }
+        } else if (!hasFullContent) {
+          if (currentContent === undefined) {
+            originalContent = change.oldContent;
+            currentContent = change.newContent;
+          } else if (change.oldContent) {
+            const idx = currentContent.indexOf(change.oldContent);
+            if (idx !== -1) {
+              currentContent =
+                currentContent.slice(0, idx) +
+                change.newContent +
+                currentContent.slice(idx + change.oldContent.length);
+            } else {
+              originalContent = (originalContent || '') + '\n' + change.oldContent;
+              currentContent = currentContent + '\n' + change.newContent;
+            }
+          }
+        }
       }
     }
 
-    const firstChange = fileChanges[0];
-    const finalContent = currentContent!;
+    if (currentContent === undefined) continue;
 
     results.push({
       filePath,
-      oldContent: firstChange.oldContent,
-      newContent: finalContent,
+      oldContent: originalContent,
+      newContent: currentContent,
       changeCount: fileChanges.length,
     });
   }

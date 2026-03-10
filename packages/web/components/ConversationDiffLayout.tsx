@@ -260,40 +260,95 @@ function computeCumulativeFiles(changes: FileChange[], upToIndex: number | null)
 
   const relevantChanges = changes.slice(0, endIndex + 1).filter(c => c.changeType !== "commit");
 
-  const fileMap = new Map<string, { change: FileChange; lastIndex: number }>();
-
+  const fileGroups = new Map<string, { changes: FileChange[]; lastGlobalIdx: number }>();
   relevantChanges.forEach((change, idx) => {
-    const existing = fileMap.get(change.filePath);
+    const existing = fileGroups.get(change.filePath);
     if (existing) {
-      fileMap.set(change.filePath, {
-        change: {
-          ...change,
-          oldContent: existing.change.oldContent,
-        },
-        lastIndex: idx,
-      });
+      existing.changes.push(change);
+      existing.lastGlobalIdx = idx;
     } else {
-      fileMap.set(change.filePath, { change, lastIndex: idx });
+      fileGroups.set(change.filePath, { changes: [change], lastGlobalIdx: idx });
     }
   });
 
   const files: (DiffFile & { lastIndex: number })[] = [];
-  fileMap.forEach(({ change, lastIndex }) => {
-    const patch = generateUnifiedPatch(change.filePath, change.oldContent || "", change.newContent);
+
+  for (const [filePath, { changes: fileChanges, lastGlobalIdx }] of fileGroups) {
+    let currentContent: string | undefined;
+    let originalContent: string | undefined;
+    let hasFullContent = false;
+    let isNewFile = false;
+
+    for (const change of fileChanges) {
+      if (change.changeType === "write") {
+        if (originalContent === undefined) {
+          originalContent = "";
+          isNewFile = true;
+        }
+        currentContent = change.newContent;
+        hasFullContent = true;
+      } else if (change.changeType === "edit") {
+        if (hasFullContent && currentContent !== undefined && change.oldContent) {
+          const idx = currentContent.indexOf(change.oldContent);
+          if (idx !== -1) {
+            currentContent =
+              currentContent.slice(0, idx) +
+              change.newContent +
+              currentContent.slice(idx + change.oldContent.length);
+          }
+        } else if (!hasFullContent) {
+          if (currentContent === undefined) {
+            originalContent = change.oldContent || "";
+            currentContent = change.newContent;
+          } else if (change.oldContent) {
+            const idx = currentContent.indexOf(change.oldContent);
+            if (idx !== -1) {
+              if (originalContent !== undefined) {
+                const origIdx = originalContent.indexOf(change.oldContent);
+                if (origIdx !== -1) {
+                  originalContent =
+                    originalContent.slice(0, origIdx) +
+                    change.oldContent +
+                    originalContent.slice(origIdx + change.oldContent.length);
+                } else {
+                  originalContent += "\n" + change.oldContent;
+                }
+              }
+              currentContent =
+                currentContent.slice(0, idx) +
+                change.newContent +
+                currentContent.slice(idx + change.oldContent.length);
+            } else {
+              originalContent = (originalContent || "") + "\n" + change.oldContent;
+              currentContent = currentContent + "\n" + change.newContent;
+            }
+          }
+        }
+      }
+    }
+
+    if (currentContent === undefined) continue;
+
+    const oldStr = originalContent || "";
+    const newStr = currentContent;
+
+    if (oldStr === newStr) continue;
+
+    const patch = generateUnifiedPatch(filePath, oldStr, newStr);
     const patchLines = patch.split('\n');
     const additions = patchLines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length;
     const deletions = patchLines.filter(l => l.startsWith('-') && !l.startsWith('---')).length;
 
     files.push({
-      filename: change.filePath,
-      status: change.changeType === "write" ? "added" : "modified",
+      filename: filePath,
+      status: isNewFile ? "added" : "modified",
       additions,
       deletions,
       changes: additions + deletions,
       patch,
-      lastIndex,
+      lastIndex: lastGlobalIdx,
     });
-  });
+  }
 
   files.sort((a, b) => b.lastIndex - a.lastIndex);
 
