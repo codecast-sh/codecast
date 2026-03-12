@@ -30,6 +30,7 @@ export const create = mutation({
     confidence: v.optional(v.number()),
     conversation_id: v.optional(v.string()),
     insight_id: v.optional(v.string()),
+    plan_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -63,11 +64,21 @@ export const create = mutation({
       }
     }
 
+    let plan_id: Id<"plans"> | undefined;
+    if (args.plan_id) {
+      const plan = await ctx.db
+        .query("plans")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
+        .first();
+      if (plan) plan_id = plan._id;
+    }
+
     const id = await ctx.db.insert("tasks", {
       user_id: auth.userId,
       team_id,
       project_id,
       parent_id: args.parent_id as any,
+      plan_id,
       short_id,
       title: args.title,
       description: args.description,
@@ -87,6 +98,18 @@ export const create = mutation({
       created_at: now,
       updated_at: now,
     });
+
+    if (plan_id) {
+      const plan = await ctx.db.get(plan_id);
+      if (plan) {
+        const taskIds = plan.task_ids || [];
+        taskIds.push(id);
+        const progress = plan.progress || { total: 0, done: 0, in_progress: 0, open: 0 };
+        progress.total++;
+        progress.open++;
+        await ctx.db.patch(plan._id, { task_ids: taskIds, progress, updated_at: now });
+      }
+    }
 
     return { id, short_id };
   },
@@ -156,6 +179,7 @@ export const snippet = query({
     }
 
     let sessionPlans: { title: string; doc_type: string; content: string }[] = [];
+    let activePlanSnippet = "";
     if (args.conversation_id) {
       const conv = await ctx.db
         .query("conversations")
@@ -170,6 +194,26 @@ export const snippet = query({
           .filter(d => !d.archived_at && (d.conversation_id === conv._id || d.project_path === conv.project_path))
           .slice(0, 5)
           .map(d => ({ title: d.title, doc_type: d.doc_type, content: (d.content || "").slice(0, 500) }));
+
+        if (conv.active_plan_id) {
+          const plan = await ctx.db.get(conv.active_plan_id);
+          if (plan) {
+            const planLines: string[] = [];
+            planLines.push(`Active Plan: ${plan.title} (${plan.short_id}) [${plan.status}]`);
+            if (plan.goal) planLines.push(`Goal: ${plan.goal}`);
+            if (plan.progress) {
+              const p = plan.progress;
+              planLines.push(`Progress: ${p.done}/${p.total} done, ${p.in_progress} in progress, ${p.open} open`);
+            }
+            if (plan.task_ids) {
+              for (const tid of plan.task_ids.slice(0, 10)) {
+                const t = await ctx.db.get(tid);
+                if (t) planLines.push(`  - ${t.short_id}: ${t.title} [${t.status}]`);
+              }
+            }
+            activePlanSnippet = planLines.join("\n");
+          }
+        }
       }
     }
 
@@ -193,6 +237,10 @@ export const snippet = query({
           lines.push(`- ${t.short_id}: ${t.title}${owner ? ` (${owner})` : ""}${t.priority === "high" || t.priority === "urgent" ? ` [${t.priority}]` : ""}`);
         }
       }
+    }
+
+    if (activePlanSnippet) {
+      lines.push(activePlanSnippet);
     }
 
     if (sessionPlans.length > 0) {
@@ -394,6 +442,26 @@ export const update = mutation({
     }
 
     await ctx.db.patch(task._id, updates);
+
+    if (args.status && args.status !== task.status && task.plan_id) {
+      const plan = await ctx.db.get(task.plan_id);
+      if (plan && plan.task_ids) {
+        let total = 0, done = 0, in_progress = 0, open = 0;
+        for (const tid of plan.task_ids) {
+          const t = tid === task._id
+            ? { ...task, status: args.status }
+            : await ctx.db.get(tid);
+          if (t) {
+            total++;
+            if (t.status === "done") done++;
+            else if (t.status === "in_progress" || t.status === "in_review") in_progress++;
+            else if (t.status === "open" || t.status === "draft") open++;
+          }
+        }
+        await ctx.db.patch(plan._id, { progress: { total, done, in_progress, open }, updated_at: now });
+      }
+    }
+
     return { success: true };
   },
 });

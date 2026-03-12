@@ -185,6 +185,8 @@ export default defineSchema({
     last_message_preview: v.optional(v.string()),
     has_pending_messages: v.optional(v.boolean()),
     session_error: v.optional(v.string()),
+    active_plan_id: v.optional(v.id("plans")),
+    active_task_id: v.optional(v.id("tasks")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -765,6 +767,78 @@ export default defineSchema({
     .index("by_status_run_at", ["status", "run_at"])
     .index("by_event_filter", ["status"]),
 
+  // --- Plans ---
+
+  plans: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    project_id: v.optional(v.id("projects")),
+    short_id: v.string(),
+
+    title: v.string(),
+    goal: v.optional(v.string()),
+    acceptance_criteria: v.optional(v.array(v.string())),
+
+    status: v.union(
+      v.literal("draft"),
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("completed"),
+      v.literal("abandoned")
+    ),
+    source: v.union(
+      v.literal("human"),
+      v.literal("agent"),
+      v.literal("import")
+    ),
+    owner_id: v.optional(v.id("users")),
+
+    task_ids: v.optional(v.array(v.id("tasks"))),
+    progress: v.optional(v.object({
+      total: v.number(),
+      done: v.number(),
+      in_progress: v.number(),
+      open: v.number(),
+    })),
+
+    progress_log: v.optional(v.array(v.object({
+      timestamp: v.number(),
+      entry: v.string(),
+      session_id: v.optional(v.string()),
+    }))),
+    decision_log: v.optional(v.array(v.object({
+      timestamp: v.number(),
+      decision: v.string(),
+      rationale: v.optional(v.string()),
+      session_id: v.optional(v.string()),
+    }))),
+    discoveries: v.optional(v.array(v.object({
+      timestamp: v.number(),
+      finding: v.string(),
+      session_id: v.optional(v.string()),
+    }))),
+    context_pointers: v.optional(v.array(v.object({
+      label: v.string(),
+      path_or_url: v.string(),
+    }))),
+
+    session_ids: v.optional(v.array(v.id("conversations"))),
+    current_session_id: v.optional(v.id("conversations")),
+
+    created_from_conversation_id: v.optional(v.id("conversations")),
+    created_from_insight_id: v.optional(v.id("session_insights")),
+
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_short_id", ["short_id"])
+    .index("by_user_id", ["user_id"])
+    .index("by_user_status", ["user_id", "status"])
+    .index("by_team_id", ["team_id"])
+    .index("by_team_status", ["team_id", "status"])
+    .index("by_project_id", ["project_id"])
+    .index("by_current_session", ["current_session_id"]),
+
   // --- Task Layer: Projects, Tasks, Docs ---
 
   projects: defineTable({
@@ -793,6 +867,7 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     project_id: v.optional(v.id("projects")),
     parent_id: v.optional(v.id("tasks")),
+    plan_id: v.optional(v.id("plans")),
     short_id: v.string(),
 
     title: v.string(),
