@@ -1,8 +1,8 @@
 "use client";
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";
-import { Copy, Check, ChevronsRight, ChevronsLeft } from "lucide-react";
+import { Copy, Check, MoveHorizontal } from "lucide-react";
 import Prism from "prismjs";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-javascript";
@@ -43,21 +43,52 @@ function highlightCode(code: string, language?: string): string | null {
   }
 }
 
+const expandedBlocks = new Set<string>();
+
+function codeKey(code: string): string {
+  let h = 0;
+  for (let i = 0; i < code.length; i++) h = ((h << 5) - h + code.charCodeAt(i)) | 0;
+  return String(h);
+}
+
 export function CodeBlock({ code, language }: CodeBlockProps) {
   const highlighted = useMemo(() => highlightCode(code, language), [code, language]);
-  const [expanded, setExpanded] = useState(false);
+  const key = useMemo(() => codeKey(code), [code]);
+  const [expanded, setExpanded] = useState(() => expandedBlocks.has(key));
+  const [copied, setCopied] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [expandWidth, setExpandWidth] = useState(0);
+
+  const applyExpand = useCallback((el: HTMLDivElement, expand: boolean) => {
+    if (expand) {
+      const scrollParent = el.closest('.overflow-y-auto');
+      if (scrollParent) {
+        const parentRect = scrollParent.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        const leftGap = elRect.left - parentRect.left;
+        const targetWidth = parentRect.width - 32;
+        el.style.marginLeft = `-${leftGap - 16}px`;
+        el.style.width = `${targetWidth}px`;
+      }
+    } else {
+      el.style.marginLeft = '';
+      el.style.width = '';
+    }
+  }, []);
 
   useEffect(() => {
-    if (!expanded) { setExpandWidth(0); return; }
-    const el = containerRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    setExpandWidth(Math.max(0, window.innerWidth - rect.right - 24));
-  }, [expanded]);
+    if (expanded && containerRef.current) {
+      const el = containerRef.current;
+      requestAnimationFrame(() => applyExpand(el, true));
+    }
+  }, [expanded, applyExpand]);
 
-  const [copied, setCopied] = useState(false);
+  const toggleExpand = useCallback(() => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next) expandedBlocks.add(key);
+    else expandedBlocks.delete(key);
+    if (containerRef.current) applyExpand(containerRef.current, next);
+  }, [expanded, key, applyExpand]);
 
   const handleCopy = async () => {
     try {
@@ -72,26 +103,25 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   return (
     <div
       ref={containerRef}
-      className="code-block-resizable relative group my-2 transition-[width] duration-200"
-      style={expanded ? { width: `calc(100% + ${expandWidth}px)` } : undefined}
+      className="code-block-resizable relative group my-2 transition-all duration-200"
     >
-      <div className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-10 flex gap-1">
+      <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity z-20 flex items-center gap-1.5 pl-8 pr-2 pt-1.5 pb-1.5 bg-gradient-to-r from-transparent to-[var(--sol-bg)] via-[var(--sol-bg)]">
         <button
-          onClick={() => setExpanded(!expanded)}
-          className="p-1 text-sol-text-dim hover:text-sol-text-secondary select-none"
+          onClick={toggleExpand}
+          className="p-1 text-sol-text-dim/60 hover:text-sol-text-secondary rounded select-none"
           title={expanded ? "Collapse" : "Expand to full width"}
         >
-          {expanded ? <ChevronsLeft size={13} /> : <ChevronsRight size={13} />}
+          <MoveHorizontal size={14} />
         </button>
         <button
           onClick={handleCopy}
-          className="p-1 text-sol-text-dim hover:text-sol-text-secondary select-none"
+          className="p-1 text-sol-text-dim/60 hover:text-sol-text-secondary rounded select-none"
           title="Copy code"
         >
-          {copied ? <Check size={13} /> : <Copy size={13} />}
+          {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
       </div>
-      <pre className="!m-0 !py-2 !pl-4 !pr-3 !border-0 cb-hscroll text-sm code-block-accent">
+      <pre className="!m-0 !py-2 !pl-4 !pr-8 !border-0 cb-hscroll text-sm code-block-accent">
         {highlighted ? (
           <code className="font-mono text-sol-text-secondary" dangerouslySetInnerHTML={{ __html: highlighted }} />
         ) : (

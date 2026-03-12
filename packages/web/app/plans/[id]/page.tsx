@@ -21,7 +21,9 @@ import {
   Lightbulb,
   GitBranch,
   ExternalLink,
+  FileText,
 } from "lucide-react";
+import Markdown from "react-markdown";
 
 const api = _api as any;
 
@@ -109,6 +111,19 @@ export default function PlanDetailPage() {
                 </div>
               )}
             </div>
+
+            {/* Plan Document Content */}
+            {plan.doc_content && (
+              <div className="mb-6 border border-sol-border/30 rounded-lg bg-sol-bg-alt/30 p-6 prose prose-invert prose-sm max-w-none overflow-hidden
+                prose-headings:text-sol-text prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-2
+                prose-p:text-sol-text-muted prose-p:leading-relaxed
+                prose-li:text-sol-text-muted prose-li:marker:text-sol-text-dim
+                prose-code:text-sol-cyan prose-code:bg-sol-bg-highlight prose-code:px-1 prose-code:rounded prose-code:text-xs
+                prose-strong:text-sol-text prose-a:text-sol-cyan
+                [&_pre]:overflow-x-auto [&_pre]:max-w-full">
+                <Markdown>{plan.doc_content}</Markdown>
+              </div>
+            )}
 
             {/* Progress */}
             {plan.progress && plan.progress.total > 0 && (

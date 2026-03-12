@@ -10821,7 +10821,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.68";
+var VERSION = "1.0.69";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -10918,24 +10918,33 @@ async function performUpdate() {
     state.availableVersion = undefined;
     writeUpdateState(state);
     console.log(`Updated to v${latest.version}`);
-    const castLink = path10.join(path10.dirname(currentExe), "cast");
-    try {
-      const target = fs10.readlinkSync(castLink);
-      if (target !== currentExe) {
-        fs10.unlinkSync(castLink);
-        fs10.symlinkSync(currentExe, castLink);
-      }
-    } catch {
-      try {
-        fs10.unlinkSync(castLink);
-      } catch {
-      }
-      fs10.symlinkSync(currentExe, castLink);
-    }
+    ensureCastAlias();
     return true;
   } catch (err) {
     console.error("Update failed:", err);
     return false;
+  }
+}
+function ensureCastAlias() {
+  if (isDevMode())
+    return;
+  const exe = process.execPath;
+  const dir = path10.dirname(exe);
+  const castLink = path10.join(dir, "cast");
+  try {
+    const target = fs10.readlinkSync(castLink);
+    if (target === exe)
+      return;
+    fs10.unlinkSync(castLink);
+  } catch (e) {
+    if (e?.code === "ENOENT") {
+    } else {
+      return;
+    }
+  }
+  try {
+    fs10.symlinkSync(exe, castLink);
+  } catch {
   }
 }
 
@@ -16892,6 +16901,7 @@ function startWatchdog(deps) {
 }
 async function main() {
   ensureConfigDir3();
+  ensureCastAlias();
   if (!acquireLock()) {
     const existingPid = fs14.readFileSync(PID_FILE, "utf-8").trim();
     console.error(`Daemon already running (PID: ${existingPid}). Exiting.`);

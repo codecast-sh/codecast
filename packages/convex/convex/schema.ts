@@ -844,6 +844,7 @@ export default defineSchema({
     current_session_id: v.optional(v.id("conversations")),
     created_from_conversation_id: v.optional(v.id("conversations")),
     created_from_insight_id: v.optional(v.id("session_insights")),
+    doc_id: v.optional(v.id("docs")),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -853,7 +854,8 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_team_status", ["team_id", "status"])
     .index("by_project_id", ["project_id"])
-    .index("by_current_session", ["current_session_id"]),
+    .index("by_current_session", ["current_session_id"])
+    .index("by_doc_id", ["doc_id"]),
 
   tasks: defineTable({
     user_id: v.id("users"),
@@ -999,6 +1001,7 @@ export default defineSchema({
       v.literal("import")
     ),
     source_file: v.optional(v.string()),
+    plan_id: v.optional(v.id("plans")),
 
     project_path: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),

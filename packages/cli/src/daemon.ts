@@ -28,7 +28,7 @@ import { InvalidateSync } from "./invalidateSync.js";
 import { promisify } from "util";
 import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
-import { getVersion, performUpdate } from "./update.js";
+import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
@@ -5810,6 +5810,7 @@ function startWatchdog(
 
 async function main(): Promise<void> {
   ensureConfigDir();
+  ensureCastAlias();
 
   if (!acquireLock()) {
     const existingPid = fs.readFileSync(PID_FILE, "utf-8").trim();

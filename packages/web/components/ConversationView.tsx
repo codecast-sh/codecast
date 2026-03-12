@@ -42,6 +42,7 @@ import { CommentPanel } from "./CommentPanel";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
+import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, type ForkChild, type InboxSession } from "../store/inboxStore";
@@ -2603,23 +2604,18 @@ function ImageBlock({ image }: { image: ImageData }) {
     api.images.getImageUrl,
     image.storage_id ? { storageId: image.storage_id as Id<"_storage"> } : "skip"
   );
-  const [fullscreen, setFullscreen] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const dismiss = useCallback(() => setFullscreen(false), []);
-  const swipe = useSwipeToDismiss(dismiss);
-
-  useEffect(() => {
-    if (!fullscreen) return;
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [fullscreen]);
+  const gallery = useImageGallery();
 
   const src = image.storage_id
     ? storageUrl ?? undefined
     : image.data
       ? `data:${image.media_type};base64,${image.data}`
       : undefined;
+
+  useEffect(() => {
+    if (src && gallery) gallery.register(src);
+  }, [src, gallery]);
 
   if (!src) {
     return (
@@ -2630,59 +2626,35 @@ function ImageBlock({ image }: { image: ImageData }) {
   }
 
   return (
-    <>
-      <div
-        className="my-2 cursor-pointer relative max-w-md"
-        style={{ minHeight: IMAGE_COLLAPSED_HEIGHT }}
-        onClick={() => setFullscreen(true)}
-      >
-        {!loaded && (
-          <div className="absolute inset-0 rounded-t border-x border-t border-sol-border bg-sol-bg-alt flex items-center justify-center z-10" style={{ height: IMAGE_COLLAPSED_HEIGHT }}>
-            <span className="text-sol-text-dim text-xs">Loading image...</span>
-          </div>
-        )}
-        <div
-          className="overflow-hidden rounded-t border-x border-t border-sol-border hover:border-sol-blue/50 transition-all"
-          style={{ height: IMAGE_COLLAPSED_HEIGHT }}
-        >
-          <img
-            src={src}
-            alt="User provided image"
-            className="w-full"
-            style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
-            onLoad={() => setLoaded(true)}
-          />
+    <div
+      className="my-2 cursor-pointer relative max-w-md"
+      style={{ minHeight: IMAGE_COLLAPSED_HEIGHT }}
+      onClick={() => gallery?.open(src)}
+    >
+      {!loaded && (
+        <div className="absolute inset-0 rounded-t border-x border-t border-sol-border bg-sol-bg-alt flex items-center justify-center z-10" style={{ height: IMAGE_COLLAPSED_HEIGHT }}>
+          <span className="text-sol-text-dim text-xs">Loading image...</span>
         </div>
-        {loaded && (
-          <div
-            className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none"
-            style={{ background: 'linear-gradient(to bottom, transparent, var(--image-fade-bg, var(--sol-bg, #0a0a0a)))' }}
-          />
-        )}
-      </div>
-      {fullscreen && createPortal(
-        <div className="fixed inset-0 z-[10001] flex items-center justify-center" onClick={() => setFullscreen(false)} style={{ backgroundColor: `rgba(0,0,0,${0.9 * swipe.backdropOpacity})` }}>
-          <button
-            onClick={() => setFullscreen(false)}
-            className="absolute top-4 right-4 text-white/70 hover:text-white p-2 transition-colors"
-            title="Close (Esc)"
-          >
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-          <img
-            src={src}
-            alt="User provided image"
-            className="max-w-[90vw] max-h-[90vh] object-contain rounded"
-            onClick={e => e.stopPropagation()}
-            style={swipe.style}
-            {...swipe.handlers}
-          />
-        </div>,
-        document.body
       )}
-    </>
+      <div
+        className="overflow-hidden rounded-t border-x border-t border-sol-border hover:border-sol-blue/50 transition-all"
+        style={{ height: IMAGE_COLLAPSED_HEIGHT }}
+      >
+        <img
+          src={src}
+          alt="User provided image"
+          className="w-full"
+          style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
+          onLoad={() => setLoaded(true)}
+        />
+      </div>
+      {loaded && (
+        <div
+          className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none"
+          style={{ background: 'linear-gradient(to bottom, transparent, var(--image-fade-bg, var(--sol-bg, #0a0a0a)))' }}
+        />
+      )}
+    </div>
   );
 }
 
@@ -7379,6 +7351,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   };
 
   return (
+    <ImageGalleryProvider>
     <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
       <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass} ${isImageLightboxActive ? "invisible" : ""}`}>
         <div className="max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 py-0.5 sm:py-1">
@@ -8140,5 +8113,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       )}
     </main>
+    </ImageGalleryProvider>
   );
 });

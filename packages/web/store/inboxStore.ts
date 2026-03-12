@@ -597,7 +597,7 @@ export const useInboxStore = create<InboxStoreState>(
           newConversations[s._id] = { _id: s._id };
         }
       }
-      if (!state.currentSessionId && Object.keys(table).length > 0) {
+      if (!state.currentSessionId && !state.showMySessions && Object.keys(table).length > 0) {
         const sorted = sortSessions(table as Record<string, InboxSession>);
         set({ sessions: table, pending, conversations: newConversations, currentSessionId: sorted[0]?._id ?? null });
       } else {

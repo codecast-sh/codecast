@@ -649,7 +649,17 @@ export const webGet = query({
       }
     }
 
-    return { ...plan, tasks };
+    let doc_content: string | undefined;
+    let doc_title: string | undefined;
+    if (plan.doc_id) {
+      const doc = await ctx.db.get(plan.doc_id);
+      if (doc) {
+        doc_content = doc.content;
+        doc_title = doc.title;
+      }
+    }
+
+    return { ...plan, tasks, doc_content, doc_title };
   },
 });
 

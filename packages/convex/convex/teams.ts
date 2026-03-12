@@ -234,6 +234,11 @@ export const getTeamMembers = query({
       memberships.map(async (m) => {
         const user = await ctx.db.get(m.user_id);
         if (!user) return null;
+        const recentConvo = await ctx.db
+          .query("conversations")
+          .withIndex("by_user_updated", (q) => q.eq("user_id", user._id))
+          .order("desc")
+          .first();
         return {
           _id: user._id,
           name: user.name,
@@ -247,6 +252,9 @@ export const getTeamMembers = query({
           bio: user.bio,
           status: user.status,
           timezone: user.timezone,
+          recent_session_title: recentConvo?.title,
+          recent_session_messages: recentConvo?.message_count,
+          recent_session_updated: recentConvo?.updated_at,
         };
       })
     );

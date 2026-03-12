@@ -4,6 +4,22 @@ import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
+function generatePlanShortId(): string {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let id = "pl-";
+  for (let i = 0; i < 4; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
+
+function extractPlanInfo(content: string): { title: string; goal?: string } {
+  const titleMatch = content.match(/^#\s+(.+)/m);
+  const title = titleMatch ? titleMatch[1].trim() : "";
+  const afterTitle = titleMatch ? content.slice(content.indexOf(titleMatch[0]) + titleMatch[0].length).trim() : content.trim();
+  const firstPara = afterTitle.split(/\n\n/)[0]?.trim();
+  const goal = firstPara && firstPara.length > 10 && !firstPara.startsWith("#") ? firstPara.slice(0, 500) : undefined;
+  return { title, goal };
+}
+
 export const create = mutation({
   args: {
     api_token: v.string(),
@@ -37,6 +53,10 @@ export const create = mutation({
           content: args.content,
           updated_at: now,
         });
+        // Update linked plan entity if this is a plan doc
+        if ((args.source || existing.source) === "plan_mode") {
+          await syncDocToPlanEntity(ctx, existing._id, args.content, auth.userId, userTeamId, existing.project_id, existing.conversation_id);
+        }
         return { id: existing._id, updated: true };
       }
     }
@@ -70,9 +90,70 @@ export const create = mutation({
       updated_at: now,
     });
 
+    // Auto-create plan entity for plan_mode docs
+    if (args.source === "plan_mode") {
+      await syncDocToPlanEntity(ctx, id, args.content, auth.userId, team_id, args.project_id as any, conversation_id);
+    }
+
     return { id, updated: false };
   },
 });
+
+async function syncDocToPlanEntity(
+  ctx: any,
+  docId: Id<"docs">,
+  content: string,
+  userId: Id<"users">,
+  teamId: any,
+  projectId: any,
+  conversationId: any,
+) {
+  const now = Date.now();
+  const { title, goal } = extractPlanInfo(content);
+  if (!title) return;
+
+  const doc = await ctx.db.get(docId);
+  if (doc?.plan_id) {
+    const plan = await ctx.db.get(doc.plan_id);
+    if (plan) {
+      await ctx.db.patch(plan._id, { title, goal, updated_at: now });
+      if (conversationId && !plan.session_ids?.some((id: any) => String(id) === String(conversationId))) {
+        await ctx.db.patch(plan._id, { session_ids: [...(plan.session_ids || []), conversationId] });
+      }
+      return;
+    }
+  }
+
+  const existingPlan = await ctx.db
+    .query("plans")
+    .withIndex("by_doc_id", (q: any) => q.eq("doc_id", docId))
+    .first();
+  if (existingPlan) {
+    await ctx.db.patch(existingPlan._id, { title, goal, updated_at: now });
+    if (!doc?.plan_id) await ctx.db.patch(docId, { plan_id: existingPlan._id });
+    if (conversationId && !existingPlan.session_ids?.some((id: any) => String(id) === String(conversationId))) {
+      await ctx.db.patch(existingPlan._id, { session_ids: [...(existingPlan.session_ids || []), conversationId] });
+    }
+    return;
+  }
+
+  const planId = await ctx.db.insert("plans", {
+    user_id: userId,
+    team_id: teamId || undefined,
+    project_id: projectId || undefined,
+    short_id: generatePlanShortId(),
+    title,
+    goal,
+    status: "active" as const,
+    source: "promoted" as const,
+    doc_id: docId,
+    session_ids: conversationId ? [conversationId] : [],
+    created_from_conversation_id: conversationId || undefined,
+    created_at: now,
+    updated_at: now,
+  });
+  await ctx.db.patch(docId, { plan_id: planId });
+}
 
 export const list = query({
   args: {
@@ -299,7 +380,7 @@ export const webList = query({
       docs = docs.filter((d) => d.doc_type === args.doc_type);
     }
 
-    docs = docs.filter((d) => !d.archived_at && !isNoiseDoc(d));
+    docs = docs.filter((d) => !d.archived_at && !isNoiseDoc(d) && d.source !== "plan_mode");
 
     const enriched = docs.map((d) => {
       const cid = d.conversation_id || (d.related_conversation_ids?.[0]);
@@ -542,6 +623,22 @@ export const fixDocTeamsByProject = internalMutation({
   },
 });
 
+export const backfillPlanDocs = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const docs = await ctx.db
+      .query("docs")
+      .collect();
+    const planDocs = docs.filter(d => d.source === "plan_mode" && !d.plan_id);
+    let created = 0;
+    for (const doc of planDocs) {
+      await syncDocToPlanEntity(ctx, doc._id, doc.content, doc.user_id, doc.team_id, doc.project_id, doc.conversation_id);
+      created++;
+    }
+    return { created, total: planDocs.length };
+  },
+});
+
 export const fixDocTeams = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -613,6 +710,21 @@ export const linkPlanToSessions = internalMutation({
       }
       await ctx.db.patch(doc._id, patch);
       updated++;
+
+      // Propagate session links to plan entity
+      if (doc.plan_id) {
+        const plan = await ctx.db.get(doc.plan_id);
+        if (plan) {
+          const existingIds = new Set((plan.session_ids || []).map((id: any) => String(id)));
+          const newIds = convIds.filter((id: any) => !existingIds.has(String(id)));
+          if (newIds.length > 0) {
+            await ctx.db.patch(plan._id, {
+              session_ids: [...(plan.session_ids || []), ...newIds],
+              updated_at: Date.now(),
+            });
+          }
+        }
+      }
     }
     return { updated };
   },
