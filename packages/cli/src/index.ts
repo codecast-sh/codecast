@@ -10,7 +10,7 @@ import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, hasTmux, tryInstallTmux } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getPlanVersion } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getPlanVersion, ensureCastAlias } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
@@ -8506,4 +8506,5 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   }
 });
 
+ensureCastAlias();
 program.parse();

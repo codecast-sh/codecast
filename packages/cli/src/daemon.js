@@ -10821,7 +10821,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.67";
+var VERSION = "1.0.68";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -10866,12 +10866,12 @@ function getVersion() {
 }
 function isDevMode() {
   const exe = process.execPath.toLowerCase();
-  return exe.includes("bun") || !exe.includes("codecast");
+  return exe.includes("bun") || !exe.includes("codecast") && !exe.includes("/cast");
 }
 async function performUpdate() {
   if (isDevMode()) {
     console.error("Cannot self-update in dev mode (running via bun)");
-    console.error("Install the binary version: curl -fsSL codecast.sh/install | sh");
+    console.error("Install the binary version: curl -fsSL codecast.sh/install | sh (provides 'cast' command)");
     return false;
   }
   const platformKey = getPlatformKey();
@@ -10887,7 +10887,7 @@ async function performUpdate() {
       console.error(`No binary available for platform: ${platformKey}`);
       return false;
     }
-    console.log(`Downloading codecast v${latest.version}...`);
+    console.log(`Downloading cast v${latest.version}...`);
     const binaryResponse = await fetch(binary.url);
     if (!binaryResponse.ok) {
       console.error("Failed to download binary");
@@ -10918,6 +10918,20 @@ async function performUpdate() {
     state.availableVersion = undefined;
     writeUpdateState(state);
     console.log(`Updated to v${latest.version}`);
+    const castLink = path10.join(path10.dirname(currentExe), "cast");
+    try {
+      const target = fs10.readlinkSync(castLink);
+      if (target !== currentExe) {
+        fs10.unlinkSync(castLink);
+        fs10.symlinkSync(currentExe, castLink);
+      }
+    } catch {
+      try {
+        fs10.unlinkSync(castLink);
+      } catch {
+      }
+      fs10.symlinkSync(currentExe, castLink);
+    }
     return true;
   } catch (err) {
     console.error("Update failed:", err);
@@ -11290,10 +11304,10 @@ class TaskScheduler {
     parts.push("");
     parts.push("---");
     parts.push("Instructions:");
-    parts.push(`- When done, run: codecast task complete ${task._id} --summary "brief description of what was done"`);
-    parts.push('- To schedule follow-up: codecast task add "..." --in <time>');
+    parts.push(`- When done, run: cast task complete ${task._id} --summary "brief description of what was done"`);
+    parts.push('- To schedule follow-up: cast task add "..." --in <time>');
     if (task.originating_conversation_id) {
-      parts.push(`- Run \`codecast read ${task.originating_conversation_id}\` for full original context`);
+      parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);
     }
     return parts.join(`
 `);
@@ -12451,7 +12465,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
                     conversation_id: conversationId,
                     type: "info",
                     title: "Codex running in full-access mode",
-                    message: "Codex is running without permission prompts by default. Configure with: codecast config codex_args"
+                    message: "Codex is running without permission prompts by default. Configure with: cast config codex_args"
                   }).catch(() => {
                   });
                 }
@@ -13626,14 +13640,14 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
                   injectViaTmux(tmuxTarget, response).then(() => {
                     log(`Injected '${response}' via tmux for session ${sessionId.slice(0, 8)}`);
                   }).catch(() => {
-                    injectViaIterm(proc.tty, response).then(() => {
+                    injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
                       log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
                     }).catch((err) => {
                       log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
                     });
                   });
                 } else {
-                  injectViaIterm(proc.tty, response).then(() => {
+                  injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
                     log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
                   }).catch((err) => {
                     log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
@@ -14472,14 +14486,15 @@ async function findSessionProcess(sessionId, agentType = "claude") {
         const reg = JSON.parse(fs14.readFileSync(registryFile, "utf-8"));
         const pid = reg.pid;
         const tty = normalizeTty(reg.tty);
+        const termProgram = reg.term || undefined;
         const { stdout: checkPs } = await execAsync2(`ps -o comm= -p ${pid} 2>/dev/null`);
         if (checkPs.trim()) {
           if (agentType === "codex") {
             log(`Ignoring registry candidate for codex session ${sessionId.slice(0, 8)} (pid=${pid})`);
           } else {
-            const result = { pid, tty, sessionId };
+            const result = { pid, tty, sessionId, termProgram };
             cacheSessionProcess(sessionId, result);
-            log(`Found session ${sessionId.slice(0, 8)} via registry: pid=${pid}, tty=${tty}`);
+            log(`Found session ${sessionId.slice(0, 8)} via registry: pid=${pid}, tty=${tty}, term=${termProgram ?? "unknown"}`);
             return result;
           }
         } else {
@@ -15003,35 +15018,50 @@ async function injectViaTmuxInner(target, content) {
     log(`WARNING: Injection to ${target} completed but paste was never confirmed`);
   }
 }
-async function injectViaIterm(tty, content) {
-  const normalizedTty = normalizeTty(tty);
-  const poll = parsePollMessage(content);
-  let scriptContent;
-  let scriptArgs;
+function buildAppleScript(app, normalizedTty, content, poll) {
+  const isIterm = app === "iTerm2";
   if (poll) {
     const steps = poll.steps || (poll.keys || []).map((k) => ({ key: k }));
-    const stepActions = steps.map((step, i) => {
-      const lines = [`            tell s to write text "${step.key}" without newline`];
-      if (step.text) {
-        const escapedText = step.text.replace(/"/g, "\\\"");
-        lines.push("            delay 0.5");
-        lines.push(`            tell s to write text "${escapedText}" without newline`);
-        lines.push("            delay 0.15");
-        lines.push(`            tell s to write text ""`);
-      }
-      if (i < steps.length - 1)
-        lines.push("            delay 0.5");
-      return lines.join(`
+    let stepActions;
+    if (isIterm) {
+      stepActions = steps.map((step, i) => {
+        const lines = [`            tell s to write text "${step.key}" without newline`];
+        if (step.text) {
+          const escapedText = step.text.replace(/"/g, "\\\"");
+          lines.push("            delay 0.5");
+          lines.push(`            tell s to write text "${escapedText}" without newline`);
+          lines.push("            delay 0.15");
+          lines.push(`            tell s to write text ""`);
+        }
+        if (i < steps.length - 1)
+          lines.push("            delay 0.5");
+        return lines.join(`
 `);
-    }).join(`
+      }).join(`
 `);
-    const keyActions = stepActions;
-    const textAction = poll.text ? `
+    } else {
+      stepActions = steps.map((step, i) => {
+        const lines = [`          do script "${step.key}" in t`];
+        if (step.text) {
+          const escapedText = step.text.replace(/"/g, "\\\"");
+          lines.push("          delay 0.5");
+          lines.push(`          do script "${escapedText}" in t`);
+        }
+        if (i < steps.length - 1)
+          lines.push("          delay 0.5");
+        return lines.join(`
+`);
+      }).join(`
+`);
+    }
+    const textAction = poll.text ? isIterm ? `
             delay 0.3
             tell s to write text "${poll.text.replace(/"/g, "\\\"")}" without newline
             delay 0.15
-            tell s to write text ""` : "";
-    scriptContent = `on run argv
+            tell s to write text ""` : `
+          delay 0.3
+          do script "${poll.text.replace(/"/g, "\\\"")}" in t` : "";
+    const script2 = isIterm ? `on run argv
   set targetTty to item 1 of argv
   tell application "iTerm2"
     repeat with w in windows
@@ -15039,7 +15069,7 @@ async function injectViaIterm(tty, content) {
         repeat with s in sessions of t
           set sTty to tty of s
           if sTty is targetTty then
-${keyActions}${textAction}
+${stepActions}${textAction}
             return "ok"
           end if
         end repeat
@@ -15047,10 +15077,24 @@ ${keyActions}${textAction}
     end repeat
   end tell
   return "not_found"
+end run` : `on run argv
+  set targetTty to item 1 of argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is targetTty then
+${stepActions}${textAction}
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "not_found"
 end run`;
-    scriptArgs = `'${normalizedTty}'`;
-  } else {
-    scriptContent = `on run argv
+    return { script: script2, args: `'${normalizedTty}'` };
+  }
+  const escapedContent = content.replace(/'/g, "'\\''");
+  const script = isIterm ? `on run argv
   set msgText to item 1 of argv
   set targetTty to item 2 of argv
   tell application "iTerm2"
@@ -15069,18 +15113,36 @@ end run`;
     end repeat
   end tell
   return "not_found"
+end run` : `on run argv
+  set msgText to item 1 of argv
+  set targetTty to item 2 of argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is targetTty then
+          do script msgText in t
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "not_found"
 end run`;
-    const escapedContent = content.replace(/'/g, "'\\''");
-    scriptArgs = `'${escapedContent}' '${normalizedTty}'`;
-  }
-  const tmpFile = path13.join(CONFIG_DIR5, "iterm-inject.scpt");
-  fs14.writeFileSync(tmpFile, scriptContent);
+  return { script, args: `'${escapedContent}' '${normalizedTty}'` };
+}
+async function injectViaTerminal(tty, content, termProgram) {
+  const normalizedTty = normalizeTty(tty);
+  const poll = parsePollMessage(content);
+  const app = termProgram === "Apple_Terminal" ? "Terminal" : "iTerm2";
+  const { script, args } = buildAppleScript(app, normalizedTty, content, poll);
+  const tmpFile = path13.join(CONFIG_DIR5, "terminal-inject.scpt");
+  fs14.writeFileSync(tmpFile, script);
   try {
-    const { stdout } = await execAsync2(`osascript "${tmpFile}" ${scriptArgs}`);
+    const { stdout } = await execAsync2(`osascript "${tmpFile}" ${args}`);
     if (stdout.trim() === "not_found") {
-      throw new Error(`iTerm2 session not found for TTY ${normalizedTty}`);
+      throw new Error(`${app} session not found for TTY ${normalizedTty}`);
     }
-    log(`Injected ${poll ? "poll response" : "message"} via iTerm2 for TTY ${normalizedTty}`);
+    log(`Injected ${poll ? "poll response" : "message"} via ${app} for TTY ${normalizedTty}`);
   } finally {
     try {
       fs14.unlinkSync(tmpFile);
@@ -15303,6 +15365,7 @@ function cacheSessionProcess(sessionId, info, tmuxTarget) {
     pid: info.pid,
     tty: info.tty,
     tmuxTarget,
+    termProgram: info.termProgram,
     lastVerified: Date.now()
   });
 }
@@ -15317,7 +15380,7 @@ async function getCachedSessionProcess(sessionId) {
     }
     cached.lastVerified = Date.now();
   }
-  return { pid: cached.pid, tty: cached.tty, sessionId };
+  return { pid: cached.pid, tty: cached.tty, sessionId, termProgram: cached.termProgram };
 }
 function validateProcessCache() {
   for (const [sessionId, cached] of sessionProcessCache) {
@@ -16013,14 +16076,15 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
           logDelivery(`tmux injection failed for ${tmuxTarget}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      logDelivery(`Trying iTerm2 injection for tty=${proc.tty}`);
+      const termLabel = proc.termProgram === "Apple_Terminal" ? "Terminal.app" : "iTerm2";
+      logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
       try {
-        await injectViaIterm(proc.tty, content);
+        await injectViaTerminal(proc.tty, content, proc.termProgram);
         await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-        logDelivery(`Delivered via iTerm2 tty=${proc.tty}`);
+        logDelivery(`Delivered via ${termLabel} tty=${proc.tty}`);
         return true;
       } catch (err) {
-        logDelivery(`iTerm2 injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+        logDelivery(`${termLabel} injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
       }
       logDelivery(`All injection methods failed for live process pid=${proc.pid}, falling back to auto-resume`);
     }
@@ -16122,7 +16186,7 @@ async function waitForConfig() {
         return { config, convexUrl };
       }
     }
-    log("Waiting for configuration... (run 'codecast auth' to set up)");
+    log("Waiting for configuration... (run 'cast auth' to set up)");
     await new Promise((resolve4) => setTimeout(resolve4, checkInterval));
   }
 }
@@ -17126,7 +17190,7 @@ async function main() {
                   return;
                 }
                 findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
-                  const inject = tmuxTarget ? () => injectViaTmux(tmuxTarget, response) : () => injectViaIterm(proc.tty, response);
+                  const inject = tmuxTarget ? () => injectViaTmux(tmuxTarget, response) : () => injectViaTerminal(proc.tty, response, proc.termProgram);
                   inject().then(() => {
                     log(`Injected '${response}' for session ${sessionId.slice(0, 8)}`);
                     sendAgentStatus(syncService2, convId, sessionId, "working");
@@ -17607,7 +17671,7 @@ async function main() {
                 }
                 if (!injected) {
                   try {
-                    await injectViaIterm(proc.tty, response);
+                    await injectViaTerminal(proc.tty, response, proc.termProgram);
                     injected = true;
                   } catch {
                   }

@@ -218,25 +218,34 @@ export async function performUpdate(): Promise<boolean> {
     writeUpdateState(state);
 
     console.log(`Updated to v${latest.version}`);
-
-    // Ensure cast alias symlink
-    const castLink = path.join(path.dirname(currentExe), "cast");
-    try {
-      const target = fs.readlinkSync(castLink);
-      if (target !== currentExe) {
-        fs.unlinkSync(castLink);
-        fs.symlinkSync(currentExe, castLink);
-      }
-    } catch {
-      try { fs.unlinkSync(castLink); } catch {}
-      fs.symlinkSync(currentExe, castLink);
-    }
-
+    ensureCastAlias();
     return true;
   } catch (err) {
     console.error("Update failed:", err);
     return false;
   }
+}
+
+export function ensureCastAlias(): void {
+  if (isDevMode()) return;
+  const exe = process.execPath;
+  const dir = path.dirname(exe);
+  const castLink = path.join(dir, "cast");
+  try {
+    const target = fs.readlinkSync(castLink);
+    if (target === exe) return;
+    fs.unlinkSync(castLink);
+  } catch (e: any) {
+    if (e?.code === "ENOENT") {
+      // no symlink yet, create below
+    } else {
+      // not a symlink (regular file) or other error — don't clobber
+      return;
+    }
+  }
+  try {
+    fs.symlinkSync(exe, castLink);
+  } catch {}
 }
 
 export function showUpdateNotice(availableVersion: string): void {
