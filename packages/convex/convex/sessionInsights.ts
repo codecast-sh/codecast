@@ -323,6 +323,7 @@ export const upsertSessionInsight = internalMutation({
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
       .first();
 
+    let insightId;
     if (existing) {
       await ctx.db.patch(existing._id, {
         team_id: args.team_id,
@@ -339,25 +340,76 @@ export const upsertSessionInsight = internalMutation({
         confidence: args.confidence,
         metadata: args.metadata,
       });
-      return existing._id;
+      insightId = existing._id;
+    } else {
+      insightId = await ctx.db.insert("session_insights", {
+        conversation_id: args.conversation_id,
+        team_id: args.team_id,
+        actor_user_id: args.actor_user_id,
+        source: args.source,
+        generated_at: args.generated_at,
+        summary: args.summary,
+        goal: args.goal,
+        what_changed: args.what_changed,
+        outcome_type: args.outcome_type,
+        blockers: args.blockers,
+        next_action: args.next_action,
+        themes: args.themes,
+        confidence: args.confidence,
+        metadata: args.metadata,
+      });
     }
 
-    return await ctx.db.insert("session_insights", {
-      conversation_id: args.conversation_id,
-      team_id: args.team_id,
-      actor_user_id: args.actor_user_id,
-      source: args.source,
-      generated_at: args.generated_at,
-      summary: args.summary,
-      goal: args.goal,
-      what_changed: args.what_changed,
-      outcome_type: args.outcome_type,
-      blockers: args.blockers,
-      next_action: args.next_action,
-      themes: args.themes,
-      confidence: args.confidence,
-      metadata: args.metadata,
-    });
+    // Auto-create/update doc from insight
+    if (args.outcome_type !== "unknown" && args.summary.length >= 50) {
+      const conv = await ctx.db.get(args.conversation_id);
+      if (conv && (conv.message_count || 0) >= 10) {
+        const docType =
+          args.outcome_type === "blocked" ? "investigation"
+          : args.outcome_type === "shipped" ? "handoff"
+          : "note";
+
+        const contentParts: string[] = [];
+        if (args.goal) contentParts.push(`## Goal\n${args.goal}`);
+        contentParts.push(`## Summary\n${args.summary}`);
+        if (args.what_changed) contentParts.push(`## What Changed\n${args.what_changed}`);
+        if (args.blockers?.length) contentParts.push(`## Blockers\n${args.blockers.map((b) => `- ${b}`).join("\n")}`);
+        if (conv.project_path) contentParts.push(`## Project\n\`${conv.project_path}\``);
+
+        const convTeamId = conv && (!conv.is_private || conv.auto_shared) ? conv.team_id : args.team_id;
+        const existingDoc = await ctx.db
+          .query("docs")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+          .first();
+
+        if (existingDoc) {
+          await ctx.db.patch(existingDoc._id, {
+            title: conv.title || args.goal || "Untitled Session",
+            content: contentParts.join("\n\n"),
+            doc_type: docType as any,
+            updated_at: Date.now(),
+          });
+        } else {
+          await ctx.db.insert("docs", {
+            user_id: args.actor_user_id,
+            team_id: convTeamId,
+            title: conv.title || args.goal || "Untitled Session",
+            content: contentParts.join("\n\n"),
+            doc_type: docType as any,
+            source: "agent" as any,
+            conversation_id: args.conversation_id,
+            project_path: conv.project_path,
+            labels: args.themes,
+            is_private: conv.is_private,
+            team_visibility: conv.team_visibility,
+            created_at: conv.started_at || Date.now(),
+            updated_at: Date.now(),
+          });
+        }
+      }
+    }
+
+    return insightId;
   },
 });
 
@@ -615,6 +667,36 @@ export const backfillTeamInsights = action({
       skipped_or_failed: candidates.length - success,
       results,
     };
+  },
+});
+
+export const backfillTeamInsightsInternal = internalAction({
+  args: {
+    team_id: v.id("teams"),
+    window_hours: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const windowHours = Math.max(1, Math.min(args.window_hours ?? 24 * 14, 24 * 30));
+    const limit = Math.max(1, Math.min(args.limit ?? 25, 100));
+    const since = Date.now() - windowHours * 60 * 60 * 1000;
+
+    const candidates = await ctx.runQuery(internalApi.sessionInsights.getBackfillCandidates, {
+      team_id: args.team_id,
+      since,
+      limit,
+    });
+
+    let success = 0;
+    for (const candidate of candidates) {
+      const res = await ctx.runAction(internalApi.sessionInsights.generateSessionInsight, {
+        conversation_id: candidate.conversation_id,
+        reason: "periodic",
+      });
+      if ((res as any)?.status === "ok") success += 1;
+    }
+
+    return { candidates: candidates.length, generated: success };
   },
 });
 

@@ -2520,7 +2520,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap }: {
+function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap, bookmarkedSet }: {
   message: Message;
   agentType?: string;
   model?: string;
@@ -2537,6 +2537,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   collapsed?: boolean;
   showThinkingGlobal?: boolean;
   childConversationMap?: Record<string, string>;
+  bookmarkedSet?: Set<string>;
 }) {
   const router = useRouter();
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
@@ -2556,10 +2557,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const [localExpanded, setLocalExpanded] = useState(false);
   useEffect(() => { setLocalExpanded(false); }, [globalCollapsed]);
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
-  const isBookmarked = useQuery(
-    api.bookmarks.isBookmarked,
-    message._id ? { message_id: message._id as Id<"messages"> } : "skip"
-  );
+  const isBookmarked = bookmarkedSet?.has(message._id);
 
   const handleLongPress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -3211,11 +3209,14 @@ export default function SessionDetailScreen() {
   const flatListRef = useRef<FlatList>(null);
   const [olderMessages, setOlderMessages] = useState<Message[]>([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadCooldownRef = useRef(false);
   const [olderHasMore, setOlderHasMore] = useState(true);
   const [olderOldestTs, setOlderOldestTs] = useState<number | null>(null);
   const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const [isNearTop, setIsNearTop] = useState(true);
+  const flatListLayoutHeightRef = useRef(0);
+  const lastContentHeightRef = useRef(0);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [toastMessage, setToastMessage] = useState('');
   const [toastKey, setToastKey] = useState(0);
@@ -3254,6 +3255,12 @@ export default function SessionDetailScreen() {
     api.permissions.getPendingPermissions,
     id ? { conversation_id: id as Id<"conversations"> } : "skip"
   );
+
+  const bookmarkedMessageIds = useQuery(
+    api.bookmarks.getConversationBookmarks,
+    id ? { conversation_id: id as Id<"conversations"> } : "skip"
+  );
+  const bookmarkedSet = useMemo(() => new Set(bookmarkedMessageIds?.map(id => id.toString()) || []), [bookmarkedMessageIds]);
 
   const commits = useQuery(
     api.commits.getCommitsForConversation,
@@ -3320,6 +3327,8 @@ export default function SessionDetailScreen() {
     merged.sort((a, b) => a.timestamp - b.timestamp);
     return merged;
   }, [conversation?.messages, olderMessages, commits, pullRequests]);
+
+  const invertedMessages = useMemo(() => [...allMessages].reverse(), [allMessages]);
 
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const router = useRouter();
@@ -3511,8 +3520,9 @@ export default function SessionDetailScreen() {
     if (highlightedMessageId && allMessages.length > 0) {
       const idx = allMessages.findIndex(m => m._id === highlightedMessageId);
       if (idx >= 0) {
+        const invertedIdx = allMessages.length - 1 - idx;
         setTimeout(() => {
-          flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.3 });
+          flatListRef.current?.scrollToIndex({ index: invertedIdx, animated: true, viewPosition: 0.3 });
         }, 500);
         setTimeout(() => setHighlightedMessageId(null), 3000);
       }
@@ -3524,7 +3534,10 @@ export default function SessionDetailScreen() {
     const nextIndex = (currentMatchIndex + 1) % searchMatchList.length;
     setCurrentMatchIndex(nextIndex);
     const idx = allMessages.findIndex(m => m._id === searchMatchList[nextIndex]);
-    if (idx >= 0) flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.3 });
+    if (idx >= 0) {
+      const invertedIdx = allMessages.length - 1 - idx;
+      flatListRef.current?.scrollToIndex({ index: invertedIdx, animated: true, viewPosition: 0.3 });
+    }
   }, [searchMatchList, currentMatchIndex, allMessages]);
 
   const goToPrevMatch = useCallback(() => {
@@ -3532,7 +3545,10 @@ export default function SessionDetailScreen() {
     const prevIndex = currentMatchIndex === 0 ? searchMatchList.length - 1 : currentMatchIndex - 1;
     setCurrentMatchIndex(prevIndex);
     const idx = allMessages.findIndex(m => m._id === searchMatchList[prevIndex]);
-    if (idx >= 0) flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.3 });
+    if (idx >= 0) {
+      const invertedIdx = allMessages.length - 1 - idx;
+      flatListRef.current?.scrollToIndex({ index: invertedIdx, animated: true, viewPosition: 0.3 });
+    }
   }, [searchMatchList, currentMatchIndex, allMessages]);
 
   const latestUsage = useMemo(() => {
@@ -3679,6 +3695,13 @@ export default function SessionDetailScreen() {
     floatingHeaderY.setValue(0);
   }, [searchVisible, floatingHeaderY]);
 
+  // With inverted FlatList, newest messages are at offset 0 (bottom) automatically.
+  // Just mark initial scroll done once we have data.
+  useEffect(() => {
+    if (initialScrollDone || !conversation || allMessages.length === 0) return;
+    setInitialScrollDone(true);
+  }, [conversation?._id, allMessages.length > 0, initialScrollDone]);
+
   // Auto-scroll when new messages arrive (if near bottom)
   useEffect(() => {
     const prevIds = prevMessageIdsRef.current;
@@ -3699,7 +3722,7 @@ export default function SessionDetailScreen() {
     }
 
     if (isNearBottomRef.current && allMessages.length > 0) {
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 16);
+      setTimeout(() => flatListRef.current?.scrollToOffset({ offset: 0, animated: false }), 16);
       setUserScrolled(false);
       setNewMessageCount(0);
     } else if (!isNearBottomRef.current) {
@@ -3736,6 +3759,8 @@ export default function SessionDetailScreen() {
       setOlderHasMore(false);
     } finally {
       setLoadingOlder(false);
+      loadCooldownRef.current = true;
+      setTimeout(() => { loadCooldownRef.current = false; }, 500);
     }
   }, [convex, id, loadingOlder, olderOldestTs, conversation?.oldest_timestamp]);
 
@@ -3743,12 +3768,11 @@ export default function SessionDetailScreen() {
     if (!id || jumpingToEnd) return;
     setJumpingToEnd(true);
     try {
-      // "Last page" in our model = drop any older pages and show the latest slice from getAllMessages.
       setOlderMessages([]);
       setOlderHasMore(true);
       setOlderOldestTs(null);
       setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
         setUserScrolled(false);
         setNewMessageCount(0);
       }, 80);
@@ -3763,7 +3787,7 @@ export default function SessionDetailScreen() {
     if (!id || jumpingToStart) return;
 
     if (!hasMoreAbove) {
-      flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      flatListRef.current?.scrollToEnd({ animated: true });
       return;
     }
 
@@ -3811,7 +3835,7 @@ export default function SessionDetailScreen() {
       setOlderHasMore(false);
       setOlderOldestTs(latestOldest);
       setTimeout(() => {
-        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+        flatListRef.current?.scrollToEnd({ animated: true });
       }, 40);
     } catch {
       showToast('Failed to jump to start');
@@ -3822,37 +3846,41 @@ export default function SessionDetailScreen() {
 
   const handleScroll = useCallback((event: any) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const scrollTop = Math.max(0, contentOffset.y);
+    const offset = Math.max(0, contentOffset.y);
     const scrollHeight = contentSize.height;
     const clientHeight = layoutMeasurement.height;
-    const deltaY = scrollTop - lastScrollYRef.current;
-    lastScrollYRef.current = scrollTop;
+    const deltaY = offset - lastScrollYRef.current;
+    lastScrollYRef.current = offset;
 
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    const isNearBottom = distanceFromBottom < 200;
+    // Inverted FlatList: offset near 0 = bottom (newest), large offset = top (oldest)
+    const isNearBottom = offset < 200;
     isNearBottomRef.current = isNearBottom;
 
-    setIsNearTop(scrollTop < 96);
+    const distanceFromTop = scrollHeight - offset - clientHeight;
+    setIsNearTop(distanceFromTop < 96);
 
-    const progress = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0;
+    const progress = scrollHeight > clientHeight ? 1 - (offset / (scrollHeight - clientHeight)) : 0;
     scrollProgressAnim.setValue(progress);
 
-    if (distanceFromBottom > 400 && !userScrolled) {
+    if (offset > 400 && !userScrolled) {
       setUserScrolled(true);
     } else if (isNearBottom && userScrolled) {
       setUserScrolled(false);
       setNewMessageCount(0);
     }
 
+    // Floating header: in inverted list, scrolling "up" visually (toward older) increases offset
+    // Invert deltaY for header hide/show since scroll direction is flipped
+    const visualDelta = -deltaY;
     if (searchVisible) {
       floatingHeaderOffsetRef.current = 0;
       floatingHeaderY.setValue(0);
-    } else if (scrollTop <= 0) {
+    } else if (offset <= 0) {
       floatingHeaderOffsetRef.current = 0;
       floatingHeaderY.setValue(0);
-    } else if (Math.abs(deltaY) > 0.5) {
+    } else if (Math.abs(visualDelta) > 0.5) {
       const maxOffset = floatingHeaderHeight;
-      const nextOffset = Math.max(0, Math.min(floatingHeaderOffsetRef.current + deltaY, maxOffset));
+      const nextOffset = Math.max(0, Math.min(floatingHeaderOffsetRef.current + visualDelta, maxOffset));
       if (Math.abs(nextOffset - floatingHeaderOffsetRef.current) > 0.1) {
         floatingHeaderOffsetRef.current = nextOffset;
         const snapped = nextOffset < maxOffset * 0.5 ? 0 : -maxOffset;
@@ -3860,8 +3888,8 @@ export default function SessionDetailScreen() {
       }
     }
 
-    // Load older messages when near top
-    if (scrollTop < 100 && hasMoreAbove && !loadingOlder && initialScrollDone) {
+    // Load older messages when near the top (large offset in inverted list)
+    if (distanceFromTop < 100 && hasMoreAbove && !loadingOlder && !loadCooldownRef.current && initialScrollDone) {
       loadOlderMessages();
     }
   }, [hasMoreAbove, loadingOlder, loadOlderMessages, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
@@ -3994,12 +4022,9 @@ export default function SessionDetailScreen() {
                 contentContainerStyle={styles.sessionMeta}
               >
                 {conversation.agent_type && (
-                  <RNView style={styles.metaBadgeIcon}>
-                    <AgentLogoSvg agentType={conversation.agent_type} size={16} />
-                    <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
-                      {formatAgentType(conversation.agent_type)}
-                    </RNText>
-                  </RNView>
+                  <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
+                    {formatAgentType(conversation.agent_type)}
+                  </RNText>
                 )}
                 {activityAt > 0 && (
                   <RNText style={styles.messageCountText}>{conversation.agent_type ? '\u00B7 ' : ''}{formatRelativeTime(activityAt)}</RNText>
@@ -4122,37 +4147,39 @@ export default function SessionDetailScreen() {
         </Animated.View>
         <FlatList
           ref={flatListRef}
-          data={allMessages}
+          data={invertedMessages}
+          inverted={true}
           removeClippedSubviews={false}
-          windowSize={11}
-          initialNumToRender={24}
-          maxToRenderPerBatch={24}
-          updateCellsBatchingPeriod={32}
-          onContentSizeChange={() => {
-            if (!conversation || allMessages.length === 0) return;
-            if (highlightMessageParam || highlightedMessageId) return;
-            if (initialScrollDone) {
-              if (isNearBottomRef.current && !userScrolled) {
-                flatListRef.current?.scrollToEnd({ animated: false });
-              }
-              return;
-            }
-            if (userScrolled) return;
-
-            didInitialScrollRef.current = true;
-            flatListRef.current?.scrollToEnd({ animated: false });
-            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 60);
-
-            if (initialScrollDebounceRef.current) {
-              clearTimeout(initialScrollDebounceRef.current);
-            }
-            initialScrollDebounceRef.current = setTimeout(() => {
-              setInitialScrollDone(true);
-              initialScrollDebounceRef.current = null;
-              setUserScrolled(false);
-            }, 350);
+          windowSize={21}
+          initialNumToRender={50}
+          maxToRenderPerBatch={50}
+          updateCellsBatchingPeriod={50}
+          onLayout={(e) => {
+            flatListLayoutHeightRef.current = e.nativeEvent.layout.height;
+          }}
+          onContentSizeChange={(_w, h) => {
+            lastContentHeightRef.current = h;
           }}
           ListHeaderComponent={
+            conversation.child_conversations && conversation.child_conversations.length > 0 ? (
+              <RNView style={styles.subagentLinksContainer}>
+                <RNText style={styles.subagentLinksLabel}>SUBAGENTS</RNText>
+                <RNView style={styles.subagentLinksRow}>
+                  {conversation.child_conversations.map(child => (
+                    <Pressable
+                      key={child._id}
+                      onPress={() => router.push(`/session/${child._id}`)}
+                      style={styles.subagentLink}
+                    >
+                      <FontAwesome name="arrow-right" size={8} color={Theme.cyan} style={{ opacity: 0.7 }} />
+                      <RNText style={styles.subagentLinkText} numberOfLines={1}>{child.title}</RNText>
+                    </Pressable>
+                  ))}
+                </RNView>
+              </RNView>
+            ) : null
+          }
+          ListFooterComponent={
             <>
               <RNView style={{ height: floatingHeaderHeight }} />
               {hasMoreAbove && (
@@ -4193,9 +4220,10 @@ export default function SessionDetailScreen() {
             </>
           }
           renderItem={({ item, index }) => {
-            // Skip tool result messages and command messages when determining header visibility
+            // In inverted list, index 0 = newest. Convert to original order for prev-message logic.
+            const originalIndex = invertedMessages.length - 1 - index;
             let prevNonToolResult: Message | null = null;
-            for (let i = index - 1; i >= 0; i--) {
+            for (let i = originalIndex - 1; i >= 0; i--) {
               const prev = allMessages[i];
               if (prev.role === 'user' && prev.tool_results && prev.tool_results.length > 0) continue;
               if (prev.role === 'user' && prev.content && isCommandMessage(prev.content)) continue;
@@ -4257,7 +4285,8 @@ export default function SessionDetailScreen() {
                   userName={conversation.user?.name || conversation.user?.email?.split('@')[0]}
                   showToast={showToast}
                   collapsed={collapsed}
-                childConversationMap={conversation.child_conversation_map}
+                  childConversationMap={conversation.child_conversation_map}
+                  bookmarkedSet={bookmarkedSet}
               />
               </RNView>
             );
@@ -4275,29 +4304,19 @@ export default function SessionDetailScreen() {
               <RNText style={styles.emptyStateSubtext}>Messages will appear here as the session progresses</RNText>
             </RNView>
           }
-          ListFooterComponent={
-            conversation.child_conversations && conversation.child_conversations.length > 0 ? (
-              <RNView style={styles.subagentLinksContainer}>
-                <RNText style={styles.subagentLinksLabel}>SUBAGENTS</RNText>
-                <RNView style={styles.subagentLinksRow}>
-                  {conversation.child_conversations.map(child => (
-                    <Pressable
-                      key={child._id}
-                      onPress={() => router.push(`/session/${child._id}`)}
-                      style={styles.subagentLink}
-                    >
-                      <FontAwesome name="arrow-right" size={8} color={Theme.cyan} style={{ opacity: 0.7 }} />
-                      <RNText style={styles.subagentLinkText} numberOfLines={1}>{child.title}</RNText>
-                    </Pressable>
-                  ))}
-                </RNView>
-              </RNView>
-            ) : null
-          }
           showsVerticalScrollIndicator={false}
+          onScrollToIndexFailed={(info) => {
+            setTimeout(() => {
+              flatListRef.current?.scrollToIndex({
+                index: info.index,
+                animated: false,
+                viewPosition: 1,
+              });
+            }, 200);
+          }}
           onScroll={handleScroll}
           scrollEventThrottle={16}
-          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+          /* maintainVisibleContentPosition removed - was causing blank screen by fighting scroll offset */
         />
 
         <RNView>
@@ -4543,7 +4562,6 @@ const styles = StyleSheet.create({
   },
   messageList: {
     padding: 16,
-    flexGrow: 1,
   },
   permissionsContainer: {
     marginBottom: 16,

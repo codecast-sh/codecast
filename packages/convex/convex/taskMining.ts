@@ -180,10 +180,7 @@ export const mineDocsFromSessions = internalMutation({
 
       const existingDocs = await ctx.db
         .query("docs")
-        .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-        .filter((q) =>
-          q.eq(q.field("conversation_id"), session.conversation_id)
-        )
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", session.conversation_id))
         .first();
       if (existingDocs) continue;
 
@@ -380,7 +377,7 @@ export const webMineAll = action({
 });
 
 export const mineAllForUser = internalAction({
-  args: { user_id: v.id("users") },
+  args: { user_id: v.id("users"), since_days: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const internalApi = internal as any;
     const team_id = await ctx.runQuery(internalApi.taskMining.getUserTeamId, {
@@ -389,7 +386,7 @@ export const mineAllForUser = internalAction({
     if (!team_id) return { tasks_created: 0, docs_created: 0 };
 
     const members: any[] = await ctx.runQuery(internalApi.taskMining.getTeamMembers, { team_id });
-    const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    const ninetyDaysAgo = Date.now() - (args.since_days || 90) * 24 * 60 * 60 * 1000;
     let totalDocsCreated = 0;
 
     for (const member of members) {

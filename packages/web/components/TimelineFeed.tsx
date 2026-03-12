@@ -110,7 +110,7 @@ function SessionCard({ item }: { item: Extract<TimelineItem, { type: "session" }
     <Link href={`/conversation/${item.id}`} className="group block relative">
       <div className="relative bg-white/60 border border-sol-border/40 rounded-xl p-4 hover:border-sol-yellow/50 transition-all duration-200 shadow-sm hover:shadow-md">
         <div className="flex items-start gap-3">
-          <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-gradient-to-br from-sol-yellow to-sol-yellow/80 flex items-center justify-center shadow-sm">
+          <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-gradient-to-br from-sol-orange to-sol-orange/80 flex items-center justify-center shadow-sm">
             <ClaudeIcon className="w-5 h-5 text-sol-bg" />
           </div>
           <div className="flex-1 min-w-0">

@@ -2059,14 +2059,14 @@ async function processSessionFile(
                   injectViaTmux(tmuxTarget, response).then(() => {
                     log(`Injected '${response}' via tmux for session ${sessionId.slice(0, 8)}`);
                   }).catch(() => {
-                    injectViaIterm(proc.tty, response).then(() => {
+                    injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
                       log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
                     }).catch((err) => {
                       log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
                     });
                   });
                 } else {
-                  injectViaIterm(proc.tty, response).then(() => {
+                  injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
                     log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
                   }).catch((err) => {
                     log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
@@ -2982,6 +2982,7 @@ interface ClaudeSessionInfo {
   pid: number;
   tty: string;
   sessionId: string;
+  termProgram?: string;
 }
 
 function normalizeTty(tty: string): string {
@@ -3062,15 +3063,16 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
         const reg = JSON.parse(fs.readFileSync(registryFile, "utf-8"));
         const pid = reg.pid;
         const tty = normalizeTty(reg.tty);
+        const termProgram = reg.term || undefined;
         // Verify process is still alive and is a claude-like process
         const { stdout: checkPs } = await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`);
         if (checkPs.trim()) {
           if (agentType === "codex") {
             log(`Ignoring registry candidate for codex session ${sessionId.slice(0, 8)} (pid=${pid})`);
           } else {
-          const result = { pid, tty, sessionId };
+          const result = { pid, tty, sessionId, termProgram };
           cacheSessionProcess(sessionId, result);
-          log(`Found session ${sessionId.slice(0, 8)} via registry: pid=${pid}, tty=${tty}`);
+          log(`Found session ${sessionId.slice(0, 8)} via registry: pid=${pid}, tty=${tty}, term=${termProgram ?? "unknown"}`);
           return result;
           }
         } else {
@@ -3610,32 +3612,52 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   }
 }
 
-async function injectViaIterm(tty: string, content: string): Promise<void> {
-  const normalizedTty = normalizeTty(tty);
-  const poll = parsePollMessage(content);
-
-  let scriptContent: string;
-  let scriptArgs: string;
+function buildAppleScript(
+  app: "iTerm2" | "Terminal",
+  normalizedTty: string,
+  content: string,
+  poll: ReturnType<typeof parsePollMessage>,
+): { script: string; args: string } {
+  const isIterm = app === "iTerm2";
 
   if (poll) {
     const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
-    const stepActions = steps.map((step, i) => {
-      const lines = [`            tell s to write text "${step.key}" without newline`];
-      if (step.text) {
-        const escapedText = step.text.replace(/"/g, '\\"');
-        lines.push("            delay 0.5");
-        lines.push(`            tell s to write text "${escapedText}" without newline`);
-        lines.push("            delay 0.15");
-        lines.push(`            tell s to write text ""`);
-      }
-      if (i < steps.length - 1) lines.push("            delay 0.5");
-      return lines.join("\n");
-    }).join("\n");
-    const keyActions = stepActions;
+
+    let stepActions: string;
+    if (isIterm) {
+      stepActions = steps.map((step, i) => {
+        const lines = [`            tell s to write text "${step.key}" without newline`];
+        if (step.text) {
+          const escapedText = step.text.replace(/"/g, '\\"');
+          lines.push("            delay 0.5");
+          lines.push(`            tell s to write text "${escapedText}" without newline`);
+          lines.push("            delay 0.15");
+          lines.push(`            tell s to write text ""`);
+        }
+        if (i < steps.length - 1) lines.push("            delay 0.5");
+        return lines.join("\n");
+      }).join("\n");
+    } else {
+      stepActions = steps.map((step, i) => {
+        const lines = [`          do script "${step.key}" in t`];
+        if (step.text) {
+          const escapedText = step.text.replace(/"/g, '\\"');
+          lines.push("          delay 0.5");
+          lines.push(`          do script "${escapedText}" in t`);
+        }
+        if (i < steps.length - 1) lines.push("          delay 0.5");
+        return lines.join("\n");
+      }).join("\n");
+    }
+
     const textAction = poll.text
-      ? `\n            delay 0.3\n            tell s to write text "${poll.text.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
+      ? isIterm
+        ? `\n            delay 0.3\n            tell s to write text "${poll.text.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
+        : `\n          delay 0.3\n          do script "${poll.text.replace(/"/g, '\\"')}" in t`
       : "";
-    scriptContent = `on run argv
+
+    const script = isIterm
+      ? `on run argv
   set targetTty to item 1 of argv
   tell application "iTerm2"
     repeat with w in windows
@@ -3643,7 +3665,7 @@ async function injectViaIterm(tty: string, content: string): Promise<void> {
         repeat with s in sessions of t
           set sTty to tty of s
           if sTty is targetTty then
-${keyActions}${textAction}
+${stepActions}${textAction}
             return "ok"
           end if
         end repeat
@@ -3651,10 +3673,27 @@ ${keyActions}${textAction}
     end repeat
   end tell
   return "not_found"
+end run`
+      : `on run argv
+  set targetTty to item 1 of argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is targetTty then
+${stepActions}${textAction}
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "not_found"
 end run`;
-    scriptArgs = `'${normalizedTty}'`;
-  } else {
-    scriptContent = `on run argv
+    return { script, args: `'${normalizedTty}'` };
+  }
+
+  const escapedContent = content.replace(/'/g, "'\\''");
+  const script = isIterm
+    ? `on run argv
   set msgText to item 1 of argv
   set targetTty to item 2 of argv
   tell application "iTerm2"
@@ -3673,19 +3712,40 @@ end run`;
     end repeat
   end tell
   return "not_found"
+end run`
+    : `on run argv
+  set msgText to item 1 of argv
+  set targetTty to item 2 of argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is targetTty then
+          do script msgText in t
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "not_found"
 end run`;
-    const escapedContent = content.replace(/'/g, "'\\''");
-    scriptArgs = `'${escapedContent}' '${normalizedTty}'`;
-  }
+  return { script, args: `'${escapedContent}' '${normalizedTty}'` };
+}
 
-  const tmpFile = path.join(CONFIG_DIR, "iterm-inject.scpt");
-  fs.writeFileSync(tmpFile, scriptContent);
+async function injectViaTerminal(tty: string, content: string, termProgram?: string): Promise<void> {
+  const normalizedTty = normalizeTty(tty);
+  const poll = parsePollMessage(content);
+
+  const app: "iTerm2" | "Terminal" = termProgram === "Apple_Terminal" ? "Terminal" : "iTerm2";
+  const { script, args } = buildAppleScript(app, normalizedTty, content, poll);
+
+  const tmpFile = path.join(CONFIG_DIR, "terminal-inject.scpt");
+  fs.writeFileSync(tmpFile, script);
   try {
-    const { stdout } = await execAsync(`osascript "${tmpFile}" ${scriptArgs}`);
+    const { stdout } = await execAsync(`osascript "${tmpFile}" ${args}`);
     if (stdout.trim() === "not_found") {
-      throw new Error(`iTerm2 session not found for TTY ${normalizedTty}`);
+      throw new Error(`${app} session not found for TTY ${normalizedTty}`);
     }
-    log(`Injected ${poll ? "poll response" : "message"} via iTerm2 for TTY ${normalizedTty}`);
+    log(`Injected ${poll ? "poll response" : "message"} via ${app} for TTY ${normalizedTty}`);
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
@@ -3937,6 +3997,7 @@ interface CachedProcessInfo {
   pid: number;
   tty: string;
   tmuxTarget?: string;
+  termProgram?: string;
   lastVerified: number;
 }
 
@@ -3948,6 +4009,7 @@ function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTar
     pid: info.pid,
     tty: info.tty,
     tmuxTarget,
+    termProgram: info.termProgram,
     lastVerified: Date.now(),
   });
 }
@@ -3962,7 +4024,7 @@ async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSession
     }
     cached.lastVerified = Date.now();
   }
-  return { pid: cached.pid, tty: cached.tty, sessionId };
+  return { pid: cached.pid, tty: cached.tty, sessionId, termProgram: cached.termProgram };
 }
 
 function validateProcessCache(): void {
@@ -4729,15 +4791,16 @@ async function deliverMessage(
         }
       }
 
-      // Try iTerm2 AppleScript
-      logDelivery(`Trying iTerm2 injection for tty=${proc.tty}`);
+      // Try AppleScript injection (iTerm2 or Terminal.app)
+      const termLabel = proc.termProgram === "Apple_Terminal" ? "Terminal.app" : "iTerm2";
+      logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
       try {
-        await injectViaIterm(proc.tty, content);
+        await injectViaTerminal(proc.tty, content, proc.termProgram);
         await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-        logDelivery(`Delivered via iTerm2 tty=${proc.tty}`);
+        logDelivery(`Delivered via ${termLabel} tty=${proc.tty}`);
         return true;
       } catch (err) {
-        logDelivery(`iTerm2 injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+        logDelivery(`${termLabel} injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
       }
 
       logDelivery(`All injection methods failed for live process pid=${proc.pid}, falling back to auto-resume`);
@@ -6108,7 +6171,7 @@ async function main(): Promise<void> {
                   findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
                     const inject = tmuxTarget
                       ? () => injectViaTmux(tmuxTarget, response)
-                      : () => injectViaIterm(proc.tty, response);
+                      : () => injectViaTerminal(proc.tty, response, proc.termProgram);
                     inject().then(() => {
                       log(`Injected '${response}' for session ${sessionId.slice(0, 8)}`);
                       sendAgentStatus(syncService, convId, sessionId, "working");
@@ -6737,7 +6800,7 @@ async function main(): Promise<void> {
                   }
                   if (!injected) {
                     try {
-                      await injectViaIterm(proc.tty, response);
+                      await injectViaTerminal(proc.tty, response, proc.termProgram);
                       injected = true;
                     } catch {}
                   }

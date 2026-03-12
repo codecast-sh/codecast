@@ -269,7 +269,6 @@
 }
 .cb-hscroll::-webkit-scrollbar {
   height: 8px;
-  display: block;
 }
 .cb-hscroll::-webkit-scrollbar-track {
   background: var(--sol-bg-highlight);

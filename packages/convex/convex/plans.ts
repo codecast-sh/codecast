@@ -376,6 +376,7 @@ export const list = query({
     status: v.optional(v.string()),
     project_id: v.optional(v.string()),
     team: v.optional(v.boolean()),
+    include_all: v.optional(v.boolean()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -415,7 +416,7 @@ export const list = query({
         .collect();
     }
 
-    if (!args.status) {
+    if (!args.status && !args.include_all) {
       plans = plans.filter(p => p.status !== "done" && p.status !== "abandoned");
     }
 

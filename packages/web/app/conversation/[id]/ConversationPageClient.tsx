@@ -37,7 +37,7 @@ function ConversationLoadingSkeleton() {
 
         <div className="space-y-1">
           <div className="flex items-center gap-2 mb-2">
-            <div className="w-6 h-6 rounded bg-sol-yellow/60" />
+            <div className="w-6 h-6 rounded bg-sol-orange/60" />
             <div className="h-3 w-14 bg-sol-bg-alt rounded" />
             <div className="h-3 w-16 bg-sol-bg-alt rounded" />
           </div>
@@ -61,7 +61,7 @@ function ConversationLoadingSkeleton() {
 
         <div className="space-y-1">
           <div className="flex items-center gap-2 mb-2">
-            <div className="w-6 h-6 rounded bg-sol-yellow/60" />
+            <div className="w-6 h-6 rounded bg-sol-orange/60" />
             <div className="h-3 w-14 bg-sol-bg-alt rounded" />
             <div className="h-3 w-16 bg-sol-bg-alt rounded" />
           </div>

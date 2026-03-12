@@ -460,7 +460,7 @@ function ConversationSkeleton() {
 
       <div className="space-y-1">
         <div className="flex items-center gap-2 mb-2">
-          <div className="w-6 h-6 rounded bg-sol-yellow/60" />
+          <div className="w-6 h-6 rounded bg-sol-orange/60" />
           <div className="h-3 w-14 bg-sol-bg-alt rounded" />
           <div className="h-3 w-16 bg-sol-bg-alt rounded" />
         </div>
@@ -484,7 +484,7 @@ function ConversationSkeleton() {
 
       <div className="space-y-1">
         <div className="flex items-center gap-2 mb-2">
-          <div className="w-6 h-6 rounded bg-sol-yellow/60" />
+          <div className="w-6 h-6 rounded bg-sol-orange/60" />
           <div className="h-3 w-14 bg-sol-bg-alt rounded" />
           <div className="h-3 w-16 bg-sol-bg-alt rounded" />
         </div>
@@ -785,7 +785,7 @@ function stripLineNumbers(content: string): string {
 
 function ClaudeIcon() {
   return (
-    <span className="w-6 h-6 rounded bg-sol-yellow flex items-center justify-center shrink-0">
+    <span className="w-6 h-6 rounded bg-sol-orange flex items-center justify-center shrink-0">
       <svg className="w-3.5 h-3.5 text-sol-bg" viewBox="0 0 24 24" fill="currentColor">
         <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
       </svg>

@@ -624,7 +624,7 @@ TTY=$(ps -o tty= -p "$CLAUDE_PID" 2>/dev/null | tr -d ' ')
 
 REGISTRY_DIR="$HOME/.codecast/session-registry"
 mkdir -p "$REGISTRY_DIR"
-echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s)}" > "$REGISTRY_DIR/$SESSION_ID.json"
+echo "{\\"pid\\":$CLAUDE_PID,\\"tty\\":\\"$TTY\\",\\"ts\\":$(date +%s),\\"term\\":\\"$\{TERM_PROGRAM:-unknown}\\"}" > "$REGISTRY_DIR/$SESSION_ID.json"
 exit 0
 `;
 
@@ -8035,10 +8035,10 @@ plan
   .option("--project <id>", "Filter by project")
   .action(async (options: any) => {
     const body: Record<string, any> = {};
-    if (options.all) body.status = "all";
+    if (options.all) body.include_all = true;
     else if (options.draft) body.status = "draft";
     else if (options.done) body.status = "done";
-    else body.status = "active";
+    else if (options.active) body.status = "active";
     if (options.project) body.project_id = options.project;
 
     const plans = await cliPost("/cli/plans/list", body);
@@ -8085,12 +8085,12 @@ plan
       console.log(`\n  ${c.bold}Progress (recent):${c.reset}`);
       for (const entry of p.progress_log.slice(-10)) {
         const ts = new Date(entry.timestamp).toLocaleString();
-        console.log(`    ${c.dim}${ts}:${c.reset} ${entry.text}`);
+        console.log(`    ${c.dim}${ts}:${c.reset} ${entry.entry}`);
       }
     }
-    if (p.decisions?.length) {
+    if (p.decision_log?.length) {
       console.log(`\n  ${c.bold}Decisions:${c.reset}`);
-      for (const d of p.decisions) {
+      for (const d of p.decision_log) {
         console.log(`    ${d.decision} ${c.dim}(${d.rationale})${c.reset}`);
       }
     }

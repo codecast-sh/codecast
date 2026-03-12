@@ -207,7 +207,6 @@ export const webList = query({
     const CONFIG_DOC_NAMES = new Set(["README", "AGENTS", "CLAUDE", "CLAUDE.md", "AGENTS.md", "README.md"]);
     const isNoiseDoc = (d: any) => {
       if (CONFIG_DOC_NAMES.has(d.title)) return true;
-      if (d.source === "agent") return true;
       return false;
     };
 

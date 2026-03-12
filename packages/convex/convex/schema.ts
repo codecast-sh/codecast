@@ -1018,6 +1018,7 @@ export default defineSchema({
     .index("by_project_id", ["project_id"])
     .index("by_team_id", ["team_id"])
     .index("by_source_file", ["source_file"])
+    .index("by_conversation_id", ["conversation_id"])
     .searchIndex("search_docs", {
       searchField: "title",
       filterFields: ["user_id", "doc_type", "project_id"],

@@ -30,7 +30,7 @@ function OpenAIIcon({ className = "w-4 h-4" }: { className?: string }) {
 
 function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; className?: string }) {
   if (agentType === "claude_code") {
-    return <ClaudeIcon className={`${className} text-amber-400`} />;
+    return <ClaudeIcon className={`${className} text-sol-orange`} />;
   } else if (agentType === "codex") {
     return <OpenAIIcon className={`${className} text-emerald-400`} />;
   }

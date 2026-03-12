@@ -400,7 +400,7 @@ function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; cl
     );
   }
   return (
-    <span className={`${className} rounded bg-sol-yellow flex items-center justify-center shrink-0`}>
+    <span className={`${className} rounded bg-sol-orange flex items-center justify-center shrink-0`}>
       <ClaudeIcon className="w-2.5 h-2.5 text-sol-bg" />
     </span>
   );
