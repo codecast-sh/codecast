@@ -2789,6 +2789,41 @@ cliRoute("/cli/work/mine", async (ctx, body) => {
   return await ctx.runAction(internal.taskMining.backfillDocsFromMessages, { user_id: body.user_id });
 });
 
+// Plans
+cliRoute("/cli/plans/create", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.create, body);
+});
+cliRoute("/cli/plans/list", async (ctx, body) => {
+  return await ctx.runQuery(api.plans.list, body);
+});
+cliRoute("/cli/plans/get", async (ctx, body) => {
+  return await ctx.runQuery(api.plans.get, body);
+});
+cliRoute("/cli/plans/update", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.update, body);
+});
+cliRoute("/cli/plans/bind", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.bindSession, body);
+});
+cliRoute("/cli/plans/unbind", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.unbindSession, body);
+});
+cliRoute("/cli/plans/log", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.addLogEntry, body);
+});
+cliRoute("/cli/plans/decide", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.addDecision, body);
+});
+cliRoute("/cli/plans/discover", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.addDiscovery, body);
+});
+cliRoute("/cli/plans/pointer", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.addPointer, body);
+});
+cliRoute("/cli/plans/status", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.updateStatus, body);
+});
+
 // Docs
 cliRoute("/cli/docs/create", async (ctx, body) => {
   return await ctx.runMutation(api.docs.create, body);

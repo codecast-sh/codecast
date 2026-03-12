@@ -788,6 +788,67 @@ export default defineSchema({
     .index("by_user_status", ["user_id", "status"])
     .index("by_team_id", ["team_id"]),
 
+  plans: defineTable({
+    short_id: v.string(),
+    title: v.string(),
+    goal: v.optional(v.string()),
+    acceptance_criteria: v.optional(v.array(v.string())),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("done"),
+      v.literal("abandoned"),
+    ),
+    source: v.union(
+      v.literal("human"),
+      v.literal("agent"),
+      v.literal("insight"),
+      v.literal("promoted"),
+    ),
+    owner_id: v.optional(v.id("users")),
+    team_id: v.optional(v.id("teams")),
+    project_id: v.optional(v.id("projects")),
+    task_ids: v.optional(v.array(v.string())),
+    progress: v.optional(v.object({
+      total: v.number(),
+      done: v.number(),
+      in_progress: v.number(),
+      blocked: v.number(),
+    })),
+    progress_log: v.optional(v.array(v.object({
+      timestamp: v.number(),
+      entry: v.string(),
+      session_id: v.optional(v.string()),
+    }))),
+    decision_log: v.optional(v.array(v.object({
+      timestamp: v.number(),
+      decision: v.string(),
+      rationale: v.string(),
+      session_id: v.optional(v.string()),
+    }))),
+    discoveries: v.optional(v.array(v.object({
+      timestamp: v.number(),
+      finding: v.string(),
+      session_id: v.optional(v.string()),
+    }))),
+    context_pointers: v.optional(v.array(v.object({
+      label: v.string(),
+      path_or_url: v.string(),
+    }))),
+    session_ids: v.optional(v.array(v.string())),
+    current_session_id: v.optional(v.string()),
+    created_from_conversation_id: v.optional(v.string()),
+    created_from_insight_id: v.optional(v.id("session_insights")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_short_id", ["short_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_status", ["status"])
+    .index("by_project_id", ["project_id"])
+    .index("by_team_and_status", ["team_id", "status"]),
+
   tasks: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
@@ -846,6 +907,9 @@ export default defineSchema({
     // Visibility (inherited from source conversation for mined tasks)
     is_private: v.optional(v.boolean()),
     team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
+
+    // Plan linkage
+    plan_id: v.optional(v.id("plans")),
 
     // Drive state (iterative polish)
     drive: v.optional(v.object({
