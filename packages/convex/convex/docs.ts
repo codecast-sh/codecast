@@ -230,22 +230,29 @@ export const webList = query({
       return d.team_id;
     };
 
+    const queryLimit = args.limit || 100;
+    const fetchLimit = queryLimit * 3;
+
     const userDocs = await ctx.db
       .query("docs")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
+      .order("desc")
+      .take(fetchLimit);
 
     let teamDocs: typeof userDocs = [];
     if (team_id) {
       teamDocs = await ctx.db
         .query("docs")
         .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
-        .collect();
+        .order("desc")
+        .take(fetchLimit);
     }
 
-    const allDocs = [...userDocs];
+    const seen = new Set<string>();
+    const allDocs = [];
+    for (const d of userDocs) { seen.add(String(d._id)); allDocs.push(d); }
     for (const td of teamDocs) {
-      if (!allDocs.some((d) => d._id === td._id)) allDocs.push(td);
+      if (!seen.has(String(td._id))) allDocs.push(td);
     }
 
     const allConvIds = new Set<string>();
@@ -302,7 +309,7 @@ export const webList = query({
     });
 
     enriched.sort((a: any, b: any) => (b.originated_at || b.created_at) - (a.originated_at || a.created_at));
-    const result = enriched.slice(0, args.limit || 100);
+    const result = enriched.slice(0, queryLimit);
 
     // Batch-load user profiles for author attribution
     const userIds = new Set<string>();
@@ -364,6 +371,15 @@ export const webGet = query({
         });
       }
       result.related_conversations = convs;
+    }
+
+    // Resolve plan from conversation's active_plan_id
+    if (doc.conversation_id) {
+      const conv = await ctx.db.get(doc.conversation_id);
+      if (conv?.active_plan_id) {
+        const plan = await ctx.db.get(conv.active_plan_id);
+        if (plan) result.active_plan = { _id: plan._id, short_id: plan.short_id, title: plan.title, status: plan.status };
+      }
     }
 
     return result;

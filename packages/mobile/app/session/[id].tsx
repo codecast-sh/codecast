@@ -358,24 +358,37 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
     setTimeout(() => setCopied(false), 1500);
   };
 
+  const totalDiffLines = oldLines.length + newLines.length;
+  const isTall = totalDiffLines > 15;
+
+  const diffInner = (
+    <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
+      <RNView style={{ paddingVertical: 2 }}>
+        {oldLines.map((line, i) => (
+          <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+            <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
+            <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+          </RNView>
+        ))}
+        {newLines.map((line, i) => (
+          <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+            <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
+            <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+          </RNView>
+        ))}
+      </RNView>
+    </ScrollView>
+  );
+
   return (
     <RNView style={{ marginVertical: 4 }}>
-      <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-        <RNView style={{ paddingVertical: 2 }}>
-          {oldLines.map((line, i) => (
-            <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-              <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
-              <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-            </RNView>
-          ))}
-          {newLines.map((line, i) => (
-            <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-              <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
-              <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-            </RNView>
-          ))}
-        </RNView>
-      </ScrollView>
+      <RNView style={{ overflow: 'hidden', maxHeight: isTall ? CODE_BLOCK_MAX_HEIGHT : undefined }}>
+        {isTall ? (
+          <ScrollView nestedScrollEnabled showsVerticalScrollIndicator>
+            {diffInner}
+          </ScrollView>
+        ) : diffInner}
+      </RNView>
       <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
         <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <FontAwesome name="expand" size={10} color={Theme.textDim} />
@@ -389,6 +402,8 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
   );
 }
 
+const CODE_BLOCK_MAX_HEIGHT = 300;
+
 function CodeBlockWithCopy({ content, language }: { content: string; language: string }) {
   const [copied, setCopied] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -401,28 +416,40 @@ function CodeBlockWithCopy({ content, language }: { content: string; language: s
 
   const lines = content.split('\n');
   const showLineNumbers = lines.length > 3;
+  const isTall = lines.length > 15;
+
+  const codeInner = (
+    <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
+      <RNView style={{ padding: 8 }}>
+        {showLineNumbers ? (
+          <RNView style={{ flexDirection: 'row' }}>
+            <RNView style={{ paddingRight: 8, marginRight: 8, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: Theme.borderLight }}>
+              {lines.map((_, i) => (
+                <RNText key={i} style={{ fontSize: 10, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textDim, textAlign: 'right', minWidth: 20 }}>{i + 1}</RNText>
+              ))}
+            </RNView>
+            <HighlightedCodeText content={content} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+          </RNView>
+        ) : (
+          <HighlightedCodeText content={content} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+        )}
+      </RNView>
+    </ScrollView>
+  );
 
   return (
     <RNView style={{ marginVertical: 4 }}>
-      <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden' }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-          <RNView style={{ padding: 8 }}>
-            {showLineNumbers ? (
-              <RNView style={{ flexDirection: 'row' }}>
-                <RNView style={{ paddingRight: 8, marginRight: 8, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: Theme.borderLight }}>
-                  {lines.map((_, i) => (
-                    <RNText key={i} style={{ fontSize: 10, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textDim, textAlign: 'right', minWidth: 20 }}>{i + 1}</RNText>
-                  ))}
-                </RNView>
-                <HighlightedCodeText content={content} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-              </RNView>
-            ) : (
-              <HighlightedCodeText content={content} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-            )}
-          </RNView>
-        </ScrollView>
+      <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden', maxHeight: isTall ? CODE_BLOCK_MAX_HEIGHT : undefined }}>
+        {isTall ? (
+          <ScrollView nestedScrollEnabled showsVerticalScrollIndicator>
+            {codeInner}
+          </ScrollView>
+        ) : codeInner}
       </RNView>
       <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
+        {isTall && (
+          <RNText style={{ fontSize: 9, color: Theme.textDim }}>{lines.length} lines</RNText>
+        )}
         <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <FontAwesome name="expand" size={10} color={Theme.textDim} />
         </TouchableOpacity>
@@ -446,7 +473,7 @@ function MarkdownContent({ text, baseStyle, isUser }: { text: string; baseStyle:
       const t = text.slice(lastIndex, match.index);
       if (t.trim()) blocks.push({ type: 'text', content: t });
     }
-    blocks.push({ type: 'code', content: match[2], language: match[1] || 'plaintext' });
+    blocks.push({ type: 'code', content: match[2].trimEnd(), language: match[1] || 'plaintext' });
     lastIndex = match.index + match[0].length;
   }
 
@@ -696,7 +723,7 @@ function agentLogoBg(agentType?: string): string {
   if (agentType === 'codex') return '#0f0f0f';
   if (agentType === 'cursor') return '#1a1a2e';
   if (agentType === 'gemini') return '#1a73e8';
-  return Theme.accent;
+  return '#cb4b16';
 }
 
 function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; size?: number }) {
@@ -730,10 +757,8 @@ function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; size?: num
     );
   }
   return (
-    <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
-      <Svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none">
-        <Path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" fill="white" />
-      </Svg>
+    <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+      <RNText style={{ color: 'white', fontSize: size * 0.6, fontWeight: '700', lineHeight: size * 0.85, textAlign: 'center' }}>A</RNText>
     </RNView>
   );
 }
@@ -4022,9 +4047,12 @@ export default function SessionDetailScreen() {
                 contentContainerStyle={styles.sessionMeta}
               >
                 {conversation.agent_type && (
-                  <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
-                    {formatAgentType(conversation.agent_type)}
-                  </RNText>
+                  <RNView style={styles.metaBadgeIcon}>
+                    <AgentLogoSvg agentType={conversation.agent_type} size={24} />
+                    <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
+                      {formatAgentType(conversation.agent_type)}
+                    </RNText>
+                  </RNView>
                 )}
                 {activityAt > 0 && (
                   <RNText style={styles.messageCountText}>{conversation.agent_type ? '\u00B7 ' : ''}{formatRelativeTime(activityAt)}</RNText>
@@ -6013,7 +6041,8 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: Theme.borderLight + '80',
     marginHorizontal: 8,
-    marginTop: 4,
+    marginTop: 6,
+    marginBottom: 2,
   },
   headerToolbar: {
     flexDirection: 'row',

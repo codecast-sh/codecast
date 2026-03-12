@@ -570,7 +570,7 @@ allowed-tools: ["Bash"]
 Run this command to get codecast links for the current session:
 
 \`\`\`bash
-codecast links
+cast links
 \`\`\`
 
 The output shows:
@@ -578,7 +578,7 @@ The output shows:
 - **Dashboard**: URL to view the session on codecast.sh
 - **Share**: URL to share with others
 
-IMPORTANT: Verify the "Session:" line matches this conversation's topic. If it shows a different/old session, tell the user to try \`codecast links -s <session-id>\` with the correct session ID from \`ls ~/.claude/projects/*/\`.
+IMPORTANT: Verify the "Session:" line matches this conversation's topic. If it shows a different/old session, tell the user to try \`cast links -s <session-id>\` with the correct session ID from \`ls ~/.claude/projects/*/\`.
 
 Note: If the session hasn't been synced yet, this command will automatically sync it first.
 `;
@@ -779,7 +779,7 @@ function installSessionRegisterHook(): void {
 
 function showWelcome(): void {
   console.log(`${c.dim}${"─".repeat(50)}${c.reset}`);
-  console.log(`\n  ${c.bold}Welcome to codecast${c.reset} ${fmt.muted("— sync & search your agent sessions")}\n`);
+  console.log(`\n  ${c.bold}Welcome to cast${c.reset} ${fmt.muted("— sync & search your agent sessions")}\n`);
 
   const feature = (icon: string, title: string, desc: string) => {
     console.log(`  ${fmt.accent(icon)}  ${c.bold}${title}${c.reset}`);
@@ -791,12 +791,12 @@ function showWelcome(): void {
   feature("◉", "Background Sync", "Sessions sync automatically as you work");
 
   console.log(`\n  ${fmt.muted("Commands")}`);
-  console.log(`     ${fmt.cmd("codecast search")} ${fmt.muted("\"query\"")}   ${fmt.muted("Full-text search across sessions")}`);
-  console.log(`     ${fmt.cmd("codecast resume")} ${fmt.muted("\"query\"")}   ${fmt.muted("Find a session and open it in Claude")}`);
-  console.log(`     ${fmt.cmd("codecast ask")} ${fmt.muted("\"question\"")}   ${fmt.muted("Ask questions about past work")}`);
-  console.log(`     ${fmt.cmd("codecast feed")}             ${fmt.muted("Browse recent sessions")}`);
-  console.log(`     ${fmt.cmd("codecast status")}           ${fmt.muted("Check sync status")}`);
-  console.log(`\n     ${fmt.muted("Run")} ${fmt.cmd("codecast -h")} ${fmt.muted("for all commands")}`);
+  console.log(`     ${fmt.cmd("cast search")} ${fmt.muted("\"query\"")}   ${fmt.muted("Full-text search across sessions")}`);
+  console.log(`     ${fmt.cmd("cast resume")} ${fmt.muted("\"query\"")}   ${fmt.muted("Find a session and open it in Claude")}`);
+  console.log(`     ${fmt.cmd("cast ask")} ${fmt.muted("\"question\"")}   ${fmt.muted("Ask questions about past work")}`);
+  console.log(`     ${fmt.cmd("cast feed")}             ${fmt.muted("Browse recent sessions")}`);
+  console.log(`     ${fmt.cmd("cast status")}           ${fmt.muted("Check sync status")}`);
+  console.log(`\n     ${fmt.muted("Run")} ${fmt.cmd("cast -h")} ${fmt.muted("for all commands")}`);
 
   console.log(`\n${c.dim}${"─".repeat(50)}${c.reset}\n`);
 }
@@ -924,7 +924,7 @@ function showStatus(): void {
 
   if (state?.authExpired) {
     row("Auth", fmt.warning("expired"));
-    console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast auth")} ${fmt.muted("to re-authenticate")}`);
+    console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast auth")} ${fmt.muted("to re-authenticate")}`);
   } else if (config?.auth_token) {
     row("Auth", fmt.success(icons.check + " authenticated"));
     if (config.user_id) {
@@ -932,7 +932,7 @@ function showStatus(): void {
     }
   } else {
     row("Auth", fmt.muted(icons.cross + " not authenticated"));
-    console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast auth")} ${fmt.muted("to authenticate")}`);
+    console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast auth")} ${fmt.muted("to authenticate")}`);
   }
 
   console.log("");
@@ -958,7 +958,7 @@ function showStatus(): void {
   } else {
     row("Daemon", fmt.muted(icons.cross + " stopped"));
     if (config?.auth_token) {
-      console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast start")} ${fmt.muted("to start syncing")}`);
+      console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast start")} ${fmt.muted("to start syncing")}`);
     }
   }
 
@@ -984,7 +984,7 @@ function showStatus(): void {
       }
     }
   }
-  console.log(`  ${fmt.muted("  Change:")} ${fmt.cmd("codecast sync-settings")}`);
+  console.log(`  ${fmt.muted("  Change:")} ${fmt.cmd("cast sync-settings")}`);
 
   console.log("");
 }
@@ -1085,7 +1085,7 @@ function getDeviceName(): string {
 }
 
 async function runLogin(setupToken: string): Promise<void> {
-  console.log("\n=== codecast Login ===\n");
+  console.log("\n=== cast Login ===\n");
   console.log("Exchanging setup token...\n");
 
   try {
@@ -1101,7 +1101,7 @@ async function runLogin(setupToken: string): Promise<void> {
         console.error("Invalid or expired setup token.");
         console.error("\nTo fix this:");
         console.error("  1. Generate a new token at: https://codecast.sh/settings/cli");
-        console.error("  2. Or authenticate via browser: codecast auth");
+        console.error("  2. Or authenticate via browser: cast auth");
       } else {
         console.error(`Error: ${error.error || response.statusText}`);
       }
@@ -1162,7 +1162,7 @@ async function runLogin(setupToken: string): Promise<void> {
 }
 
 async function runAuth(): Promise<void> {
-  console.log(`\n${c.bold}codecast${c.reset} ${fmt.muted("Authentication")}\n`);
+  console.log(`\n${c.bold}cast${c.reset} ${fmt.muted("Authentication")}\n`);
 
   const agents = detectAgents();
   if (agents.length > 0) {
@@ -1196,7 +1196,7 @@ async function runAuth(): Promise<void> {
 
   if (!authResult || !authResult.apiToken) {
     console.error("\nAuthentication failed or timed out.");
-    console.error("Please try again with 'codecast auth'");
+    console.error("Please try again with 'cast auth'");
     process.exit(1);
   }
 
@@ -1312,7 +1312,7 @@ async function promptProjectSelection(config: Config): Promise<void> {
   await updateSyncSettingsOnServer(config);
 
   if (selectedProjects.length === 0) {
-    console.log("\nNo projects selected. You can change this later with 'codecast config sync'.\n");
+    console.log("\nNo projects selected. You can change this later with 'cast config sync'.\n");
   } else {
     console.log(`\n${selectedProjects.length} project${selectedProjects.length === 1 ? "" : "s"} will be synced.\n`);
   }
@@ -1369,10 +1369,10 @@ async function promptTeamSelection(config: Config): Promise<void> {
       writeConfig(config);
       const modeLabel = shareMode === "full" ? "full transcripts" : "summaries only";
       console.log(`\nSessions will be shared with ${fmt.accent(teams[0].name)} (${modeLabel}).`);
-      console.log(`${fmt.muted("You can configure per-project sharing with 'codecast sync-settings'")}\n`);
+      console.log(`${fmt.muted("You can configure per-project sharing with 'cast sync-settings'")}\n`);
     } else {
       console.log(`\nSessions will be private by default.`);
-      console.log(`${fmt.muted("You can share specific projects with 'codecast sync-settings'")}\n`);
+      console.log(`${fmt.muted("You can share specific projects with 'cast sync-settings'")}\n`);
     }
     return;
   }
@@ -1480,9 +1480,9 @@ async function promptTeamSelection(config: Config): Promise<void> {
       }
     }
 
-    console.log(`${fmt.muted("Configure more projects anytime with 'codecast sync-settings'")}\n`);
+    console.log(`${fmt.muted("Configure more projects anytime with 'cast sync-settings'")}\n`);
   } else {
-    console.log(`\n${fmt.muted("Run 'codecast sync-settings' anytime to configure team sharing.")}\n`);
+    console.log(`\n${fmt.muted("Run 'cast sync-settings' anytime to configure team sharing.")}\n`);
   }
 }
 
@@ -1494,23 +1494,23 @@ You are one session among many. Past conversations contain valuable context abou
 
 \`\`\`bash
 # Search & Browse
-codecast search "auth"                # search current project
-codecast search "bug" -g -s 7d        # global, last 7 days
-codecast feed                         # browse recent conversations
-codecast read <id> 15:25              # read messages 15-25
+cast search "auth"                # search current project
+cast search "bug" -g -s 7d        # global, last 7 days
+cast feed                         # browse recent conversations
+cast read <id> 15:25              # read messages 15-25
 
 # Analysis
-codecast diff <id>                    # files changed, commits, tools used
-codecast diff --today                 # aggregate today's work
-codecast summary <id>                 # goal, approach, outcome, files
-codecast context "implement auth"     # find relevant prior sessions
-codecast ask "how does X work"        # query across sessions
+cast diff <id>                    # files changed, commits, tools used
+cast diff --today                 # aggregate today's work
+cast summary <id>                 # goal, approach, outcome, files
+cast context "implement auth"     # find relevant prior sessions
+cast ask "how does X work"        # query across sessions
 
 # Handoff & Tracking
-codecast handoff                      # generate context transfer doc
-codecast bookmark <id> <msg> --name x # save shareable link
-codecast decisions list               # view architectural decisions
-codecast decisions add "title" --reason "why"
+cast handoff                      # generate context transfer doc
+cast bookmark <id> <msg> --name x # save shareable link
+cast decisions list               # view architectural decisions
+cast decisions add "title" --reason "why"
 \`\`\`
 
 Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n (limit)
@@ -1525,21 +1525,21 @@ You can schedule follow-up work that runs autonomously after this session ends. 
 
 \`\`\`bash
 # Schedule tasks
-codecast schedule add "Check if CI is green on main" --in 30m
-codecast schedule add "Review open PRs and summarize findings" --every 4h
-codecast schedule add "Respond to new PR review comments" --on pr_comment
-codecast schedule add "Continue the auth refactor" --in 2h --context current --mode apply
+cast schedule add "Check if CI is green on main" --in 30m
+cast schedule add "Review open PRs and summarize findings" --every 4h
+cast schedule add "Respond to new PR review comments" --on pr_comment
+cast schedule add "Continue the auth refactor" --in 2h --context current --mode apply
 
 # Report completion (when running inside a task)
-codecast schedule complete <task_id> --summary "what was done"
+cast schedule complete <task_id> --summary "what was done"
 
 # Manage tasks
-codecast schedule ls                       # list active tasks
-codecast schedule ls --all                 # include completed/failed
-codecast schedule pause <id>               # pause a task
-codecast schedule run <id>                 # run immediately
-codecast schedule cancel <id>              # cancel a task
-codecast schedule log <id>                 # show last run conversation
+cast schedule ls                       # list active tasks
+cast schedule ls --all                 # include completed/failed
+cast schedule pause <id>               # pause a task
+cast schedule run <id>                 # run immediately
+cast schedule cancel <id>              # cancel a task
+cast schedule log <id>                 # show last run conversation
 \`\`\`
 
 Options:
@@ -1551,35 +1551,35 @@ Options:
 - \`--project <path>\`: set working directory (defaults to current)
 - \`--max-runtime <duration>\`: override max runtime (default: 10m)
 
-When a task fires, a new agent session spawns with your prompt and the task ID. The agent should call \`codecast schedule complete <task_id> --summary "..."\` when done to report results back.
+When a task fires, a new agent session spawns with your prompt and the task ID. The agent should call \`cast schedule complete <task_id> --summary "..."\` when done to report results back.
 ${TASK_SNIPPET_END}
 `;
 
 const WORK_SNIPPET_END = "<!-- /codecast-work -->";
 const WORK_SNIPPET = `
-## Issue Tracking with codecast task
+## Issue Tracking with cast task
 
-Use \`codecast task\` for work item tracking (tasks, bugs, features). Cloud-persistent via Convex.
+Use \`cast task\` for work item tracking (tasks, bugs, features). Cloud-persistent via Convex.
 
 ### Quick Start
 
 \`\`\`bash
-codecast task ready                          # Unblocked tasks ready to work
-codecast task create "Title" -t task -p high # Create new task
-codecast task start ct-a1b2                  # Claim work (set in_progress)
-codecast task done ct-a1b2 -m "Done"        # Mark complete
-codecast task context ct-a1b2               # Full context for agents
-codecast project ls                         # List projects
-codecast doc sync                           # Sync plan files to doc library
+cast task ready                          # Unblocked tasks ready to work
+cast task create "Title" -t task -p high # Create new task
+cast task start ct-a1b2                  # Claim work (set in_progress)
+cast task done ct-a1b2 -m "Done"        # Mark complete
+cast task context ct-a1b2               # Full context for agents
+cast project ls                         # List projects
+cast doc sync                           # Sync plan files to doc library
 \`\`\`
 
 ### Workflow
 
-1. \`codecast task ready\` - Find available work
-2. \`codecast task start <short_id>\` - Claim it
+1. \`cast task ready\` - Find available work
+2. \`cast task start <short_id>\` - Claim it
 3. Work on implementation
-4. \`codecast task comment <short_id> "progress" -t progress\` - Report progress
-5. \`codecast task done <short_id>\` - Mark done
+4. \`cast task comment <short_id> "progress" -t progress\` - Report progress
+5. \`cast task done <short_id>\` - Mark done
 ${WORK_SNIPPET_END}
 `;
 
@@ -1644,7 +1644,7 @@ function installSnippetToFile(filePath: string, dirPath: string, update: boolean
     existing = fs.readFileSync(filePath, "utf-8");
   }
 
-  const hasMemory = existing.includes("## Memory") && existing.includes("codecast search");
+  const hasMemory = existing.includes("## Memory") && (existing.includes("codecast search") || existing.includes("cast search"));
   if (hasMemory && !update) {
     return { installed: false, updated: false };
   }
@@ -1699,7 +1699,7 @@ function installTaskSnippetToFile(filePath: string, dirPath: string, update: boo
     existing = fs.readFileSync(filePath, "utf-8");
   }
 
-  const hasTask = existing.includes("## Async Tasks") && existing.includes("codecast task");
+  const hasTask = existing.includes("## Async Tasks") && (existing.includes("codecast task") || existing.includes("cast task"));
   if (hasTask && !update) {
     return { installed: false, updated: false };
   }
@@ -1754,7 +1754,7 @@ function installWorkSnippetToFile(filePath: string, dirPath: string, update: boo
     existing = fs.readFileSync(filePath, "utf-8");
   }
 
-  const hasWork = existing.includes("## Issue Tracking with codecast task") && existing.includes(WORK_SNIPPET_END);
+  const hasWork = (existing.includes("## Issue Tracking with codecast task") || existing.includes("## Issue Tracking with cast task")) && existing.includes(WORK_SNIPPET_END);
   if (hasWork && !update) {
     return { installed: false, updated: false };
   }
@@ -1907,7 +1907,7 @@ async function promptMemoryEnablement(): Promise<void> {
   const claudeMdPath = path.join(os.homedir(), ".claude", "CLAUDE.md");
   if (fs.existsSync(claudeMdPath)) {
     const content = fs.readFileSync(claudeMdPath, "utf-8");
-    if (content.includes("codecast search") && config.memory_enabled === undefined) {
+    if ((content.includes("codecast search") || content.includes("cast search")) && config.memory_enabled === undefined) {
       config.memory_enabled = true;
       config.memory_version = getMemoryVersion();
       writeConfig(config);
@@ -1918,7 +1918,7 @@ async function promptMemoryEnablement(): Promise<void> {
 
   console.log("--- Agent Memory ---");
   console.log("Lets your agents search and learn from past conversations.");
-  console.log(`${fmt.muted("Adds codecast commands to your agent config so they can recall prior work.")}\n`);
+  console.log(`${fmt.muted("Adds cast commands to your agent config so they can recall prior work.")}\n`);
 
   const enableMemory = await confirm({
     message: "Enable agent memory?",
@@ -1937,7 +1937,7 @@ async function promptMemoryEnablement(): Promise<void> {
     writeConfig(config);
     console.log();
   } else {
-    console.log(`\nSkipped. Run ${fmt.cmd("codecast memory")} later to enable.\n`);
+    console.log(`\nSkipped. Run ${fmt.cmd("cast memory")} later to enable.\n`);
     config.memory_enabled = false;
     writeConfig(config);
   }
@@ -1966,9 +1966,9 @@ async function promptStableEnablement(): Promise<void> {
     writeConfig(config);
     installStableHook();
     console.log(`\nStable context enabled (solo, current project).`);
-    console.log(`${fmt.muted("Run")} ${fmt.cmd("codecast stable team")} ${fmt.muted("for team-wide context, or")} ${fmt.cmd("codecast stable off")} ${fmt.muted("to disable.")}\n`);
+    console.log(`${fmt.muted("Run")} ${fmt.cmd("cast stable team")} ${fmt.muted("for team-wide context, or")} ${fmt.cmd("cast stable off")} ${fmt.muted("to disable.")}\n`);
   } else {
-    console.log(`\nSkipped. Run ${fmt.cmd("codecast stable solo")} later to enable.\n`);
+    console.log(`\nSkipped. Run ${fmt.cmd("cast stable solo")} later to enable.\n`);
   }
 }
 
@@ -1976,7 +1976,7 @@ async function runSync(): Promise<void> {
   const config = readConfig();
 
   if (!config?.auth_token || !config?.user_id) {
-    console.error("Not authenticated. Run 'codecast auth' first.");
+    console.error("Not authenticated. Run 'cast auth' first.");
     process.exit(1);
   }
 
@@ -2184,13 +2184,13 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
 }
 
 program
-  .name("codecast")
+  .name("cast")
   .description(
     "Sync coding agent conversations to a shared Convex database\n\n" +
     "Quick Start:\n" +
-    "  1. codecast auth          # Authenticate with your account\n" +
-    "  2. codecast start         # Start background sync daemon\n" +
-    "  3. codecast status        # Check sync status"
+    "  1. cast auth          # Authenticate with your account\n" +
+    "  2. cast start         # Start background sync daemon\n" +
+    "  3. cast status        # Check sync status"
   )
   .version(getVersion())
   .action(() => {
@@ -2199,7 +2199,7 @@ program
 
 program
   .command("auth")
-  .description("Authenticate with codecast using browser OAuth flow")
+  .description("Authenticate with cast using browser OAuth flow")
   .action(async () => {
     await runAuth();
   });
@@ -2275,7 +2275,7 @@ program
 
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -2344,7 +2344,7 @@ program
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -2458,7 +2458,7 @@ program
     if (options.reconcile) {
       const config = readConfig();
       if (!config?.auth_token || !config?.convex_url) {
-        console.log(fmt.error("  Not authenticated. Run 'codecast auth' first."));
+        console.log(fmt.error("  Not authenticated. Run 'cast auth' first."));
         console.log("");
         return;
       }
@@ -2537,7 +2537,7 @@ program
       if (droppedOps.length > 5) {
         console.log(`      ${fmt.muted(`... and ${droppedOps.length - 5} more`)}`);
       }
-      console.log(`      ${fmt.muted("Use")} ${fmt.cmd("codecast health --clear-dropped")} ${fmt.muted("to clear")}`);
+      console.log(`      ${fmt.muted("Use")} ${fmt.cmd("cast health --clear-dropped")} ${fmt.muted("to clear")}`);
     }
     console.log("");
 
@@ -2599,7 +2599,7 @@ program
     } else {
       row("Last run", fmt.muted("never"), 2);
     }
-    console.log(`      ${fmt.muted("Use")} ${fmt.cmd("codecast health --reconcile")} ${fmt.muted("to run now")}`);
+    console.log(`      ${fmt.muted("Use")} ${fmt.cmd("cast health --reconcile")} ${fmt.muted("to run now")}`);
     console.log("");
 
     // Sync ledger summary
@@ -2633,9 +2633,9 @@ program
   .description(
     "View or modify configuration settings\n\n" +
     "Examples:\n" +
-    "  codecast config                    # View all configuration\n" +
-    "  codecast config excluded_paths     # View specific setting\n" +
-    "  codecast config excluded_paths \"**/node_modules/**\"  # Set value"
+    "  cast config                    # View all configuration\n" +
+    "  cast config excluded_paths     # View specific setting\n" +
+    "  cast config excluded_paths \"**/node_modules/**\"  # Set value"
   )
   .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths)")
   .argument("[value]", "Value to set for the key")
@@ -2657,7 +2657,7 @@ program
         if (config.created_at) console.log(`  created_at: ${config.created_at}`);
         if (config.updated_at) console.log(`  updated_at: ${config.updated_at}`);
       } else {
-        console.log("  (no configuration found - run 'codecast setup')");
+        console.log("  (no configuration found - run 'cast setup')");
       }
       return;
     }
@@ -2795,9 +2795,9 @@ program
   .description(
     "View or modify sync and team sharing settings\n\n" +
     "Examples:\n" +
-    "  codecast sync-settings           # Interactive project and team configuration\n" +
-    "  codecast sync-settings --all     # Sync all projects\n" +
-    "  codecast sync-settings --show    # Show current settings only"
+    "  cast sync-settings           # Interactive project and team configuration\n" +
+    "  cast sync-settings --all     # Sync all projects\n" +
+    "  cast sync-settings --show    # Show current settings only"
   )
   .option("--all", "Sync all projects")
   .option("--show", "Show current settings without prompting")
@@ -2805,7 +2805,7 @@ program
     const config = readConfig();
 
     if (!config?.auth_token) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -2890,7 +2890,7 @@ program
       return;
     }
 
-    console.log(`\n${c.bold}codecast${c.reset} ${fmt.muted("Sync Settings")}\n`);
+    console.log(`\n${c.bold}cast${c.reset} ${fmt.muted("Sync Settings")}\n`);
 
     const displayProjects = projects.slice(0, 25);
     const maxNameLen = Math.min(25, Math.max(12, ...displayProjects.map(p => getProjectName(p.path).length)));
@@ -3061,7 +3061,7 @@ program
     }
 
     if (hasTeams) {
-      console.log(`${fmt.muted("Tip: Use")} codecast teams map <path> <team> ${fmt.muted("to map projects directly.")}`);
+      console.log(`${fmt.muted("Tip: Use")} cast teams map <path> <team> ${fmt.muted("to map projects directly.")}`);
     } else {
       console.log(`${fmt.muted("Tip: Create or join a team at")} ${fmt.accent("codecast.sh/settings/team")}`);
     }
@@ -3072,10 +3072,10 @@ program
   .description(
     "Manage teams and directory mappings\n\n" +
     "Examples:\n" +
-    "  codecast teams                      # List your teams\n" +
-    "  codecast teams mappings             # Show directory-to-team mappings\n" +
-    "  codecast teams map <path> <team>    # Map a directory to a team\n" +
-    "  codecast teams unmap <path>         # Remove a directory mapping"
+    "  cast teams                      # List your teams\n" +
+    "  cast teams mappings             # Show directory-to-team mappings\n" +
+    "  cast teams map <path> <team>    # Map a directory to a team\n" +
+    "  cast teams unmap <path>         # Remove a directory mapping"
   )
   .argument("[action]", "Action: mappings, map, unmap")
   .argument("[path]", "Directory path (for map/unmap)")
@@ -3084,7 +3084,7 @@ program
     const config = readConfig();
 
     if (!config?.auth_token) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -3102,7 +3102,7 @@ program
         const roleLabel = team.role === "admin" ? fmt.accent("admin") : fmt.muted("member");
         console.log(`  ${fmt.value(team.name.padEnd(20))} ${roleLabel.padEnd(12)} ${fmt.muted(team._id)}`);
       }
-      console.log(`\n${fmt.muted("Run 'codecast teams mappings' to see which projects share with which teams.")}`);
+      console.log(`\n${fmt.muted("Run 'cast teams mappings' to see which projects share with which teams.")}`);
       return;
     }
 
@@ -3142,7 +3142,7 @@ program
 
     if (action === "map") {
       if (!pathArg || !teamArg) {
-        console.error("Usage: codecast teams map <path> <team_id_or_name>");
+        console.error("Usage: cast teams map <path> <team_id_or_name>");
         process.exit(1);
       }
 
@@ -3166,7 +3166,7 @@ program
 
     if (action === "unmap") {
       if (!pathArg) {
-        console.error("Usage: codecast teams unmap <path>");
+        console.error("Usage: cast teams unmap <path>");
         process.exit(1);
       }
 
@@ -3191,9 +3191,9 @@ program
   .description(
     "View daemon logs for troubleshooting\n\n" +
     "Examples:\n" +
-    "  codecast logs              # View all logs\n" +
-    "  codecast logs -n 50        # View last 50 lines\n" +
-    "  codecast logs -f           # Follow logs in real-time"
+    "  cast logs              # View all logs\n" +
+    "  cast logs -n 50        # View last 50 lines\n" +
+    "  cast logs -f           # Follow logs in real-time"
   )
   .option("-n, --lines <number>", "Number of lines to show (default: all)")
   .option("-f, --follow", "Follow log output in real-time (Ctrl+C to stop)")
@@ -3263,9 +3263,9 @@ program
     "Use --keyword for keyword-only, --semantic for semantic-only.\n\n" +
     "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
-    "  codecast search auth                 # word match\n" +
-    "  codecast search \"error handling\"    # exact phrase match\n" +
-    "  codecast search auth -g -s 7d        # global, last 7 days"
+    "  cast search auth                 # word match\n" +
+    "  cast search \"error handling\"    # exact phrase match\n" +
+    "  cast search auth -g -s 7d        # global, last 7 days"
   )
   .argument("<query>", "Search query (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
@@ -3283,7 +3283,7 @@ program
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -3370,11 +3370,11 @@ program
     "Use -q to filter by keyword while keeping recency order.\n\n" +
     "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
-    "  codecast feed                    # recent sessions\n" +
-    "  codecast feed -g                 # all projects globally\n" +
-    "  codecast feed -s 7d              # last 7 days\n" +
-    "  codecast feed -q auth            # recent sessions mentioning 'auth'\n" +
-    "  codecast feed -p 2               # page 2 (skip first 10)"
+    "  cast feed                    # recent sessions\n" +
+    "  cast feed -g                 # all projects globally\n" +
+    "  cast feed -s 7d              # last 7 days\n" +
+    "  cast feed -q auth            # recent sessions mentioning 'auth'\n" +
+    "  cast feed -p 2               # page 2 (skip first 10)"
   )
   .option("-g, --global", "Show all sessions (not just current project)")
   .option("-q, --query <text>", "Filter by keyword (keeps recency order)")
@@ -3386,7 +3386,7 @@ program
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -3450,10 +3450,10 @@ program
   .description(
     "Chronological list of sessions with title, summary, and link\n\n" +
     "Examples:\n" +
-    "  codecast list                    # recent sessions\n" +
-    "  codecast list -g                 # all projects\n" +
-    "  codecast list -n 20              # show 20 sessions\n" +
-    "  codecast list -s 7d              # last 7 days"
+    "  cast list                    # recent sessions\n" +
+    "  cast list -g                 # all projects\n" +
+    "  cast list -n 20              # show 20 sessions\n" +
+    "  cast list -s 7d              # last 7 days"
   )
   .option("-g, --global", "Show all sessions (not just current project)")
   .option("-n, --limit <n>", "Number of sessions to show", "10")
@@ -3463,7 +3463,7 @@ program
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -3736,11 +3736,11 @@ async function selectAndAttachFromLiveSessions(
   if (rawProcs.length === 0) {
     if (options.tmuxOnly) {
       console.log(`${c.dim}No live tmux sessions found${c.reset}`);
-      console.log(`\n${c.dim}Start one in tmux, then run:${c.reset}  codecast attach`);
+      console.log(`\n${c.dim}Start one in tmux, then run:${c.reset}  cast attach`);
     } else {
       console.log(`${c.dim}No live sessions found${c.reset}`);
       console.log(`\n${c.dim}Start a session with:${c.reset}  claude`);
-      console.log(`${c.dim}Search history with:${c.reset}  codecast resume <query>`);
+      console.log(`${c.dim}Search history with:${c.reset}  cast resume <query>`);
     }
     return;
   }
@@ -3852,14 +3852,14 @@ program
     "Multiple words are AND-ed (all must match).\n" +
     "Use \"quotes\" for exact phrase matching.\n\n" +
     "Configure default args:\n" +
-    "  codecast config claude_args \"--dangerously-skip-permissions\"\n" +
-    "  codecast config codex_args \"--dangerously-bypass-approvals-and-sandbox\"\n\n" +
+    "  cast config claude_args \"--dangerously-skip-permissions\"\n" +
+    "  cast config codex_args \"--dangerously-bypass-approvals-and-sandbox\"\n\n" +
     "Examples:\n" +
-    "  codecast resume                          # list live sessions\n" +
-    "  codecast resume logo design              # search: 'logo' AND 'design'\n" +
-    "  codecast resume \"logo design\"            # exact phrase\n" +
-    "  codecast resume <session-id> --as codex  # convert/resume by exact session id\n" +
-    "  codecast resume auth --as codex          # resume Claude session in Codex"
+    "  cast resume                          # list live sessions\n" +
+    "  cast resume logo design              # search: 'logo' AND 'design'\n" +
+    "  cast resume \"logo design\"            # exact phrase\n" +
+    "  cast resume <session-id> --as codex  # convert/resume by exact session id\n" +
+    "  cast resume auth --as codex          # resume Claude session in Codex"
   )
   .argument("[query...]", "Search terms (AND-ed, use quotes for exact phrase)")
   .option("-g, --global", "Search all sessions (not just current project)")
@@ -3873,7 +3873,7 @@ program
   .action(async (queryWords: string[], options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -4103,8 +4103,8 @@ program
         console.log(`No sessions found matching "${query}"`);
         console.log("");
         console.log("Try:");
-        console.log("  codecast resume \"different query\"");
-        console.log("  codecast feed -g  # browse all sessions");
+        console.log("  cast resume \"different query\"");
+        console.log("  cast feed -g  # browse all sessions");
         process.exit(0);
       }
 
@@ -4402,7 +4402,7 @@ function launchCodex(sessionId: string, extraArgs?: string, showArgsHint?: boole
     args.push(...parsedArgs);
     console.log(`Using: codex ${args.join(" ")}`);
   } else if (showArgsHint) {
-    console.log(`\nTip: Set default codex args with: codecast config codex_args -- "--dangerously-bypass-approvals-and-sandbox"`);
+    console.log(`\nTip: Set default codex args with: cast config codex_args -- "--dangerously-bypass-approvals-and-sandbox"`);
   }
 
   let cwd = process.cwd();
@@ -4464,7 +4464,7 @@ function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: bool
     args.push(...parsedArgs);
     console.log(`Using: claude ${args.join(" ")}`);
   } else if (showArgsHint) {
-    console.log(`\nTip: Set default claude args with: codecast config claude_args -- "--dangerously-skip-permissions"`);
+    console.log(`\nTip: Set default claude args with: cast config claude_args -- "--dangerously-skip-permissions"`);
   }
 
   let cwd = process.cwd();
@@ -4503,12 +4503,12 @@ program
   .description(
     "Read messages from a conversation\n\n" +
     "Examples:\n" +
-    "  codecast read jx70ntf                   # Read all messages\n" +
-    "  codecast read jx70ntf 12:20             # Read messages 12-20\n" +
-    "  codecast read jx70ntf 12:               # Read from message 12 to end\n" +
-    "  codecast read jx70ntf :20               # Read first 20 messages\n" +
-    "  codecast read jx70ntf 15                # Read single message 15\n" +
-    "  codecast read jx70ntf 10:15 --full      # Show full tool call/result content"
+    "  cast read jx70ntf                   # Read all messages\n" +
+    "  cast read jx70ntf 12:20             # Read messages 12-20\n" +
+    "  cast read jx70ntf 12:               # Read from message 12 to end\n" +
+    "  cast read jx70ntf :20               # Read first 20 messages\n" +
+    "  cast read jx70ntf 15                # Read single message 15\n" +
+    "  cast read jx70ntf 10:15 --full      # Show full tool call/result content"
   )
   .argument("<conversation-id>", "Conversation ID (can be truncated)")
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
@@ -4516,7 +4516,7 @@ program
   .action(async (conversationId, range, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -4569,9 +4569,9 @@ program
   .description(
     "Manage private conversations (hidden from team view)\n\n" +
     "Examples:\n" +
-    "  codecast private --list                  # List private conversations\n" +
-    "  codecast private <session-id>            # Mark as private\n" +
-    "  codecast private <session-id> --remove   # Make visible to team"
+    "  cast private --list                  # List private conversations\n" +
+    "  cast private <session-id>            # Mark as private\n" +
+    "  cast private <session-id> --remove   # Make visible to team"
   )
   .argument("[session-id]", "Session ID to mark as private/public")
   .option("--list", "List all private conversations")
@@ -4579,7 +4579,7 @@ program
   .action(async (sessionId, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.user_id) {
-      console.error("Not authenticated. Run 'codecast auth' first.");
+      console.error("Not authenticated. Run 'cast auth' first.");
       process.exit(1);
     }
 
@@ -4596,7 +4596,7 @@ program
 
         if (conversations.length === 0) {
           console.log("\nNo private conversations found.");
-          console.log("Mark conversations as private using: codecast private <session-id>");
+          console.log("Mark conversations as private using: cast private <session-id>");
         } else {
           console.log(`\nPrivate conversations (${conversations.length}):\n`);
           for (const conv of conversations) {
@@ -4620,7 +4620,7 @@ program
 
     if (!sessionId) {
       console.error("Session ID is required");
-      console.log("Usage: codecast private <session-id>");
+      console.log("Usage: cast private <session-id>");
       process.exit(1);
     }
 
@@ -4999,7 +4999,7 @@ function setupWindows(disable: boolean): void {
     console.log(`Task Scheduler task created: ${taskName}`);
     console.log(`Command: ${fullCommand}`);
     console.log("\nThe daemon will start automatically on login");
-    console.log("To start now, run: codecast start");
+    console.log("To start now, run: cast start");
   } else {
     console.error("Failed to create scheduled task");
     console.log("\nManual setup:");
@@ -5018,8 +5018,8 @@ program
     "  - Linux: systemd user service\n" +
     "  - Windows: Task Scheduler\n\n" +
     "Examples:\n" +
-    "  codecast setup             # Enable auto-start\n" +
-    "  codecast setup --disable   # Disable auto-start"
+    "  cast setup             # Enable auto-start\n" +
+    "  cast setup --disable   # Disable auto-start"
   )
   .option("--disable", "Disable auto-start on login")
   .action((options) => {
@@ -5042,7 +5042,7 @@ program
 
 program
   .command("uninstall")
-  .description("Completely remove codecast from this machine")
+  .description("Completely remove cast from this machine")
   .option("--keep-config", "Keep ~/.codecast config directory")
   .option("-y, --yes", "Skip confirmation prompt")
   .action(async (options) => {
@@ -5050,7 +5050,7 @@ program
       const rl = await import("readline");
       const iface = rl.createInterface({ input: process.stdin, output: process.stdout });
       const answer = await new Promise<string>((resolve) => {
-        iface.question("This will remove codecast, its daemon, auto-start config, and all local data. Continue? [y/N] ", resolve);
+        iface.question("This will remove cast, its daemon, auto-start config, and all local data. Continue? [y/N] ", resolve);
       });
       iface.close();
       if (answer.toLowerCase() !== "y" && answer.toLowerCase() !== "yes") {
@@ -5170,7 +5170,7 @@ program
 
       // Remove memory snippet
       const memStart = content.indexOf("## Memory");
-      if (memStart !== -1 && content.includes("codecast search")) {
+      if (memStart !== -1 && (content.includes("codecast search") || content.includes("cast search"))) {
         const memEndMarker = content.indexOf(MEMORY_SNIPPET_END, memStart);
         let memEnd = memEndMarker !== -1 ? memEndMarker + MEMORY_SNIPPET_END.length : content.length;
         if (content[memEnd] === "\n") memEnd++;
@@ -5180,7 +5180,7 @@ program
 
       // Remove task snippet
       const taskStart = content.indexOf("## Async Tasks");
-      if (taskStart !== -1 && (content.includes("codecast task") || content.includes("codecast schedule"))) {
+      if (taskStart !== -1 && (content.includes("codecast task") || content.includes("codecast schedule") || content.includes("cast task") || content.includes("cast schedule"))) {
         const taskEndMarker = content.indexOf(TASK_SNIPPET_END, taskStart);
         let taskEnd = taskEndMarker !== -1 ? taskEndMarker + TASK_SNIPPET_END.length : content.length;
         if (content[taskEnd] === "\n") taskEnd++;
@@ -5189,7 +5189,8 @@ program
       }
 
       // Remove work snippet
-      const workStart = content.indexOf("## Issue Tracking with codecast task");
+      let workStart = content.indexOf("## Issue Tracking with cast task");
+      if (workStart === -1) workStart = content.indexOf("## Issue Tracking with codecast task");
       if (workStart !== -1 && content.includes(WORK_SNIPPET_END)) {
         const workEndMarker = content.indexOf(WORK_SNIPPET_END, workStart);
         let workEnd = workEndMarker !== -1 ? workEndMarker + WORK_SNIPPET_END.length : content.length;
@@ -5214,12 +5215,20 @@ program
       console.log(`Kept ${CONFIG_DIR}`);
     }
 
-    // 7. Remove binary
+    // 7. Remove binary and cast symlink
     const binaryPath = path.join(home, ".local", "bin", "codecast");
     if (fs.existsSync(binaryPath)) {
       fs.unlinkSync(binaryPath);
       console.log(`Removed ${binaryPath}`);
     }
+    const castPath = path.join(home, ".local", "bin", "cast");
+    try {
+      const target = fs.readlinkSync(castPath);
+      if (target === binaryPath || target.endsWith("/codecast")) {
+        fs.unlinkSync(castPath);
+        console.log(`Removed ${castPath}`);
+      }
+    } catch {}
 
     console.log("\nCodecast has been uninstalled.");
   });
@@ -5229,16 +5238,16 @@ program
   .description(
     "Get dashboard and share URLs for the current session\n\n" +
     "Examples:\n" +
-    "  codecast links              # Get links for current project\n" +
-    "  codecast links --json       # Output as JSON\n" +
-    "  codecast links -s abc123    # Specific session ID"
+    "  cast links              # Get links for current project\n" +
+    "  cast links --json       # Output as JSON\n" +
+    "  cast links -s abc123    # Specific session ID"
   )
   .option("--json", "Output as JSON")
   .option("-s, --session <id>", "Specific session ID (default: most recent)")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -5320,7 +5329,7 @@ program
             for (let i = lines.length - 1; i >= 0; i--) {
               const line = lines[i];
               // Look for codecast links command (production or dev)
-              const isCodecastCommand = (line.includes("codecast links") || line.includes("index.ts links")) && line.includes("Bash");
+              const isCodecastCommand = (line.includes("codecast links") || line.includes("cast links") || line.includes("index.ts links")) && line.includes("Bash");
               if (isCodecastCommand) {
                 try {
                   const entry = JSON.parse(line);
@@ -5419,11 +5428,11 @@ program
   .description(
     "Show the impact of a session - files changed, commits made, tools used\n\n" +
     "Examples:\n" +
-    "  codecast diff <session-id>     # show changes from session\n" +
-    "  codecast diff --today          # aggregate today's sessions\n" +
-    "  codecast diff --week           # this week's changes\n" +
-    "  codecast diff --full           # include full file diffs\n" +
-    "  codecast diff --patch          # show only the patch (no stats)"
+    "  cast diff <session-id>     # show changes from session\n" +
+    "  cast diff --today          # aggregate today's sessions\n" +
+    "  cast diff --week           # this week's changes\n" +
+    "  cast diff --full           # include full file diffs\n" +
+    "  cast diff --patch          # show only the patch (no stats)"
   )
   .argument("[session-id]", "Session ID to analyze")
   .option("--today", "Aggregate changes from today's sessions")
@@ -5433,7 +5442,7 @@ program
   .action(async (sessionId, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -5527,7 +5536,7 @@ program
 
         if (!sessionId) {
           console.error("No session ID provided and could not detect current session");
-          console.error("Usage: codecast diff <session-id>");
+          console.error("Usage: cast diff <session-id>");
           process.exit(1);
         }
       }
@@ -5557,16 +5566,16 @@ program
   .description(
     "Generate a context transfer document for the next session/agent\n\n" +
     "Examples:\n" +
-    "  codecast handoff                        # from current/recent session\n" +
-    "  codecast handoff --session abc123       # from specific session\n" +
-    "  codecast handoff --to-file /tmp/h.md    # save to file"
+    "  cast handoff                        # from current/recent session\n" +
+    "  cast handoff --session abc123       # from specific session\n" +
+    "  cast handoff --to-file /tmp/h.md    # save to file"
   )
   .option("-s, --session <id>", "Specific session ID (default: most recent)")
   .option("-o, --to-file <path>", "Save output to file instead of stdout")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -5634,15 +5643,15 @@ program
   .description(
     "Generate a concise summary of a session\n\n" +
     "Examples:\n" +
-    "  codecast summary <session-id>    # Summarize specific session\n" +
-    "  codecast summary --today         # Summarize today's work"
+    "  cast summary <session-id>    # Summarize specific session\n" +
+    "  cast summary --today         # Summarize today's work"
   )
   .argument("[session-id]", "Session ID to summarize")
   .option("--today", "Summarize today's most recent session")
   .action(async (sessionId, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -5709,7 +5718,7 @@ program
       config.memory_enabled = false;
       writeConfig(config);
       console.log("Memory disabled. Snippet will not be added/updated.");
-      console.log("Run 'codecast memory' to re-enable.");
+      console.log("Run 'cast memory' to re-enable.");
       return;
     }
 
@@ -5734,11 +5743,11 @@ program
   .description(
     "Bookmark a specific message in a conversation\n\n" +
     "Examples:\n" +
-    "  codecast bookmark abc123 42                     # bookmark message 42\n" +
-    "  codecast bookmark abc123 42 --name auth-fix    # with a name\n" +
-    "  codecast bookmark abc123 42 --note \"key insight\"  # with a note\n" +
-    "  codecast bookmark --list                        # list all bookmarks\n" +
-    "  codecast bookmark --delete auth-fix             # delete by name"
+    "  cast bookmark abc123 42                     # bookmark message 42\n" +
+    "  cast bookmark abc123 42 --name auth-fix    # with a name\n" +
+    "  cast bookmark abc123 42 --note \"key insight\"  # with a note\n" +
+    "  cast bookmark --list                        # list all bookmarks\n" +
+    "  cast bookmark --delete auth-fix             # delete by name"
   )
   .argument("[session-id]", "Session ID of the conversation")
   .argument("[message-index]", "Message number to bookmark (1-indexed)")
@@ -5750,7 +5759,7 @@ program
   .action(async (sessionId, messageIndex, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -5776,7 +5785,7 @@ program
 
         if (!result.bookmarks || result.bookmarks.length === 0) {
           console.log("\nNo bookmarks found.");
-          console.log("Create one with: codecast bookmark <session-id> <message-index>");
+          console.log("Create one with: cast bookmark <session-id> <message-index>");
           return;
         }
 
@@ -5827,7 +5836,7 @@ program
     }
 
     if (!sessionId || !messageIndex) {
-      console.error("Usage: codecast bookmark <session-id> <message-index>");
+      console.error("Usage: cast bookmark <session-id> <message-index>");
       console.error("Or use --list to view bookmarks, --delete <name> to remove one");
       process.exit(1);
     }
@@ -5873,13 +5882,13 @@ program
   .description(
     "Track and retrieve architectural decisions\n\n" +
     "Examples:\n" +
-    "  codecast decisions                            # list recent decisions\n" +
-    "  codecast decisions --project .                # current project only\n" +
-    "  codecast decisions --search \"database\"        # search decisions\n" +
-    "  codecast decisions --tags db,arch             # filter by tags\n" +
-    "  codecast decisions add \"Use Convex\" --reason \"Better TypeScript\"  # add decision\n" +
-    "  codecast decisions add \"Cursor pagination\" --reason \"Better for realtime\" --tags api,perf\n" +
-    "  codecast decisions delete <id>                # delete a decision"
+    "  cast decisions                            # list recent decisions\n" +
+    "  cast decisions --project .                # current project only\n" +
+    "  cast decisions --search \"database\"        # search decisions\n" +
+    "  cast decisions --tags db,arch             # filter by tags\n" +
+    "  cast decisions add \"Use Convex\" --reason \"Better TypeScript\"  # add decision\n" +
+    "  cast decisions add \"Cursor pagination\" --reason \"Better for realtime\" --tags api,perf\n" +
+    "  cast decisions delete <id>                # delete a decision"
   )
   .argument("[action]", "Action: add, delete, or omit to list")
   .argument("[title-or-id]", "Title for add, ID for delete")
@@ -5892,7 +5901,7 @@ program
   .action(async (action, titleOrId, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -5900,7 +5909,7 @@ program
 
     if (action === "add") {
       if (!titleOrId) {
-        console.error("Usage: codecast decisions add \"Title\" --reason \"Why\"");
+        console.error("Usage: cast decisions add \"Title\" --reason \"Why\"");
         process.exit(1);
       }
       if (!options.reason) {
@@ -5943,7 +5952,7 @@ program
 
     if (action === "delete") {
       if (!titleOrId) {
-        console.error("Usage: codecast decisions delete <decision-id>");
+        console.error("Usage: cast decisions delete <decision-id>");
         process.exit(1);
       }
 
@@ -6012,11 +6021,11 @@ program
   .description(
     "Save and retrieve code patterns for reuse\n\n" +
     "Examples:\n" +
-    "  codecast learn                              # list saved patterns\n" +
-    "  codecast learn add \"convex-http\" --description \"HTTP action pattern\" --content \"...\"\n" +
-    "  codecast learn show \"convex-http\"           # show pattern content\n" +
-    "  codecast learn search \"webhook\"             # search patterns\n" +
-    "  codecast learn delete \"convex-http\"         # delete pattern"
+    "  cast learn                              # list saved patterns\n" +
+    "  cast learn add \"convex-http\" --description \"HTTP action pattern\" --content \"...\"\n" +
+    "  cast learn show \"convex-http\"           # show pattern content\n" +
+    "  cast learn search \"webhook\"             # search patterns\n" +
+    "  cast learn delete \"convex-http\"         # delete pattern"
   )
   .argument("[action]", "Action: add, show, search, delete, or omit to list")
   .argument("[name-or-query]", "Pattern name for add/show/delete, or search query")
@@ -6029,7 +6038,7 @@ program
   .action(async (action, nameOrQuery, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -6037,7 +6046,7 @@ program
 
     if (action === "add") {
       if (!nameOrQuery) {
-        console.error("Usage: codecast learn add \"name\" --description \"...\" --content \"...\"");
+        console.error("Usage: cast learn add \"name\" --description \"...\" --content \"...\"");
         process.exit(1);
       }
       if (!options.description) {
@@ -6086,7 +6095,7 @@ program
 
     if (action === "show") {
       if (!nameOrQuery) {
-        console.error("Usage: codecast learn show \"pattern-name\"");
+        console.error("Usage: cast learn show \"pattern-name\"");
         process.exit(1);
       }
 
@@ -6148,7 +6157,7 @@ program
 
     if (action === "delete") {
       if (!nameOrQuery) {
-        console.error("Usage: codecast learn delete \"pattern-name\"");
+        console.error("Usage: cast learn delete \"pattern-name\"");
         process.exit(1);
       }
 
@@ -6211,8 +6220,8 @@ program
   .description(
     "Find sessions that touched the same file or are similar to a session\n\n" +
     "Examples:\n" +
-    "  codecast similar --file src/auth.ts     # sessions that touched this file\n" +
-    "  codecast similar --session abc123       # sessions similar to this one\n\n" +
+    "  cast similar --file src/auth.ts     # sessions that touched this file\n" +
+    "  cast similar --session abc123       # sessions similar to this one\n\n" +
     "Note: File touch data may be sparse for older sessions."
   )
   .option("-f, --file <path>", "Find sessions that touched this file")
@@ -6221,14 +6230,14 @@ program
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
     if (!options.file && !options.session) {
       console.error("Must specify --file or --session");
-      console.error("Usage: codecast similar --file <path>");
-      console.error("       codecast similar --session <id>");
+      console.error("Usage: cast similar --file <path>");
+      console.error("       cast similar --session <id>");
       process.exit(1);
     }
 
@@ -6267,15 +6276,15 @@ program
   .description(
     "Find sessions that touched a specific file\n\n" +
     "Examples:\n" +
-    "  codecast blame src/auth.ts             # sessions that touched this file\n" +
-    "  codecast blame src/auth.ts:42          # sessions that touched line 42"
+    "  cast blame src/auth.ts             # sessions that touched this file\n" +
+    "  cast blame src/auth.ts:42          # sessions that touched line 42"
   )
   .argument("<file>", "File path, optionally with line number (e.g., src/auth.ts:42)")
   .option("-n, --limit <n>", "Number of results", "20")
   .action(async (file, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -6332,11 +6341,11 @@ program
     "Creates a new conversation branching from a specific point.\n" +
     "Like git branching for conversations.\n\n" +
     "Examples:\n" +
-    "  codecast fork                            # fork current session\n" +
-    "  codecast fork --from 15                  # fork current session from message 15\n" +
-    "  codecast fork --from 15 --resume         # fork and open in Claude\n" +
-    "  codecast fork abc1234                    # fork specific conversation\n" +
-    "  codecast fork abc1234 --from 15          # fork specific conversation from message 15"
+    "  cast fork                            # fork current session\n" +
+    "  cast fork --from 15                  # fork current session from message 15\n" +
+    "  cast fork --from 15 --resume         # fork and open in Claude\n" +
+    "  cast fork abc1234                    # fork specific conversation\n" +
+    "  cast fork abc1234 --from 15          # fork specific conversation from message 15"
   )
   .argument("[id]", "Conversation ID or short ID (auto-detects current session if omitted)")
   .option("--from <index>", "1-based message index to fork from")
@@ -6348,7 +6357,7 @@ program
   .action(async (id: string | undefined, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -6385,7 +6394,7 @@ program
       }
 
       if (!sessionId) {
-        console.error("Could not detect current session. Pass a conversation ID: codecast fork <id>");
+        console.error("Could not detect current session. Pass a conversation ID: cast fork <id>");
         process.exit(1);
       }
 
@@ -6396,7 +6405,7 @@ program
       });
       const linksResult = await linksResp.json() as any;
       if (!linksResult.conversation_id) {
-        console.error("Could not resolve session to conversation. Try: codecast fork <id>");
+        console.error("Could not resolve session to conversation. Try: cast fork <id>");
         process.exit(1);
       }
       id = linksResult.conversation_id;
@@ -6515,7 +6524,7 @@ program
   .action(async (id: string) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -6558,7 +6567,7 @@ program
 
 program
   .command("update")
-  .description("Update codecast to the latest version")
+  .description("Update cast to the latest version")
   .option("--no-auto", "Disable auto-updates")
   .option("--auto", "Enable auto-updates (default)")
   .action(async (options) => {
@@ -6567,7 +6576,7 @@ program
     if (options.auto === false) {
       config.auto_update = false;
       writeConfig(config);
-      console.log("Auto-updates disabled. Run 'codecast update' manually to update.");
+      console.log("Auto-updates disabled. Run 'cast update' manually to update.");
       return;
     }
 
@@ -6580,7 +6589,7 @@ program
     const available = await checkForUpdates(true);
     if (!available) {
       // Even if version matches, force reinstall to fix corrupted binaries
-      console.log(`codecast v${getVersion()} matches latest. Reinstalling to ensure integrity...`);
+      console.log(`cast v${getVersion()} matches latest. Reinstalling to ensure integrity...`);
     } else {
       console.log(`Updating from v${getVersion()} to v${available}...`);
     }
@@ -6628,7 +6637,7 @@ program
   .action(async (version) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -6663,11 +6672,11 @@ program
   .description(
     "Natural language query over conversation history\n\n" +
     "Examples:\n" +
-    "  codecast ask \"when did we last refactor the feed?\"\n" +
-    "  codecast ask \"what's the pattern for adding CLI commands?\"\n" +
-    "  codecast ask \"why did we switch to Convex?\"\n" +
-    "  codecast ask \"auth bug\" -g         # search globally\n" +
-    "  codecast ask \"auth\" -s 7d          # search last 7 days"
+    "  cast ask \"when did we last refactor the feed?\"\n" +
+    "  cast ask \"what's the pattern for adding CLI commands?\"\n" +
+    "  cast ask \"why did we switch to Convex?\"\n" +
+    "  cast ask \"auth bug\" -g         # search globally\n" +
+    "  cast ask \"auth\" -s 7d          # search last 7 days"
   )
   .argument("<query>", "Natural language question")
   .option("-g, --global", "Search all sessions (not just current project)")
@@ -6678,7 +6687,7 @@ program
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -6839,7 +6848,7 @@ Question: ${query}`,
         console.log(`<ANSWER query="${query}">`);
         console.log("No matching conversations found.");
         if (projectPath) {
-          console.log("\nTry: codecast ask \"" + query + "\" -g   # search globally");
+          console.log("\nTry: cast ask \"" + query + "\" -g   # search globally");
         }
         console.log("</ANSWER>");
         process.exit(0);
@@ -6952,9 +6961,9 @@ program
     "Searches for conversations related to your task, combining text search\n" +
     "and file-based similarity to surface relevant context.\n\n" +
     "Examples:\n" +
-    "  codecast context \"add stripe integration\"   # search by description\n" +
-    "  codecast context --file src/auth.ts         # sessions that touched file\n" +
-    "  codecast context --auto                     # infer from git diff/status"
+    "  cast context \"add stripe integration\"   # search by description\n" +
+    "  cast context --file src/auth.ts         # sessions that touched file\n" +
+    "  cast context --auto                     # infer from git diff/status"
   )
   .argument("[query]", "Search query describing the work")
   .option("-f, --file <path>", "Find sessions that touched this file")
@@ -6964,7 +6973,7 @@ program
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
@@ -7022,9 +7031,9 @@ program
     if (!searchQuery && filePaths.length === 0) {
       console.error("Provide a query, --file, or use --auto in a git repo");
       console.error("\nUsage:");
-      console.error("  codecast context \"add stripe integration\"");
-      console.error("  codecast context --file src/auth.ts");
-      console.error("  codecast context --auto");
+      console.error("  cast context \"add stripe integration\"");
+      console.error("  cast context --file src/auth.ts");
+      console.error("  cast context --auto");
       process.exit(1);
     }
 
@@ -7201,7 +7210,7 @@ schedule
   .action(async (prompt, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -7315,7 +7324,7 @@ schedule
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -7392,7 +7401,7 @@ schedule
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -7457,7 +7466,7 @@ schedule
   .action(async (id) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: codecast auth");
+      console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -7485,7 +7494,7 @@ schedule
     }
 
     console.log(`Last run conversation: ${c.cyan}${t.last_run_conversation_id}${c.reset}`);
-    console.log(fmt.muted(`Use: codecast read ${t.last_run_conversation_id}`));
+    console.log(fmt.muted(`Use: cast read ${t.last_run_conversation_id}`));
   });
 
 schedule
@@ -7498,7 +7507,7 @@ schedule
     if (options.disable) {
       config.task_enabled = false;
       writeConfig(config);
-      console.log("Schedule snippet disabled. Run 'codecast schedule install' to re-enable.");
+      console.log("Schedule snippet disabled. Run 'cast schedule install' to re-enable.");
       return;
     }
 
@@ -7522,7 +7531,7 @@ schedule
 async function taskAction(action: string, id: string, successMsg: string): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
-    console.error("Not authenticated. Run: codecast auth");
+    console.error("Not authenticated. Run: cast auth");
     process.exit(1);
   }
   const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -7603,7 +7612,7 @@ function formatRunAt(timestamp: number): string {
 function getCliEndpoint(): { siteUrl: string; apiToken: string } {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
-    console.error("Not authenticated. Run: codecast auth");
+    console.error("Not authenticated. Run: cast auth");
     process.exit(1);
   }
   return {
@@ -7957,7 +7966,7 @@ work
     if (options.disable) {
       config.work_enabled = false;
       writeConfig(config);
-      console.log("Work snippet disabled. Run 'codecast task install' to re-enable.");
+      console.log("Work snippet disabled. Run 'cast task install' to re-enable.");
       return;
     }
 
@@ -8351,11 +8360,11 @@ program
     "By default, feeds are scoped to the current project.\n" +
     "Use -g to include sessions from all projects.\n\n" +
     "Examples:\n" +
-    "  codecast stable solo       # Current project only\n" +
-    "  codecast stable solo -g    # All projects\n" +
-    "  codecast stable team -g    # Team, all projects\n" +
-    "  codecast stable off        # Disable\n" +
-    "  codecast stable            # Show current status"
+    "  cast stable solo       # Current project only\n" +
+    "  cast stable solo -g    # All projects\n" +
+    "  cast stable team -g    # Team, all projects\n" +
+    "  cast stable off        # Disable\n" +
+    "  cast stable            # Show current status"
   )
   .argument("[mode]", "solo, team, or off")
   .option("-g, --global", "Include sessions from all projects (default: current project only)")
@@ -8375,7 +8384,7 @@ program
         }
       } else {
         console.log(`${fmt.muted("○")} Stable mode: ${fmt.muted("off")}`);
-        console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast stable solo")} ${fmt.muted("or")} ${fmt.cmd("codecast stable team")} ${fmt.muted("to enable")}`);
+        console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast stable solo")} ${fmt.muted("or")} ${fmt.cmd("cast stable team")} ${fmt.muted("to enable")}`);
       }
       return;
     }
@@ -8407,7 +8416,7 @@ program
     } else {
       console.log(`  ${fmt.muted("Each session will start with team's recent 15 sessions (14d)")}`);
     }
-    console.log(`  ${fmt.muted("Run")} ${fmt.cmd("codecast stable off")} ${fmt.muted("to disable")}`);
+    console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast stable off")} ${fmt.muted("to disable")}`);
   });
 
 program
@@ -8463,7 +8472,7 @@ checkForUpdates().then(async (available) => {
     }
     installSessionRegisterHook();
     installStatusHook();
-    console.log("Update complete. Restart codecast to use the new version.\n");
+    console.log("Update complete. Restart cast to use the new version.\n");
   } else {
     showUpdateNotice(available);
   }

@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
+import { resolveTeamForPath } from "./privacy";
 
 type TableConfig =
   | {
@@ -154,41 +155,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const agentType = (opts.agent_type || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
     const user = await ctx.db.get(userId);
-    let resolvedTeamId = user?.active_team_id || user?.team_id;
-    let isPrivate = true;
-    let autoShared = false;
-
     const conversationPath = opts.git_root || opts.project_path;
-    if (conversationPath) {
-      const mappings = await ctx.db
-        .query("directory_team_mappings")
-        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-        .collect();
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
 
-      let bestMatch: { teamId: Id<"teams">; pathLength: number; autoShare: boolean } | null = null;
-      for (const mapping of mappings) {
-        if (conversationPath === mapping.path_prefix || conversationPath.startsWith(mapping.path_prefix + "/")) {
-          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-            bestMatch = { teamId: mapping.team_id, pathLength: mapping.path_prefix.length, autoShare: mapping.auto_share };
-          }
-        }
-      }
-
-      if (bestMatch) {
-        resolvedTeamId = bestMatch.teamId;
-        if (bestMatch.autoShare) { isPrivate = false; autoShared = true; }
-      }
-    }
-
-    if (!autoShared && user?.team_share_paths && user.team_share_paths.length > 0 && resolvedTeamId && conversationPath) {
-      for (const sharePath of user.team_share_paths) {
-        if (conversationPath === sharePath || conversationPath.startsWith(sharePath + "/")) {
-          isPrivate = false;
-          autoShared = true;
-          break;
-        }
-      }
-    }
+    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
+      mappings,
+      conversationPath,
+      user?.team_share_paths,
+      user?.active_team_id || user?.team_id
+    );
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,

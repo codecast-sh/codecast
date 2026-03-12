@@ -714,10 +714,23 @@ export const webList = query({
       } catch {}
     }
 
+    const planIds = new Set<string>();
+    for (const t of result) {
+      if (t.plan_id) planIds.add(t.plan_id.toString());
+    }
+    const planMap = new Map<string, { _id: any; short_id: string; title: string; status: string }>();
+    for (const pid of planIds) {
+      try {
+        const p = await ctx.db.get(pid as Id<"plans">);
+        if (p) planMap.set(pid, { _id: p._id, short_id: p.short_id, title: p.title, status: p.status });
+      } catch {}
+    }
+
     return result.map(t => ({
       ...t,
       creator: userMap.get(t.user_id.toString()) || null,
       assignee_info: t.assignee ? userMap.get(t.assignee.toString()) || null : null,
+      plan: t.plan_id ? planMap.get(t.plan_id.toString()) || null : null,
     }));
   },
 });
@@ -748,7 +761,13 @@ export const webGet = query({
       .withIndex("by_task_id", (q) => q.eq("task_id", task!._id))
       .collect();
 
-    return { ...task, comments };
+    let plan = null;
+    if (task.plan_id) {
+      const p = await ctx.db.get(task.plan_id);
+      if (p) plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
+    }
+
+    return { ...task, comments, plan };
   },
 });
 

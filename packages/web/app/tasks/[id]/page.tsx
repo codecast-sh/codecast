@@ -491,6 +491,22 @@ export default function TaskDetailPage() {
             </div>
           )}
 
+          {/* Plan */}
+          {(data as any).plan && (
+            <div className="mb-6">
+              <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">Plan</h2>
+              <Link
+                href={`/plans/${(data as any).plan._id}`}
+                className="flex items-center gap-2.5 px-4 py-3 border border-sol-border/30 rounded-lg hover:bg-sol-bg-alt/50 transition-colors"
+              >
+                <CircleDot className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+                <span className="text-sm font-medium text-sol-cyan">{(data as any).plan.title}</span>
+                <span className="text-[10px] font-mono text-sol-text-dim">{(data as any).plan.short_id}</span>
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto">{(data as any).plan.status}</Badge>
+              </Link>
+            </div>
+          )}
+
           {/* Linked Sessions */}
           {data.linked_conversations && data.linked_conversations.length > 0 && (
             <div className="mb-6">

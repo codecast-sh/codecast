@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { isConversationTeamVisible, isTeamMember } from "./privacy";
+import { isConversationTeamVisible, isTeamMember, createTeamFeedFilter } from "./privacy";
 
 type OutcomeType = "shipped" | "progress" | "blocked" | "unknown";
 type InsightGenStatus = {
@@ -744,13 +744,21 @@ export const getTeamDigest = query({
     );
 
     const conversations = await Promise.all(
-      deduped.slice(0, 50).map((i) => ctx.db.get(i.conversation_id))
+      deduped.map((i) => ctx.db.get(i.conversation_id))
     );
     const conversationMap = new Map(
       conversations
         .filter((c): c is NonNullable<typeof c> => c !== null)
         .map((c) => [c._id.toString(), c])
     );
+
+    const insightFeedFilter = await createTeamFeedFilter(ctx, args.team_id);
+
+    const filteredDeduped = deduped.filter((insight) => {
+      const conv = conversationMap.get(insight.conversation_id.toString());
+      if (!conv) return false;
+      return insightFeedFilter.isVisible(conv);
+    });
 
     const outcomes = { shipped: 0, progress: 0, blocked: 0, unknown: 0 };
     const themeCounts = new Map<string, number>();
@@ -767,7 +775,7 @@ export const getTeamDigest = query({
       theme_counts: Map<string, number>;
     }>();
 
-    for (const insight of deduped) {
+    for (const insight of filteredDeduped) {
       outcomes[insight.outcome_type] += 1;
 
       for (const theme of insight.themes || []) {
@@ -814,7 +822,7 @@ export const getTeamDigest = query({
       .map(([theme, count]) => ({ theme, count }));
 
     const CLUSTER_WINDOW_MS = 6 * 60 * 60 * 1000;
-    const sorted = [...deduped].sort((a, b) => b.generated_at - a.generated_at);
+    const sorted = [...filteredDeduped].sort((a, b) => b.generated_at - a.generated_at);
     const clusters: Array<{
       key: string;
       outcome_type: OutcomeType;
@@ -967,7 +975,7 @@ export const getTeamDigest = query({
     return {
       window_hours: windowHours,
       generated_at: Date.now(),
-      sessions_analyzed: deduped.length,
+      sessions_analyzed: filteredDeduped.length,
       outcomes,
       top_themes: topThemes,
       highlights,

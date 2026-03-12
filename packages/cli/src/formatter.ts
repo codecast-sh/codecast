@@ -228,9 +228,9 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 
   if (result.conversations.length > 0) {
     lines.push("To explore:");
-    lines.push("  codecast read <id> <line>:<line>   # read message range");
-    lines.push("  codecast read <id>                 # read all messages");
-    lines.push("  codecast summary <id>              # get session summary");
+    lines.push("  cast read <id> <line>:<line>   # read message range");
+    lines.push("  cast read <id>                 # read all messages");
+    lines.push("  cast summary <id>              # get session summary");
   }
 
   if (options.projectPath) {
@@ -693,8 +693,8 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
   if (result.conversations.length > 0) {
     const firstId = truncateId(result.conversations[0].id);
     const page = options.page ?? 1;
-    lines.push(`Use: codecast read ${firstId} <range>        # read messages by line range`);
-    lines.push(`     codecast feed -p ${page + 1}                  # next page`);
+    lines.push(`Use: cast read ${firstId} <range>        # read messages by line range`);
+    lines.push(`     cast feed -p ${page + 1}                  # next page`);
   }
 
   if (options.projectPath) {
@@ -1335,7 +1335,7 @@ export function formatSimilarResults(result: SimilarResult, query: { file?: stri
     const firstId = result.sessions[0].session_id
       ? truncateId(result.sessions[0].session_id)
       : truncateId(result.sessions[0].conversation_id);
-    lines.push(`Use: codecast read ${firstId} <range>  # read messages from a session`);
+    lines.push(`Use: cast read ${firstId} <range>  # read messages from a session`);
   }
 
   lines.push("</SIMILAR>");
@@ -1578,7 +1578,7 @@ export function formatBlameResults(result: BlameResult): string {
   if (groupedBySession.size > 0) {
     const firstSession = result.touches[0];
     const firstId = truncateId(firstSession.session_id || firstSession.conversation_id);
-    lines.push(`Use: codecast read ${firstId}                # read full session`);
+    lines.push(`Use: cast read ${firstId}                # read full session`);
   }
 
   lines.push("</BLAME>");
@@ -1620,8 +1620,8 @@ export function formatContextResults(input: ContextInput): string {
     lines.push("No relevant sessions found.");
     lines.push("");
     lines.push("Try:");
-    lines.push("  codecast context \"your task description\"");
-    lines.push("  codecast context --file path/to/file.ts");
+    lines.push("  cast context \"your task description\"");
+    lines.push("  cast context --file path/to/file.ts");
     lines.push("</CONTEXT>");
     return lines.join("\n");
   }
@@ -1664,8 +1664,8 @@ export function formatContextResults(input: ContextInput): string {
 
   if (sessions.length > 0) {
     const firstId = truncateId(sessions[0].id);
-    lines.push(`Use: codecast read ${firstId} <range>  # read session messages`);
-    lines.push(`     codecast summary ${firstId}        # get session summary`);
+    lines.push(`Use: cast read ${firstId} <range>  # read session messages`);
+    lines.push(`     cast summary ${firstId}        # get session summary`);
   }
 
   lines.push("</CONTEXT>");
@@ -1700,8 +1700,8 @@ export function formatResumeResults(result: ResumeResult): string {
     lines.push(`${c.dim}No sessions found matching "${query}"${c.reset}`);
     lines.push("");
     lines.push("Try:");
-    lines.push("  codecast resume \"different query\"");
-    lines.push("  codecast feed -g  # browse all sessions");
+    lines.push("  cast resume \"different query\"");
+    lines.push("  cast feed -g  # browse all sessions");
     return lines.join("\n");
   }
 
@@ -1786,7 +1786,7 @@ export function formatResumeResults(result: ResumeResult): string {
     }
   }
 
-  lines.push(`${c.dim}Run: codecast resume "${query}" and use arrows to pick a session (q to quit)${c.reset}`);
+  lines.push(`${c.dim}Run: cast resume "${query}" and use arrows to pick a session (q to quit)${c.reset}`);
 
   return lines.join("\n");
 }

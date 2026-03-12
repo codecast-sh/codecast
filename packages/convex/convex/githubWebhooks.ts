@@ -600,7 +600,7 @@ export const postPRCommentIfNeeded = internalMutation({
       return { posted: false, reason: "Auto-commenting disabled in user settings" };
     }
 
-    const conversationUrl = `https://codecast.sh/c/${args.conversation_id}`;
+    const conversationUrl = `https://codecast.sh/conversation/${args.conversation_id}`;
     const commentBody = `## 🎙️ Codecast Conversation\n\n**${conversation.title || "Untitled Conversation"}**\n\nThis PR was created during a Codecast session.\n\n[View full conversation →](${conversationUrl})`;
 
     try {

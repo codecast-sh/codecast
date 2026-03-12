@@ -206,6 +206,24 @@ export default function DocDetailPage() {
             <Markdown>{doc.content}</Markdown>
           </div>
 
+          {/* Plan */}
+          {(doc as any).active_plan && (
+            <div className="mb-8">
+              <h2 className="text-sm font-medium text-sol-text-dim uppercase tracking-wide mb-3">
+                Plan
+              </h2>
+              <Link
+                href={`/plans/${(doc as any).active_plan._id}`}
+                className="flex items-center gap-2.5 px-4 py-3 border border-sol-border/30 rounded-lg hover:bg-sol-bg-alt/50 transition-colors group"
+              >
+                <CircleDot className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+                <span className="text-sm font-medium text-sol-text group-hover:text-sol-cyan transition-colors">{(doc as any).active_plan.title}</span>
+                <span className="text-[10px] font-mono text-sol-text-dim">{(doc as any).active_plan.short_id}</span>
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto">{(doc as any).active_plan.status}</Badge>
+              </Link>
+            </div>
+          )}
+
           {/* Sessions */}
           {((doc as any).related_conversations?.length > 0 || conversation) && (
             <div className="mb-8">

@@ -11,8 +11,8 @@ import {
   canTeamMemberAccess,
   checkConversationAccess,
   isConversationTeamVisible,
-  isConversationTeamVisibleSync,
-  isPathMappedToTeam,
+  createTeamFeedFilter,
+  resolveTeamForPath,
   resolveVisibilityMode,
 } from "./privacy";
 
@@ -395,49 +395,19 @@ export const createConversation = mutation({
     const startedAt = args.started_at ?? now;
 
     const user = await ctx.db.get(args.user_id);
-    let resolvedTeamId = args.team_id || (user as any)?.active_team_id || (user as any)?.team_id;
-    let isPrivate = true;
-    let autoShared = false;
-
     const conversationPath = args.git_root || args.project_path;
-    if (conversationPath) {
-      const mappings = await ctx.db
-        .query("directory_team_mappings")
-        .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-        .collect();
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+      .collect();
 
-      let bestMatch: { teamId: Id<"teams">; pathLength: number; autoShare: boolean } | null = null;
-      for (const mapping of mappings) {
-        if (conversationPath === mapping.path_prefix || conversationPath.startsWith(mapping.path_prefix + "/")) {
-          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-            bestMatch = {
-              teamId: mapping.team_id,
-              pathLength: mapping.path_prefix.length,
-              autoShare: mapping.auto_share,
-            };
-          }
-        }
-      }
-
-      if (bestMatch) {
-        resolvedTeamId = bestMatch.teamId;
-        if (bestMatch.autoShare) {
-          isPrivate = false;
-          autoShared = true;
-        }
-      }
-      // If no directory mapping matches, resolvedTeamId stays as user's active_team_id
-    }
-
-    if (!autoShared && user?.team_share_paths && user.team_share_paths.length > 0 && resolvedTeamId && conversationPath) {
-      for (const sharePath of user.team_share_paths) {
-        if (conversationPath === sharePath || conversationPath.startsWith(sharePath + "/")) {
-          isPrivate = false;
-          autoShared = true;
-          break;
-        }
-      }
-    }
+    const fallbackTeamId = args.team_id || (user as any)?.active_team_id || (user as any)?.team_id;
+    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
+      mappings,
+      conversationPath,
+      (user as any)?.team_share_paths,
+      fallbackTeamId
+    );
 
     let parentConversationId: Id<"conversations"> | undefined;
     if (args.parent_conversation_id) {
@@ -570,48 +540,18 @@ export const createQuickSession = mutation({
     const agentType = args.agent_type || "claude_code";
 
     const user = await ctx.db.get(userId);
-    let resolvedTeamId = (user as any)?.active_team_id || (user as any)?.team_id;
-    let isPrivate = true;
-    let autoShared = false;
-
     const conversationPath = args.git_root || args.project_path;
-    if (conversationPath) {
-      const mappings = await ctx.db
-        .query("directory_team_mappings")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
 
-      let bestMatch: { teamId: Id<"teams">; pathLength: number; autoShare: boolean } | null = null;
-      for (const mapping of mappings) {
-        if (conversationPath === mapping.path_prefix || conversationPath.startsWith(mapping.path_prefix + "/")) {
-          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-            bestMatch = {
-              teamId: mapping.team_id,
-              pathLength: mapping.path_prefix.length,
-              autoShare: mapping.auto_share,
-            };
-          }
-        }
-      }
-
-      if (bestMatch) {
-        resolvedTeamId = bestMatch.teamId;
-        if (bestMatch.autoShare) {
-          isPrivate = false;
-          autoShared = true;
-        }
-      }
-    }
-
-    if (!autoShared && user?.team_share_paths && user.team_share_paths.length > 0 && resolvedTeamId && conversationPath) {
-      for (const sharePath of user.team_share_paths) {
-        if (conversationPath === sharePath || conversationPath.startsWith(sharePath + "/")) {
-          isPrivate = false;
-          autoShared = true;
-          break;
-        }
-      }
-    }
+    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
+      mappings,
+      conversationPath,
+      (user as any)?.team_share_paths,
+      (user as any)?.active_team_id || (user as any)?.team_id
+    );
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
@@ -665,12 +605,10 @@ export const getConversations = query({
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
       .collect();
     const userTeamIds = new Set(memberships.map((m: any) => m.team_id.toString()));
-    const ownerVisMap = new Map<string, string>();
-    for (const teamId of userTeamIds) {
-      const teamMembers = await ctx.db.query("team_memberships")
-        .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
-        .collect();
-      for (const m of teamMembers) ownerVisMap.set(m.user_id.toString(), m.visibility || "summary");
+
+    const feedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
+    for (const m of memberships) {
+      feedFilters.set(m.team_id.toString(), await createTeamFeedFilter(ctx, m.team_id));
     }
 
     const ownConversations = await ctx.db
@@ -701,8 +639,8 @@ export const getConversations = query({
       const isOwn = c.user_id.toString() === args.user_id.toString();
       if (isOwn) return true;
       if (!c.team_id || !userTeamIds.has(c.team_id.toString())) return false;
-      const ownerVis = ownerVisMap.get(c.user_id.toString()) || "summary";
-      return isConversationTeamVisibleSync(c, ownerVis);
+      const filter = feedFilters.get(c.team_id.toString());
+      return filter ? filter.isVisible(c) : false;
     });
     return filtered.sort((a, b) => b.updated_at - a.updated_at);
   },
@@ -764,6 +702,18 @@ export const getConversation = query({
       || (conversation.slug ? formatSlugAsTitle(conversation.slug) : null)
       || "New Session";
 
+    let active_plan = null;
+    if (conversation.active_plan_id) {
+      const plan = await ctx.db.get(conversation.active_plan_id);
+      if (plan) active_plan = { _id: plan._id, short_id: plan.short_id, title: plan.title, status: plan.status };
+    }
+
+    let active_task = null;
+    if (conversation.active_task_id) {
+      const task = await ctx.db.get(conversation.active_task_id);
+      if (task) active_task = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
+    }
+
     return {
       ...conversation,
       title,
@@ -771,6 +721,8 @@ export const getConversation = query({
       user: user ? { name: user.name, email: user.email } : null,
       has_more_above: hasMore,
       oldest_timestamp: oldestTimestamp,
+      active_plan,
+      active_task,
     };
   },
 });
@@ -1278,6 +1230,18 @@ export const getConversationWithMeta = query({
       effective_team_visibility = (membership?.visibility as any) || "summary";
     }
 
+    let active_plan = null;
+    if (conversation.active_plan_id) {
+      const plan = await ctx.db.get(conversation.active_plan_id);
+      if (plan) active_plan = { _id: plan._id, short_id: plan.short_id, title: plan.title, status: plan.status };
+    }
+
+    let active_task = null;
+    if (conversation.active_task_id) {
+      const task = await ctx.db.get(conversation.active_task_id);
+      if (task) active_task = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
+    }
+
     return {
       ...conversation,
       title,
@@ -1291,6 +1255,8 @@ export const getConversationWithMeta = query({
       forked_from_details: forkedFromDetails,
       fork_children: forkChildrenDetails,
       parent_conversation_id: parentConversationId,
+      active_plan,
+      active_task,
     };
   },
 });
@@ -1476,33 +1442,17 @@ export const listConversations = query({
           .collect()
       : [];
 
-    const teamMemberships = args.filter === "team" && effectiveTeamId
-      ? await ctx.db
-          .query("team_memberships")
-          .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
-          .collect()
-      : [];
+    const feedFilter = args.filter === "team" && effectiveTeamId
+      ? await createTeamFeedFilter(ctx, effectiveTeamId)
+      : null;
 
     const additionalUsers = await Promise.all(
-      teamMemberships
+      (feedFilter?.memberships ?? [])
         .filter(m => !teamUsers.some(u => u._id.toString() === m.user_id.toString()))
         .map(m => ctx.db.get(m.user_id))
     );
     const allTeamUsers = [...teamUsers, ...additionalUsers.filter((u): u is NonNullable<typeof u> => u !== null)];
     const teamUserMap = new Map(allTeamUsers.map(u => [u._id.toString(), u]));
-    const membershipVisibilityMap = new Map(teamMemberships.map(m => [m.user_id.toString(), m.visibility || "summary"]));
-
-    const allMappings = args.filter === "team" && effectiveTeamId
-      ? await ctx.db
-          .query("directory_team_mappings")
-          .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
-          .collect()
-      : [];
-
-    const userHasMappings = new Map<string, boolean>();
-    for (const m of allMappings) {
-      userHasMappings.set(m.user_id.toString(), true);
-    }
 
     const normalizeToRoot = (path: string): string => {
       const parts = path.split('/');
@@ -1605,7 +1555,7 @@ export const listConversations = query({
       if (!targetMember) {
         return { conversations: [], nextCursor: null };
       }
-      const visibility = membershipVisibilityMap.get(args.memberId.toString()) || "summary";
+      const visibility = feedFilter!.getVisibility(args.memberId.toString());
       if (visibility === "hidden") {
         return { conversations: [], nextCursor: null };
       }
@@ -1619,10 +1569,8 @@ export const listConversations = query({
         )
         .order("desc");
 
-      const memberVis = membershipVisibilityMap.get(args.memberId!.toString()) || "summary";
       const isVisible = (c: any): boolean => {
-        if (!isConversationTeamVisibleSync(c, memberVis)) return false;
-        return isPathMappedToTeam(c.user_id.toString(), c.git_root || c.project_path, allMappings, userHasMappings);
+        return feedFilter!.isVisible(c);
       };
       if (needsBatchScan) {
         const results: any[] = [];
@@ -1659,8 +1607,8 @@ export const listConversations = query({
     } else {
       // Query recent conversations from each visible team member and merge
       // This ensures all team members' conversations appear regardless of activity level
-      const visibleMembers = teamMemberships.filter(m => {
-        const visibility = m.visibility || "summary";
+      const visibleMembers = (feedFilter?.memberships ?? []).filter(m => {
+        const visibility = (m as any).visibility || "summary";
         return visibility !== "hidden";
       });
 
@@ -1683,10 +1631,8 @@ export const listConversations = query({
             .order("desc");
 
           const convs = await query.take(perMemberFetch);
-          const memberVis = membershipVisibilityMap.get(member.user_id.toString()) || "summary";
           return convs.filter((c) => {
-            if (!isConversationTeamVisibleSync(c, memberVis)) return false;
-            if (!isPathMappedToTeam(c.user_id.toString(), c.git_root || c.project_path, allMappings, userHasMappings)) return false;
+            if (!feedFilter!.isVisible(c)) return false;
             if (!matchesFilters(c)) return false;
             return true;
           }).slice(0, perMemberLimit);
@@ -1712,7 +1658,7 @@ export const listConversations = query({
 
         const visibilityMode = resolveVisibilityMode(
           c.team_visibility,
-          membershipVisibilityMap.get(c.user_id.toString()),
+          feedFilter?.getVisibility(c.user_id.toString()),
           args.filter === "team"
         );
         const authorName = (conversationUser as any)?.name || (conversationUser as any)?.email?.split("@")[0] || "Unknown";
@@ -1738,6 +1684,7 @@ export const listConversations = query({
             activity_summary: `1 agent in ${projectName}`,
             project_path: c.project_path || null,
             git_root: c.git_root || null,
+            active_plan_id: c.active_plan_id || null,
           };
         }
 
@@ -1760,6 +1707,7 @@ export const listConversations = query({
             git_root: c.git_root || null,
             tool_names: [],
             subagent_types: [],
+            active_plan_id: c.active_plan_id || null,
           };
         }
 
@@ -1804,6 +1752,7 @@ export const listConversations = query({
             is_private: c.is_private,
             team_visibility: c.team_visibility || null,
             auto_shared: c.auto_shared || false,
+            active_plan_id: c.active_plan_id || null,
           };
         }
 
@@ -1940,6 +1889,7 @@ export const listConversations = query({
           is_private: c.is_private,
           team_visibility: c.team_visibility || null,
           auto_shared: c.auto_shared || false,
+          active_plan_id: c.active_plan_id || null,
         };
       })
     );
@@ -2220,6 +2170,11 @@ export const searchConversations = query({
     const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
     const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
 
+    const feedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
+    for (const teamId of effectiveTeamIds) {
+      feedFilters.set(teamId.toString(), await createTeamFeedFilter(ctx, teamId));
+    }
+
     const searchTerm = args.query.trim();
     if (!searchTerm || searchTerm.length < 2) {
       return [];
@@ -2282,9 +2237,10 @@ export const searchConversations = query({
 
       const isOwn = conv.user_id.toString() === userId.toString();
       if (!isOwn) {
-        if (!(await isConversationTeamVisible(ctx, conv))) continue;
-        if (!teamUserIds.has(conv.user_id.toString())) continue;
         if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) continue;
+        const filter = feedFilters.get(conv.team_id.toString());
+        if (!filter || !filter.isVisible(conv)) continue;
+        if (!teamUserIds.has(conv.user_id.toString())) continue;
       }
 
       const conversationUser = await ctx.db.get(conv.user_id);
@@ -2816,6 +2772,11 @@ export const searchForCLI = query({
     const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
     const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
 
+    const cliFeedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
+    for (const teamId of effectiveTeamIds) {
+      cliFeedFilters.set(teamId.toString(), await createTeamFeedFilter(ctx, teamId));
+    }
+
     let filterUserId: string | null = null;
     if (args.member_name) {
       const memberNameLower = args.member_name.toLowerCase();
@@ -2916,9 +2877,10 @@ export const searchForCLI = query({
 
       const isOwn = conv.user_id.toString() === authUserId.toString();
       if (!isOwn) {
-        if (!(await isConversationTeamVisible(ctx, conv))) continue;
-        if (!teamUserIds.has(conv.user_id.toString())) continue;
         if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) continue;
+        const cliFilter = cliFeedFilters.get(conv.team_id.toString());
+        if (!cliFilter || !cliFilter.isVisible(conv)) continue;
+        if (!teamUserIds.has(conv.user_id.toString())) continue;
       }
 
       // Filter by specific member if requested
@@ -4283,30 +4245,18 @@ export const feedForCLI = query({
 
     type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
     const allTeamUsers: UserDoc[] = [];
-    const memberVisibilityMap = new Map<string, string>();
+    const cliFeedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
     for (const teamId of effectiveTeamIds) {
-      const teamMemberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
-        .collect();
-      for (const m of teamMemberships) {
-        memberVisibilityMap.set(m.user_id.toString(), m.visibility || "summary");
-      }
+      const ff = await createTeamFeedFilter(ctx, teamId);
+      cliFeedFilters.set(teamId.toString(), ff);
       const memberUsers = await Promise.all(
-        teamMemberships.map(m => ctx.db.get(m.user_id))
+        ff.memberships.map(m => ctx.db.get(m.user_id))
       );
       allTeamUsers.push(...memberUsers.filter((u): u is UserDoc => u !== null));
     }
     const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
     const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
     const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
-
-    const isTeamConversationVisible = (c: { is_private: boolean; team_visibility?: string; user_id: Id<"users">; team_id?: Id<"teams"> }) => {
-      if (c.is_private === false) return true;
-      if (c.team_visibility && c.team_visibility !== "private") return true;
-      const ownerVis = memberVisibilityMap.get(c.user_id.toString()) || "summary";
-      return ownerVis !== "hidden" && ownerVis !== "activity";
-    };
 
     let filterUserId: string | null = null;
     if (args.member_name) {
@@ -4394,8 +4344,8 @@ export const feedForCLI = query({
       const teamUserIdSet = new Set(teamUsers.filter(u => u._id.toString() !== authUserId.toString()).map(u => u._id.toString()));
       queryMatchedTeamConversations = validConvs.filter(c =>
         teamUserIdSet.has(c.user_id.toString()) &&
-        isTeamConversationVisible(c) &&
-        c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString())
+        c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString()) &&
+        (cliFeedFilters.get(c.team_id!.toString())?.isVisible(c) ?? false)
       );
     }
 
@@ -4431,8 +4381,8 @@ export const feedForCLI = query({
             .order("desc")
             .take(10);
           return convos.filter(c =>
-            isTeamConversationVisible(c) &&
-            c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString())
+            c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString()) &&
+            (cliFeedFilters.get(c.team_id!.toString())?.isVisible(c) ?? false)
           );
         })
       );
@@ -4732,17 +4682,7 @@ export const getTeamUnreadCount = query({
       return 0;
     }
 
-    // Get all directory mappings for this team to filter by project visibility
-    const teamMappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_team_id", (q) => q.eq("team_id", effectiveTeamId))
-      .collect();
-
-    // Track which users have configured mappings
-    const userHasMappings = new Map<string, boolean>();
-    for (const m of teamMappings) {
-      userHasMappings.set(m.user_id.toString(), true);
-    }
+    const feedFilter = await createTeamFeedFilter(ctx, effectiveTeamId);
 
     const lastSeen = user.team_conversations_last_seen || 0;
 
@@ -4755,7 +4695,7 @@ export const getTeamUnreadCount = query({
     let count = 0;
     for (const conv of recentConversations) {
       if (conv.updated_at > lastSeen && conv.user_id.toString() !== userId.toString()) {
-        if (isPathMappedToTeam(conv.user_id.toString(), conv.git_root || conv.project_path, teamMappings, userHasMappings)) {
+        if (feedFilter.isVisible(conv)) {
           count++;
         }
       }
@@ -4813,21 +4753,25 @@ export const backfillConversationTeamIds = internalMutation({
         const projectPath = conv.git_root || conv.project_path;
         if (!projectPath) continue;
 
-        let bestMatch: { teamId: Id<"teams">; pathLength: number; autoShare: boolean } | null = null;
-        for (const mapping of mappings) {
-          if (projectPath === mapping.path_prefix || projectPath.startsWith(mapping.path_prefix + "/")) {
-            if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-              bestMatch = {
-                teamId: mapping.team_id,
-                pathLength: mapping.path_prefix.length,
-                autoShare: mapping.auto_share,
-              };
-            }
-          }
-        }
+        const { teamId, isPrivate, autoShared } = resolveTeamForPath(
+          mappings,
+          projectPath,
+          (user as any).team_share_paths,
+          (user as any).active_team_id || (user as any).team_id
+        );
 
-        if (bestMatch && conv.team_id?.toString() !== bestMatch.teamId.toString()) {
-          await ctx.db.patch(conv._id, { team_id: bestMatch.teamId });
+        const patches: Record<string, any> = {};
+        if (teamId && conv.team_id?.toString() !== teamId.toString()) {
+          patches.team_id = teamId;
+        } else if (!teamId && conv.team_id) {
+          patches.team_id = undefined;
+        }
+        if (autoShared && conv.is_private !== false) {
+          patches.is_private = false;
+          patches.auto_shared = true;
+        }
+        if (Object.keys(patches).length > 0) {
+          await ctx.db.patch(conv._id, patches);
           updated++;
         }
       }
@@ -5203,7 +5147,7 @@ export const listIdleSessions = query({
     const CLUSTER_WINDOW_MS = 60 * 60 * 1000;
     const cutoff = now - WINDOW_MS;
 
-    const conversations = await ctx.db
+    const recentConversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_updated", (q) =>
         q.eq("user_id", userId).gte("updated_at", cutoff)
@@ -5214,6 +5158,18 @@ export const listIdleSessions = query({
         q.eq(q.field("status"), "completed")
       ))
       .take(100);
+
+    const recentIds = new Set(recentConversations.map((c) => c._id.toString()));
+    const pinnedConversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_pinned", (q) =>
+        q.eq("user_id", userId).gt("inbox_pinned_at", 0)
+      )
+      .take(20);
+    const conversations = [
+      ...recentConversations,
+      ...pinnedConversations.filter((c) => !recentIds.has(c._id.toString())),
+    ];
 
     const managedSessions = await ctx.db
       .query("managed_sessions")
@@ -5291,7 +5247,7 @@ export const listIdleSessions = query({
       if (!args.show_all && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) continue;
 
       const dismissed = conv.inbox_dismissed_at && conv.inbox_dismissed_at >= conv.updated_at;
-      if (dismissed) continue;
+      if (dismissed && !pinned) continue;
 
       const daemonAlive = liveConvIds.has(conv._id.toString()) ||
         (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);

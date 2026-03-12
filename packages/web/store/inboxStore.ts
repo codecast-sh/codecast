@@ -18,6 +18,34 @@ export function isConvexId(id: string): boolean {
 
 // -- Types --
 
+export type PlanRef = {
+  _id: string;
+  short_id: string;
+  title: string;
+  status: string;
+};
+
+export type TaskRef = {
+  _id: string;
+  short_id: string;
+  title: string;
+  status: string;
+};
+
+export type PlanItem = {
+  _id: string;
+  short_id: string;
+  title: string;
+  goal?: string;
+  status: string;
+  source: string;
+  progress?: { total: number; done: number; in_progress: number; open: number };
+  task_count?: number;
+  session_count?: number;
+  created_at: number;
+  updated_at: number;
+};
+
 export type InboxSession = {
   _id: string;
   session_id: string;
@@ -43,6 +71,8 @@ export type InboxSession = {
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
   parent_conversation_id?: string;
+  active_plan?: PlanRef;
+  active_task?: TaskRef;
 };
 
 export type Message = {
@@ -118,6 +148,7 @@ export type TaskItem = {
   updated_at: number;
   closed_at?: number;
   creator?: { name: string; image?: string };
+  plan?: PlanRef;
 };
 
 export type TaskDetail = TaskItem & {
@@ -128,6 +159,7 @@ export type TaskDetail = TaskItem & {
   creator?: { _id: string; name: string; image?: string };
   history?: any[];
   created_from_conversation?: string;
+  plan?: PlanRef;
 };
 
 export type DocItem = {
@@ -319,20 +351,23 @@ interface InboxStoreState {
   updateClientLayout: (key: keyof ClientLayouts, value: any) => void;
   updateClientDismissed: (key: keyof ClientDismissed, value: any) => void;
 
-  // -- Task / Doc state --
+  // -- Task / Doc / Plan state --
   tasks: Record<string, TaskItem>;
   docs: Record<string, DocItem>;
+  plans: Record<string, PlanItem>;
   docProjectPaths: string[];
   taskDetails: Record<string, TaskDetail>;
   docDetails: Record<string, DocDetail>;
   taskFilter: { status: string };
   docFilter: { type: string; query: string; project: string; scope: string };
+  planFilter: { status: string };
 
-  // -- Task / Doc detail sync --
+  // -- Task / Doc / Plan detail sync --
   syncTaskDetail: (id: string, detail: TaskDetail) => void;
   syncDocDetail: (id: string, detail: DocDetail) => void;
   setTaskFilter: (filter: Partial<{ status: string }>) => void;
   setDocFilter: (filter: Partial<{ type: string; query: string; project: string; scope: string }>) => void;
+  setPlanFilter: (filter: Partial<{ status: string }>) => void;
 
   // -- Task / Doc mutations (action + side effect) --
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
@@ -436,26 +471,52 @@ export const useInboxStore = create<InboxStoreState>(
       this.conversations[id].inbox_dismissed_at = null;
     }
     delete this.pending[`sessions:${id}`];
+    if (this.dismissedSessions[id]) {
+      this.sessions[id] = this.dismissedSessions[id];
+      delete this.dismissedSessions[id];
+    }
+    this.currentSessionId = id;
+    this.viewingDismissedId = null;
   }),
 
-  deferSession: action(function (this: Draft, id: string) {
-    if (this.conversations[id]) {
-      this.conversations[id].inbox_deferred_at = Date.now();
+  deferSession: (id: string) => {
+    const state = get();
+    const newSessions = { ...state.sessions };
+    if (newSessions[id]) {
+      newSessions[id] = { ...newSessions[id], is_deferred: true };
     }
-    if (this.sessions[id]) {
-      this.sessions[id].is_deferred = true;
+    const newConversations = { ...state.conversations };
+    if (newConversations[id]) {
+      newConversations[id] = { ...newConversations[id], inbox_deferred_at: Date.now() };
     }
-  }),
+    const newPending = { ...state.pending };
+    newPending[`sessions:${id}:is_deferred`] = { type: "field", value: true, expiresAt: Date.now() + 15_000 };
+    set({ sessions: newSessions, conversations: newConversations, pending: newPending });
+    get()._dispatch("patch", [], {
+      conversations: { [id]: { inbox_deferred_at: Date.now() } },
+    }).catch(() => {});
+  },
 
-  pinSession: action(function (this: Draft, id: string) {
-    const isPinned = this.sessions[id]?.is_pinned;
-    if (this.conversations[id]) {
-      this.conversations[id].inbox_pinned_at = isPinned ? null : Date.now();
+  pinSession: (id: string) => {
+    const state = get();
+    const isPinned = state.sessions[id]?.is_pinned;
+    const newPinned = !isPinned;
+    const pinnedAt = newPinned ? Date.now() : null;
+    const newSessions = { ...state.sessions };
+    if (newSessions[id]) {
+      newSessions[id] = { ...newSessions[id], is_pinned: newPinned };
     }
-    if (this.sessions[id]) {
-      this.sessions[id].is_pinned = !isPinned;
+    const newConversations = { ...state.conversations };
+    if (newConversations[id]) {
+      newConversations[id] = { ...newConversations[id], inbox_pinned_at: pinnedAt };
     }
-  }),
+    const newPending = { ...state.pending };
+    newPending[`sessions:${id}:is_pinned`] = { type: "field", value: newPinned, expiresAt: Date.now() + 15_000 };
+    set({ sessions: newSessions, conversations: newConversations, pending: newPending });
+    get()._dispatch("patch", [], {
+      conversations: { [id]: { inbox_pinned_at: pinnedAt } },
+    }).catch(() => {});
+  },
 
   switchProject: action(function (this: Draft, convId: string, path: string) {
     if (this.sessions[convId]) {
@@ -525,6 +586,9 @@ export const useInboxStore = create<InboxStoreState>(
         } else if (!table[oldId]) {
           table[oldId] = oldSession as any;
         }
+      }
+      if (state.currentSessionId && !table[state.currentSessionId] && prev[state.currentSessionId]) {
+        table[state.currentSessionId] = prev[state.currentSessionId] as any;
       }
       const newConversations = { ...state.conversations };
       for (const s of incoming) {
@@ -961,10 +1025,12 @@ export const useInboxStore = create<InboxStoreState>(
 
   tasks: {},
   docs: {},
+  plans: {},
   taskDetails: {},
   docDetails: {},
   taskFilter: { status: "" },
   docFilter: { type: "", query: "", project: "", scope: "" },
+  planFilter: { status: "" },
   docProjectPaths: [],
 
   syncTaskDetail: (id: string, detail: TaskDetail) => {
@@ -988,6 +1054,12 @@ export const useInboxStore = create<InboxStoreState>(
   setDocFilter: (filter: Partial<{ type: string; query: string }>) => {
     set((s: InboxStoreState) => ({
       docFilter: { ...s.docFilter, ...filter },
+    }));
+  },
+
+  setPlanFilter: (filter: Partial<{ status: string }>) => {
+    set((s: InboxStoreState) => ({
+      planFilter: { ...s.planFilter, ...filter },
     }));
   },
 

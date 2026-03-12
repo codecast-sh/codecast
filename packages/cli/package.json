@@ -4,7 +4,8 @@
   "description": "Sync coding agent conversations to a shared Convex database",
   "type": "module",
   "bin": {
-    "codecast": "./dist/index.js"
+    "codecast": "./dist/index.js",
+    "cast": "./dist/index.js"
   },
   "scripts": {
     "dev": "bun run src/index.ts",

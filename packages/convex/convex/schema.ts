@@ -207,7 +207,8 @@ export default defineSchema({
     .index("by_forked_from", ["forked_from"])
     .index("by_git_branch", ["git_branch"])
     .index("by_parent_message_uuid", ["parent_message_uuid"])
-    .index("by_parent_conversation_id", ["parent_conversation_id"]),
+    .index("by_parent_conversation_id", ["parent_conversation_id"])
+    .index("by_user_pinned", ["user_id", "inbox_pinned_at"]),
 
   public_conversations: defineTable({
     conversation_id: v.id("conversations"),

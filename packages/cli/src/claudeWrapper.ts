@@ -91,7 +91,7 @@ function parsePollMessage(content: string): { keys: string[]; text?: string; dis
 export async function runClaudeWrapper(args: string[]): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token) {
-    console.error("Error: Not authenticated. Run 'codecast auth' first.");
+    console.error("Error: Not authenticated. Run 'cast auth' first.");
     process.exit(1);
   }
 

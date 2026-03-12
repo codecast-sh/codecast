@@ -437,12 +437,12 @@ export default function SyncPage() {
         <div className="text-sm text-sol-base1 space-y-2">
           <p>Manage sync settings from the command line:</p>
           <div className="bg-sol-base03 p-3 rounded font-mono text-sm space-y-1">
-            <p><span className="text-sol-cyan">codecast sync-settings</span> <span className="text-sol-base1">- Interactive project selection</span></p>
+            <p><span className="text-sol-cyan">cast sync-settings</span> <span className="text-sol-base1">- Interactive project selection</span></p>
             {hasTeams && (
               <>
-                <p><span className="text-sol-cyan">codecast teams</span> <span className="text-sol-base1">- List your teams</span></p>
-                <p><span className="text-sol-cyan">codecast teams map &lt;path&gt; &lt;team_id&gt;</span> <span className="text-sol-base1">- Map directory to team</span></p>
-                <p><span className="text-sol-cyan">codecast teams mappings</span> <span className="text-sol-base1">- List directory mappings</span></p>
+                <p><span className="text-sol-cyan">cast teams</span> <span className="text-sol-base1">- List your teams</span></p>
+                <p><span className="text-sol-cyan">cast teams map &lt;path&gt; &lt;team_id&gt;</span> <span className="text-sol-base1">- Map directory to team</span></p>
+                <p><span className="text-sol-cyan">cast teams mappings</span> <span className="text-sol-base1">- List directory mappings</span></p>
               </>
             )}
           </div>

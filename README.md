@@ -80,7 +80,7 @@ bun link
 Run the setup wizard:
 
 ```bash
-codecast setup
+cast setup
 ```
 
 This will:
@@ -91,7 +91,7 @@ This will:
 ### Start the daemon
 
 ```bash
-codecast start
+cast start
 ```
 
 The daemon runs in the background, watching your history files and syncing new conversations.
@@ -99,25 +99,25 @@ The daemon runs in the background, watching your history files and syncing new c
 ### Check status
 
 ```bash
-codecast status
+cast status
 ```
 
 ### Stop the daemon
 
 ```bash
-codecast stop
+cast stop
 ```
 
 ### View logs
 
 ```bash
-codecast logs
+cast logs
 ```
 
 ### Mark a conversation as private
 
 ```bash
-codecast private <conversation-id>
+cast private <conversation-id>
 ```
 
 ## Web Dashboard
@@ -165,7 +165,7 @@ codecast/
 ./dev.sh
 ```
 
-This starts Convex backend and Next.js web dashboard. The CLI is not run in dev mode (it's a daemon you start separately with `codecast start`).
+This starts Convex backend and Next.js web dashboard. The CLI is not run in dev mode (it's a daemon you start separately with `cast start`).
 
 ### Type check
 

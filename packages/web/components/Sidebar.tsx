@@ -135,6 +135,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const isAdminLogs = pathname?.startsWith("/admin/daemon-logs");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
+  const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
   const { user: currentUser } = useCurrentUser();
   const isAdmin = currentUser?.email === "ashot@almostcandid.com";
@@ -277,6 +278,20 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
             </svg>
             {!isNarrow && <span>Tasks</span>}
+          </Link>
+          <Link
+            href="/plans"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isPlans
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Plans"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
+            </svg>
+            {!isNarrow && <span>Plans</span>}
           </Link>
           <Link
             href="/docs"

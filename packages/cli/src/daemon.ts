@@ -748,7 +748,7 @@ async function executeRemoteCommand(
                     conversation_id: conversationId,
                     type: "info",
                     title: "Codex running in full-access mode",
-                    message: "Codex is running without permission prompts by default. Configure with: codecast config codex_args",
+                    message: "Codex is running without permission prompts by default. Configure with: cast config codex_args",
                   }).catch(() => {});
                 }
               }
@@ -2061,6 +2061,7 @@ async function processSessionFile(
                   }).catch(() => {
                     injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
                       log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
+
                     }).catch((err) => {
                       log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
                     });
@@ -2068,6 +2069,7 @@ async function processSessionFile(
                 } else {
                   injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
                     log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
+
                   }).catch((err) => {
                     log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
                   });
@@ -3751,6 +3753,7 @@ async function injectViaTerminal(tty: string, content: string, termProgram?: str
   }
 }
 
+
 type SessionFileInfo = { path: string; agentType: "claude" | "codex" | "gemini" };
 
 function findSessionJsonlPath(sessionId: string): string | null {
@@ -4922,7 +4925,7 @@ async function waitForConfig(): Promise<{ config: Config; convexUrl: string }> {
         return { config, convexUrl };
       }
     }
-    log("Waiting for configuration... (run 'codecast auth' to set up)");
+    log("Waiting for configuration... (run 'cast auth' to set up)");
     await new Promise(resolve => setTimeout(resolve, checkInterval));
   }
 }

@@ -4,7 +4,7 @@ set -e
 DOWNLOAD_HOST="https://dl.codecast.sh"
 TOKEN="${1:-}"
 
-echo "Installing codecast..."
+echo "Installing cast..."
 
 # Detect platform
 OS="$(uname -s)"
@@ -48,7 +48,7 @@ DOWNLOAD_URL="${DOWNLOAD_HOST}/${BINARY_NAME}"
 
 mkdir -p "${INSTALL_DIR}"
 
-echo "Downloading codecast..."
+echo "Downloading cast..."
 TEMP_FILE="$(mktemp)"
 if command -v curl >/dev/null 2>&1; then
   curl -fsSL "${DOWNLOAD_URL}" -o "${TEMP_FILE}"
@@ -73,6 +73,7 @@ fi
 echo "Installing to ${INSTALL_DIR}/codecast..."
 mv "${TEMP_FILE}" "${INSTALL_DIR}/codecast"
 chmod +x "${INSTALL_DIR}/codecast"
+ln -sf "${INSTALL_DIR}/codecast" "${INSTALL_DIR}/cast"
 
 if ! echo "${PATH}" | grep -q "${INSTALL_DIR}"; then
   echo ""
@@ -84,20 +85,22 @@ if ! echo "${PATH}" | grep -q "${INSTALL_DIR}"; then
 fi
 
 # Check for stale installs that might shadow the new binary
-RESOLVED="$(command -v codecast 2>/dev/null || true)"
-if [ -n "${RESOLVED}" ] && [ "${RESOLVED}" != "${INSTALL_DIR}/codecast" ]; then
-  echo "Warning: found another codecast at ${RESOLVED}"
-  echo "Removing stale install to avoid conflicts..."
-  rm -f "${RESOLVED}" 2>/dev/null || echo "  Could not remove ${RESOLVED} (permission denied). Please remove it manually."
-fi
+for CMD_NAME in codecast cast; do
+  RESOLVED="$(command -v ${CMD_NAME} 2>/dev/null || true)"
+  if [ -n "${RESOLVED}" ] && [ "${RESOLVED}" != "${INSTALL_DIR}/${CMD_NAME}" ]; then
+    echo "Warning: found another ${CMD_NAME} at ${RESOLVED}"
+    echo "Removing stale install to avoid conflicts..."
+    rm -f "${RESOLVED}" 2>/dev/null || echo "  Could not remove ${RESOLVED} (permission denied). Please remove it manually."
+  fi
+done
 
-if ! command -v codecast >/dev/null 2>&1; then
-  echo "Error: codecast command not found after installation"
+if ! command -v cast >/dev/null 2>&1 && ! command -v codecast >/dev/null 2>&1; then
+  echo "Error: cast command not found after installation"
   echo "Try running: export PATH=\"\${HOME}/.local/bin:\${PATH}\""
   exit 1
 fi
 
-echo "codecast installed successfully!"
+echo "cast installed successfully! (also available as codecast)"
 echo ""
 
 if [ -n "${TOKEN}" ]; then
@@ -109,6 +112,6 @@ else
     echo "Restarting daemon..."
     "${INSTALL_DIR}/codecast" start 2>/dev/null || true
   else
-    echo "Run 'codecast auth' to authenticate and start syncing."
+    echo "Run 'cast auth' to authenticate and start syncing."
   fi
 fi

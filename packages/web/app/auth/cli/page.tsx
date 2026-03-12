@@ -141,7 +141,7 @@ function CliAuthContent() {
             </h1>
             <p className="text-sol-text-muted mb-4">{errorMessage}</p>
             <p className="text-sol-text-muted text-sm">
-              Please return to your terminal and try again with &apos;codecast auth&apos;
+              Please return to your terminal and try again with &apos;cast auth&apos;
             </p>
           </div>
         </div>

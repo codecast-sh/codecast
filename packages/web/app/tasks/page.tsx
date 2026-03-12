@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo, Fragment } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem } from "../../store/inboxStore";
@@ -167,6 +168,16 @@ function TaskRow({
         />
       ) : (
         <span className="flex-1 text-sm text-sol-text truncate">{task.title}</span>
+      )}
+      {(task as any).plan && (
+        <Link
+          href={`/plans/${(task as any).plan._id}`}
+          onClick={(e) => e.stopPropagation()}
+          className="text-[10px] px-1.5 py-0 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 flex-shrink-0 hover:bg-sol-cyan/20 transition-colors"
+          title={`Plan: ${(task as any).plan.title}`}
+        >
+          {(task as any).plan.short_id}
+        </Link>
       )}
       {task.source === "insight" && (
         <span className="text-[10px] px-1.5 py-0 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0">mined</span>

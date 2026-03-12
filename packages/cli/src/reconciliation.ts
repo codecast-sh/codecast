@@ -2,8 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { parseSessionFile } from "./parser.js";
 import { SyncService } from "./syncService.js";
-import { getAllSyncRecords, markSynced } from "./syncLedger.js";
-import { getPosition, setPosition } from "./positionTracker.js";
+import { setPosition } from "./positionTracker.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const RECONCILIATION_FILE = path.join(CONFIG_DIR, "last-reconciliation.json");
@@ -201,12 +200,26 @@ export async function repairDiscrepancies(
   log: (message: string) => void
 ): Promise<number> {
   let repaired = 0;
+  const MAX_RESYNC_BYTES = 5 * 1024 * 1024; // 5MB max re-read to avoid hanging on large files
 
   for (const d of discrepancies) {
+    if (d.status === "count_mismatch" && d.backendCount >= d.localCount) {
+      log(`Skipping repair for ${d.sessionId.slice(0, 8)}... backend already has >= local messages (backend: ${d.backendCount}, local: ${d.localCount})`);
+      continue;
+    }
+
     if (d.status === "missing_backend" || d.status === "count_mismatch") {
-      // Reset position to 0 to force full re-sync
-      setPosition(d.filePath, 0);
-      log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to trigger re-sync`);
+      let fileSize = 0;
+      try { fileSize = fs.statSync(d.filePath).size; } catch { /* ignore */ }
+
+      if (fileSize > MAX_RESYNC_BYTES) {
+        const newPosition = Math.max(0, fileSize - MAX_RESYNC_BYTES);
+        setPosition(d.filePath, newPosition);
+        log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to ${newPosition} (tail ${MAX_RESYNC_BYTES} bytes of ${fileSize} byte file)`);
+      } else {
+        setPosition(d.filePath, 0);
+        log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to trigger full re-sync`);
+      }
       repaired++;
     }
   }

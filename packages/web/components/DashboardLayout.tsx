@@ -106,7 +106,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const handleQuickCreate = useCallback(() => {
     if (creatingRef.current) return;
     creatingRef.current = true;
-    const path = currentConvContext.projectPath || currentConvContext.gitRoot;
+    const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
     const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const now = Date.now();
     const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
@@ -153,7 +153,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     }).catch(() => {
       creatingRef.current = false;
     });
-  }, [createQuickSession, currentConvContext, router, isOnInboxPage, injectSession]);
+  }, [createQuickSession, currentConvContext, directoryFilter, router, isOnInboxPage, injectSession]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -171,7 +171,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         if (store.showMySessions) {
           store.setShowMySessions(false);
         }
-        if (currentConvContext.projectPath || currentConvContext.gitRoot) {
+        if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
           handleQuickCreate();
         } else {
           openNewSession({
@@ -182,7 +182,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hideSidebar, isSidebarCollapsed, isZenMode, isOnInboxPage, currentConvContext, openNewSession, handleQuickCreate, updateUI]);
+  }, [hideSidebar, isSidebarCollapsed, isZenMode, isOnInboxPage, currentConvContext, directoryFilter, openNewSession, handleQuickCreate, updateUI]);
 
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
@@ -237,7 +237,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             )}
             <button
               onClick={() => {
-                if (currentConvContext.projectPath || currentConvContext.gitRoot) {
+                if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
                   handleQuickCreate();
                 } else {
                   openNewSession({});

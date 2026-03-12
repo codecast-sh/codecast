@@ -71,6 +71,7 @@ export function cleanContent(content: string): string {
     .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, "")
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
     .replace(/<[^>]+>/g, "")
+    .replace(/\x1b\[[0-9;]*m/g, "")
     .replace(/^\s*Caveat:.*$/gm, "")
     .trim();
 }

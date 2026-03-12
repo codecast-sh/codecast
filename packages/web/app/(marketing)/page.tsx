@@ -555,25 +555,25 @@ export default function LandingPage() {
                 <svg className="w-5 h-5 text-[#6c71c4] shrink-0" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                <span>Search history like ripgrep: <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">codecast search &quot;auth&quot;</code></span>
+                <span>Search history like ripgrep: <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">cast search &quot;auth&quot;</code></span>
               </div>
               <div className="flex items-center gap-3 text-[#657b83]">
                 <svg className="w-5 h-5 text-[#6c71c4] shrink-0" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                <span>Resume sessions: <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">codecast resume &quot;logo&quot;</code></span>
+                <span>Resume sessions: <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">cast resume &quot;logo&quot;</code></span>
               </div>
               <div className="flex items-center gap-3 text-[#657b83]">
                 <svg className="w-5 h-5 text-[#6c71c4] shrink-0" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                <span>Track decisions: <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">codecast decisions add &quot;Use Convex&quot;</code></span>
+                <span>Track decisions: <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">cast decisions add &quot;Use Convex&quot;</code></span>
               </div>
               <div className="flex items-center gap-3 text-[#657b83]">
                 <svg className="w-5 h-5 text-[#6c71c4] shrink-0" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                <span>File blame: <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">codecast blame src/auth.ts</code></span>
+                <span>File blame: <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">cast blame src/auth.ts</code></span>
               </div>
             </div>
             <Link href="/features" className="text-[#b58900] hover:text-[#cb4b16] font-medium flex items-center gap-1">
@@ -596,7 +596,7 @@ export default function LandingPage() {
             <div className="p-4 font-mono text-sm space-y-3">
               <div>
                 <span className="text-[#859900]">$</span>
-                <span className="text-[#93a1a1]"> codecast ask &quot;how did we implement auth?&quot;</span>
+                <span className="text-[#93a1a1]"> cast ask &quot;how did we implement auth?&quot;</span>
               </div>
               <div className="text-[#586e75] text-xs">
                 Searching 3 relevant sessions...
@@ -611,7 +611,7 @@ export default function LandingPage() {
               </div>
               <div className="mt-3">
                 <span className="text-[#859900]">$</span>
-                <span className="text-[#93a1a1]"> codecast blame src/auth/callback.ts</span>
+                <span className="text-[#93a1a1]"> cast blame src/auth/callback.ts</span>
               </div>
               <div className="text-[#586e75] text-xs">
                 5 sessions touched this file

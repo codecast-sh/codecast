@@ -103,9 +103,9 @@ export default function CliSettingsPage() {
       <div className="bg-sol-bg-alt/50 rounded-lg p-6 border border-sol-border">
         <h2 className="text-lg font-medium text-sol-text mb-4">CLI Commands</h2>
         <div className="bg-sol-base03 p-3 rounded font-mono text-sm space-y-1">
-          <p><span className="text-sol-cyan">codecast start</span> <span className="text-sol-base1">- Start the sync daemon</span></p>
-          <p><span className="text-sol-cyan">codecast stop</span> <span className="text-sol-base1">- Stop the sync daemon</span></p>
-          <p><span className="text-sol-cyan">codecast status</span> <span className="text-sol-base1">- Check daemon status</span></p>
+          <p><span className="text-sol-cyan">cast start</span> <span className="text-sol-base1">- Start the sync daemon</span></p>
+          <p><span className="text-sol-cyan">cast stop</span> <span className="text-sol-base1">- Stop the sync daemon</span></p>
+          <p><span className="text-sol-cyan">cast status</span> <span className="text-sol-base1">- Check daemon status</span></p>
         </div>
       </div>
     </div>

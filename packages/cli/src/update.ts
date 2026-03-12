@@ -1,7 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { execSync, spawn } from "child_process";
 
 const VERSION = "1.0.67";
 const MEMORY_VERSION = "3";
@@ -144,13 +143,13 @@ export async function checkForUpdates(force = false): Promise<string | null> {
 
 export function isDevMode(): boolean {
   const exe = process.execPath.toLowerCase();
-  return exe.includes("bun") || !exe.includes("codecast");
+  return exe.includes("bun") || (!exe.includes("codecast") && !exe.includes("/cast"));
 }
 
 export async function performUpdate(): Promise<boolean> {
   if (isDevMode()) {
     console.error("Cannot self-update in dev mode (running via bun)");
-    console.error("Install the binary version: curl -fsSL codecast.sh/install | sh");
+    console.error("Install the binary version: curl -fsSL codecast.sh/install | sh (provides 'cast' command)");
     return false;
   }
 
@@ -171,7 +170,7 @@ export async function performUpdate(): Promise<boolean> {
       return false;
     }
 
-    console.log(`Downloading codecast v${latest.version}...`);
+    console.log(`Downloading cast v${latest.version}...`);
 
     const binaryResponse = await fetch(binary.url);
     if (!binaryResponse.ok) {
@@ -219,6 +218,20 @@ export async function performUpdate(): Promise<boolean> {
     writeUpdateState(state);
 
     console.log(`Updated to v${latest.version}`);
+
+    // Ensure cast alias symlink
+    const castLink = path.join(path.dirname(currentExe), "cast");
+    try {
+      const target = fs.readlinkSync(castLink);
+      if (target !== currentExe) {
+        fs.unlinkSync(castLink);
+        fs.symlinkSync(currentExe, castLink);
+      }
+    } catch {
+      try { fs.unlinkSync(castLink); } catch {}
+      fs.symlinkSync(currentExe, castLink);
+    }
+
     return true;
   } catch (err) {
     console.error("Update failed:", err);
@@ -228,5 +241,5 @@ export async function performUpdate(): Promise<boolean> {
 
 export function showUpdateNotice(availableVersion: string): void {
   console.log(`\n  Update available: v${VERSION} -> v${availableVersion}`);
-  console.log(`  Run 'codecast update' to update\n`);
+  console.log(`  Run 'cast update' to update\n`);
 }

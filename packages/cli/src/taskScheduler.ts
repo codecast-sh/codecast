@@ -243,10 +243,10 @@ export class TaskScheduler {
     parts.push("");
     parts.push("---");
     parts.push("Instructions:");
-    parts.push(`- When done, run: codecast task complete ${task._id} --summary "brief description of what was done"`);
-    parts.push('- To schedule follow-up: codecast task add "..." --in <time>');
+    parts.push(`- When done, run: cast task complete ${task._id} --summary "brief description of what was done"`);
+    parts.push('- To schedule follow-up: cast task add "..." --in <time>');
     if (task.originating_conversation_id) {
-      parts.push(`- Run \`codecast read ${task.originating_conversation_id}\` for full original context`);
+      parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);
     }
 
     return parts.join("\n");

@@ -1057,6 +1057,12 @@ export const webGetTaskDetail = query({
       actor: h.user_id ? historyUsers.get(h.user_id.toString()) : null,
     }));
 
+    let plan = null;
+    if (task.plan_id) {
+      const p = await ctx.db.get(task.plan_id);
+      if (p) plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
+    }
+
     return {
       ...task,
       comments,
@@ -1065,6 +1071,7 @@ export const webGetTaskDetail = query({
       source_insight: insight,
       creator,
       history: enrichedHistory,
+      plan,
     };
   },
 });

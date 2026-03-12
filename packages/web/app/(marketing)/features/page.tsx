@@ -75,9 +75,9 @@ const FEATURE_CATEGORIES = [
     icon: BrainIcon,
     color: "purple",
     commands: [
-      { cmd: "codecast memory", desc: "Install agent memory component" },
-      { cmd: "codecast ask \"how did we implement auth?\"", desc: "Natural language query" },
-      { cmd: "codecast context \"add stripe\"", desc: "Pre-work intelligence" },
+      { cmd: "cast memory", desc: "Install agent memory component" },
+      { cmd: "cast ask \"how did we implement auth?\"", desc: "Natural language query" },
+      { cmd: "cast context \"add stripe\"", desc: "Pre-work intelligence" },
     ],
   },
   {
@@ -87,9 +87,9 @@ const FEATURE_CATEGORIES = [
     icon: SearchIcon,
     color: "blue",
     commands: [
-      { cmd: "codecast search \"auth\" -s 7d", desc: "Search last 7 days" },
-      { cmd: "codecast feed -g", desc: "Browse all sessions" },
-      { cmd: "codecast read abc123 10:20", desc: "Read messages 10-20" },
+      { cmd: "cast search \"auth\" -s 7d", desc: "Search last 7 days" },
+      { cmd: "cast feed -g", desc: "Browse all sessions" },
+      { cmd: "cast read abc123 10:20", desc: "Read messages 10-20" },
     ],
   },
   {
@@ -99,9 +99,9 @@ const FEATURE_CATEGORIES = [
     icon: TerminalIcon,
     color: "amber",
     commands: [
-      { cmd: "codecast resume \"logo design\"", desc: "Search and resume" },
-      { cmd: "codecast handoff", desc: "Generate context transfer" },
-      { cmd: "codecast summary --today", desc: "Summarize today's work" },
+      { cmd: "cast resume \"logo design\"", desc: "Search and resume" },
+      { cmd: "cast handoff", desc: "Generate context transfer" },
+      { cmd: "cast summary --today", desc: "Summarize today's work" },
     ],
   },
   {
@@ -111,9 +111,9 @@ const FEATURE_CATEGORIES = [
     icon: GitIcon,
     color: "green",
     commands: [
-      { cmd: "codecast blame src/auth.ts", desc: "Who touched this file" },
-      { cmd: "codecast similar --file src/api.ts", desc: "Related sessions" },
-      { cmd: "codecast diff --today", desc: "Today's file changes" },
+      { cmd: "cast blame src/auth.ts", desc: "Who touched this file" },
+      { cmd: "cast similar --file src/api.ts", desc: "Related sessions" },
+      { cmd: "cast diff --today", desc: "Today's file changes" },
     ],
   },
   {
@@ -123,9 +123,9 @@ const FEATURE_CATEGORIES = [
     icon: UsersIcon,
     color: "orange",
     commands: [
-      { cmd: "codecast links", desc: "Get shareable URLs" },
-      { cmd: "codecast private abc123", desc: "Mark session private" },
-      { cmd: "codecast bookmark abc123 42", desc: "Bookmark a message" },
+      { cmd: "cast links", desc: "Get shareable URLs" },
+      { cmd: "cast private abc123", desc: "Mark session private" },
+      { cmd: "cast bookmark abc123 42", desc: "Bookmark a message" },
     ],
   },
   {
@@ -135,9 +135,9 @@ const FEATURE_CATEGORIES = [
     icon: LightbulbIcon,
     color: "red",
     commands: [
-      { cmd: "codecast decisions add \"Use Convex\"", desc: "Record decision" },
-      { cmd: "codecast learn add \"http-pattern\"", desc: "Save code pattern" },
-      { cmd: "codecast decisions --search \"db\"", desc: "Search decisions" },
+      { cmd: "cast decisions add \"Use Convex\"", desc: "Record decision" },
+      { cmd: "cast learn add \"http-pattern\"", desc: "Save code pattern" },
+      { cmd: "cast decisions --search \"db\"", desc: "Search decisions" },
     ],
   },
 ];
@@ -152,13 +152,13 @@ const QUICK_START_STEPS = [
   {
     step: 2,
     title: "Authenticate",
-    code: "codecast auth",
+    code: "cast auth",
     detail: "Opens browser for OAuth. Takes 10 seconds.",
   },
   {
     step: 3,
     title: "Start syncing",
-    code: "codecast start",
+    code: "cast start",
     detail: "Background daemon watches and syncs automatically.",
   },
 ];
@@ -289,7 +289,7 @@ export default function CLIPage() {
             <div className="p-4 font-mono text-sm space-y-4">
               <div>
                 <span className="text-[#859900]">$</span>
-                <span className="text-[#93a1a1]"> codecast search &quot;auth bug&quot; -s 7d</span>
+                <span className="text-[#93a1a1]"> cast search &quot;auth bug&quot; -s 7d</span>
               </div>
               <div className="text-[#586e75] text-xs">
                 Searching sessions from last 7 days...
@@ -315,7 +315,7 @@ export default function CLIPage() {
               </div>
               <div className="mt-4">
                 <span className="text-[#859900]">$</span>
-                <span className="text-[#93a1a1]"> codecast resume &quot;OAuth callback&quot;</span>
+                <span className="text-[#93a1a1]"> cast resume &quot;OAuth callback&quot;</span>
               </div>
               <div className="text-[#859900]">
                 Opening: Fixed OAuth callback error
@@ -474,19 +474,19 @@ export default function CLIPage() {
           <div>
             <CodeBlock title="~/.claude/CLAUDE.md">{`## Memory
 
-You have access to past sessions via codecast.
+You have access to past sessions via cast.
 Search proactively when starting tasks.
 
 \`\`\`bash
 # Search & Browse
-codecast search "auth" -s 7d
-codecast context "stripe integration"
-codecast ask "why did we use Convex?"
+cast search "auth" -s 7d
+cast context "stripe integration"
+cast ask "why did we use Convex?"
 
 # Recall & Resume
-codecast handoff
-codecast decisions list
-codecast blame src/auth.ts
+cast handoff
+cast decisions list
+cast blame src/auth.ts
 \`\`\``}</CodeBlock>
           </div>
         </div>

@@ -118,15 +118,15 @@ export function OnboardingEmptyState() {
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
           <div className="p-4 rounded-lg bg-sol-bg-alt/30">
-            <code className="text-green-400 text-sm">codecast start</code>
+            <code className="text-green-400 text-sm">cast start</code>
             <p className="text-sol-text-dim text-xs mt-2">Start syncing</p>
           </div>
           <div className="p-4 rounded-lg bg-sol-bg-alt/30">
-            <code className="text-green-400 text-sm">codecast status</code>
+            <code className="text-green-400 text-sm">cast status</code>
             <p className="text-sol-text-dim text-xs mt-2">Check status</p>
           </div>
           <div className="p-4 rounded-lg bg-sol-bg-alt/30">
-            <code className="text-green-400 text-sm">codecast stop</code>
+            <code className="text-green-400 text-sm">cast stop</code>
             <p className="text-sol-text-dim text-xs mt-2">Stop syncing</p>
           </div>
         </div>

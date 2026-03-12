@@ -19,24 +19,24 @@ For testing the web app locally:
 
 ```bash
 # Search & Browse (quotes = exact phrase, no quotes = all words anywhere)
-codecast search auth                  # finds "auth" anywhere
-codecast search "error handling"      # exact phrase match
-codecast search bug -g -s 7d          # global, last 7 days
-codecast feed                         # browse recent conversations
-codecast read <id> 15:25              # read messages 15-25
+cast search auth                  # finds "auth" anywhere
+cast search "error handling"      # exact phrase match
+cast search bug -g -s 7d          # global, last 7 days
+cast feed                         # browse recent conversations
+cast read <id> 15:25              # read messages 15-25
 
 # Analysis
-codecast diff <id>                    # files changed, commits, tools used
-codecast diff --today                 # aggregate today's work
-codecast summary <id>                 # goal, approach, outcome, files
-codecast context "implement auth"     # find relevant prior sessions
-codecast ask "how does X work"        # query across sessions
+cast diff <id>                    # files changed, commits, tools used
+cast diff --today                 # aggregate today's work
+cast summary <id>                 # goal, approach, outcome, files
+cast context "implement auth"     # find relevant prior sessions
+cast ask "how does X work"        # query across sessions
 
 # Handoff & Tracking
-codecast handoff                      # generate context transfer doc
-codecast bookmark <id> <msg> --name x # save shareable link
-codecast decisions list               # view architectural decisions
-codecast decisions add "title" --reason "why"
+cast handoff                      # generate context transfer doc
+cast bookmark <id> <msg> --name x # save shareable link
+cast decisions list               # view architectural decisions
+cast decisions add "title" --reason "why"
 ```
 
 Common options: -g (global), -s/-e (start/end: 7d, 2w, yesterday), -p (page), -n (limit)
@@ -58,7 +58,7 @@ cd packages/cli
 # 2. Deploy (builds binaries and uploads to R2)
 ./scripts/deploy.sh              # normal release, users update manually
 ./scripts/deploy.sh --force      # force all remote clients to auto-update
-# 3. Verify: curl -fsSL codecast.sh/install | sh && codecast --version
+# 3. Verify: curl -fsSL codecast.sh/install | sh && cast --version
 # 4. Commit, tag, push
 git tag -a v1.0.X -m "release(cli): v1.0.X"
 git push origin v1.0.X

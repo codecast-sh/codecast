@@ -518,6 +518,10 @@ function formatDuration(startTs: number): string {
   return `${days}d ${hours % 24}h`;
 }
 
+function stripAnsiCodes(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 function stripSystemTags(content: string): string {
   return content
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
@@ -702,6 +706,7 @@ function classifyUserMessage(
     return msg.images?.length ? { kind: 'normal' } : { kind: 'empty' };
   }
   const t = content.trim();
+  if (!stripSystemTags(t).trim()) return { kind: 'noise' };
   if (isCommandMessage(t)) return { kind: 'command' };
   if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
   if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
@@ -4079,7 +4084,7 @@ function SystemBlock({ content, subtype, timestamp, messageUuid, messageId, conv
 
   if ((subtype === "stop_hook_summary" || subtype === "local_command") && content) {
     const label = subtype === "stop_hook_summary" ? "hook" : "command";
-    const trimmed = content.slice(0, 200);
+    const trimmed = stripAnsiCodes(content).slice(0, 200);
     return (
       <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-bg-alt/30 border-l-2 border-sol-border text-xs">
         <span className="text-[10px] text-sol-text-dim bg-sol-bg-highlight px-1.5 py-0.5 rounded font-mono">{label}</span>
@@ -4088,7 +4093,7 @@ function SystemBlock({ content, subtype, timestamp, messageUuid, messageId, conv
     );
   }
 
-  const cleanText = content.replace(/<[^>]+>/g, "").slice(0, 200);
+  const cleanText = stripAnsiCodes(content.replace(/<[^>]+>/g, "")).slice(0, 200);
   if (!cleanText) return null;
 
   return (
@@ -6276,7 +6281,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         ? `${cdPrefix}codex resume ${sessionId}`
         : `${cdPrefix}claude --resume ${sessionId}${flags}`;
     }
-    return `${cdPrefix}codecast resume ${sessionId} --as ${targetAgent}`;
+    return `${cdPrefix}cast resume ${sessionId} --as ${targetAgent}`;
   }, [managedSession?.session_id, conversation?.session_id, conversation?.agent_type, conversation?.project_path, conversation?.git_root, (conversation as any)?.cli_flags]);
 
   const handleCopyResumeCommand = useCallback(async (targetAgent: "claude" | "codex") => {
@@ -7421,6 +7426,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                  managedSession?.agent_status === "connected" ? "Conn" :
                  "Work"}</span>
               </span>
+            )}
+
+            {(conversation as any)?.active_plan && (
+              <Link href={`/plans/${(conversation as any).active_plan._id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors">
+                {(conversation as any).active_plan.short_id}
+              </Link>
+            )}
+            {(conversation as any)?.active_task && (
+              <Link href={`/tasks/${(conversation as any).active_task._id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/20 hover:bg-sol-yellow/20 transition-colors">
+                {(conversation as any).active_task.short_id}
+              </Link>
             )}
 
             {conversation && (
