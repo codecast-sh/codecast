@@ -446,9 +446,10 @@ export const useInboxStore = create<InboxStoreState>(
     delete newSessions[id];
     const newPending = { ...state.pending };
     newPending[`sessions:${id}`] = { type: "exclude", expiresAt: Date.now() + 15_000 };
+    const wasPinned = state.sessions[id]?.is_pinned;
     const newConversations = { ...state.conversations };
     if (newConversations[id]) {
-      newConversations[id] = { ...newConversations[id], inbox_dismissed_at: Date.now() };
+      newConversations[id] = { ...newConversations[id], inbox_dismissed_at: Date.now(), ...(wasPinned ? { inbox_pinned_at: null } : {}) };
     }
     let newSessionId = state.currentSessionId;
     if (state.currentSessionId === id) {
@@ -462,7 +463,7 @@ export const useInboxStore = create<InboxStoreState>(
       currentSessionId: newSessionId,
     });
     get()._dispatch("patch", [], {
-      conversations: { [id]: { inbox_dismissed_at: Date.now() } },
+      conversations: { [id]: { inbox_dismissed_at: Date.now(), ...(wasPinned ? { inbox_pinned_at: null } : {}) } },
     }).catch(() => {});
   },
 
