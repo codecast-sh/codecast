@@ -125,13 +125,34 @@
 }
 
 .prose pre {
-  @apply rounded-md text-sm;
-  background-color: var(--sol-bg-alt) !important;
-  border: 1px solid var(--sol-border) !important;
-  border-opacity: 0.3;
+  @apply text-sm;
+  background: transparent !important;
+  border: none !important;
   outline: none !important;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.code-block-accent {
+  position: relative;
+}
+
+.code-block-accent::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: linear-gradient(
+    to bottom,
+    var(--sol-cyan) 0%,
+    var(--sol-blue) 40%,
+    var(--sol-violet) 100%
+  );
+  opacity: 0.35;
 }
 
 .prose code {
@@ -266,6 +287,7 @@
 /* Code block horizontal scrollbar - solarized */
 .cb-hscroll {
   overflow-x: auto;
+  overflow-y: hidden;
 }
 .cb-hscroll::-webkit-scrollbar {
   height: 8px;
