@@ -10,7 +10,7 @@ import { maskToken } from "./redact.js";
 import { AuthServer } from "./authServer.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, hasTmux, tryInstallTmux } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getPlanVersion } from "./update.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
@@ -283,6 +283,8 @@ interface Config {
   task_version?: string;
   work_enabled?: boolean;
   work_version?: string;
+  plan_enabled?: boolean;
+  plan_version?: string;
   claude_args?: string;
   codex_args?: string;
   sync_mode?: "all" | "selected";
@@ -1581,6 +1583,28 @@ codecast doc sync                           # Sync plan files to doc library
 ${WORK_SNIPPET_END}
 `;
 
+const PLAN_SNIPPET_END = "<!-- /codecast-plans -->";
+const PLAN_SNIPPET = `
+## Plans
+
+Use \`codecast plan\` to manage multi-session plans. Plans persist across sessions and connect tasks to goals.
+
+\`\`\`bash
+codecast plan create "Title" -g "goal" -a "criterion"  # Create plan
+codecast plan ls                                        # List active plans
+codecast plan show <plan_id>                            # Full plan detail
+codecast plan bind <plan_id>                            # Bind session to plan
+codecast plan unbind                                    # Unbind session
+codecast plan update <plan_id> --log "progress"         # Log progress
+codecast plan decide <plan_id> "decision" --rationale "why"
+codecast plan discover <plan_id> "finding"
+codecast plan pointer <plan_id> "label" "path"
+codecast plan activate|pause|done|drop <plan_id>        # Status transitions
+codecast task create "Title" --plan <plan_id>            # Create task in plan
+\`\`\`
+${PLAN_SNIPPET_END}
+`;
+
 interface SnippetTarget {
   filePath: string;
   dirPath: string;
@@ -1770,6 +1794,56 @@ function installWorkSnippet(update = false): { installed: boolean; updated: bool
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
+function installPlanSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+
+  let existing = "";
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, "utf-8");
+  }
+
+  const hasPlan = existing.includes("## Plans") && existing.includes(PLAN_SNIPPET_END);
+  if (hasPlan && !update) {
+    return { installed: false, updated: false };
+  }
+
+  if (hasPlan && update) {
+    const planStart = existing.indexOf("## Plans");
+    let planEnd = existing.length;
+
+    const endMarkerIdx = existing.indexOf(PLAN_SNIPPET_END, planStart);
+    if (endMarkerIdx !== -1) {
+      planEnd = endMarkerIdx + PLAN_SNIPPET_END.length;
+      if (existing[planEnd] === "\n") planEnd++;
+    }
+
+    const before = existing.slice(0, planStart);
+    const after = existing.slice(planEnd);
+    existing = before + after;
+    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + PLAN_SNIPPET, { mode: 0o600 });
+    return { installed: true, updated: true };
+  }
+
+  fs.writeFileSync(filePath, existing + PLAN_SNIPPET, { mode: 0o600 });
+  return { installed: true, updated: false };
+}
+
+function installPlanSnippet(update = false): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    const result = installPlanSnippetToFile(target.filePath, target.dirPath, update);
+    if (result.installed) anyInstalled = true;
+    if (result.updated) anyUpdated = true;
+  }
+
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
 async function promptMemoryEnablement(): Promise<void> {
   const config = readConfig() || {};
 
@@ -1797,6 +1871,19 @@ async function promptMemoryEnablement(): Promise<void> {
     }
   } else if (config.work_enabled) {
     installWorkSnippet(false);
+  }
+
+  // Auto-update plan snippet if enabled
+  if (config.plan_enabled && config.plan_version !== getPlanVersion()) {
+    const result = installPlanSnippet(true);
+    config.plan_version = getPlanVersion();
+    writeConfig(config);
+    if (result.updated) {
+      const targets = getSnippetTargets();
+      console.log(`Plan snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+    }
+  } else if (config.plan_enabled) {
+    installPlanSnippet(false);
   }
 
   if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
@@ -7594,6 +7681,7 @@ work
   .option("--labels <labels>", "Comma-separated labels")
   .option("--assignee <name>", "Assignee")
   .option("--status <status>", "Initial status (default: open)", "open")
+  .option("--plan <plan_id>", "Plan short ID to associate this task with")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = {
       title,
@@ -7606,6 +7694,7 @@ work
     if (options.assignee) body.assignee = options.assignee;
     if (options.blockedBy) body.blocked_by = options.blockedBy.split(",").map((s: string) => s.trim());
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
+    if (options.plan) body.plan_id = options.plan;
 
     const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
     if (sessionId) body.conversation_id = sessionId;
@@ -7678,8 +7767,15 @@ work
     const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
     const body: Record<string, any> = { short_id: shortId, status: "in_progress" };
     if (sessionId) body.conversation_id = sessionId;
-    await cliPost("/cli/work/update", body);
+    const result = await cliPost("/cli/work/update", body);
     console.log(`${c.green}ok${c.reset} Started ${c.cyan}${shortId}${c.reset}`);
+
+    if (result.plan_id && sessionId) {
+      try {
+        await cliPost("/cli/plans/bind", { short_id: result.plan_id, session_id: sessionId });
+        console.log(`${c.dim}Session bound to plan ${result.plan_id}${c.reset}`);
+      } catch {}
+    }
   });
 
 work
@@ -7810,9 +7906,11 @@ work
   .command("ready")
   .description("Show tasks ready to work on (open, no blockers)")
   .option("-p, --project <id>", "Filter by project")
+  .option("--plan <plan_id>", "Filter by plan")
   .action(async (options: any) => {
     const body: Record<string, any> = { ready: true };
     if (options.project) body.project_id = options.project;
+    if (options.plan) body.plan_id = options.plan;
     const tasks = await cliPost("/cli/work/list", body);
     if (!Array.isArray(tasks) || tasks.length === 0) {
       console.log(fmt.muted("No ready tasks."));
@@ -7877,6 +7975,311 @@ work
       console.log("Your agents can now track and manage work items.");
     } else {
       console.log("Work snippet is up to date.");
+    }
+  });
+
+// --- Plans ---
+
+const PLAN_STATUS_ICONS: Record<string, string> = {
+  draft: "○",
+  active: "◉",
+  paused: "◫",
+  done: "●",
+  abandoned: "✕",
+};
+
+function formatPlanItem(p: any): string {
+  const icon = PLAN_STATUS_ICONS[p.status] || "?";
+  const progress = p.task_total ? ` (${p.task_done}/${p.task_total})` : "";
+  return `  ${icon} ${c.cyan}${p.short_id}${c.reset} ${p.title} ${c.dim}${p.status}${progress}${c.reset}`;
+}
+
+const plan = program
+  .command("plan")
+  .alias("p")
+  .description("Manage multi-session plans");
+
+plan
+  .command("create")
+  .description("Create a new plan")
+  .argument("<title>", "Plan title")
+  .option("-g, --goal <text>", "Plan goal")
+  .option("-a, --acceptance <criteria>", "Acceptance criterion (repeatable)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
+  .option("--from-session", "Promote from current session")
+  .option("--project <id>", "Project ID")
+  .action(async (title: string, options: any) => {
+    const body: Record<string, any> = { title };
+    if (options.goal) body.goal = options.goal;
+    if (options.acceptance?.length) body.acceptance_criteria = options.acceptance;
+    if (options.project) body.project_id = options.project;
+
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    if (options.fromSession) {
+      body.source = "promoted";
+      if (sessionId) body.session_id = sessionId;
+    } else {
+      body.source = "human";
+    }
+
+    const result = await cliPost("/cli/plans/create", body);
+    console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset}: ${title}`);
+  });
+
+plan
+  .command("ls")
+  .description("List plans")
+  .option("--active", "Show active plans (default)")
+  .option("--draft", "Show draft plans")
+  .option("--done", "Show done plans")
+  .option("--all", "Show all statuses")
+  .option("--project <id>", "Filter by project")
+  .action(async (options: any) => {
+    const body: Record<string, any> = {};
+    if (options.all) body.status = "all";
+    else if (options.draft) body.status = "draft";
+    else if (options.done) body.status = "done";
+    else body.status = "active";
+    if (options.project) body.project_id = options.project;
+
+    const plans = await cliPost("/cli/plans/list", body);
+    if (!Array.isArray(plans) || plans.length === 0) {
+      console.log(fmt.muted("No plans found."));
+      return;
+    }
+    for (const p of plans) {
+      console.log(formatPlanItem(p));
+    }
+    console.log(fmt.muted(`\n  ${plans.length} plans`));
+  });
+
+plan
+  .command("show")
+  .description("Show plan details")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const result = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!result) {
+      console.error("Plan not found");
+      process.exit(1);
+    }
+    const p = result;
+    const icon = PLAN_STATUS_ICONS[p.status] || "?";
+    const progress = p.task_total ? `${p.task_done}/${p.task_total} tasks done` : "no tasks";
+    console.log(`\n  ${icon} ${c.bold}${p.title}${c.reset}`);
+    console.log(`  ${c.cyan}${p.short_id}${c.reset} | ${p.status} | ${progress}`);
+    if (p.goal) console.log(`\n  ${c.bold}Goal:${c.reset} ${p.goal}`);
+    if (p.acceptance_criteria?.length) {
+      console.log(`\n  ${c.bold}Acceptance Criteria:${c.reset}`);
+      for (const ac of p.acceptance_criteria) {
+        console.log(`    - ${ac}`);
+      }
+    }
+    if (p.tasks?.length) {
+      console.log(`\n  ${c.bold}Tasks:${c.reset}`);
+      for (const t of p.tasks) {
+        const tIcon = STATUS_ICONS[t.status] || "?";
+        console.log(`    ${tIcon} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(${t.status})${c.reset}`);
+      }
+    }
+    if (p.progress_log?.length) {
+      console.log(`\n  ${c.bold}Progress (recent):${c.reset}`);
+      for (const entry of p.progress_log.slice(-10)) {
+        const ts = new Date(entry.timestamp).toLocaleString();
+        console.log(`    ${c.dim}${ts}:${c.reset} ${entry.text}`);
+      }
+    }
+    if (p.decisions?.length) {
+      console.log(`\n  ${c.bold}Decisions:${c.reset}`);
+      for (const d of p.decisions) {
+        console.log(`    ${d.decision} ${c.dim}(${d.rationale})${c.reset}`);
+      }
+    }
+    if (p.discoveries?.length) {
+      console.log(`\n  ${c.bold}Discoveries:${c.reset}`);
+      for (const d of p.discoveries) {
+        console.log(`    ${d.finding}`);
+      }
+    }
+    if (p.context_pointers?.length) {
+      console.log(`\n  ${c.bold}Context:${c.reset}`);
+      for (const cp of p.context_pointers) {
+        console.log(`    ${cp.label}: ${cp.path_or_url}`);
+      }
+    }
+    console.log();
+  });
+
+plan
+  .command("bind")
+  .description("Bind current session to a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    if (!sessionId) {
+      console.error("No session ID found (CLAUDE_CODE_SESSION_ID or CODEX_SESSION_ID)");
+      process.exit(1);
+    }
+    await cliPost("/cli/plans/bind", { short_id: planId, session_id: sessionId });
+    console.log(`${c.green}ok${c.reset} Session bound to plan ${c.cyan}${planId}${c.reset}`);
+  });
+
+plan
+  .command("unbind")
+  .description("Unbind current session from its plan")
+  .action(async () => {
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    if (!sessionId) {
+      console.error("No session ID found (CLAUDE_CODE_SESSION_ID or CODEX_SESSION_ID)");
+      process.exit(1);
+    }
+    await cliPost("/cli/plans/unbind", { session_id: sessionId });
+    console.log(`${c.green}ok${c.reset} Session unbound from plan`);
+  });
+
+plan
+  .command("update")
+  .description("Update plan or log progress")
+  .argument("<plan_id>", "Plan short ID")
+  .option("--log <entry>", "Add progress log entry")
+  .option("--goal <text>", "Update goal")
+  .option("--title <text>", "Update title")
+  .action(async (planId: string, options: any) => {
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    if (options.log) {
+      const body: Record<string, any> = { short_id: planId, entry: options.log };
+      if (sessionId) body.session_id = sessionId;
+      await cliPost("/cli/plans/log", body);
+      console.log(`${c.green}ok${c.reset} Progress logged to ${c.cyan}${planId}${c.reset}`);
+    }
+    if (options.goal || options.title) {
+      const body: Record<string, any> = { short_id: planId };
+      if (options.goal) body.goal = options.goal;
+      if (options.title) body.title = options.title;
+      await cliPost("/cli/plans/update", body);
+      console.log(`${c.green}ok${c.reset} Updated plan ${c.cyan}${planId}${c.reset}`);
+    }
+    if (!options.log && !options.goal && !options.title) {
+      console.error("Specify --log, --goal, or --title");
+      process.exit(1);
+    }
+  });
+
+plan
+  .command("decide")
+  .description("Log a decision on a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .argument("<decision>", "The decision")
+  .option("--rationale <why>", "Rationale for the decision")
+  .action(async (planId: string, decision: string, options: any) => {
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const body: Record<string, any> = { short_id: planId, decision };
+    if (options.rationale) body.rationale = options.rationale;
+    if (sessionId) body.session_id = sessionId;
+    await cliPost("/cli/plans/decide", body);
+    console.log(`${c.green}ok${c.reset} Decision logged to ${c.cyan}${planId}${c.reset}`);
+  });
+
+plan
+  .command("discover")
+  .description("Log a discovery on a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .argument("<finding>", "The finding")
+  .action(async (planId: string, finding: string) => {
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const body: Record<string, any> = { short_id: planId, finding };
+    if (sessionId) body.session_id = sessionId;
+    await cliPost("/cli/plans/discover", body);
+    console.log(`${c.green}ok${c.reset} Discovery logged to ${c.cyan}${planId}${c.reset}`);
+  });
+
+plan
+  .command("pointer")
+  .description("Add a context pointer to a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .argument("<label>", "Pointer label")
+  .argument("<path>", "Path or URL")
+  .action(async (planId: string, label: string, pathOrUrl: string) => {
+    await cliPost("/cli/plans/pointer", { short_id: planId, label, path_or_url: pathOrUrl });
+    console.log(`${c.green}ok${c.reset} Pointer added to ${c.cyan}${planId}${c.reset}`);
+  });
+
+plan
+  .command("activate")
+  .description("Activate a plan (draft -> active)")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    await cliPost("/cli/plans/status", { short_id: planId, status: "active" });
+    console.log(`${c.green}ok${c.reset} Plan ${c.cyan}${planId}${c.reset} activated`);
+  });
+
+plan
+  .command("pause")
+  .description("Pause a plan (active -> paused)")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    await cliPost("/cli/plans/status", { short_id: planId, status: "paused" });
+    console.log(`${c.green}ok${c.reset} Plan ${c.cyan}${planId}${c.reset} paused`);
+  });
+
+plan
+  .command("done")
+  .description("Mark a plan as done")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    await cliPost("/cli/plans/status", { short_id: planId, status: "done" });
+    console.log(`${c.green}ok${c.reset} Plan ${c.cyan}${planId}${c.reset} done`);
+  });
+
+plan
+  .command("drop")
+  .description("Abandon a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    await cliPost("/cli/plans/status", { short_id: planId, status: "abandoned" });
+    console.log(`${c.green}ok${c.reset} Plan ${c.cyan}${planId}${c.reset} abandoned`);
+  });
+
+plan
+  .command("promote")
+  .description("Promote current session's ad-hoc plan to a persistent plan")
+  .action(async () => {
+    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    if (!sessionId) {
+      console.error("No session ID found (CLAUDE_CODE_SESSION_ID or CODEX_SESSION_ID)");
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/plans/create", { title: "Promoted from session", source: "promoted", session_id: sessionId });
+    console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset} from session`);
+  });
+
+plan
+  .command("install")
+  .description("Install plan snippet into agent config (CLAUDE.md, AGENTS.md)")
+  .option("--disable", "Remove plan snippet and disable")
+  .action(async (options: any) => {
+    const config = readConfig() || {};
+
+    if (options.disable) {
+      config.plan_enabled = false;
+      writeConfig(config);
+      console.log("Plan snippet disabled. Run 'codecast plan install' to re-enable.");
+      return;
+    }
+
+    const result = installPlanSnippet(true);
+    config.plan_enabled = true;
+    config.plan_version = getPlanVersion();
+    writeConfig(config);
+
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
+    if (result.updated) {
+      console.log(`Plan snippet updated in ${targetList}`);
+    } else if (result.installed) {
+      console.log(`Plan snippet installed in ${targetList}`);
+      console.log("Your agents can now manage multi-session plans.");
+    } else {
+      console.log("Plan snippet is up to date.");
     }
   });
 
@@ -8054,6 +8457,9 @@ checkForUpdates().then(async (available) => {
     }
     if (config?.task_enabled) {
       installTaskSnippet(true);
+    }
+    if (config?.plan_enabled) {
+      installPlanSnippet(true);
     }
     installSessionRegisterHook();
     installStatusHook();

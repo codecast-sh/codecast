@@ -7,6 +7,7 @@ const VERSION = "1.0.67";
 const MEMORY_VERSION = "3";
 const TASK_VERSION = "1";
 const WORK_VERSION = "1";
+const PLAN_VERSION = "1";
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -97,6 +98,10 @@ export function getTaskVersion(): string {
 
 export function getWorkVersion(): string {
   return WORK_VERSION;
+}
+
+export function getPlanVersion(): string {
+  return PLAN_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {
