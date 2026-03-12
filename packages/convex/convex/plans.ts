@@ -158,7 +158,7 @@ export const updateStatus = mutation({
     const team_id = user?.active_team_id || user?.team_id;
     if (plan.user_id !== auth.userId && plan.team_id !== team_id) throw new Error("Plan not found");
 
-    const validStatuses = ["draft", "active", "paused", "completed", "abandoned"];
+    const validStatuses = ["draft", "active", "paused", "done", "abandoned"];
     if (!validStatuses.includes(args.status)) throw new Error(`Invalid status: ${args.status}`);
 
     await ctx.db.patch(plan._id, { status: args.status as any, updated_at: Date.now() });
@@ -416,7 +416,7 @@ export const list = query({
     }
 
     if (!args.status) {
-      plans = plans.filter(p => p.status !== "completed" && p.status !== "abandoned");
+      plans = plans.filter(p => p.status !== "done" && p.status !== "abandoned");
     }
 
     return plans.slice(0, args.limit || 50);
@@ -686,7 +686,7 @@ export const webList = query({
     if (args.status) {
       plans = plans.filter(p => p.status === args.status);
     } else {
-      plans = plans.filter(p => p.status !== "completed" && p.status !== "abandoned");
+      plans = plans.filter(p => p.status !== "done" && p.status !== "abandoned");
     }
 
     return plans.slice(0, args.limit || 50);
@@ -714,7 +714,7 @@ export const webTeamList = query({
     if (args.status) {
       plans = plans.filter(p => p.status === args.status);
     } else {
-      plans = plans.filter(p => p.status !== "completed" && p.status !== "abandoned");
+      plans = plans.filter(p => p.status !== "done" && p.status !== "abandoned");
     }
 
     return plans.slice(0, args.limit || 100);
