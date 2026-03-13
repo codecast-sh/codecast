@@ -67,8 +67,10 @@ Title: 2-5 words max. Short noun phrase or verb phrase identifying the core task
 Examples: "Auth redirect fix", "Dark mode settings", "Replace chokidar", "Inbox card redesign", "FD leak debug"
 Anti-examples (too verbose): "Investigate Non-Resumable Session Root Cause", "Implement agent-triggered community chat with leave option", "Add Sessions tab to mobile with chronological summaries"
 
-Subtitle: One line, max 80 chars. What specifically was done or is being done. Telegraphic style.
-Examples: "Switched from chokidar to native fs.watch, cut FD usage 3x", "Fixed OAuth refresh token race condition in auth middleware"
+Subtitle: Bullet points (2-4 lines) describing what was done. Each bullet starts with "- ". Cover: what was built/fixed/changed, key files or components, current state.
+Examples:
+"- Switched from chokidar to native fs.watch, cut FD usage 3x\n- Updated daemon.ts and fileWatcher.ts\n- Working, deployed"
+"- Fixed OAuth refresh token race condition in auth middleware\n- Added retry logic in sessionValidator.ts\n- In progress, needs testing"
 
 Output ONLY valid JSON, no markdown:
 {"title": "...", "subtitle": "..."}
