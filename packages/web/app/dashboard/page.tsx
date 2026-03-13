@@ -4,8 +4,12 @@ import { useState, useCallback, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { ConversationList } from "../../components/ConversationList";
+import { ActivityFeed } from "../../components/ActivityFeed";
 import { reportWebVitals } from "../../lib/reportWebVitals";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../../store/inboxStore";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -20,6 +24,10 @@ export default function DashboardPage() {
   const [memberFilter, setMemberFilter] = useState<string | null>(
     searchParams.get("member")
   );
+
+  const user = useQuery(api.users.getCurrentUser);
+  const activeTeamId = useInboxStore((s: any) => s.clientState?.ui?.active_team_id) as Id<"teams"> | undefined;
+  const teamId = activeTeamId || user?.active_team_id || (user as any)?.team_id;
 
   const handleFilterChange = useCallback((newFilter: "my" | "team") => {
     setFilter(newFilter);
@@ -103,11 +111,9 @@ export default function DashboardPage() {
         directoryFilter={directoryFilter}
         onDirectoryFilterChange={handleDirectoryFilterChange}
       >
-        <ConversationList
-          filter={filter}
-          directoryFilter={directoryFilter}
-          memberFilter={memberFilter}
-          onMemberFilterChange={handleMemberFilterChange}
+        <ActivityFeed
+          mode={filter === "team" ? "team" : "personal"}
+          teamId={teamId}
         />
       </DashboardLayout>
     </AuthGuard>

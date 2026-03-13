@@ -2,7 +2,7 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { TeamActivityFeed } from "../../../components/TeamActivityFeed";
+import { ActivityFeed } from "../../../components/ActivityFeed";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { EmptyState } from "../../../components/EmptyState";
 import { DashboardLayout } from "../../../components/DashboardLayout";
@@ -40,7 +40,7 @@ export default function TeamActivityPage() {
   return (
     <DashboardLayout>
       <div className="max-w-3xl mx-auto py-6">
-        <TeamActivityFeed teamId={teamId} />
+        <ActivityFeed mode="team" teamId={teamId} />
       </div>
     </DashboardLayout>
   );
