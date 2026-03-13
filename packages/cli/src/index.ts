@@ -215,6 +215,52 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
   }
 }
 
+function detectCurrentSessionId(): string | null {
+  const envId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+  if (envId) return envId;
+
+  try {
+    let projectRoot = process.cwd();
+    try {
+      projectRoot = execSync("git rev-parse --show-toplevel", {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim();
+    } catch {}
+
+    const fromProcess = findCurrentSessionFromProcess(projectRoot);
+    if (fromProcess) return fromProcess;
+
+    const projectDir = projectRoot.replace(/\//g, "-");
+    const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
+    if (!fs.existsSync(sessionsDir)) return null;
+
+    const now = Date.now();
+    const ACTIVE_THRESHOLD = 5 * 60 * 1000;
+    const files = fs.readdirSync(sessionsDir)
+      .filter(f => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/.test(f))
+      .map(f => ({
+        name: f,
+        path: path.join(sessionsDir, f),
+        mtime: fs.statSync(path.join(sessionsDir, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.mtime - a.mtime);
+
+    if (files.length === 0) return null;
+
+    const activeSessions = files.filter(f => now - f.mtime < ACTIVE_THRESHOLD);
+    if (activeSessions.length === 1) {
+      return path.basename(activeSessions[0].name, ".jsonl");
+    } else if (activeSessions.length > 1) {
+      return path.basename(activeSessions[0].name, ".jsonl");
+    } else {
+      return path.basename(files[0].name, ".jsonl");
+    }
+  } catch {
+    return null;
+  }
+}
+
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
@@ -7705,7 +7751,7 @@ work
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.plan) body.plan_id = options.plan;
 
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     if (sessionId) body.conversation_id = sessionId;
 
     const result = await cliPost("/cli/work/create", body);
@@ -7773,7 +7819,7 @@ work
   .description("Start working on a task (set in_progress)")
   .argument("<short_id>", "Task short ID")
   .action(async (shortId: string) => {
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId, status: "in_progress" };
     if (sessionId) body.conversation_id = sessionId;
     const result = await cliPost("/cli/work/update", body);
@@ -7844,7 +7890,7 @@ work
   .argument("<text>", "Comment text")
   .option("-t, --type <type>", "Comment type: note, progress, blocker, review", "note")
   .action(async (shortId: string, text: string, options: any) => {
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: shortId, text, comment_type: options.type };
     if (sessionId) body.conversation_id = sessionId;
     await cliPost("/cli/work/comment", body);
