@@ -46,6 +46,51 @@ const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", 
 const EXEC_TIMEOUT_MS = 10_000;
 const execAsync: typeof _execAsync = (cmd, opts?) => _execAsync(cmd, { timeout: EXEC_TIMEOUT_MS, ...opts as any, env: { ...process.env, PATH: ENRICHED_PATH, ...(opts as any)?.env } });
 
+const _execFileAsync = promisify(execFile);
+
+const SAFE_ENV = { ...process.env, PATH: ENRICHED_PATH };
+
+function tmuxExecSync(args: string[], opts?: { timeout?: number; env?: Record<string, string | undefined> }): string {
+  return execFileSync("tmux", args, {
+    timeout: opts?.timeout ?? EXEC_TIMEOUT_MS,
+    encoding: "utf-8",
+    env: { ...SAFE_ENV, ...opts?.env },
+  }).toString();
+}
+
+async function tmuxExec(args: string[], opts?: { timeout?: number; killSignal?: string; env?: Record<string, string | undefined> }): Promise<{ stdout: string; stderr: string }> {
+  return _execFileAsync("tmux", args, {
+    timeout: opts?.timeout ?? EXEC_TIMEOUT_MS,
+    killSignal: (opts?.killSignal ?? "SIGTERM") as any,
+    env: { ...SAFE_ENV, ...opts?.env },
+  });
+}
+
+function validatePath(p: string): string | null {
+  if (!p || typeof p !== "string") return null;
+  if (!path.isAbsolute(p)) return null;
+  if (/[;|&`$(){}\\!#~<>"'\r\n\0]/.test(p)) return null;
+  const resolved = path.resolve(p);
+  if (resolved !== p && resolved !== p.replace(/\/+$/, "")) return null;
+  if (!fs.existsSync(resolved)) return null;
+  return resolved;
+}
+
+const SAFE_ARG_RE = /^[a-zA-Z0-9_.\/=:@%+, -]+$/;
+function sanitizeBinaryArgs(args: string[]): string[] {
+  return args.filter(a => {
+    if (!SAFE_ARG_RE.test(a)) {
+      log(`[SECURITY] Rejected unsafe binary arg: ${a}`);
+      return false;
+    }
+    return true;
+  });
+}
+
+function validateTmuxTarget(target: string): boolean {
+  return /^[a-zA-Z0-9_.:-]+$/.test(target);
+}
+
 // Sleep/wake detection: if the last tick was more than 30s ago, we probably just woke from sleep.
 // During the wake grace period, skip polling to let tmux recover and avoid zombie accumulation.
 let lastTickTime = Date.now();
