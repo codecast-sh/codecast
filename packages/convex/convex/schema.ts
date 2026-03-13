@@ -586,7 +586,7 @@ export default defineSchema({
 
   session_insights: defineTable({
     conversation_id: v.id("conversations"),
-    team_id: v.id("teams"),
+    team_id: v.optional(v.id("teams")),
     actor_user_id: v.id("users"),
     source: v.union(
       v.literal("idle"),

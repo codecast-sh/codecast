@@ -14,7 +14,7 @@ type InsightGenStatus = {
 type ConversationInsightContext = {
   conversation: {
     _id: Id<"conversations">;
-    team_id: Id<"teams">;
+    team_id?: Id<"teams">;
     actor_user_id: Id<"users">;
     title?: string;
     subtitle?: string;
@@ -115,7 +115,7 @@ export const getConversationContextForInsight = internalQuery({
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation || !conversation.team_id) return null;
+    if (!conversation) return null;
 
     const messages = await ctx.db
       .query("messages")
@@ -148,22 +148,25 @@ export const getConversationContextForInsight = internalQuery({
       .order("desc")
       .take(20);
 
-    const teamPrs = await ctx.db
-      .query("pull_requests")
-      .withIndex("by_team_id", (q) => q.eq("team_id", conversation.team_id!))
-      .collect();
+    let linkedPrs: Array<{ number: number; title: string; state: "open" | "closed" | "merged"; repository: string; updated_at: number }> = [];
+    if (conversation.team_id) {
+      const teamPrs = await ctx.db
+        .query("pull_requests")
+        .withIndex("by_team_id", (q) => q.eq("team_id", conversation.team_id!))
+        .collect();
 
-    const linkedPrs = teamPrs
-      .filter((pr) => pr.linked_session_ids.some((id) => id.toString() === args.conversation_id.toString()))
-      .sort((a, b) => b.updated_at - a.updated_at)
-      .slice(0, 10)
-      .map((pr) => ({
-        number: pr.number,
-        title: pr.title,
-        state: pr.state,
-        repository: pr.repository,
-        updated_at: pr.updated_at,
-      }));
+      linkedPrs = teamPrs
+        .filter((pr) => pr.linked_session_ids.some((id) => id.toString() === args.conversation_id.toString()))
+        .sort((a, b) => b.updated_at - a.updated_at)
+        .slice(0, 10)
+        .map((pr) => ({
+          number: pr.number,
+          title: pr.title,
+          state: pr.state,
+          repository: pr.repository,
+          updated_at: pr.updated_at,
+        }));
+    }
 
     return {
       conversation: {
@@ -289,7 +292,7 @@ export const getBackfillCandidates = internalQuery({
 export const upsertSessionInsight = internalMutation({
   args: {
     conversation_id: v.id("conversations"),
-    team_id: v.id("teams"),
+    team_id: v.optional(v.id("teams")),
     actor_user_id: v.id("users"),
     source: v.union(
       v.literal("idle"),
@@ -560,7 +563,7 @@ ${sampledMessages}`;
 
       const insightId = (await ctx.runMutation(internalApi.sessionInsights.upsertSessionInsight, {
         conversation_id: context.conversation._id,
-        team_id: context.conversation.team_id!,
+        team_id: context.conversation.team_id,
         actor_user_id: context.conversation.actor_user_id,
         source,
         generated_at: now,
@@ -600,7 +603,6 @@ export const regenerateSessionInsight = action({
     });
 
     if (!conversation) throw new Error("Conversation not found");
-    if (!conversation.team_id) throw new Error("Conversation is not in a team");
 
     return await ctx.runAction(internalApi.sessionInsights.generateSessionInsight, {
       conversation_id: args.conversation_id,
@@ -1010,7 +1012,7 @@ export const getPersonDigest = query({
       .order("desc")
       .take(200);
 
-    const filtered = actorInsights.filter((i) => i.team_id.toString() === args.team_id.toString());
+    const filtered = actorInsights.filter((i) => i.team_id && i.team_id.toString() === args.team_id.toString());
 
     const deduped: typeof filtered = [];
     const seenConversations = new Set<string>();
@@ -1083,6 +1085,249 @@ export const getPersonDigest = query({
         .map(([blocker, count]) => ({ blocker, count })),
       next_actions: uniqCompact(nextActions, 8, 180),
       highlights,
+    };
+  },
+});
+
+export const getActivityDigest = query({
+  args: {
+    mode: v.union(v.literal("personal"), v.literal("team")),
+    team_id: v.optional(v.id("teams")),
+    window_hours: v.optional(v.number()),
+    timezone: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Not authenticated");
+
+    if (args.mode === "team") {
+      if (!args.team_id) throw new Error("team_id required for team mode");
+      if (!(await isTeamMember(ctx, authUserId, args.team_id))) {
+        throw new Error("Not a member of this team");
+      }
+    }
+
+    const windowHours = Math.max(1, Math.min(args.window_hours ?? 24, 24 * 30));
+    const since = Date.now() - windowHours * 60 * 60 * 1000;
+    const tz = args.timezone || "UTC";
+
+    let recent;
+    if (args.mode === "personal") {
+      recent = await ctx.db
+        .query("session_insights")
+        .withIndex("by_actor_generated_at", (q) =>
+          q.eq("actor_user_id", authUserId).gt("generated_at", since)
+        )
+        .order("desc")
+        .take(300);
+    } else {
+      recent = await ctx.db
+        .query("session_insights")
+        .withIndex("by_team_generated_at", (q) =>
+          q.eq("team_id", args.team_id!).gt("generated_at", since)
+        )
+        .order("desc")
+        .take(300);
+    }
+
+    const deduped: typeof recent = [];
+    const seenConversationIds = new Set<string>();
+    for (const insight of recent) {
+      const key = insight.conversation_id.toString();
+      if (seenConversationIds.has(key)) continue;
+      seenConversationIds.add(key);
+      deduped.push(insight);
+    }
+
+    const actorIds = [...new Set(deduped.map((i) => i.actor_user_id.toString()))];
+    const actorDocs = await Promise.all(
+      actorIds.map((id) => ctx.db.get(id as Id<"users">))
+    );
+    const actorMap = new Map(
+      actorDocs
+        .filter((u): u is NonNullable<typeof u> => u !== null)
+        .map((u) => [u._id.toString(), u])
+    );
+
+    const conversations = await Promise.all(
+      deduped.map((i) => ctx.db.get(i.conversation_id))
+    );
+    const conversationMap = new Map(
+      conversations
+        .filter((c): c is NonNullable<typeof c> => c !== null)
+        .map((c) => [c._id.toString(), c])
+    );
+
+    let filteredDeduped = deduped;
+    if (args.mode === "team") {
+      const insightFeedFilter = await createTeamFeedFilter(ctx, args.team_id!);
+      filteredDeduped = deduped.filter((insight) => {
+        const conv = conversationMap.get(insight.conversation_id.toString());
+        if (!conv) return false;
+        return insightFeedFilter.isVisible(conv);
+      });
+    }
+
+    const outcomes = { shipped: 0, progress: 0, blocked: 0, unknown: 0 };
+    const themeCounts = new Map<string, number>();
+    const peopleMap = new Map<string, {
+      actor_user_id: Id<"users">;
+      sessions: number;
+      shipped: number;
+      progress: number;
+      blocked: number;
+      unknown: number;
+      latest_summary: string;
+      latest_at: number;
+      latest_conversation_id: Id<"conversations">;
+      theme_counts: Map<string, number>;
+    }>();
+
+    for (const insight of filteredDeduped) {
+      outcomes[insight.outcome_type] += 1;
+      for (const theme of insight.themes || []) {
+        const key = theme.toLowerCase();
+        themeCounts.set(key, (themeCounts.get(key) || 0) + 1);
+      }
+
+      const actorKey = insight.actor_user_id.toString();
+      let person = peopleMap.get(actorKey);
+      if (!person) {
+        person = {
+          actor_user_id: insight.actor_user_id,
+          sessions: 0, shipped: 0, progress: 0, blocked: 0, unknown: 0,
+          latest_summary: insight.summary,
+          latest_at: insight.generated_at,
+          latest_conversation_id: insight.conversation_id,
+          theme_counts: new Map<string, number>(),
+        };
+        peopleMap.set(actorKey, person);
+      }
+      person.sessions += 1;
+      person[insight.outcome_type] += 1;
+      if (insight.generated_at > person.latest_at) {
+        person.latest_at = insight.generated_at;
+        person.latest_summary = insight.summary;
+        person.latest_conversation_id = insight.conversation_id;
+      }
+      for (const theme of insight.themes || []) {
+        const key = theme.toLowerCase();
+        person.theme_counts.set(key, (person.theme_counts.get(key) || 0) + 1);
+      }
+    }
+
+    const topThemes = [...themeCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([theme, count]) => ({ theme, count }));
+
+    const sorted = [...filteredDeduped].sort((a, b) => b.generated_at - a.generated_at);
+
+    const feedUnsorted = sorted.slice(0, 50).map((insight) => {
+      const actor = actorMap.get(insight.actor_user_id.toString());
+      const conv = conversationMap.get(insight.conversation_id.toString());
+      return {
+        conversation_id: insight.conversation_id,
+        title: conv?.title || conv?.subtitle || "Session",
+        summary: insight.summary,
+        goal: insight.goal,
+        what_changed: insight.what_changed,
+        outcome_type: insight.outcome_type,
+        blockers: insight.blockers,
+        next_action: insight.next_action,
+        themes: insight.themes,
+        confidence: insight.confidence,
+        generated_at: insight.generated_at,
+        metadata: insight.metadata,
+        actor: {
+          _id: insight.actor_user_id,
+          name: actor?.name || actor?.email || "Unknown",
+        },
+        project_path: conv?.project_path,
+        git_branch: conv?.git_branch,
+        message_count: conv?.message_count,
+        status: conv?.status,
+        started_at: conv?.started_at,
+        updated_at: conv?.updated_at,
+      };
+    });
+    const feed = feedUnsorted.sort((a, b) =>
+      (b.updated_at || b.started_at || b.generated_at) - (a.updated_at || a.started_at || a.generated_at)
+    );
+
+    const dayMap = new Map<string, typeof feed>();
+    for (const item of feed) {
+      const ts = item.updated_at || item.started_at || item.generated_at;
+      const dateStr = new Date(ts).toLocaleDateString("en-CA", { timeZone: tz });
+      if (!dayMap.has(dateStr)) dayMap.set(dateStr, []);
+      dayMap.get(dateStr)!.push(item);
+    }
+
+    const daySummaries = [...dayMap.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([date, items]) => {
+        const dayOutcomes = { shipped: 0, progress: 0, blocked: 0, unknown: 0 };
+        const dayThemes = new Map<string, number>();
+        const dayActors = new Set<string>();
+        for (const item of items) {
+          dayOutcomes[item.outcome_type as OutcomeType] += 1;
+          dayActors.add(item.actor._id.toString());
+          for (const theme of item.themes || []) {
+            const key = theme.toLowerCase();
+            dayThemes.set(key, (dayThemes.get(key) || 0) + 1);
+          }
+        }
+        const sortedThemes = [...dayThemes.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([t]) => t);
+
+        const highlights = items
+          .filter((i) => i.outcome_type === "shipped" || i.outcome_type === "progress")
+          .slice(0, 2)
+          .map((i) => i.summary.slice(0, 120));
+
+        return {
+          date,
+          session_count: items.length,
+          outcomes: dayOutcomes,
+          top_themes: sortedThemes,
+          highlights,
+          people_count: dayActors.size,
+        };
+      });
+
+    const people = [...peopleMap.values()]
+      .map((p) => {
+        const actor = actorMap.get(p.actor_user_id.toString());
+        const topPersonThemes = [...p.theme_counts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 4)
+          .map(([theme]) => theme);
+        return {
+          actor: {
+            _id: p.actor_user_id,
+            name: actor?.name || actor?.email || "Unknown",
+          },
+          sessions: p.sessions,
+          outcomes: { shipped: p.shipped, progress: p.progress, blocked: p.blocked, unknown: p.unknown },
+          top_themes: topPersonThemes,
+          latest_summary: p.latest_summary,
+          latest_at: p.latest_at,
+          latest_conversation_id: p.latest_conversation_id,
+        };
+      })
+      .sort((a, b) => b.sessions - a.sessions);
+
+    return {
+      window_hours: windowHours,
+      generated_at: Date.now(),
+      sessions_analyzed: filteredDeduped.length,
+      outcomes,
+      top_themes: topThemes,
+      day_summaries: daySummaries,
+      feed,
+      people,
     };
   },
 });

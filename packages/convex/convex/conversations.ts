@@ -477,12 +477,12 @@ export const createConversation = mutation({
               git_branch: parent.git_branch,
             },
           });
-
-          await ctx.scheduler.runAfter(0, internal.sessionInsights.generateSessionInsight, {
-            conversation_id: parentConversationId,
-            reason: "periodic",
-          });
         }
+
+        await ctx.scheduler.runAfter(0, internal.sessionInsights.generateSessionInsight, {
+          conversation_id: parentConversationId,
+          reason: "periodic",
+        });
       }
     }
 
