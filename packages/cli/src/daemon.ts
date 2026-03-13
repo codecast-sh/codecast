@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { Database } from "bun:sqlite";
-import { execSync, exec, spawn } from "child_process";
+import { execSync, execFileSync, exec, execFile, spawn } from "child_process";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
@@ -1802,6 +1802,11 @@ async function processSessionFile(
           log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
         } else if (matchedStartedConversation && actualProjectPath) {
           log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
+        } else {
+          matchedStartedConversation = matchSingleFreshStartedConversation(startedClaudeEntries);
+          if (matchedStartedConversation) {
+            log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via fresh-start fallback`);
+          }
         }
       }
 
