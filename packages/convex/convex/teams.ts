@@ -255,6 +255,7 @@ export const getTeamMembers = query({
           recent_session_title: recentConvo?.title,
           recent_session_messages: recentConvo?.message_count,
           recent_session_updated: recentConvo?.updated_at,
+          recent_session_last_message: recentConvo?.last_message_preview,
         };
       })
     );

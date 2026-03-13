@@ -113,7 +113,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
             {online && !isSelected && (
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-400 border-2 border-sol-bg rounded-full" />
             )}
-            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1.5 bg-sol-bg-alt border border-sol-border rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg max-w-[220px]">
+            <div className="absolute top-full right-0 mt-2 px-2.5 py-1.5 bg-sol-bg-alt border border-sol-border rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg max-w-[320px]">
               <div className="font-medium text-sol-text whitespace-nowrap">{displayName}</div>
               <div className={`whitespace-nowrap ${online ? "text-emerald-400" : "text-sol-text-muted"}`}>
                 {lastSeenText}
@@ -121,6 +121,11 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
               {sessionTitle && (
                 <div className="text-sol-text-muted mt-0.5 truncate" title={sessionTitle}>
                   {sessionTitle}{sessionMessages ? ` (${sessionMessages})` : ""}
+                </div>
+              )}
+              {member.recent_session_last_message && (
+                <div className="text-sol-cyan mt-0.5 truncate" title={member.recent_session_last_message}>
+                  {member.recent_session_last_message}
                 </div>
               )}
             </div>
