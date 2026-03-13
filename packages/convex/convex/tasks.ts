@@ -111,6 +111,16 @@ export const create = mutation({
       }
     }
 
+    if (created_from_conversation) {
+      const conv = await ctx.db.get(created_from_conversation);
+      if (conv) {
+        await ctx.db.patch(created_from_conversation, { active_task_id: id });
+        if (plan_id && !conv.active_plan_id) {
+          await ctx.db.patch(created_from_conversation, { active_plan_id: plan_id });
+        }
+      }
+    }
+
     return { id, short_id };
   },
 });
@@ -404,15 +414,21 @@ export const update = mutation({
     }
 
     // Link conversation if provided
+    let linkedConvId: Id<"conversations"> | undefined;
     if (args.conversation_id) {
       const conv = await ctx.db
         .query("conversations")
         .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
         .first();
       if (conv) {
+        linkedConvId = conv._id;
         const existing = task.conversation_ids || [];
         if (!existing.some((id) => id === conv._id)) {
           updates.conversation_ids = [...existing, conv._id];
+        }
+        await ctx.db.patch(conv._id, { active_task_id: task._id });
+        if (task.plan_id && !conv.active_plan_id) {
+          await ctx.db.patch(conv._id, { active_plan_id: task.plan_id });
         }
       }
     }

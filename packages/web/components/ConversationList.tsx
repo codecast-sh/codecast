@@ -14,6 +14,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
+import { soundNewSession } from "../lib/sounds";
 
 function VisibilityDropdown({
   conversationId,
@@ -538,6 +539,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   const handleSubmit = async () => {
     setIsSubmitting(true);
+    soundNewSession();
     try {
       const convexAgentType = agentType === "claude" ? "claude_code" as const : agentType === "codex" ? "codex" as const : "gemini" as const;
       const conversationId = await createQuickSession({
@@ -1323,6 +1325,11 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         {conv.parent_conversation_id && !conv.is_subagent && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-blue/20 text-sol-blue border border-sol-blue/40 text-[10px] font-medium">
                             Plan
+                          </span>
+                        )}
+                        {(conv as any).active_plan && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] font-medium">
+                            {(conv as any).active_plan.short_id}
                           </span>
                         )}
                       </div>

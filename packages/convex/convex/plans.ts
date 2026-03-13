@@ -659,7 +659,34 @@ export const webGet = query({
       }
     }
 
-    return { ...plan, tasks, doc_content, doc_title };
+    const sessions: any[] = [];
+    if (plan.session_ids) {
+      for (const sid of plan.session_ids) {
+        const conv = await ctx.db.get(sid);
+        if (conv) {
+          sessions.push({
+            _id: conv._id,
+            session_id: conv.session_id,
+            title: conv.title,
+            project_path: conv.project_path,
+            message_count: conv.message_count || 0,
+            is_active: conv.is_active,
+            updated_at: conv.updated_at,
+          });
+        }
+      }
+    }
+
+    const author = await ctx.db.get(plan.user_id);
+
+    return {
+      ...plan,
+      tasks,
+      sessions,
+      doc_content,
+      doc_title,
+      author: author ? { name: author.name, image: author.image } : null,
+    };
   },
 });
 
@@ -667,6 +694,7 @@ export const webList = query({
   args: {
     status: v.optional(v.string()),
     project_id: v.optional(v.string()),
+    include_all: v.optional(v.boolean()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -696,7 +724,7 @@ export const webList = query({
 
     if (args.status) {
       plans = plans.filter(p => p.status === args.status);
-    } else {
+    } else if (!args.include_all) {
       plans = plans.filter(p => p.status !== "done" && p.status !== "abandoned");
     }
 

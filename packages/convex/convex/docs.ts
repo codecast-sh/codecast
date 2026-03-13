@@ -120,6 +120,12 @@ async function syncDocToPlanEntity(
       if (conversationId && !plan.session_ids?.some((id: any) => String(id) === String(conversationId))) {
         await ctx.db.patch(plan._id, { session_ids: [...(plan.session_ids || []), conversationId] });
       }
+      if (conversationId) {
+        const conv = await ctx.db.get(conversationId);
+        if (conv && !conv.active_plan_id) {
+          await ctx.db.patch(conversationId, { active_plan_id: plan._id });
+        }
+      }
       return;
     }
   }
@@ -133,6 +139,12 @@ async function syncDocToPlanEntity(
     if (!doc?.plan_id) await ctx.db.patch(docId, { plan_id: existingPlan._id });
     if (conversationId && !existingPlan.session_ids?.some((id: any) => String(id) === String(conversationId))) {
       await ctx.db.patch(existingPlan._id, { session_ids: [...(existingPlan.session_ids || []), conversationId] });
+    }
+    if (conversationId) {
+      const conv = await ctx.db.get(conversationId);
+      if (conv && !conv.active_plan_id) {
+        await ctx.db.patch(conversationId, { active_plan_id: existingPlan._id });
+      }
     }
     return;
   }
@@ -153,6 +165,12 @@ async function syncDocToPlanEntity(
     updated_at: now,
   });
   await ctx.db.patch(docId, { plan_id: planId });
+  if (conversationId) {
+    const conv = await ctx.db.get(conversationId);
+    if (conv) {
+      await ctx.db.patch(conversationId, { active_plan_id: planId });
+    }
+  }
 }
 
 export const list = query({
@@ -711,7 +729,7 @@ export const linkPlanToSessions = internalMutation({
       await ctx.db.patch(doc._id, patch);
       updated++;
 
-      // Propagate session links to plan entity
+      // Propagate session links to plan entity and set active_plan_id on conversations
       if (doc.plan_id) {
         const plan = await ctx.db.get(doc.plan_id);
         if (plan) {
@@ -722,6 +740,12 @@ export const linkPlanToSessions = internalMutation({
               session_ids: [...(plan.session_ids || []), ...newIds],
               updated_at: Date.now(),
             });
+          }
+          for (const cid of convIds) {
+            const conv = await ctx.db.get(cid);
+            if (conv && !conv.active_plan_id) {
+              await ctx.db.patch(cid, { active_plan_id: plan._id });
+            }
           }
         }
       }

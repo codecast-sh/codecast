@@ -1894,8 +1894,25 @@ export const listConversations = query({
       })
     );
 
+    const sortedConvs = conversationsWithUsers.sort((a, b) => (b as { updated_at: number }).updated_at - (a as { updated_at: number }).updated_at);
+
+    const planIds = new Set<string>();
+    for (const c of sortedConvs) {
+      const pid = (c as any).active_plan_id;
+      if (pid) planIds.add(pid.toString());
+    }
+    const planCache = new Map<string, { _id: string; short_id: string; title: string; status: string }>();
+    for (const pid of planIds) {
+      const p = await ctx.db.get(pid as any);
+      if (p) planCache.set(pid, { _id: (p as any)._id, short_id: (p as any).short_id, title: (p as any).title, status: (p as any).status });
+    }
+    const enriched = sortedConvs.map((c: any) => ({
+      ...c,
+      active_plan: c.active_plan_id ? planCache.get(c.active_plan_id.toString()) || null : null,
+    }));
+
     return {
-      conversations: conversationsWithUsers.sort((a, b) => (b as { updated_at: number }).updated_at - (a as { updated_at: number }).updated_at),
+      conversations: enriched,
       nextCursor,
       hasSubagents: true,
     };
@@ -5288,6 +5305,18 @@ export const listIdleSessions = query({
         }
       }
 
+      let active_plan: { _id: string; short_id: string; title: string; status: string } | undefined;
+      if (conv.active_plan_id) {
+        const p = await ctx.db.get(conv.active_plan_id);
+        if (p) active_plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
+      }
+
+      let active_task: { _id: string; short_id: string; title: string; status: string } | undefined;
+      if (conv.active_task_id) {
+        const t = await ctx.db.get(conv.active_task_id);
+        if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
+      }
+
       results.push({
         _id: conv._id,
         session_id: conv.session_id,
@@ -5311,6 +5340,8 @@ export const listIdleSessions = query({
         last_user_message: lastUserMessage,
         session_error: conv.session_error,
         implementation_session: implementationSession,
+        active_plan,
+        active_task,
       });
     }
 

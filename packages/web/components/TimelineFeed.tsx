@@ -21,6 +21,7 @@ type TimelineItem =
       message_count: number;
       is_active: boolean;
       is_own: boolean;
+      active_plan?: { _id: string; short_id: string; title: string; status: string } | null;
     }
   | {
       type: "commit";
@@ -139,6 +140,11 @@ function SessionCard({ item }: { item: Extract<TimelineItem, { type: "session" }
                   <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
                   <span className="text-[10px] text-sol-green font-semibold">LIVE</span>
                 </span>
+              )}
+              {item.active_plan && (
+                <Link href={`/plans/${item.active_plan._id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors" onClick={(e) => e.stopPropagation()}>
+                  {item.active_plan.short_id}
+                </Link>
               )}
               {item.duration_ms > 60000 && (
                 <span className="inline-flex items-center gap-1">
@@ -418,6 +424,7 @@ export function TimelineFeed({ filter, dateRange }: TimelineFeedProps) {
         message_count: conv.message_count ?? 0,
         is_active: conv.is_active,
         is_own: conv.is_own,
+        active_plan: (conv as any).active_plan || null,
       });
     }
 

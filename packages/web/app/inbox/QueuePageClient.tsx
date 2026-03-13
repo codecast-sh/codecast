@@ -318,6 +318,16 @@ function SessionCard({
                 sub
               </span>
             )}
+            {session.active_plan && (
+              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20">
+                {session.active_plan.short_id}
+              </span>
+            )}
+            {session.active_task && (
+              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/20">
+                {session.active_task.short_id}
+              </span>
+            )}
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}

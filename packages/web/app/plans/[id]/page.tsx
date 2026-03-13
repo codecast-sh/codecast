@@ -90,6 +90,10 @@ export default function PlanDetailPage() {
                 </Badge>
               </div>
               <div className="flex items-center gap-3 text-xs text-sol-text-dim">
+                {plan.author?.image && (
+                  <img src={plan.author.image} className="w-4 h-4 rounded-full" alt="" />
+                )}
+                {plan.author?.name && <span>{plan.author.name}</span>}
                 <span className="font-mono">{plan.short_id}</span>
                 <span>Created {formatTimestamp(plan.created_at)}</span>
                 <span>Updated {formatTimestamp(plan.updated_at)}</span>
@@ -171,15 +175,30 @@ export default function PlanDetailPage() {
             )}
 
             {/* Sessions */}
-            {plan.session_ids?.length > 0 && (
+            {plan.sessions?.length > 0 && (
               <div className="mb-6">
                 <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
                   <MessageSquare className="w-4 h-4 text-sol-text-dim" />
-                  Sessions ({plan.session_ids.length})
+                  Sessions ({plan.sessions.length})
                 </h2>
-                <p className="text-xs text-sol-text-dim">
-                  {plan.session_ids.length} session{plan.session_ids.length !== 1 ? "s" : ""} linked to this plan
-                </p>
+                <div className="border border-sol-border/20 rounded-lg overflow-hidden">
+                  {plan.sessions.map((s: any) => (
+                    <Link
+                      key={s._id}
+                      href={`/conversation/${s.session_id}`}
+                      className="flex items-center gap-3 px-3 py-2.5 hover:bg-sol-bg-alt/40 transition-colors border-b border-sol-border/10 last:border-b-0"
+                    >
+                      <MessageSquare className={`w-3.5 h-3.5 flex-shrink-0 ${s.is_active ? "text-sol-green" : "text-sol-text-dim"}`} />
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm text-sol-text truncate block">{s.title || "Untitled"}</span>
+                        {s.project_path && (
+                          <span className="text-[11px] text-sol-text-dim font-mono truncate block">{s.project_path.split("/").slice(-2).join("/")}</span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-sol-text-dim tabular-nums">{s.message_count} msgs</span>
+                    </Link>
+                  ))}
+                </div>
               </div>
             )}
 
