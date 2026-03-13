@@ -16,7 +16,7 @@ import * as fs14 from "fs";
 import * as os2 from "os";
 import * as path13 from "path";
 import { Database as Database3 } from "bun:sqlite";
-import { execSync as execSync2, exec as exec2, spawn } from "child_process";
+import { execSync as execSync2, execFileSync, exec as exec2, execFile, spawn } from "child_process";
 
 // node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/index.js
 import { stat as statcb } from "fs";
@@ -10822,7 +10822,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.60";
+var VERSION = "1.0.71";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -10867,12 +10867,12 @@ function getVersion() {
 }
 function isDevMode() {
   const exe = process.execPath.toLowerCase();
-  return exe.includes("bun") || !exe.includes("codecast");
+  return exe.includes("bun") || !exe.includes("codecast") && !exe.includes("/cast");
 }
 async function performUpdate() {
   if (isDevMode()) {
     console.error("Cannot self-update in dev mode (running via bun)");
-    console.error("Install the binary version: curl -fsSL codecast.sh/install | sh");
+    console.error("Install the binary version: curl -fsSL codecast.sh/install | sh (provides 'cast' command)");
     return false;
   }
   const platformKey = getPlatformKey();
@@ -10888,7 +10888,7 @@ async function performUpdate() {
       console.error(`No binary available for platform: ${platformKey}`);
       return false;
     }
-    console.log(`Downloading codecast v${latest.version}...`);
+    console.log(`Downloading cast v${latest.version}...`);
     const binaryResponse = await fetch(binary.url);
     if (!binaryResponse.ok) {
       console.error("Failed to download binary");
@@ -10919,10 +10919,33 @@ async function performUpdate() {
     state.availableVersion = undefined;
     writeUpdateState(state);
     console.log(`Updated to v${latest.version}`);
+    ensureCastAlias();
     return true;
   } catch (err) {
     console.error("Update failed:", err);
     return false;
+  }
+}
+function ensureCastAlias() {
+  if (isDevMode())
+    return;
+  const exe = process.execPath;
+  const dir = path10.dirname(exe);
+  const castLink = path10.join(dir, "cast");
+  try {
+    const target = fs10.readlinkSync(castLink);
+    if (target === exe)
+      return;
+    fs10.unlinkSync(castLink);
+  } catch (e) {
+    if (e?.code === "ENOENT") {
+    } else {
+      return;
+    }
+  }
+  try {
+    fs10.symlinkSync(exe, castLink);
+  } catch {
   }
 }
 
@@ -11040,10 +11063,26 @@ async function performReconciliation(syncService2, log, maxFiles = 50) {
 }
 async function repairDiscrepancies(discrepancies, log) {
   let repaired = 0;
+  const MAX_RESYNC_BYTES = 5 * 1024 * 1024;
   for (const d of discrepancies) {
+    if (d.status === "count_mismatch" && d.backendCount >= d.localCount) {
+      log(`Skipping repair for ${d.sessionId.slice(0, 8)}... backend already has >= local messages (backend: ${d.backendCount}, local: ${d.localCount})`);
+      continue;
+    }
     if (d.status === "missing_backend" || d.status === "count_mismatch") {
-      setPosition(d.filePath, 0);
-      log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to trigger re-sync`);
+      let fileSize = 0;
+      try {
+        fileSize = fs11.statSync(d.filePath).size;
+      } catch {
+      }
+      if (fileSize > MAX_RESYNC_BYTES) {
+        const newPosition = Math.max(0, fileSize - MAX_RESYNC_BYTES);
+        setPosition(d.filePath, newPosition);
+        log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to ${newPosition} (tail ${MAX_RESYNC_BYTES} bytes of ${fileSize} byte file)`);
+      } else {
+        setPosition(d.filePath, 0);
+        log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to trigger full re-sync`);
+      }
       repaired++;
     }
   }
@@ -11275,10 +11314,10 @@ class TaskScheduler {
     parts.push("");
     parts.push("---");
     parts.push("Instructions:");
-    parts.push(`- When done, run: codecast task complete ${task._id} --summary "brief description of what was done"`);
-    parts.push('- To schedule follow-up: codecast task add "..." --in <time>');
+    parts.push(`- When done, run: cast task complete ${task._id} --summary "brief description of what was done"`);
+    parts.push('- To schedule follow-up: cast task add "..." --in <time>');
     if (task.originating_conversation_id) {
-      parts.push(`- Run \`codecast read ${task.originating_conversation_id}\` for full original context`);
+      parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);
     }
     return parts.join(`
 `);
@@ -11859,6 +11898,49 @@ var _execAsync2 = promisify2(exec2);
 var ENRICHED_PATH2 = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 var EXEC_TIMEOUT_MS = 1e4;
 var execAsync2 = (cmd, opts) => _execAsync2(cmd, { timeout: EXEC_TIMEOUT_MS, ...opts, env: { ...process.env, PATH: ENRICHED_PATH2, ...opts?.env } });
+var _execFileAsync = promisify2(execFile);
+var SAFE_ENV = { ...process.env, PATH: ENRICHED_PATH2 };
+function tmuxExecSync(args, opts) {
+  return execFileSync("tmux", args, {
+    timeout: opts?.timeout ?? EXEC_TIMEOUT_MS,
+    encoding: "utf-8",
+    env: { ...SAFE_ENV, ...opts?.env }
+  }).toString();
+}
+async function tmuxExec(args, opts) {
+  return _execFileAsync("tmux", args, {
+    timeout: opts?.timeout ?? EXEC_TIMEOUT_MS,
+    killSignal: opts?.killSignal ?? "SIGTERM",
+    env: { ...SAFE_ENV, ...opts?.env }
+  });
+}
+function validatePath(p) {
+  if (!p || typeof p !== "string")
+    return null;
+  if (!path13.isAbsolute(p))
+    return null;
+  if (/[;|&`$(){}<>"\r\n\0]/.test(p))
+    return null;
+  const resolved = path13.resolve(p);
+  if (resolved !== p && resolved !== p.replace(/\/+$/, ""))
+    return null;
+  if (!fs14.existsSync(resolved))
+    return null;
+  return resolved;
+}
+var SAFE_ARG_RE = /^[a-zA-Z0-9_.\/=:@%+, -]+$/;
+function sanitizeBinaryArgs(args) {
+  return args.filter((a) => {
+    if (!SAFE_ARG_RE.test(a)) {
+      log(`[SECURITY] Rejected unsafe binary arg: ${a}`);
+      return false;
+    }
+    return true;
+  });
+}
+function validateTmuxTarget(target) {
+  return /^[a-zA-Z0-9_.:-]+$/.test(target);
+}
 var lastTickTime = Date.now();
 var SLEEP_DETECTION_THRESHOLD_MS = 30000;
 var WAKE_GRACE_PERIOD_MS = 5000;
@@ -12003,6 +12085,7 @@ var lastErrorNotification = new Map;
 var lastWorkingStatusSent = new Map;
 var WORKING_STATUS_THROTTLE_MS = 1e4;
 var lastHookStatus = new Map;
+var pendingInteractivePrompts = new Map;
 var AGENT_STATUS_DIR = path13.join(process.env.HOME || "", ".codecast", "agent-status");
 function sendAgentStatus(syncService2, conversationId, sessionId, status, clientTs, permissionMode) {
   if (status === "working" && !permissionMode) {
@@ -12215,6 +12298,36 @@ function isAutostartEnabled() {
   }
   return false;
 }
+async function pollDaemonCommands() {
+  const config = readConfig();
+  if (!config?.auth_token || !config?.convex_url)
+    return;
+  try {
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const response = await fetch(`${siteUrl}/cli/heartbeat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        version: daemonVersion || "unknown",
+        platform: platform2,
+        pid: process.pid,
+        autostart_enabled: isAutostartEnabled(),
+        has_tmux: hasTmux()
+      })
+    });
+    if (!response.ok)
+      return;
+    const data = await response.json();
+    if (data.commands && data.commands.length > 0) {
+      log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c) => c.command).join(", ")}`);
+      for (const cmd of data.commands) {
+        await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
+      }
+    }
+  } catch {
+  }
+}
 async function sendHeartbeat() {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
@@ -12381,11 +12494,11 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const rawAgentType = parsed.agent_type;
         const agentType = rawAgentType === "codex" || rawAgentType === "gemini" ? rawAgentType : "claude";
-        const projectPath = parsed.project_path || process.env.HOME || "/tmp";
+        const rawPath = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId = parsed.conversation_id;
         const shortId = Math.random().toString(36).slice(2, 8);
         const tmuxSession = `cc-${agentType}-${shortId}`;
-        const cwd = fs14.existsSync(projectPath) ? projectPath : process.env.HOME || "/tmp";
+        const cwd = validatePath(rawPath) || validatePath(process.env.HOME || "/tmp") || "/tmp";
         let binary;
         let binaryArgs = [];
         if (agentType === "codex") {
@@ -12405,7 +12518,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
                     conversation_id: conversationId,
                     type: "info",
                     title: "Codex running in full-access mode",
-                    message: "Codex is running without permission prompts by default. Configure with: codecast config codex_args"
+                    message: "Codex is running without permission prompts by default. Configure with: cast config codex_args"
                   }).catch(() => {
                   });
                 }
@@ -12424,17 +12537,16 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
           }
         }
-        const shellCmd = [binary, ...binaryArgs].map((a) => a.includes(" ") ? `'${a.replace(/'/g, "'\\''")}'` : a).join(" ");
-        const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; ${shellCmd}`;
-        const execPath = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
-        const execOpts = { timeout: 5000, env: { ...process.env, PATH: execPath } };
+        binaryArgs = sanitizeBinaryArgs(binaryArgs);
+        const cmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${[binary, ...binaryArgs].join(" ")}`;
         if (!hasTmux()) {
           error = "tmux is not installed";
           break;
         }
         try {
-          execSync2(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
-          execSync2(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
+          tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+          tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
+          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           result = JSON.stringify({ tmux_session: tmuxSession, agent_type: agentType, project_path: cwd });
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
           if (conversationId) {
@@ -12477,10 +12589,10 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           break;
         }
         const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (tmuxTarget) {
-          await execAsync2(`tmux send-keys -t '${tmuxTarget}' Escape`);
+        if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
           await new Promise((resolve4) => setTimeout(resolve4, 500));
-          await execAsync2(`tmux send-keys -t '${tmuxTarget}' Enter`);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
           result = "escape_sent";
           log(`[REMOTE] Sent Escape+Enter to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
         } else {
@@ -12520,15 +12632,16 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           break;
         }
         const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (!tmuxTarget) {
+        if (!tmuxTarget || !validateTmuxTarget(tmuxTarget)) {
           error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
           break;
         }
+        const safeSteps = Math.min(Math.max(1, Math.floor(Number(stepsBack))), 50);
         const PROMPT_RE = /[\u276F\u203A]/;
         const PROMPT_EMPTY_RE = /[\u276F\u203A]\s*(\n|$)/;
         const BUSY_RE = /\u280B|\u2819|\u2839|\u2838|\u283C|\u2834|\u2826|\u2827|\u2807|\u280F|Wandering|Vibing|Coasting|Working|thinking/;
         const captureLast = async () => {
-          const { stdout } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxTarget}' -S -8`);
+          const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-8"]);
           return stdout.split(`
 `).slice(-10).join(`
 `);
@@ -12543,7 +12656,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         };
         if (!await isAtPrompt()) {
           log(`[REWIND] Session not at prompt, sending Escape`);
-          await execAsync2(`tmux send-keys -t '${tmuxTarget}' Escape`);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
           let gotPrompt = false;
           for (let i = 0;i < 60; i++) {
             await new Promise((r) => setTimeout(r, 500));
@@ -12562,20 +12675,20 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           if (await hasEmptyPrompt())
             break;
           log(`[REWIND] Clearing existing prompt text (attempt ${attempt + 1})`);
-          await execAsync2(`tmux send-keys -t '${tmuxTarget}' Escape`);
+          await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
           await new Promise((r) => setTimeout(r, 500));
         }
-        log(`[REWIND] Sending ${stepsBack} Up arrows`);
-        const ups = Array(stepsBack).fill("Up").join(" ");
-        await execAsync2(`tmux send-keys -t '${tmuxTarget}' ${ups}`);
+        log(`[REWIND] Sending ${safeSteps} Up arrows`);
+        const upKeys = Array.from({ length: safeSteps }, () => "Up");
+        await tmuxExec(["send-keys", "-t", tmuxTarget, ...upKeys]);
         await new Promise((r) => setTimeout(r, 300));
         if (await hasEmptyPrompt()) {
-          log(`[REWIND] Prompt still empty after Up arrows, no history at position ${stepsBack}`);
-          error = `No message found at history position ${stepsBack}`;
+          log(`[REWIND] Prompt still empty after Up arrows, no history at position ${safeSteps}`);
+          error = `No message found at history position ${safeSteps}`;
           break;
         }
         log(`[REWIND] Submitting rewind`);
-        await execAsync2(`tmux send-keys -t '${tmuxTarget}' Enter`);
+        await tmuxExec(["send-keys", "-t", tmuxTarget, "Enter"]);
         result = "rewind_sent";
         log(`[REWIND] Rewind ${stepsBack} steps sent to session ${sessionId.slice(0, 8)}`);
         break;
@@ -12595,9 +12708,22 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           error = `Key '${invalidKey}' not in allowlist`;
           break;
         }
-        const cache = readConversationCache();
-        const reverse = buildReverseConversationCache(cache);
-        const sessionId = reverse[conversationId];
+        let sessionId;
+        {
+          const cache = readConversationCache();
+          const reverse = buildReverseConversationCache(cache);
+          sessionId = reverse[conversationId];
+        }
+        if (!sessionId) {
+          for (let i = 0;i < 10; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            const freshCache = readConversationCache();
+            const freshReverse = buildReverseConversationCache(freshCache);
+            sessionId = freshReverse[conversationId];
+            if (sessionId)
+              break;
+          }
+        }
         if (!sessionId) {
           error = `No session found for conversation ${conversationId}`;
           break;
@@ -12608,7 +12734,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           break;
         }
         const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-        if (tmuxTarget) {
+        if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
           const groups = [];
           for (const k of keyList) {
             if (k === "Escape" || k === "Enter" || groups.length > 0 && k !== groups[groups.length - 1][0]) {
@@ -12625,7 +12751,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
               const needsDelay = prevKey === "Escape" || prevKey === "Enter";
               await new Promise((r) => setTimeout(r, needsDelay ? 600 : 150));
             }
-            await execAsync2(`tmux send-keys -t '${tmuxTarget}' ${groups[i].join(" ")}`);
+            await tmuxExec(["send-keys", "-t", tmuxTarget, ...groups[i]]);
           }
           result = "keys_sent";
           log(`[REMOTE] Sent ${keys} (${groups.length} groups) to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget}`);
@@ -12642,9 +12768,9 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           break;
         }
         const started = startedSessionTmux.get(conversationId);
-        if (started) {
+        if (started && validateTmuxTarget(started.tmuxSession)) {
           try {
-            await execAsync2(`tmux kill-session -t '${started.tmuxSession}' 2>/dev/null`);
+            await tmuxExec(["kill-session", "-t", started.tmuxSession]);
             log(`[REMOTE] Killed started tmux session ${started.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
           } catch {
           }
@@ -12658,10 +12784,10 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
           if (proc) {
             const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-            if (tmuxTarget) {
+            if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
               const tmuxSessionName = tmuxTarget.split(":")[0];
               try {
-                await execAsync2(`tmux kill-session -t '${tmuxSessionName}' 2>/dev/null`);
+                await tmuxExec(["kill-session", "-t", tmuxSessionName]);
                 log(`[REMOTE] Killed tmux session ${tmuxSessionName} for conversation ${conversationId.slice(0, 12)}`);
                 result = "killed_tmux";
               } catch {
@@ -12686,9 +12812,9 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         }
         if (sessionId) {
           const cachedTmux = resumeSessionCache.get(sessionId);
-          if (cachedTmux) {
+          if (cachedTmux && validateTmuxTarget(cachedTmux)) {
             try {
-              await execAsync2(`tmux kill-session -t '${cachedTmux}' 2>/dev/null`);
+              await tmuxExec(["kill-session", "-t", cachedTmux]);
               log(`[REMOTE] Killed cached resume tmux ${cachedTmux} for session ${sessionId.slice(0, 8)}`);
             } catch {
             }
@@ -12705,15 +12831,17 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           sessionProcessCache.delete(sessionId);
           const shortId = sessionId.slice(0, 8);
           try {
-            const { stdout: tmuxList } = await execAsync2("tmux list-sessions -F '#{session_name}' 2>/dev/null");
+            const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
             for (const tmuxName of tmuxList.trim().split(`
 `)) {
               if (!tmuxName || !tmuxName.includes(shortId))
                 continue;
+              if (!validateTmuxTarget(tmuxName))
+                continue;
               const alive = await isTmuxAgentAlive(tmuxName);
               if (!alive) {
                 try {
-                  await execAsync2(`tmux kill-session -t '${tmuxName}' 2>/dev/null`);
+                  await tmuxExec(["kill-session", "-t", tmuxName]);
                   log(`[REMOTE] Killed zombie tmux session ${tmuxName} for session ${shortId}`);
                   if (!result)
                     result = "killed_zombie";
@@ -12804,11 +12932,13 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             const shortId = Math.random().toString(36).slice(2, 8);
             const tmuxSession = `cc-claude-${shortId}`;
             let extraFlags = config.claude_args || "";
-            const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; claude${extraFlags ? " " + extraFlags : ""}`;
-            const execOpts = { timeout: 5000, env: { ...process.env, PATH: ENRICHED_PATH2 } };
+            const blankArgs = extraFlags ? extraFlags.split(/\s+/).filter(Boolean) : [];
+            const safeBlankArgs = sanitizeBinaryArgs(blankArgs);
+            const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${["claude", ...safeBlankArgs].join(" ")}`;
             try {
-              execSync2(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
-              execSync2(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
+              tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+              tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
+              tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
               startedSessionTmux.set(conversationId, {
                 tmuxSession,
                 projectPath: cwd,
@@ -13337,6 +13467,11 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
             log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
           } else if (matchedStartedConversation && actualProjectPath) {
             log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
+          } else {
+            matchedStartedConversation = matchSingleFreshStartedConversation(startedClaudeEntries);
+            if (matchedStartedConversation) {
+              log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via fresh-start fallback`);
+            }
           }
         }
         if (matchedStartedConversation) {
@@ -13567,14 +13702,14 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
                   injectViaTmux(tmuxTarget, response).then(() => {
                     log(`Injected '${response}' via tmux for session ${sessionId.slice(0, 8)}`);
                   }).catch(() => {
-                    injectViaIterm(proc.tty, response).then(() => {
+                    injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
                       log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
                     }).catch((err) => {
                       log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
                     });
                   });
                 } else {
-                  injectViaIterm(proc.tty, response).then(() => {
+                  injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
                     log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
                   }).catch((err) => {
                     log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
@@ -14413,14 +14548,15 @@ async function findSessionProcess(sessionId, agentType = "claude") {
         const reg = JSON.parse(fs14.readFileSync(registryFile, "utf-8"));
         const pid = reg.pid;
         const tty = normalizeTty(reg.tty);
+        const termProgram = reg.term || undefined;
         const { stdout: checkPs } = await execAsync2(`ps -o comm= -p ${pid} 2>/dev/null`);
         if (checkPs.trim()) {
           if (agentType === "codex") {
             log(`Ignoring registry candidate for codex session ${sessionId.slice(0, 8)} (pid=${pid})`);
           } else {
-            const result = { pid, tty, sessionId };
+            const result = { pid, tty, sessionId, termProgram };
             cacheSessionProcess(sessionId, result);
-            log(`Found session ${sessionId.slice(0, 8)} via registry: pid=${pid}, tty=${tty}`);
+            log(`Found session ${sessionId.slice(0, 8)} via registry: pid=${pid}, tty=${tty}, term=${termProgram ?? "unknown"}`);
             return result;
           }
         } else {
@@ -14553,14 +14689,14 @@ async function findSessionProcess(sessionId, agentType = "claude") {
       }
     }
     try {
-      const { stdout: tmuxList } = await execAsync2("tmux list-sessions -F '#{session_name}' 2>/dev/null");
+      const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
       const shortId = sessionId.slice(0, 8);
       for (const tmuxName of tmuxList.trim().split(`
 `)) {
         if (!tmuxName.includes(shortId))
           continue;
         try {
-          const { stdout: paneInfo } = await execAsync2(`tmux list-panes -t '${tmuxName}' -F '#{pane_tty} #{pane_pid}' 2>/dev/null`);
+          const { stdout: paneInfo } = await tmuxExec(["list-panes", "-t", tmuxName, "-F", "#{pane_tty} #{pane_pid}"]);
           const paneLine = paneInfo.trim().split(`
 `)[0];
           if (paneLine) {
@@ -14682,7 +14818,7 @@ async function findTmuxPaneForTty(tty) {
   if (!hasTmux())
     return null;
   try {
-    const { stdout } = await execAsync2("tmux list-panes -a -F '#{pane_tty} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null");
+    const { stdout } = await tmuxExec(["list-panes", "-a", "-F", "#{pane_tty} #{session_name}:#{window_index}.#{pane_index}"]);
     const normalizedTty = normalizeTty(tty);
     for (const line of stdout.trim().split(`
 `)) {
@@ -14696,6 +14832,40 @@ async function findTmuxPaneForTty(tty) {
     return null;
   }
 }
+function parseInteractivePrompt(text) {
+  const lines = text.split(`
+`);
+  const optionPattern = /^\s*[\u276F>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
+  const options = [];
+  let firstOptionIdx = -1;
+  let gapCount = 0;
+  for (let i = 0;i < lines.length; i++) {
+    const m = lines[i].match(optionPattern);
+    if (m) {
+      if (firstOptionIdx < 0)
+        firstOptionIdx = i;
+      const label = m[2].replace(/\s*[\u2713\u2717\u2714\u2611]\s*/g, "").trim();
+      const description = m[3]?.trim() || undefined;
+      if (label)
+        options.push({ label, description });
+      gapCount = 0;
+    } else if (options.length > 0) {
+      const trimmed = lines[i].trim();
+      if (!trimmed || /^\s{10,}/.test(lines[i])) {
+        gapCount++;
+        if (gapCount > 3)
+          break;
+      } else if (/^\s*[\u276F>]\s*$/.test(lines[i]) || /confirm|exit|adjust|effort/i.test(trimmed)) {
+        break;
+      }
+    }
+  }
+  if (options.length < 2 || firstOptionIdx < 0)
+    return null;
+  const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx).map((l) => l.trim()).filter((l) => l.length > 0 && !/^[\u276F>]/.test(l) && !/^[\u2500\u2501\u2550\u2500\-_]{5,}$/.test(l));
+  const question = headerLines[0] || "Select an option";
+  return { question, options };
+}
 function parsePollMessage(content) {
   try {
     const parsed = JSON.parse(content);
@@ -14704,6 +14874,51 @@ function parsePollMessage(content) {
   } catch {
   }
   return null;
+}
+async function checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService2) {
+  if (pendingInteractivePrompts.has(sessionId)) {
+    log(`Skipping prompt check: pending prompt exists for ${sessionId.slice(0, 8)}`);
+    return;
+  }
+  const hookEntry = lastHookStatus.get(sessionId);
+  if (hookEntry && hookEntry.status === "working" && Date.now() / 1000 - hookEntry.ts < 10) {
+    log(`Skipping prompt check: session ${sessionId.slice(0, 8)} is working`);
+    return;
+  }
+  await new Promise((resolve4) => setTimeout(resolve4, 2000));
+  try {
+    const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxTarget, "-S", "-50"]);
+    const prompt = parseInteractivePrompt(paneContent);
+    if (!prompt) {
+      log(`No interactive prompt found in ${tmuxTarget} for session ${sessionId.slice(0, 8)}`);
+      return;
+    }
+    log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options`);
+    const now = Date.now();
+    pendingInteractivePrompts.set(sessionId, now);
+    await syncService2.addMessages({
+      conversationId,
+      messages: [{
+        messageUuid: `interactive-prompt-${sessionId}-${now}`,
+        role: "assistant",
+        content: "",
+        timestamp: now,
+        toolCalls: [{
+          id: `prompt-${now}`,
+          name: "AskUserQuestion",
+          input: {
+            questions: [{
+              question: prompt.question,
+              options: prompt.options
+            }]
+          }
+        }]
+      }]
+    });
+    log(`Synced interactive prompt as AskUserQuestion for session ${sessionId.slice(0, 8)}`);
+  } catch (err) {
+    log(`Interactive prompt check failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 function normalizePromptText(value) {
   return value.replace(/\s+/g, " ").trim();
@@ -14748,80 +14963,91 @@ async function injectViaTmuxInner(target, content) {
   if (poll) {
     const steps = poll.steps || (poll.keys || []).map((k) => ({ key: k }));
     for (const step of steps) {
-      await execAsync2(`tmux send-keys -t '${target}' '${step.key}'`);
+      await tmuxExec(["send-keys", "-t", target, step.key]);
       await new Promise((resolve4) => setTimeout(resolve4, 500));
       if (step.text) {
         await new Promise((resolve4) => setTimeout(resolve4, 300));
-        const escaped = step.text.replace(/'/g, "'\\''");
-        await execAsync2(`tmux send-keys -t '${target}' -l '${escaped}'`);
+        await tmuxExec(["send-keys", "-t", target, "-l", step.text]);
         await new Promise((resolve4) => setTimeout(resolve4, 150));
-        await execAsync2(`tmux send-keys -t '${target}' Enter`);
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
         await new Promise((resolve4) => setTimeout(resolve4, 500));
       }
     }
     if (poll.text) {
       await new Promise((resolve4) => setTimeout(resolve4, 300));
-      const escaped = poll.text.replace(/'/g, "'\\''");
-      await execAsync2(`tmux send-keys -t '${target}' -l '${escaped}'`);
+      await tmuxExec(["send-keys", "-t", target, "-l", poll.text]);
       await new Promise((resolve4) => setTimeout(resolve4, 150));
-      await execAsync2(`tmux send-keys -t '${target}' Enter`);
+      await tmuxExec(["send-keys", "-t", target, "Enter"]);
     }
     log(`Injected poll response via tmux to ${target}`);
     return;
   }
   const sanitized = content.replace(/\r?\n/g, " ");
   try {
-    const { stdout: preCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -5`);
+    const { stdout: preCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-5"]);
     const hasBlockingWarning = /Press enter to continue|Update available|\u26A0|recorded with model|weekly limit/i.test(preCheck);
     const promptVisible = /[\u276F\u203A]/.test(preCheck.split(`
 `).slice(-5).join(`
 `));
     if (hasBlockingWarning && !promptVisible) {
       log(`Clearing blocking dialog before inject to ${target}`);
-      await execAsync2(`tmux send-keys -t '${target}' Enter`);
+      await tmuxExec(["send-keys", "-t", target, "Enter"]);
       await new Promise((resolve4) => setTimeout(resolve4, 1000));
     } else if (hasBlockingWarning && promptVisible) {
-      await execAsync2(`tmux send-keys -t '${target}' Escape`);
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise((resolve4) => setTimeout(resolve4, 500));
     }
   } catch {
   }
-  const id = `cc-${process.pid}-${Date.now()}`;
-  const tmpFile = `/tmp/${id}`;
-  try {
-    fs14.writeFileSync(tmpFile, sanitized);
-    await execAsync2(`tmux load-buffer -b '${id}' '${tmpFile}'`);
-    await execAsync2(`tmux paste-buffer -t '${target}' -b '${id}' -d`);
-  } catch (err) {
-    const escaped = sanitized.replace(/'/g, "'\\''");
-    await execAsync2(`tmux send-keys -t '${target}' -l '${escaped}'`);
-  } finally {
-    try {
-      fs14.unlinkSync(tmpFile);
-    } catch {
-    }
-  }
   const captureLines = Math.max(30, Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
-  for (let attempt = 0;attempt < 12; attempt++) {
-    try {
-      const { stdout: echoCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
-      if (tmuxPromptStillHasInput(echoCheck, contentPrefix))
-        break;
-    } catch {
+  let pasteConfirmed = false;
+  for (let pasteRetry = 0;pasteRetry < 4; pasteRetry++) {
+    if (pasteRetry > 0) {
+      log(`Paste retry ${pasteRetry} for ${target} (text not appearing in pane)`);
+      await new Promise((resolve4) => setTimeout(resolve4, 500 * pasteRetry));
     }
-    await new Promise((resolve4) => setTimeout(resolve4, 150));
+    const id = `cc-${process.pid}-${Date.now()}`;
+    const tmpFile = `/tmp/${id}`;
+    try {
+      fs14.writeFileSync(tmpFile, sanitized);
+      await tmuxExec(["load-buffer", "-b", id, tmpFile]);
+      await tmuxExec(["paste-buffer", "-t", target, "-b", id, "-d"]);
+    } catch (err) {
+      await tmuxExec(["send-keys", "-t", target, "-l", sanitized]);
+    } finally {
+      try {
+        fs14.unlinkSync(tmpFile);
+      } catch {
+      }
+    }
+    for (let attempt = 0;attempt < 12; attempt++) {
+      try {
+        const { stdout: echoCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
+        if (tmuxPromptStillHasInput(echoCheck, contentPrefix)) {
+          pasteConfirmed = true;
+          break;
+        }
+      } catch {
+      }
+      await new Promise((resolve4) => setTimeout(resolve4, 150));
+    }
+    if (pasteConfirmed)
+      break;
+  }
+  if (!pasteConfirmed) {
+    log(`WARNING: paste text never appeared in pane ${target} after 4 retries`);
   }
   const enterDelay = Math.max(200, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
   await new Promise((resolve4) => setTimeout(resolve4, enterDelay));
-  await execAsync2(`tmux send-keys -t '${target}' Enter`);
+  await tmuxExec(["send-keys", "-t", target, "Enter"]);
   for (let retry = 0;retry < 5; retry++) {
     await new Promise((resolve4) => setTimeout(resolve4, 600));
     try {
-      const { stdout: postCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
+      const { stdout: postCheck } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`]);
       if (tmuxPromptStillHasInput(postCheck, contentPrefix)) {
         log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
-        await execAsync2(`tmux send-keys -t '${target}' Enter`);
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
       } else {
         const lastLines = postCheck.split(`
 `).slice(-5).join(`
@@ -14845,37 +15071,56 @@ async function injectViaTmuxInner(target, content) {
       break;
     }
   }
-  log(`Injected via tmux to ${target}`);
+  if (pasteConfirmed) {
+    log(`Injected via tmux to ${target}`);
+  } else {
+    log(`WARNING: Injection to ${target} completed but paste was never confirmed`);
+  }
 }
-async function injectViaIterm(tty, content) {
-  const normalizedTty = normalizeTty(tty);
-  const poll = parsePollMessage(content);
-  let scriptContent;
-  let scriptArgs;
+function buildAppleScript(app, normalizedTty, content, poll) {
+  const isIterm = app === "iTerm2";
   if (poll) {
     const steps = poll.steps || (poll.keys || []).map((k) => ({ key: k }));
-    const stepActions = steps.map((step, i) => {
-      const lines = [`            tell s to write text "${step.key}" without newline`];
-      if (step.text) {
-        const escapedText = step.text.replace(/"/g, "\\\"");
-        lines.push("            delay 0.5");
-        lines.push(`            tell s to write text "${escapedText}" without newline`);
-        lines.push("            delay 0.15");
-        lines.push(`            tell s to write text ""`);
-      }
-      if (i < steps.length - 1)
-        lines.push("            delay 0.5");
-      return lines.join(`
+    let stepActions;
+    if (isIterm) {
+      stepActions = steps.map((step, i) => {
+        const lines = [`            tell s to write text "${step.key}" without newline`];
+        if (step.text) {
+          const escapedText = step.text.replace(/"/g, "\\\"");
+          lines.push("            delay 0.5");
+          lines.push(`            tell s to write text "${escapedText}" without newline`);
+          lines.push("            delay 0.15");
+          lines.push(`            tell s to write text ""`);
+        }
+        if (i < steps.length - 1)
+          lines.push("            delay 0.5");
+        return lines.join(`
 `);
-    }).join(`
+      }).join(`
 `);
-    const keyActions = stepActions;
-    const textAction = poll.text ? `
+    } else {
+      stepActions = steps.map((step, i) => {
+        const lines = [`          do script "${step.key}" in t`];
+        if (step.text) {
+          const escapedText = step.text.replace(/"/g, "\\\"");
+          lines.push("          delay 0.5");
+          lines.push(`          do script "${escapedText}" in t`);
+        }
+        if (i < steps.length - 1)
+          lines.push("          delay 0.5");
+        return lines.join(`
+`);
+      }).join(`
+`);
+    }
+    const textAction = poll.text ? isIterm ? `
             delay 0.3
             tell s to write text "${poll.text.replace(/"/g, "\\\"")}" without newline
             delay 0.15
-            tell s to write text ""` : "";
-    scriptContent = `on run argv
+            tell s to write text ""` : `
+          delay 0.3
+          do script "${poll.text.replace(/"/g, "\\\"")}" in t` : "";
+    const script2 = isIterm ? `on run argv
   set targetTty to item 1 of argv
   tell application "iTerm2"
     repeat with w in windows
@@ -14883,7 +15128,7 @@ async function injectViaIterm(tty, content) {
         repeat with s in sessions of t
           set sTty to tty of s
           if sTty is targetTty then
-${keyActions}${textAction}
+${stepActions}${textAction}
             return "ok"
           end if
         end repeat
@@ -14891,10 +15136,24 @@ ${keyActions}${textAction}
     end repeat
   end tell
   return "not_found"
+end run` : `on run argv
+  set targetTty to item 1 of argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is targetTty then
+${stepActions}${textAction}
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "not_found"
 end run`;
-    scriptArgs = `'${normalizedTty}'`;
-  } else {
-    scriptContent = `on run argv
+    return { script: script2, args: `'${normalizedTty}'` };
+  }
+  const escapedContent = content.replace(/'/g, "'\\''");
+  const script = isIterm ? `on run argv
   set msgText to item 1 of argv
   set targetTty to item 2 of argv
   tell application "iTerm2"
@@ -14913,18 +15172,36 @@ end run`;
     end repeat
   end tell
   return "not_found"
+end run` : `on run argv
+  set msgText to item 1 of argv
+  set targetTty to item 2 of argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is targetTty then
+          do script msgText in t
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "not_found"
 end run`;
-    const escapedContent = content.replace(/'/g, "'\\''");
-    scriptArgs = `'${escapedContent}' '${normalizedTty}'`;
-  }
-  const tmpFile = path13.join(CONFIG_DIR5, "iterm-inject.scpt");
-  fs14.writeFileSync(tmpFile, scriptContent);
+  return { script, args: `'${escapedContent}' '${normalizedTty}'` };
+}
+async function injectViaTerminal(tty, content, termProgram) {
+  const normalizedTty = normalizeTty(tty);
+  const poll = parsePollMessage(content);
+  const app = termProgram === "Apple_Terminal" ? "Terminal" : "iTerm2";
+  const { script, args } = buildAppleScript(app, normalizedTty, content, poll);
+  const tmpFile = path13.join(CONFIG_DIR5, "terminal-inject.scpt");
+  fs14.writeFileSync(tmpFile, script);
   try {
-    const { stdout } = await execAsync2(`osascript "${tmpFile}" ${scriptArgs}`);
+    const { stdout } = await execAsync2(`osascript "${tmpFile}" ${args}`);
     if (stdout.trim() === "not_found") {
-      throw new Error(`iTerm2 session not found for TTY ${normalizedTty}`);
+      throw new Error(`${app} session not found for TTY ${normalizedTty}`);
     }
-    log(`Injected ${poll ? "poll response" : "message"} via iTerm2 for TTY ${normalizedTty}`);
+    log(`Injected ${poll ? "poll response" : "message"} via ${app} for TTY ${normalizedTty}`);
   } finally {
     try {
       fs14.unlinkSync(tmpFile);
@@ -15032,7 +15309,7 @@ function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, sync
       return;
     codexPermissionRunning.add(sessionId);
     try {
-      const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -30 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+      const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-30"], { timeout: 3000, killSignal: "SIGKILL" });
       const prompt = detectCodexPermissionFromPane(paneContent);
       if (!prompt)
         return;
@@ -15056,7 +15333,7 @@ function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, sync
           const key = decision.approved ? "Enter" : "Escape";
           log(`Injecting Codex permission '${key}' for session ${sessionId.slice(0, 8)}`);
           try {
-            await execAsync2(`tmux send-keys -t '${tmuxSession}' ${key}`);
+            await tmuxExec(["send-keys", "-t", tmuxSession, key]);
           } catch (err) {
             log(`Failed to inject Codex permission key: ${err instanceof Error ? err.message : String(err)}`);
           }
@@ -15147,6 +15424,7 @@ function cacheSessionProcess(sessionId, info, tmuxTarget) {
     pid: info.pid,
     tty: info.tty,
     tmuxTarget,
+    termProgram: info.termProgram,
     lastVerified: Date.now()
   });
 }
@@ -15161,7 +15439,7 @@ async function getCachedSessionProcess(sessionId) {
     }
     cached.lastVerified = Date.now();
   }
-  return { pid: cached.pid, tty: cached.tty, sessionId };
+  return { pid: cached.pid, tty: cached.tty, sessionId, termProgram: cached.termProgram };
 }
 function validateProcessCache() {
   for (const [sessionId, cached] of sessionProcessCache) {
@@ -15262,15 +15540,16 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
   const tmuxSession = slug ? `${prefix}-resume-${slug}-${shortId}` : `${prefix}-resume-${shortId}`;
   try {
     try {
-      await execAsync2(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`);
+      await tmuxExec(["kill-session", "-t", tmuxSession]);
     } catch {
     }
-    await execAsync2(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`);
+    await tmuxExec(["new-session", "-d", "-s", tmuxSession, "-c", cwd]);
     if (nonInteractive && agentType === "claude") {
       const tmpFile = path13.join(os2.tmpdir(), `codecast-msg-${shortId}.txt`);
       fs14.writeFileSync(tmpFile, content);
       const nonInteractiveCmd = `env -u CLAUDECODE ${resumeCmd} -p "$(cat '${tmpFile}')" --output-format stream-json --verbose && rm -f '${tmpFile}'`;
-      await execAsync2(`tmux send-keys -t '${tmuxSession}' '${nonInteractiveCmd.replace(/'/g, "'\\''")}'  Enter`);
+      await tmuxExec(["send-keys", "-t", tmuxSession, "-l", nonInteractiveCmd]);
+      await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
       logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} (non-interactive) cwd=${cwd}`);
       const fatalErrors2 = [
         "No conversation found",
@@ -15283,11 +15562,11 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
       for (let i = 0;i < 20; i++) {
         await new Promise((resolve4) => setTimeout(resolve4, 500));
         try {
-          const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
+          const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
           if (fatalErrors2.some((e) => paneContent.includes(e))) {
             logDelivery(`Auto-resume FATAL (non-interactive) for ${shortId}: ${paneContent.slice(0, 300)}`);
             try {
-              await execAsync2(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`);
+              await tmuxExec(["kill-session", "-t", tmuxSession]);
             } catch {
             }
             try {
@@ -15312,8 +15591,8 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
       }
       return true;
     }
-    const safeResumeCmd = `env -u CLAUDECODE ${resumeCmd}`;
-    await execAsync2(`tmux send-keys -t '${tmuxSession}' '${safeResumeCmd.replace(/'/g, "'\\''")}'  Enter`);
+    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `env -u CLAUDECODE ${resumeCmd}`]);
+    await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
     resumeSessionCache.set(sessionId, tmuxSession);
     if (syncServiceRef) {
@@ -15348,11 +15627,11 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     for (let i = 0;i < 60; i++) {
       await new Promise((resolve4) => setTimeout(resolve4, 250));
       try {
-        const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
+        const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
         if (fatalErrors.some((e) => paneContent.includes(e))) {
           logDelivery(`Auto-resume FATAL for ${shortId}: agent crashed. Pane: ${paneContent.slice(0, 300)}`);
           try {
-            await execAsync2(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`);
+            await tmuxExec(["kill-session", "-t", tmuxSession]);
           } catch {
           }
           return false;
@@ -15370,16 +15649,16 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     }
     if (ready || !content) {
       try {
-        const { stdout: preInjectPane } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -15`);
+        const { stdout: preInjectPane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-15"]);
         const warningPatterns = /\u26A0|recorded with model|weekly limit|Update available|Press enter to continue/;
         if (warningPatterns.test(preInjectPane)) {
           logDelivery(`Clearing startup warnings for ${shortId} before injection`);
-          await execAsync2(`tmux send-keys -t '${tmuxSession}' Escape`);
+          await tmuxExec(["send-keys", "-t", tmuxSession, "Escape"]);
           await new Promise((resolve4) => setTimeout(resolve4, 300));
           for (let w = 0;w < 20; w++) {
             await new Promise((resolve4) => setTimeout(resolve4, 250));
             try {
-              const { stdout: cleared } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -5`);
+              const { stdout: cleared } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-5"]);
               if (promptPattern.test(cleared.split(`
 `).slice(-3).join(`
 `)))
@@ -15533,7 +15812,7 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
   if (!tmuxSession)
     return;
   try {
-    await execAsync2(`tmux has-session -t '${tmuxSession}' 2>/dev/null`);
+    await tmuxExec(["has-session", "-t", tmuxSession]);
   } catch {
     log(`Health check: tmux session ${tmuxSession} is dead after delivery for ${sessionId.slice(0, 8)}`);
     const repaired = await repairAndResumeSession(sessionId, content, titleCache, false, undefined, conversationId);
@@ -15557,7 +15836,7 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
   if (!alive) {
     log(`Health check: agent process dead in ${tmuxSession} for ${sessionId.slice(0, 8)}`);
     try {
-      await execAsync2(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`);
+      await tmuxExec(["kill-session", "-t", tmuxSession]);
     } catch {
     }
     resumeSessionCache.delete(sessionId);
@@ -15613,7 +15892,7 @@ async function materializeSession(conversationId, conversationCache, titleCache,
       logDelivery(`Materializing session for conv=${conversationId.slice(0, 12)}...`);
       const exportData = await fetchExport(siteUrl, config.auth_token, conversationId);
       if (exportData.messages.length === 0) {
-        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages`);
+        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages (session_id=${exportData.conversation?.session_id?.slice(0, 8) || "none"})`);
         return null;
       }
       const TOKEN_BUDGET = 1e5;
@@ -15669,11 +15948,14 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
   }
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
+  pendingInteractivePrompts.delete(sessionId || conversationId);
   if (!sessionId) {
-    logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, trying fallback strategies`);
+    const cacheKeys = Object.keys(conversationCache);
+    const reverseKeys = Object.keys(reverseCache);
+    logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, cache has ${cacheKeys.length} sessions/${reverseKeys.length} convs, startedTmux has ${startedSessionTmux.size} entries`);
     const tryStartedTmux = async (entry) => {
       try {
-        await execAsync2(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
+        await tmuxExec(["has-session", "-t", entry.tmuxSession]);
         const promptPattern = entry.agentType === "codex" ? />\s*$/ : entry.agentType === "gemini" ? />\s*$|gemini/i : /\u276F|\u23F5/;
         const fatalErrors = [
           "cannot be launched inside another",
@@ -15683,16 +15965,28 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         ];
         let ready = false;
         const startTime = Date.now();
+        const trustPromptPatterns = /trust this folder|safety check|Is this a project/i;
         for (let i = 0;i < 60; i++) {
           await new Promise((resolve4) => setTimeout(resolve4, 250));
           try {
-            const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${entry.tmuxSession}' -S -20`);
+            const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]);
             if (fatalErrors.some((e) => paneContent.includes(e))) {
               log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${paneContent.slice(0, 200)}`);
               startedSessionTmux.delete(conversationId);
               return false;
             }
+            if (trustPromptPatterns.test(paneContent)) {
+              log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
+              await tmuxExec(["send-keys", "-t", entry.tmuxSession, "Enter"]);
+              await new Promise((resolve4) => setTimeout(resolve4, 2000));
+              continue;
+            }
             if (promptPattern.test(paneContent)) {
+              const lastLines = paneContent.split(`
+`).slice(-10).join(`
+`);
+              if (trustPromptPatterns.test(lastLines))
+                continue;
               log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
               ready = true;
               break;
@@ -15703,9 +15997,15 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         if (!ready) {
           log(`Started session ${entry.tmuxSession} startup timed out after ${Date.now() - startTime}ms, proceeding anyway`);
         }
-        await injectViaTmux(entry.tmuxSession + ":0.0", content);
+        await new Promise((resolve4) => setTimeout(resolve4, 1500));
+        const startedTmuxTarget = entry.tmuxSession + ":0.0";
+        await injectViaTmux(startedTmuxTarget, content);
         await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         log(`Delivered message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
+        if (content.trimStart().startsWith("/")) {
+          checkForInteractivePrompt(startedTmuxTarget, conversationId, conversationId, syncService2).catch(() => {
+          });
+        }
         return true;
       } catch (err) {
         log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
@@ -15723,6 +16023,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
       conversationCache[sessionId] = conversationId;
       log(`Found session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} via disk cache refresh`);
     } else if (!started) {
+      logDelivery(`Waiting up to 12s for start_session to populate startedSessionTmux for conv=${conversationId.slice(0, 12)}`);
       for (let i = 0;i < 24; i++) {
         await new Promise((r) => setTimeout(r, 500));
         const justStarted = startedSessionTmux.get(conversationId);
@@ -15775,7 +16076,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
   if (cachedTmux) {
     logDelivery(`Found cached tmux=${cachedTmux} for session=${sessionId.slice(0, 12)}`);
     try {
-      await execAsync2(`tmux has-session -t '${cachedTmux}' 2>/dev/null`);
+      await tmuxExec(["has-session", "-t", cachedTmux]);
       if (!await isTmuxAgentAlive(cachedTmux)) {
         logDelivery(`Cached tmux ${cachedTmux} has no live agent, clearing cache`);
         resumeSessionCache.delete(sessionId);
@@ -15786,7 +16087,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
           resumeHeartbeatIntervals.delete(sessionId);
         }
         try {
-          await execAsync2(`tmux kill-session -t '${cachedTmux}' 2>/dev/null`);
+          await tmuxExec(["kill-session", "-t", cachedTmux]);
         } catch {
         }
       } else {
@@ -15794,6 +16095,10 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
         syncService2.setSessionError(conversationId).catch(() => {
         });
+        if (content.trimStart().startsWith("/")) {
+          checkForInteractivePrompt(cachedTmux, sessionId, conversationId, syncService2).catch(() => {
+          });
+        }
         return true;
       }
     } catch {
@@ -15822,19 +16127,24 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
           await injectViaTmux(tmuxTarget, content);
           await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
           logDelivery(`Delivered via tmux ${tmuxTarget}`);
+          if (content.trimStart().startsWith("/")) {
+            checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService2).catch(() => {
+            });
+          }
           return true;
         } catch (err) {
           logDelivery(`tmux injection failed for ${tmuxTarget}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      logDelivery(`Trying iTerm2 injection for tty=${proc.tty}`);
+      const termLabel = proc.termProgram === "Apple_Terminal" ? "Terminal.app" : "iTerm2";
+      logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
       try {
-        await injectViaIterm(proc.tty, content);
+        await injectViaTerminal(proc.tty, content, proc.termProgram);
         await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-        logDelivery(`Delivered via iTerm2 tty=${proc.tty}`);
+        logDelivery(`Delivered via ${termLabel} tty=${proc.tty}`);
         return true;
       } catch (err) {
-        logDelivery(`iTerm2 injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+        logDelivery(`${termLabel} injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
       }
       logDelivery(`All injection methods failed for live process pid=${proc.pid}, falling back to auto-resume`);
     }
@@ -15851,6 +16161,13 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
     materializedSessions.delete(sessionId);
     await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via auto-resume for session=${sessionId.slice(0, 8)}`);
+    if (content.trimStart().startsWith("/")) {
+      const resumeTmux = resumeSessionCache.get(sessionId);
+      if (resumeTmux) {
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService2).catch(() => {
+        });
+      }
+    }
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService2, titleCache, conversationCache).catch((err) => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -15862,6 +16179,13 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
     materializedSessions.delete(sessionId);
     await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`Delivered via repair+resume for session=${sessionId.slice(0, 8)}`);
+    if (content.trimStart().startsWith("/")) {
+      const resumeTmux = resumeSessionCache.get(sessionId);
+      if (resumeTmux) {
+        checkForInteractivePrompt(resumeTmux + ":0.0", sessionId, conversationId, syncService2).catch(() => {
+        });
+      }
+    }
     postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService2, titleCache, conversationCache).catch((err) => {
       log(`Health check error: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -15922,7 +16246,7 @@ async function waitForConfig() {
         return { config, convexUrl };
       }
     }
-    log("Waiting for configuration... (run 'codecast auth' to set up)");
+    log("Waiting for configuration... (run 'cast auth' to set up)");
     await new Promise((resolve4) => setTimeout(resolve4, checkInterval));
   }
 }
@@ -15938,7 +16262,7 @@ async function isTmuxAgentAlive(tmuxSession) {
   if (!hasTmux())
     return false;
   try {
-    const { stdout } = await execAsync2(`tmux list-panes -t '${tmuxSession}' -F '#{pane_pid}' 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+    const { stdout } = await tmuxExec(["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"], { timeout: 3000, killSignal: "SIGKILL" });
     const panePid = stdout.trim();
     if (!panePid)
       return false;
@@ -15947,7 +16271,7 @@ async function isTmuxAgentAlive(tmuxSession) {
       return true;
     } catch {
       try {
-        const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -5 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+        const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-5"], { timeout: 3000, killSignal: "SIGKILL" });
         const trimmed = paneContent.trim();
         if (/[$%#]\s*$/.test(trimmed))
           return false;
@@ -16476,11 +16800,11 @@ function startWatchdog(deps) {
       for (const [convId, entry] of startedSessionTmux.entries()) {
         if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
           try {
-            await execAsync2(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+            await tmuxExec(["has-session", "-t", entry.tmuxSession], { timeout: 3000, killSignal: "SIGKILL" });
             if (!await isTmuxAgentAlive(entry.tmuxSession)) {
               log(`Pruning started session ${entry.tmuxSession}: agent dead (zombie shell)`);
               try {
-                await execAsync2(`tmux kill-session -t '${entry.tmuxSession}' 2>/dev/null`);
+                await tmuxExec(["kill-session", "-t", entry.tmuxSession]);
               } catch {
               }
               startedSessionTmux.delete(convId);
@@ -16492,7 +16816,7 @@ function startWatchdog(deps) {
       }
       const activeStartedTmux = new Set([...startedSessionTmux.values()].map((e) => e.tmuxSession));
       try {
-        const { stdout: tmuxList } = await execAsync2("tmux list-sessions -F '#{session_name}' 2>/dev/null", { timeout: 3000, killSignal: "SIGKILL" });
+        const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"], { timeout: 3000, killSignal: "SIGKILL" });
         for (const tmuxName of tmuxList.trim().split(`
 `)) {
           if (!tmuxName || !/^cc-resume-/.test(tmuxName) && !/^cc-claude-/.test(tmuxName))
@@ -16502,7 +16826,7 @@ function startWatchdog(deps) {
           if (!await isTmuxAgentAlive(tmuxName)) {
             log(`Reaping zombie tmux session ${tmuxName}`);
             try {
-              await execAsync2(`tmux kill-session -t '${tmuxName}' 2>/dev/null`);
+              await tmuxExec(["kill-session", "-t", tmuxName]);
             } catch {
             }
           }
@@ -16628,6 +16952,7 @@ function startWatchdog(deps) {
 }
 async function main() {
   ensureConfigDir3();
+  ensureCastAlias();
   if (!acquireLock()) {
     const existingPid = fs14.readFileSync(PID_FILE, "utf-8").trim();
     console.error(`Daemon already running (PID: ${existingPid}). Exiting.`);
@@ -16752,6 +17077,10 @@ async function main() {
     });
     checkDiskVersionMismatch();
   }, HEALTH_REPORT_INTERVAL_MS);
+  setInterval(() => {
+    pollDaemonCommands().catch(() => {
+    });
+  }, 1e4);
   sendHeartbeat().catch(() => {
   });
   const taskScheduler = new TaskScheduler({
@@ -16922,7 +17251,7 @@ async function main() {
                   return;
                 }
                 findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
-                  const inject = tmuxTarget ? () => injectViaTmux(tmuxTarget, response) : () => injectViaIterm(proc.tty, response);
+                  const inject = tmuxTarget ? () => injectViaTmux(tmuxTarget, response) : () => injectViaTerminal(proc.tty, response, proc.termProgram);
                   inject().then(() => {
                     log(`Injected '${response}' for session ${sessionId.slice(0, 8)}`);
                     sendAgentStatus(syncService2, convId, sessionId, "working");
@@ -17403,7 +17732,7 @@ async function main() {
                 }
                 if (!injected) {
                   try {
-                    await injectViaIterm(proc.tty, response);
+                    await injectViaTerminal(proc.tty, response, proc.termProgram);
                     injected = true;
                   } catch {
                   }
