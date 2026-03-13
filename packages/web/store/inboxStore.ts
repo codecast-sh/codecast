@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { mutativeMiddleware, action } from "./mutativeMiddleware";
 import { applySyncTable, type PendingEntry } from "./syncProtocol";
+import { soundDismiss } from "../lib/sounds";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -443,6 +444,7 @@ export const useInboxStore = create<InboxStoreState>(
   // =====================
 
   stashSession: (id: string) => {
+    soundDismiss();
     const state = get();
     const newSessions = { ...state.sessions };
     delete newSessions[id];

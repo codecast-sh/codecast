@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
+import { soundIdle } from "../lib/sounds";
 
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
@@ -36,6 +37,7 @@ export function useSyncInboxSessions(showAll: boolean) {
   const _setDispatch = useInboxStore((s) => s._setDispatch);
 
   const prevActiveIdsRef = useRef<Set<string> | null>(null);
+  const prevIdleMapRef = useRef<Map<string, boolean> | null>(null);
 
   useEffect(() => {
     _setDispatch((action, args, patches) => dispatchMutation({ action, args, patches }));
@@ -43,6 +45,17 @@ export function useSyncInboxSessions(showAll: boolean) {
 
   useEffect(() => {
     if (activeSessions) {
+      const prev = prevIdleMapRef.current;
+      if (prev) {
+        for (const s of activeSessions) {
+          const id = s._id.toString();
+          if (s.is_idle && prev.has(id) && !prev.get(id) && (s as any).message_count > 0) {
+            soundIdle();
+            break;
+          }
+        }
+      }
+      prevIdleMapRef.current = new Map(activeSessions.map((s) => [s._id.toString(), !!s.is_idle]));
       syncTable("sessions", activeSessions as unknown as InboxSession[]);
     }
   }, [activeSessions, syncTable]);

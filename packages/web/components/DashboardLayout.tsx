@@ -13,6 +13,7 @@ import { NotificationBell } from "./NotificationBell";
 import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
 import { Logo } from "./Logo";
+import { soundNewSession } from "../lib/sounds";
 import { Plus } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
@@ -100,6 +101,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const handleQuickCreate = useCallback(() => {
     if (creatingRef.current) return;
     creatingRef.current = true;
+    soundNewSession();
     const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
     const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const now = Date.now();
