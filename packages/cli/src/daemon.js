@@ -1,32 +1,58 @@
 #!/usr/bin/env node
+"use strict";
+var __create = Object.create;
 var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
-    __defProp(target, name, {
-      get: all[name],
-      enumerable: true,
-      configurable: true,
-      set: (newValue) => all[name] = () => newValue
-    });
+    __defProp(target, name, { get: all[name], enumerable: true });
 };
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/daemon.ts
-import * as fs14 from "fs";
-import * as os2 from "os";
-import * as path13 from "path";
-import { Database as Database3 } from "bun:sqlite";
-import { execSync as execSync2, exec as exec2, spawn } from "child_process";
+var daemon_exports = {};
+__export(daemon_exports, {
+  runDaemon: () => runDaemon,
+  runWatchdog: () => runWatchdog,
+  shouldTreatClaudeFileAsStale: () => shouldTreatClaudeFileAsStale,
+  tmuxPromptStillHasInput: () => tmuxPromptStillHasInput
+});
+module.exports = __toCommonJS(daemon_exports);
+var fs14 = __toESM(require("fs"), 1);
+var os2 = __toESM(require("os"), 1);
+var path13 = __toESM(require("path"), 1);
+var import_bun_sqlite3 = require("bun:sqlite");
+var import_child_process3 = require("child_process");
 
 // node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/index.js
-import { stat as statcb } from "fs";
-import { stat as stat3, readdir as readdir2 } from "fs/promises";
-import { EventEmitter } from "events";
-import * as sysPath2 from "path";
+var import_fs2 = require("fs");
+var import_promises3 = require("fs/promises");
+var import_events = require("events");
+var sysPath2 = __toESM(require("path"), 1);
 
 // node_modules/.pnpm/readdirp@4.1.2/node_modules/readdirp/esm/index.js
-import { stat, lstat, readdir, realpath } from "node:fs/promises";
-import { Readable } from "node:stream";
-import { resolve as presolve, relative as prelative, join as pjoin, sep as psep } from "node:path";
+var import_promises = require("node:fs/promises");
+var import_node_stream = require("node:stream");
+var import_node_path = require("node:path");
 var EntryTypes = {
   FILE_TYPE: "files",
   DIR_TYPE: "directories",
@@ -45,19 +71,19 @@ var defaultOptions = {
 };
 Object.freeze(defaultOptions);
 var RECURSIVE_ERROR_CODE = "READDIRP_RECURSIVE_ERROR";
-var NORMAL_FLOW_ERRORS = new Set(["ENOENT", "EPERM", "EACCES", "ELOOP", RECURSIVE_ERROR_CODE]);
+var NORMAL_FLOW_ERRORS = /* @__PURE__ */ new Set(["ENOENT", "EPERM", "EACCES", "ELOOP", RECURSIVE_ERROR_CODE]);
 var ALL_TYPES = [
   EntryTypes.DIR_TYPE,
   EntryTypes.EVERYTHING_TYPE,
   EntryTypes.FILE_DIR_TYPE,
   EntryTypes.FILE_TYPE
 ];
-var DIR_TYPES = new Set([
+var DIR_TYPES = /* @__PURE__ */ new Set([
   EntryTypes.DIR_TYPE,
   EntryTypes.EVERYTHING_TYPE,
   EntryTypes.FILE_DIR_TYPE
 ]);
-var FILE_TYPES = new Set([
+var FILE_TYPES = /* @__PURE__ */ new Set([
   EntryTypes.EVERYTHING_TYPE,
   EntryTypes.FILE_DIR_TYPE,
   EntryTypes.FILE_TYPE
@@ -66,7 +92,7 @@ var isNormalFlowError = (error) => NORMAL_FLOW_ERRORS.has(error.code);
 var wantBigintFsStats = process.platform === "win32";
 var emptyFn = (_entryInfo) => true;
 var normalizeFilter = (filter) => {
-  if (filter === undefined)
+  if (filter === void 0)
     return emptyFn;
   if (typeof filter === "function")
     return filter;
@@ -80,8 +106,7 @@ var normalizeFilter = (filter) => {
   }
   return emptyFn;
 };
-
-class ReaddirpStream extends Readable {
+var ReaddirpStream = class extends import_node_stream.Readable {
   constructor(options = {}) {
     super({
       objectMode: true,
@@ -92,9 +117,9 @@ class ReaddirpStream extends Readable {
     const { root, type } = opts;
     this._fileFilter = normalizeFilter(opts.fileFilter);
     this._directoryFilter = normalizeFilter(opts.directoryFilter);
-    const statMethod = opts.lstat ? lstat : stat;
+    const statMethod = opts.lstat ? import_promises.lstat : import_promises.stat;
     if (wantBigintFsStats) {
-      this._stat = (path) => statMethod(path, { bigint: true });
+      this._stat = (path14) => statMethod(path14, { bigint: true });
     } else {
       this._stat = statMethod;
     }
@@ -102,13 +127,13 @@ class ReaddirpStream extends Readable {
     this._wantsDir = type ? DIR_TYPES.has(type) : false;
     this._wantsFile = type ? FILE_TYPES.has(type) : false;
     this._wantsEverything = type === EntryTypes.EVERYTHING_TYPE;
-    this._root = presolve(root);
+    this._root = (0, import_node_path.resolve)(root);
     this._isDirent = !opts.alwaysStat;
     this._statsProp = this._isDirent ? "dirent" : "stats";
     this._rdOptions = { encoding: "utf8", withFileTypes: this._isDirent };
     this.parents = [this._exploreDir(root, 1)];
     this.reading = false;
-    this.parent = undefined;
+    this.parent = void 0;
   }
   async _read(batch) {
     if (this.reading)
@@ -119,8 +144,8 @@ class ReaddirpStream extends Readable {
         const par = this.parent;
         const fil = par && par.files;
         if (fil && fil.length > 0) {
-          const { path, depth } = par;
-          const slice = fil.splice(0, batch).map((dirent) => this._formatEntry(dirent, path));
+          const { path: path14, depth } = par;
+          const slice = fil.splice(0, batch).map((dirent) => this._formatEntry(dirent, path14));
           const awaited = await Promise.all(slice);
           for (const entry of awaited) {
             if (!entry)
@@ -160,21 +185,21 @@ class ReaddirpStream extends Readable {
       this.reading = false;
     }
   }
-  async _exploreDir(path, depth) {
+  async _exploreDir(path14, depth) {
     let files;
     try {
-      files = await readdir(path, this._rdOptions);
+      files = await (0, import_promises.readdir)(path14, this._rdOptions);
     } catch (error) {
       this._onError(error);
     }
-    return { files, depth, path };
+    return { files, depth, path: path14 };
   }
-  async _formatEntry(dirent, path) {
+  async _formatEntry(dirent, path14) {
     let entry;
-    const basename = this._isDirent ? dirent.name : dirent;
+    const basename8 = this._isDirent ? dirent.name : dirent;
     try {
-      const fullPath = presolve(pjoin(path, basename));
-      entry = { path: prelative(this._root, fullPath), fullPath, basename };
+      const fullPath = (0, import_node_path.resolve)((0, import_node_path.join)(path14, basename8));
+      entry = { path: (0, import_node_path.relative)(this._root, fullPath), fullPath, basename: basename8 };
       entry[this._statsProp] = this._isDirent ? dirent : await this._stat(fullPath);
     } catch (err) {
       this._onError(err);
@@ -201,14 +226,14 @@ class ReaddirpStream extends Readable {
     if (stats && stats.isSymbolicLink()) {
       const full = entry.fullPath;
       try {
-        const entryRealPath = await realpath(full);
-        const entryRealPathStats = await lstat(entryRealPath);
+        const entryRealPath = await (0, import_promises.realpath)(full);
+        const entryRealPathStats = await (0, import_promises.lstat)(entryRealPath);
         if (entryRealPathStats.isFile()) {
           return "file";
         }
         if (entryRealPathStats.isDirectory()) {
           const len = entryRealPath.length;
-          if (full.startsWith(entryRealPath) && full.substr(len, 1) === psep) {
+          if (full.startsWith(entryRealPath) && full.substr(len, 1) === import_node_path.sep) {
             const recursiveError = new Error(`Circular symlink detected: "${full}" points to "${entryRealPath}"`);
             recursiveError.code = RECURSIVE_ERROR_CODE;
             return this._onError(recursiveError);
@@ -225,7 +250,7 @@ class ReaddirpStream extends Readable {
     const stats = entry && entry[this._statsProp];
     return stats && this._wantsEverything && !stats.isDirectory();
   }
-}
+};
 function readdirp(root, options = {}) {
   let type = options.entryType || options.type;
   if (type === "both")
@@ -244,10 +269,10 @@ function readdirp(root, options = {}) {
 }
 
 // node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/handler.js
-import { watchFile, unwatchFile, watch as fs_watch } from "fs";
-import { open, stat as stat2, lstat as lstat2, realpath as fsrealpath } from "fs/promises";
-import * as sysPath from "path";
-import { type as osType } from "os";
+var import_fs = require("fs");
+var import_promises2 = require("fs/promises");
+var sysPath = __toESM(require("path"), 1);
+var import_os = require("os");
 var STR_DATA = "data";
 var STR_END = "end";
 var STR_CLOSE = "close";
@@ -258,7 +283,7 @@ var isWindows = pl === "win32";
 var isMacos = pl === "darwin";
 var isLinux = pl === "linux";
 var isFreeBSD = pl === "freebsd";
-var isIBMi = osType() === "OS400";
+var isIBMi = (0, import_os.type)() === "OS400";
 var EVENTS = {
   ALL: "all",
   READY: "ready",
@@ -272,12 +297,12 @@ var EVENTS = {
 };
 var EV = EVENTS;
 var THROTTLE_MODE_WATCH = "watch";
-var statMethods = { lstat: lstat2, stat: stat2 };
+var statMethods = { lstat: import_promises2.lstat, stat: import_promises2.stat };
 var KEY_LISTENERS = "listeners";
 var KEY_ERR = "errHandlers";
 var KEY_RAW = "rawEmitters";
 var HANDLER_KEYS = [KEY_LISTENERS, KEY_ERR, KEY_RAW];
-var binaryExtensions = new Set([
+var binaryExtensions = /* @__PURE__ */ new Set([
   "3dm",
   "3ds",
   "3g2",
@@ -548,10 +573,10 @@ var foreach = (val, fn) => {
     fn(val);
   }
 };
-var addAndConvert = (main, prop, item) => {
-  let container = main[prop];
+var addAndConvert = (main2, prop, item) => {
+  let container = main2[prop];
   if (!(container instanceof Set)) {
-    main[prop] = container = new Set([container]);
+    main2[prop] = container = /* @__PURE__ */ new Set([container]);
   }
   container.add(item);
 };
@@ -563,31 +588,31 @@ var clearItem = (cont) => (key) => {
     delete cont[key];
   }
 };
-var delFromSet = (main, prop, item) => {
-  const container = main[prop];
+var delFromSet = (main2, prop, item) => {
+  const container = main2[prop];
   if (container instanceof Set) {
     container.delete(item);
   } else if (container === item) {
-    delete main[prop];
+    delete main2[prop];
   }
 };
 var isEmptySet = (val) => val instanceof Set ? val.size === 0 : !val;
-var FsWatchInstances = new Map;
-function createFsWatchInstance(path, options, listener, errHandler, emitRaw) {
+var FsWatchInstances = /* @__PURE__ */ new Map();
+function createFsWatchInstance(path14, options, listener, errHandler, emitRaw) {
   const handleEvent = (rawEvent, evPath) => {
-    listener(path);
-    emitRaw(rawEvent, evPath, { watchedPath: path });
-    if (evPath && path !== evPath) {
-      fsWatchBroadcast(sysPath.resolve(path, evPath), KEY_LISTENERS, sysPath.join(path, evPath));
+    listener(path14);
+    emitRaw(rawEvent, evPath, { watchedPath: path14 });
+    if (evPath && path14 !== evPath) {
+      fsWatchBroadcast(sysPath.resolve(path14, evPath), KEY_LISTENERS, sysPath.join(path14, evPath));
     }
   };
   try {
-    return fs_watch(path, {
+    return (0, import_fs.watch)(path14, {
       persistent: options.persistent
     }, handleEvent);
   } catch (error) {
     errHandler(error);
-    return;
+    return void 0;
   }
 }
 var fsWatchBroadcast = (fullPath, listenerType, val1, val2, val3) => {
@@ -598,12 +623,12 @@ var fsWatchBroadcast = (fullPath, listenerType, val1, val2, val3) => {
     listener(val1, val2, val3);
   });
 };
-var setFsWatchListener = (path, fullPath, options, handlers) => {
+var setFsWatchListener = (path14, fullPath, options, handlers) => {
   const { listener, errHandler, rawEmitter } = handlers;
   let cont = FsWatchInstances.get(fullPath);
   let watcher;
   if (!options.persistent) {
-    watcher = createFsWatchInstance(path, options, listener, errHandler, rawEmitter);
+    watcher = createFsWatchInstance(path14, options, listener, errHandler, rawEmitter);
     if (!watcher)
       return;
     return watcher.close.bind(watcher);
@@ -613,7 +638,14 @@ var setFsWatchListener = (path, fullPath, options, handlers) => {
     addAndConvert(cont, KEY_ERR, errHandler);
     addAndConvert(cont, KEY_RAW, rawEmitter);
   } else {
-    watcher = createFsWatchInstance(path, options, fsWatchBroadcast.bind(null, fullPath, KEY_LISTENERS), errHandler, fsWatchBroadcast.bind(null, fullPath, KEY_RAW));
+    watcher = createFsWatchInstance(
+      path14,
+      options,
+      fsWatchBroadcast.bind(null, fullPath, KEY_LISTENERS),
+      errHandler,
+      // no need to use broadcast here
+      fsWatchBroadcast.bind(null, fullPath, KEY_RAW)
+    );
     if (!watcher)
       return;
     watcher.on(EV.ERROR, async (error) => {
@@ -622,7 +654,7 @@ var setFsWatchListener = (path, fullPath, options, handlers) => {
         cont.watcherUnusable = true;
       if (isWindows && error.code === "EPERM") {
         try {
-          const fd = await open(path, "r");
+          const fd = await (0, import_promises2.open)(path14, "r");
           await fd.close();
           broadcastErr(error);
         } catch (err) {
@@ -647,19 +679,19 @@ var setFsWatchListener = (path, fullPath, options, handlers) => {
       cont.watcher.close();
       FsWatchInstances.delete(fullPath);
       HANDLER_KEYS.forEach(clearItem(cont));
-      cont.watcher = undefined;
+      cont.watcher = void 0;
       Object.freeze(cont);
     }
   };
 };
-var FsWatchFileInstances = new Map;
-var setFsWatchFileListener = (path, fullPath, options, handlers) => {
+var FsWatchFileInstances = /* @__PURE__ */ new Map();
+var setFsWatchFileListener = (path14, fullPath, options, handlers) => {
   const { listener, rawEmitter } = handlers;
   let cont = FsWatchFileInstances.get(fullPath);
   const copts = cont && cont.options;
   if (copts && (copts.persistent < options.persistent || copts.interval > options.interval)) {
-    unwatchFile(fullPath);
-    cont = undefined;
+    (0, import_fs.unwatchFile)(fullPath);
+    cont = void 0;
   }
   if (cont) {
     addAndConvert(cont, KEY_LISTENERS, listener);
@@ -669,13 +701,13 @@ var setFsWatchFileListener = (path, fullPath, options, handlers) => {
       listeners: listener,
       rawEmitters: rawEmitter,
       options,
-      watcher: watchFile(fullPath, options, (curr, prev) => {
+      watcher: (0, import_fs.watchFile)(fullPath, options, (curr, prev) => {
         foreach(cont.rawEmitters, (rawEmitter2) => {
           rawEmitter2(EV.CHANGE, fullPath, { curr, prev });
         });
         const currmtime = curr.mtimeMs;
         if (curr.size !== prev.size || currmtime > prev.mtimeMs || currmtime === 0) {
-          foreach(cont.listeners, (listener2) => listener2(path, curr));
+          foreach(cont.listeners, (listener2) => listener2(path14, curr));
         }
       })
     };
@@ -686,25 +718,30 @@ var setFsWatchFileListener = (path, fullPath, options, handlers) => {
     delFromSet(cont, KEY_RAW, rawEmitter);
     if (isEmptySet(cont.listeners)) {
       FsWatchFileInstances.delete(fullPath);
-      unwatchFile(fullPath);
-      cont.options = cont.watcher = undefined;
+      (0, import_fs.unwatchFile)(fullPath);
+      cont.options = cont.watcher = void 0;
       Object.freeze(cont);
     }
   };
 };
-
-class NodeFsHandler {
+var NodeFsHandler = class {
   constructor(fsW) {
     this.fsw = fsW;
     this._boundHandleError = (error) => fsW._handleError(error);
   }
-  _watchWithNodeFs(path, listener) {
+  /**
+   * Watch file for changes with fs_watchFile or fs_watch.
+   * @param path to file or dir
+   * @param listener on fs change
+   * @returns closer for the watcher instance
+   */
+  _watchWithNodeFs(path14, listener) {
     const opts = this.fsw.options;
-    const directory = sysPath.dirname(path);
-    const basename2 = sysPath.basename(path);
+    const directory = sysPath.dirname(path14);
+    const basename8 = sysPath.basename(path14);
     const parent = this.fsw._getWatchedDir(directory);
-    parent.add(basename2);
-    const absolutePath = sysPath.resolve(path);
+    parent.add(basename8);
+    const absolutePath = sysPath.resolve(path14);
     const options = {
       persistent: opts.persistent
     };
@@ -713,13 +750,13 @@ class NodeFsHandler {
     let closer;
     if (opts.usePolling) {
       const enableBin = opts.interval !== opts.binaryInterval;
-      options.interval = enableBin && isBinaryPath(basename2) ? opts.binaryInterval : opts.interval;
-      closer = setFsWatchFileListener(path, absolutePath, options, {
+      options.interval = enableBin && isBinaryPath(basename8) ? opts.binaryInterval : opts.interval;
+      closer = setFsWatchFileListener(path14, absolutePath, options, {
         listener,
         rawEmitter: this.fsw._emitRaw
       });
     } else {
-      closer = setFsWatchListener(path, absolutePath, options, {
+      closer = setFsWatchListener(path14, absolutePath, options, {
         listener,
         errHandler: this._boundHandleError,
         rawEmitter: this.fsw._emitRaw
@@ -727,22 +764,26 @@ class NodeFsHandler {
     }
     return closer;
   }
+  /**
+   * Watch a file and emit add event if warranted.
+   * @returns closer for the watcher instance
+   */
   _handleFile(file, stats, initialAdd) {
     if (this.fsw.closed) {
       return;
     }
-    const dirname2 = sysPath.dirname(file);
-    const basename2 = sysPath.basename(file);
-    const parent = this.fsw._getWatchedDir(dirname2);
+    const dirname6 = sysPath.dirname(file);
+    const basename8 = sysPath.basename(file);
+    const parent = this.fsw._getWatchedDir(dirname6);
     let prevStats = stats;
-    if (parent.has(basename2))
+    if (parent.has(basename8))
       return;
-    const listener = async (path, newStats) => {
+    const listener = async (path14, newStats) => {
       if (!this.fsw._throttle(THROTTLE_MODE_WATCH, file, 5))
         return;
       if (!newStats || newStats.mtimeMs === 0) {
         try {
-          const newStats2 = await stat2(file);
+          const newStats2 = await (0, import_promises2.stat)(file);
           if (this.fsw.closed)
             return;
           const at = newStats2.atimeMs;
@@ -751,18 +792,18 @@ class NodeFsHandler {
             this.fsw._emit(EV.CHANGE, file, newStats2);
           }
           if ((isMacos || isLinux || isFreeBSD) && prevStats.ino !== newStats2.ino) {
-            this.fsw._closeFile(path);
+            this.fsw._closeFile(path14);
             prevStats = newStats2;
             const closer2 = this._watchWithNodeFs(file, listener);
             if (closer2)
-              this.fsw._addPathCloser(path, closer2);
+              this.fsw._addPathCloser(path14, closer2);
           } else {
             prevStats = newStats2;
           }
         } catch (error) {
-          this.fsw._remove(dirname2, basename2);
+          this.fsw._remove(dirname6, basename8);
         }
-      } else if (parent.has(basename2)) {
+      } else if (parent.has(basename8)) {
         const at = newStats.atimeMs;
         const mt = newStats.mtimeMs;
         if (!at || at <= mt || mt !== prevStats.mtimeMs) {
@@ -779,7 +820,15 @@ class NodeFsHandler {
     }
     return closer;
   }
-  async _handleSymlink(entry, directory, path, item) {
+  /**
+   * Handle symlinks encountered while reading a dir.
+   * @param entry returned by readdirp
+   * @param directory path of dir being read
+   * @param path of this item
+   * @param item basename of this item
+   * @returns true if no more processing is needed for this entry.
+   */
+  async _handleSymlink(entry, directory, path14, item) {
     if (this.fsw.closed) {
       return;
     }
@@ -789,7 +838,7 @@ class NodeFsHandler {
       this.fsw._incrReadyCount();
       let linkPath;
       try {
-        linkPath = await fsrealpath(path);
+        linkPath = await (0, import_promises2.realpath)(path14);
       } catch (e) {
         this.fsw._emitReady();
         return true;
@@ -799,12 +848,12 @@ class NodeFsHandler {
       if (dir.has(item)) {
         if (this.fsw._symlinkPaths.get(full) !== linkPath) {
           this.fsw._symlinkPaths.set(full, linkPath);
-          this.fsw._emit(EV.CHANGE, path, entry.stats);
+          this.fsw._emit(EV.CHANGE, path14, entry.stats);
         }
       } else {
         dir.add(item);
         this.fsw._symlinkPaths.set(full, linkPath);
-        this.fsw._emit(EV.ADD, path, entry.stats);
+        this.fsw._emit(EV.ADD, path14, entry.stats);
       }
       this.fsw._emitReady();
       return true;
@@ -816,11 +865,11 @@ class NodeFsHandler {
   }
   _handleRead(directory, initialAdd, wh, target, dir, depth, throttler) {
     directory = sysPath.join(directory, "");
-    throttler = this.fsw._throttle("readdir", directory, 1000);
+    throttler = this.fsw._throttle("readdir", directory, 1e3);
     if (!throttler)
       return;
     const previous = this.fsw._getWatchedDir(wh.path);
-    const current = new Set;
+    const current = /* @__PURE__ */ new Set();
     let stream = this.fsw._readdirp(directory, {
       fileFilter: (entry) => wh.filterPath(entry),
       directoryFilter: (entry) => wh.filterDir(entry)
@@ -829,46 +878,57 @@ class NodeFsHandler {
       return;
     stream.on(STR_DATA, async (entry) => {
       if (this.fsw.closed) {
-        stream = undefined;
+        stream = void 0;
         return;
       }
       const item = entry.path;
-      let path = sysPath.join(directory, item);
+      let path14 = sysPath.join(directory, item);
       current.add(item);
-      if (entry.stats.isSymbolicLink() && await this._handleSymlink(entry, directory, path, item)) {
+      if (entry.stats.isSymbolicLink() && await this._handleSymlink(entry, directory, path14, item)) {
         return;
       }
       if (this.fsw.closed) {
-        stream = undefined;
+        stream = void 0;
         return;
       }
       if (item === target || !target && !previous.has(item)) {
         this.fsw._incrReadyCount();
-        path = sysPath.join(dir, sysPath.relative(dir, path));
-        this._addToNodeFs(path, initialAdd, wh, depth + 1);
+        path14 = sysPath.join(dir, sysPath.relative(dir, path14));
+        this._addToNodeFs(path14, initialAdd, wh, depth + 1);
       }
     }).on(EV.ERROR, this._boundHandleError);
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve4, reject) => {
       if (!stream)
         return reject();
       stream.once(STR_END, () => {
         if (this.fsw.closed) {
-          stream = undefined;
+          stream = void 0;
           return;
         }
         const wasThrottled = throttler ? throttler.clear() : false;
-        resolve2(undefined);
+        resolve4(void 0);
         previous.getChildren().filter((item) => {
           return item !== directory && !current.has(item);
         }).forEach((item) => {
           this.fsw._remove(directory, item);
         });
-        stream = undefined;
+        stream = void 0;
         if (wasThrottled)
           this._handleRead(directory, false, wh, target, dir, depth, throttler);
       });
     });
   }
+  /**
+   * Read directory to add / remove files from `@watched` list and re-read it on change.
+   * @param dir fs path
+   * @param stats
+   * @param initialAdd
+   * @param depth relative to user-supplied path
+   * @param target child path targeted for watch
+   * @param wh Common watch helpers for this path
+   * @param realpath
+   * @returns closer for the watcher instance.
+   */
   async _handleDir(dir, stats, initialAdd, depth, target, wh, realpath2) {
     const parentDir = this.fsw._getWatchedDir(sysPath.dirname(dir));
     const tracked = parentDir.has(sysPath.basename(dir));
@@ -894,13 +954,22 @@ class NodeFsHandler {
     }
     return closer;
   }
-  async _addToNodeFs(path, initialAdd, priorWh, depth, target) {
+  /**
+   * Handle added file, directory, or glob pattern.
+   * Delegates call to _handleFile / _handleDir after checks.
+   * @param path to file or ir
+   * @param initialAdd was the file added at watch instantiation?
+   * @param priorWh depth relative to user-supplied path
+   * @param depth Child path actually targeted for watch
+   * @param target Child path actually targeted for watch
+   */
+  async _addToNodeFs(path14, initialAdd, priorWh, depth, target) {
     const ready = this.fsw._emitReady;
-    if (this.fsw._isIgnored(path) || this.fsw.closed) {
+    if (this.fsw._isIgnored(path14) || this.fsw.closed) {
       ready();
       return false;
     }
-    const wh = this.fsw._getWatchHelpers(path);
+    const wh = this.fsw._getWatchHelpers(path14);
     if (priorWh) {
       wh.filterPath = (entry) => priorWh.filterPath(entry);
       wh.filterDir = (entry) => priorWh.filterDir(entry);
@@ -916,47 +985,46 @@ class NodeFsHandler {
       const follow = this.fsw.options.followSymlinks;
       let closer;
       if (stats.isDirectory()) {
-        const absPath = sysPath.resolve(path);
-        const targetPath = follow ? await fsrealpath(path) : path;
+        const absPath = sysPath.resolve(path14);
+        const targetPath = follow ? await (0, import_promises2.realpath)(path14) : path14;
         if (this.fsw.closed)
           return;
         closer = await this._handleDir(wh.watchPath, stats, initialAdd, depth, target, wh, targetPath);
         if (this.fsw.closed)
           return;
-        if (absPath !== targetPath && targetPath !== undefined) {
+        if (absPath !== targetPath && targetPath !== void 0) {
           this.fsw._symlinkPaths.set(absPath, targetPath);
         }
       } else if (stats.isSymbolicLink()) {
-        const targetPath = follow ? await fsrealpath(path) : path;
+        const targetPath = follow ? await (0, import_promises2.realpath)(path14) : path14;
         if (this.fsw.closed)
           return;
         const parent = sysPath.dirname(wh.watchPath);
         this.fsw._getWatchedDir(parent).add(wh.watchPath);
         this.fsw._emit(EV.ADD, wh.watchPath, stats);
-        closer = await this._handleDir(parent, stats, initialAdd, depth, path, wh, targetPath);
+        closer = await this._handleDir(parent, stats, initialAdd, depth, path14, wh, targetPath);
         if (this.fsw.closed)
           return;
-        if (targetPath !== undefined) {
-          this.fsw._symlinkPaths.set(sysPath.resolve(path), targetPath);
+        if (targetPath !== void 0) {
+          this.fsw._symlinkPaths.set(sysPath.resolve(path14), targetPath);
         }
       } else {
         closer = this._handleFile(wh.watchPath, stats, initialAdd);
       }
       ready();
       if (closer)
-        this.fsw._addPathCloser(path, closer);
+        this.fsw._addPathCloser(path14, closer);
       return false;
     } catch (error) {
       if (this.fsw._handleError(error)) {
         ready();
-        return path;
+        return path14;
       }
     }
   }
-}
+};
 
 // node_modules/.pnpm/chokidar@4.0.3/node_modules/chokidar/esm/index.js
-/*! chokidar - MIT License (c) 2012 Paul Miller (paulmillr.com) */
 var SLASH = "/";
 var SLASH_SLASH = "//";
 var ONE_DOT = ".";
@@ -982,37 +1050,37 @@ function createPattern(matcher) {
       if (matcher.path === string)
         return true;
       if (matcher.recursive) {
-        const relative3 = sysPath2.relative(matcher.path, string);
-        if (!relative3) {
+        const relative5 = sysPath2.relative(matcher.path, string);
+        if (!relative5) {
           return false;
         }
-        return !relative3.startsWith("..") && !sysPath2.isAbsolute(relative3);
+        return !relative5.startsWith("..") && !sysPath2.isAbsolute(relative5);
       }
       return false;
     };
   }
   return () => false;
 }
-function normalizePath(path) {
-  if (typeof path !== "string")
+function normalizePath(path14) {
+  if (typeof path14 !== "string")
     throw new Error("string expected");
-  path = sysPath2.normalize(path);
-  path = path.replace(/\\/g, "/");
+  path14 = sysPath2.normalize(path14);
+  path14 = path14.replace(/\\/g, "/");
   let prepend = false;
-  if (path.startsWith("//"))
+  if (path14.startsWith("//"))
     prepend = true;
   const DOUBLE_SLASH_RE2 = /\/\//;
-  while (path.match(DOUBLE_SLASH_RE2))
-    path = path.replace(DOUBLE_SLASH_RE2, "/");
+  while (path14.match(DOUBLE_SLASH_RE2))
+    path14 = path14.replace(DOUBLE_SLASH_RE2, "/");
   if (prepend)
-    path = "/" + path;
-  return path;
+    path14 = "/" + path14;
+  return path14;
 }
 function matchPatterns(patterns, testString, stats) {
-  const path = normalizePath(testString);
-  for (let index = 0;index < patterns.length; index++) {
+  const path14 = normalizePath(testString);
+  for (let index = 0; index < patterns.length; index++) {
     const pattern = patterns[index];
-    if (pattern(path, stats)) {
+    if (pattern(path14, stats)) {
       return true;
     }
   }
@@ -1052,27 +1120,26 @@ var toUnix = (string) => {
   }
   return str;
 };
-var normalizePathToUnix = (path) => toUnix(sysPath2.normalize(toUnix(path)));
-var normalizeIgnored = (cwd = "") => (path) => {
-  if (typeof path === "string") {
-    return normalizePathToUnix(sysPath2.isAbsolute(path) ? path : sysPath2.join(cwd, path));
+var normalizePathToUnix = (path14) => toUnix(sysPath2.normalize(toUnix(path14)));
+var normalizeIgnored = (cwd = "") => (path14) => {
+  if (typeof path14 === "string") {
+    return normalizePathToUnix(sysPath2.isAbsolute(path14) ? path14 : sysPath2.join(cwd, path14));
   } else {
-    return path;
+    return path14;
   }
 };
-var getAbsolutePath = (path, cwd) => {
-  if (sysPath2.isAbsolute(path)) {
-    return path;
+var getAbsolutePath = (path14, cwd) => {
+  if (sysPath2.isAbsolute(path14)) {
+    return path14;
   }
-  return sysPath2.join(cwd, path);
+  return sysPath2.join(cwd, path14);
 };
-var EMPTY_SET = Object.freeze(new Set);
-
-class DirEntry {
+var EMPTY_SET = Object.freeze(/* @__PURE__ */ new Set());
+var DirEntry = class {
   constructor(dir, removeWatcher) {
     this.path = dir;
     this._removeWatcher = removeWatcher;
-    this.items = new Set;
+    this.items = /* @__PURE__ */ new Set();
   }
   add(item) {
     const { items } = this;
@@ -1090,7 +1157,7 @@ class DirEntry {
       return;
     const dir = this.path;
     try {
-      await readdir2(dir);
+      await (0, import_promises3.readdir)(dir);
     } catch (err) {
       if (this._removeWatcher) {
         this._removeWatcher(sysPath2.dirname(dir), sysPath2.basename(dir));
@@ -1116,15 +1183,14 @@ class DirEntry {
     this.items = EMPTY_SET;
     Object.freeze(this);
   }
-}
+};
 var STAT_METHOD_F = "stat";
 var STAT_METHOD_L = "lstat";
-
-class WatchHelper {
-  constructor(path, follow, fsw) {
+var WatchHelper = class {
+  constructor(path14, follow, fsw) {
     this.fsw = fsw;
-    const watchPath = path;
-    this.path = path = path.replace(REPLACER_RE, "");
+    const watchPath = path14;
+    this.path = path14 = path14.replace(REPLACER_RE, "");
     this.watchPath = watchPath;
     this.fullWatchPath = sysPath2.resolve(watchPath);
     this.dirParts = [];
@@ -1148,25 +1214,26 @@ class WatchHelper {
   filterDir(entry) {
     return this.fsw._isntIgnored(this.entryPath(entry), entry.stats);
   }
-}
-
-class FSWatcher extends EventEmitter {
+};
+var FSWatcher = class extends import_events.EventEmitter {
+  // Not indenting methods for history sake; for now.
   constructor(_opts = {}) {
     super();
     this.closed = false;
-    this._closers = new Map;
-    this._ignoredPaths = new Set;
-    this._throttled = new Map;
-    this._streams = new Set;
-    this._symlinkPaths = new Map;
-    this._watched = new Map;
-    this._pendingWrites = new Map;
-    this._pendingUnlinks = new Map;
+    this._closers = /* @__PURE__ */ new Map();
+    this._ignoredPaths = /* @__PURE__ */ new Set();
+    this._throttled = /* @__PURE__ */ new Map();
+    this._streams = /* @__PURE__ */ new Set();
+    this._symlinkPaths = /* @__PURE__ */ new Map();
+    this._watched = /* @__PURE__ */ new Map();
+    this._pendingWrites = /* @__PURE__ */ new Map();
+    this._pendingUnlinks = /* @__PURE__ */ new Map();
     this._readyCount = 0;
     this._readyEmitted = false;
     const awf = _opts.awaitWriteFinish;
-    const DEF_AWF = { stabilityThreshold: 2000, pollInterval: 100 };
+    const DEF_AWF = { stabilityThreshold: 2e3, pollInterval: 100 };
     const opts = {
+      // Defaults
       persistent: true,
       ignoreInitial: false,
       ignorePermissionErrors: false,
@@ -1174,17 +1241,20 @@ class FSWatcher extends EventEmitter {
       binaryInterval: 300,
       followSymlinks: true,
       usePolling: false,
+      // useAsync: false,
       atomic: true,
+      // NOTE: overwritten later (depends on usePolling)
       ..._opts,
+      // Change format
       ignored: _opts.ignored ? arrify(_opts.ignored) : arrify([]),
       awaitWriteFinish: awf === true ? DEF_AWF : typeof awf === "object" ? { ...DEF_AWF, ...awf } : false
     };
     if (isIBMi)
       opts.usePolling = true;
-    if (opts.atomic === undefined)
+    if (opts.atomic === void 0)
       opts.atomic = !opts.usePolling;
     const envPoll = process.env.CHOKIDAR_USEPOLLING;
-    if (envPoll !== undefined) {
+    if (envPoll !== void 0) {
       const envLower = envPoll.toLowerCase();
       if (envLower === "false" || envLower === "0")
         opts.usePolling = false;
@@ -1231,26 +1301,31 @@ class FSWatcher extends EventEmitter {
       }
     }
   }
+  // Public methods
+  /**
+   * Adds paths to be watched on an existing FSWatcher instance.
+   * @param paths_ file or file list. Other arguments are unused
+   */
   add(paths_, _origAdd, _internal) {
     const { cwd } = this.options;
     this.closed = false;
-    this._closePromise = undefined;
+    this._closePromise = void 0;
     let paths = unifyPaths(paths_);
     if (cwd) {
-      paths = paths.map((path) => {
-        const absPath = getAbsolutePath(path, cwd);
+      paths = paths.map((path14) => {
+        const absPath = getAbsolutePath(path14, cwd);
         return absPath;
       });
     }
-    paths.forEach((path) => {
-      this._removeIgnoredPath(path);
+    paths.forEach((path14) => {
+      this._removeIgnoredPath(path14);
     });
-    this._userIgnored = undefined;
+    this._userIgnored = void 0;
     if (!this._readyCount)
       this._readyCount = 0;
     this._readyCount += paths.length;
-    Promise.all(paths.map(async (path) => {
-      const res = await this._nodeFsHandler._addToNodeFs(path, !_internal, undefined, 0, _origAdd);
+    Promise.all(paths.map(async (path14) => {
+      const res = await this._nodeFsHandler._addToNodeFs(path14, !_internal, void 0, 0, _origAdd);
       if (res)
         this._emitReady();
       return res;
@@ -1264,29 +1339,35 @@ class FSWatcher extends EventEmitter {
     });
     return this;
   }
+  /**
+   * Close watchers or start ignoring events from specified paths.
+   */
   unwatch(paths_) {
     if (this.closed)
       return this;
     const paths = unifyPaths(paths_);
     const { cwd } = this.options;
-    paths.forEach((path) => {
-      if (!sysPath2.isAbsolute(path) && !this._closers.has(path)) {
+    paths.forEach((path14) => {
+      if (!sysPath2.isAbsolute(path14) && !this._closers.has(path14)) {
         if (cwd)
-          path = sysPath2.join(cwd, path);
-        path = sysPath2.resolve(path);
+          path14 = sysPath2.join(cwd, path14);
+        path14 = sysPath2.resolve(path14);
       }
-      this._closePath(path);
-      this._addIgnoredPath(path);
-      if (this._watched.has(path)) {
+      this._closePath(path14);
+      this._addIgnoredPath(path14);
+      if (this._watched.has(path14)) {
         this._addIgnoredPath({
-          path,
+          path: path14,
           recursive: true
         });
       }
-      this._userIgnored = undefined;
+      this._userIgnored = void 0;
     });
     return this;
   }
+  /**
+   * Close watchers and remove all listeners from watched paths.
+   */
   close() {
     if (this._closePromise) {
       return this._closePromise;
@@ -1300,7 +1381,7 @@ class FSWatcher extends EventEmitter {
         closers.push(promise);
     }));
     this._streams.forEach((stream) => stream.destroy());
-    this._userIgnored = undefined;
+    this._userIgnored = void 0;
     this._readyCount = 0;
     this._readyEmitted = false;
     this._watched.forEach((dirent) => dirent.dispose());
@@ -1309,11 +1390,13 @@ class FSWatcher extends EventEmitter {
     this._streams.clear();
     this._symlinkPaths.clear();
     this._throttled.clear();
-    this._closePromise = closers.length ? Promise.all(closers).then(() => {
-      return;
-    }) : Promise.resolve();
+    this._closePromise = closers.length ? Promise.all(closers).then(() => void 0) : Promise.resolve();
     return this._closePromise;
   }
+  /**
+   * Expose list of watched paths
+   * @returns for chaining
+   */
   getWatched() {
     const watchList = {};
     this._watched.forEach((entry, dir) => {
@@ -1328,38 +1411,48 @@ class FSWatcher extends EventEmitter {
     if (event !== EVENTS.ERROR)
       this.emit(EVENTS.ALL, event, ...args);
   }
-  async _emit(event, path, stats) {
+  // Common helpers
+  // --------------
+  /**
+   * Normalize and emit events.
+   * Calling _emit DOES NOT MEAN emit() would be called!
+   * @param event Type of event
+   * @param path File or directory path
+   * @param stats arguments to be passed with event
+   * @returns the error if defined, otherwise the value of the FSWatcher instance's `closed` flag
+   */
+  async _emit(event, path14, stats) {
     if (this.closed)
       return;
     const opts = this.options;
     if (isWindows)
-      path = sysPath2.normalize(path);
+      path14 = sysPath2.normalize(path14);
     if (opts.cwd)
-      path = sysPath2.relative(opts.cwd, path);
-    const args = [path];
+      path14 = sysPath2.relative(opts.cwd, path14);
+    const args = [path14];
     if (stats != null)
       args.push(stats);
     const awf = opts.awaitWriteFinish;
     let pw;
-    if (awf && (pw = this._pendingWrites.get(path))) {
-      pw.lastChange = new Date;
+    if (awf && (pw = this._pendingWrites.get(path14))) {
+      pw.lastChange = /* @__PURE__ */ new Date();
       return this;
     }
     if (opts.atomic) {
       if (event === EVENTS.UNLINK) {
-        this._pendingUnlinks.set(path, [event, ...args]);
+        this._pendingUnlinks.set(path14, [event, ...args]);
         setTimeout(() => {
-          this._pendingUnlinks.forEach((entry, path2) => {
+          this._pendingUnlinks.forEach((entry, path15) => {
             this.emit(...entry);
             this.emit(EVENTS.ALL, ...entry);
-            this._pendingUnlinks.delete(path2);
+            this._pendingUnlinks.delete(path15);
           });
         }, typeof opts.atomic === "number" ? opts.atomic : 100);
         return this;
       }
-      if (event === EVENTS.ADD && this._pendingUnlinks.has(path)) {
+      if (event === EVENTS.ADD && this._pendingUnlinks.has(path14)) {
         event = EVENTS.CHANGE;
-        this._pendingUnlinks.delete(path);
+        this._pendingUnlinks.delete(path14);
       }
     }
     if (awf && (event === EVENTS.ADD || event === EVENTS.CHANGE) && this._readyEmitted) {
@@ -1377,19 +1470,19 @@ class FSWatcher extends EventEmitter {
           this.emitWithAll(event, args);
         }
       };
-      this._awaitWriteFinish(path, awf.stabilityThreshold, event, awfEmit);
+      this._awaitWriteFinish(path14, awf.stabilityThreshold, event, awfEmit);
       return this;
     }
     if (event === EVENTS.CHANGE) {
-      const isThrottled = !this._throttle(EVENTS.CHANGE, path, 50);
+      const isThrottled = !this._throttle(EVENTS.CHANGE, path14, 50);
       if (isThrottled)
         return this;
     }
-    if (opts.alwaysStat && stats === undefined && (event === EVENTS.ADD || event === EVENTS.ADD_DIR || event === EVENTS.CHANGE)) {
-      const fullPath = opts.cwd ? sysPath2.join(opts.cwd, path) : path;
+    if (opts.alwaysStat && stats === void 0 && (event === EVENTS.ADD || event === EVENTS.ADD_DIR || event === EVENTS.CHANGE)) {
+      const fullPath = opts.cwd ? sysPath2.join(opts.cwd, path14) : path14;
       let stats2;
       try {
-        stats2 = await stat3(fullPath);
+        stats2 = await (0, import_promises3.stat)(fullPath);
       } catch (err) {
       }
       if (!stats2 || this.closed)
@@ -1399,30 +1492,41 @@ class FSWatcher extends EventEmitter {
     this.emitWithAll(event, args);
     return this;
   }
+  /**
+   * Common handler for errors
+   * @returns The error if defined, otherwise the value of the FSWatcher instance's `closed` flag
+   */
   _handleError(error) {
-    const code = error && error.code;
-    if (error && code !== "ENOENT" && code !== "ENOTDIR" && (!this.options.ignorePermissionErrors || code !== "EPERM" && code !== "EACCES")) {
+    const code2 = error && error.code;
+    if (error && code2 !== "ENOENT" && code2 !== "ENOTDIR" && (!this.options.ignorePermissionErrors || code2 !== "EPERM" && code2 !== "EACCES")) {
       this.emit(EVENTS.ERROR, error);
     }
     return error || this.closed;
   }
-  _throttle(actionType, path, timeout) {
+  /**
+   * Helper utility for throttling
+   * @param actionType type being throttled
+   * @param path being acted upon
+   * @param timeout duration of time to suppress duplicate actions
+   * @returns tracking object or false if action should be suppressed
+   */
+  _throttle(actionType, path14, timeout) {
     if (!this._throttled.has(actionType)) {
-      this._throttled.set(actionType, new Map);
+      this._throttled.set(actionType, /* @__PURE__ */ new Map());
     }
     const action = this._throttled.get(actionType);
     if (!action)
       throw new Error("invalid throttle");
-    const actionPath = action.get(path);
+    const actionPath = action.get(path14);
     if (actionPath) {
       actionPath.count++;
       return false;
     }
     let timeoutObject;
     const clear = () => {
-      const item = action.get(path);
+      const item = action.get(path14);
       const count = item ? item.count : 0;
-      action.delete(path);
+      action.delete(path14);
       clearTimeout(timeoutObject);
       if (item)
         clearTimeout(item.timeoutObject);
@@ -1430,50 +1534,58 @@ class FSWatcher extends EventEmitter {
     };
     timeoutObject = setTimeout(clear, timeout);
     const thr = { timeoutObject, clear, count: 0 };
-    action.set(path, thr);
+    action.set(path14, thr);
     return thr;
   }
   _incrReadyCount() {
     return this._readyCount++;
   }
-  _awaitWriteFinish(path, threshold, event, awfEmit) {
+  /**
+   * Awaits write operation to finish.
+   * Polls a newly created file for size variations. When files size does not change for 'threshold' milliseconds calls callback.
+   * @param path being acted upon
+   * @param threshold Time in milliseconds a file size must be fixed before acknowledging write OP is finished
+   * @param event
+   * @param awfEmit Callback to be called when ready for event to be emitted.
+   */
+  _awaitWriteFinish(path14, threshold, event, awfEmit) {
     const awf = this.options.awaitWriteFinish;
     if (typeof awf !== "object")
       return;
     const pollInterval = awf.pollInterval;
     let timeoutHandler;
-    let fullPath = path;
-    if (this.options.cwd && !sysPath2.isAbsolute(path)) {
-      fullPath = sysPath2.join(this.options.cwd, path);
+    let fullPath = path14;
+    if (this.options.cwd && !sysPath2.isAbsolute(path14)) {
+      fullPath = sysPath2.join(this.options.cwd, path14);
     }
-    const now = new Date;
+    const now = /* @__PURE__ */ new Date();
     const writes = this._pendingWrites;
     function awaitWriteFinishFn(prevStat) {
-      statcb(fullPath, (err, curStat) => {
-        if (err || !writes.has(path)) {
+      (0, import_fs2.stat)(fullPath, (err, curStat) => {
+        if (err || !writes.has(path14)) {
           if (err && err.code !== "ENOENT")
             awfEmit(err);
           return;
         }
-        const now2 = Number(new Date);
+        const now2 = Number(/* @__PURE__ */ new Date());
         if (prevStat && curStat.size !== prevStat.size) {
-          writes.get(path).lastChange = now2;
+          writes.get(path14).lastChange = now2;
         }
-        const pw = writes.get(path);
+        const pw = writes.get(path14);
         const df = now2 - pw.lastChange;
         if (df >= threshold) {
-          writes.delete(path);
-          awfEmit(undefined, curStat);
+          writes.delete(path14);
+          awfEmit(void 0, curStat);
         } else {
           timeoutHandler = setTimeout(awaitWriteFinishFn, pollInterval, curStat);
         }
       });
     }
-    if (!writes.has(path)) {
-      writes.set(path, {
+    if (!writes.has(path14)) {
+      writes.set(path14, {
         lastChange: now,
         cancelWait: () => {
-          writes.delete(path);
+          writes.delete(path14);
           clearTimeout(timeoutHandler);
           return event;
         }
@@ -1481,8 +1593,11 @@ class FSWatcher extends EventEmitter {
       timeoutHandler = setTimeout(awaitWriteFinishFn, pollInterval);
     }
   }
-  _isIgnored(path, stats) {
-    if (this.options.atomic && DOT_RE.test(path))
+  /**
+   * Determines whether user has asked to ignore this path.
+   */
+  _isIgnored(path14, stats) {
+    if (this.options.atomic && DOT_RE.test(path14))
       return true;
     if (!this._userIgnored) {
       const { cwd } = this.options;
@@ -1490,79 +1605,107 @@ class FSWatcher extends EventEmitter {
       const ignored = (ign || []).map(normalizeIgnored(cwd));
       const ignoredPaths = [...this._ignoredPaths];
       const list = [...ignoredPaths.map(normalizeIgnored(cwd)), ...ignored];
-      this._userIgnored = anymatch(list, undefined);
+      this._userIgnored = anymatch(list, void 0);
     }
-    return this._userIgnored(path, stats);
+    return this._userIgnored(path14, stats);
   }
-  _isntIgnored(path, stat4) {
-    return !this._isIgnored(path, stat4);
+  _isntIgnored(path14, stat4) {
+    return !this._isIgnored(path14, stat4);
   }
-  _getWatchHelpers(path) {
-    return new WatchHelper(path, this.options.followSymlinks, this);
+  /**
+   * Provides a set of common helpers and properties relating to symlink handling.
+   * @param path file or directory pattern being watched
+   */
+  _getWatchHelpers(path14) {
+    return new WatchHelper(path14, this.options.followSymlinks, this);
   }
+  // Directory helpers
+  // -----------------
+  /**
+   * Provides directory tracking objects
+   * @param directory path of the directory
+   */
   _getWatchedDir(directory) {
     const dir = sysPath2.resolve(directory);
     if (!this._watched.has(dir))
       this._watched.set(dir, new DirEntry(dir, this._boundRemove));
     return this._watched.get(dir);
   }
+  // File helpers
+  // ------------
+  /**
+   * Check for read permissions: https://stackoverflow.com/a/11781404/1358405
+   */
   _hasReadPermissions(stats) {
     if (this.options.ignorePermissionErrors)
       return true;
     return Boolean(Number(stats.mode) & 256);
   }
+  /**
+   * Handles emitting unlink events for
+   * files and directories, and via recursion, for
+   * files and directories within directories that are unlinked
+   * @param directory within which the following item is located
+   * @param item      base path of item/directory
+   */
   _remove(directory, item, isDirectory) {
-    const path = sysPath2.join(directory, item);
-    const fullPath = sysPath2.resolve(path);
-    isDirectory = isDirectory != null ? isDirectory : this._watched.has(path) || this._watched.has(fullPath);
-    if (!this._throttle("remove", path, 100))
+    const path14 = sysPath2.join(directory, item);
+    const fullPath = sysPath2.resolve(path14);
+    isDirectory = isDirectory != null ? isDirectory : this._watched.has(path14) || this._watched.has(fullPath);
+    if (!this._throttle("remove", path14, 100))
       return;
     if (!isDirectory && this._watched.size === 1) {
       this.add(directory, item, true);
     }
-    const wp = this._getWatchedDir(path);
+    const wp = this._getWatchedDir(path14);
     const nestedDirectoryChildren = wp.getChildren();
-    nestedDirectoryChildren.forEach((nested) => this._remove(path, nested));
+    nestedDirectoryChildren.forEach((nested) => this._remove(path14, nested));
     const parent = this._getWatchedDir(directory);
     const wasTracked = parent.has(item);
     parent.remove(item);
     if (this._symlinkPaths.has(fullPath)) {
       this._symlinkPaths.delete(fullPath);
     }
-    let relPath = path;
+    let relPath = path14;
     if (this.options.cwd)
-      relPath = sysPath2.relative(this.options.cwd, path);
+      relPath = sysPath2.relative(this.options.cwd, path14);
     if (this.options.awaitWriteFinish && this._pendingWrites.has(relPath)) {
       const event = this._pendingWrites.get(relPath).cancelWait();
       if (event === EVENTS.ADD)
         return;
     }
-    this._watched.delete(path);
+    this._watched.delete(path14);
     this._watched.delete(fullPath);
     const eventName = isDirectory ? EVENTS.UNLINK_DIR : EVENTS.UNLINK;
-    if (wasTracked && !this._isIgnored(path))
-      this._emit(eventName, path);
-    this._closePath(path);
+    if (wasTracked && !this._isIgnored(path14))
+      this._emit(eventName, path14);
+    this._closePath(path14);
   }
-  _closePath(path) {
-    this._closeFile(path);
-    const dir = sysPath2.dirname(path);
-    this._getWatchedDir(dir).remove(sysPath2.basename(path));
+  /**
+   * Closes all watchers for a path
+   */
+  _closePath(path14) {
+    this._closeFile(path14);
+    const dir = sysPath2.dirname(path14);
+    this._getWatchedDir(dir).remove(sysPath2.basename(path14));
   }
-  _closeFile(path) {
-    const closers = this._closers.get(path);
+  /**
+   * Closes only file-specific watchers
+   */
+  _closeFile(path14) {
+    const closers = this._closers.get(path14);
     if (!closers)
       return;
     closers.forEach((closer) => closer());
-    this._closers.delete(path);
+    this._closers.delete(path14);
   }
-  _addPathCloser(path, closer) {
+  _addPathCloser(path14, closer) {
     if (!closer)
       return;
-    let list = this._closers.get(path);
+    let list = this._closers.get(path14);
     if (!list) {
       list = [];
-      this._closers.set(path, list);
+      this._closers.set(path14, list);
     }
     list.push(closer);
   }
@@ -1573,17 +1716,17 @@ class FSWatcher extends EventEmitter {
     let stream = readdirp(root, options);
     this._streams.add(stream);
     stream.once(STR_CLOSE, () => {
-      stream = undefined;
+      stream = void 0;
     });
     stream.once(STR_END, () => {
       if (stream) {
         this._streams.delete(stream);
-        stream = undefined;
+        stream = void 0;
       }
     });
     return stream;
   }
-}
+};
 function watch(paths, options = {}) {
   const watcher = new FSWatcher(options);
   watcher.add(paths);
@@ -1591,20 +1734,19 @@ function watch(paths, options = {}) {
 }
 
 // src/sessionWatcher.ts
-import { EventEmitter as EventEmitter3 } from "events";
-import * as path2 from "path";
-import * as fs2 from "fs";
+var import_events3 = require("events");
+var path2 = __toESM(require("path"), 1);
+var fs2 = __toESM(require("fs"), 1);
 
 // src/recursiveWatcher.ts
-import { EventEmitter as EventEmitter2 } from "events";
-import * as fs from "fs";
-import * as path from "path";
+var import_events2 = require("events");
+var fs = __toESM(require("fs"), 1);
+var path = __toESM(require("path"), 1);
 var supportsRecursiveWatch = process.platform === "darwin" || process.platform === "win32";
-
-class RecursiveWatcher extends EventEmitter2 {
+var RecursiveWatcher = class extends import_events2.EventEmitter {
   fsWatcher = null;
   chokidarWatcher = null;
-  debounceTimers = new Map;
+  debounceTimers = /* @__PURE__ */ new Map();
   watchPath;
   filter;
   callback;
@@ -1619,8 +1761,7 @@ class RecursiveWatcher extends EventEmitter2 {
     this.debounceMs = opts.debounceMs ?? 100;
   }
   start() {
-    if (this.fsWatcher || this.chokidarWatcher)
-      return;
+    if (this.fsWatcher || this.chokidarWatcher) return;
     if (!fs.existsSync(this.watchPath)) {
       fs.mkdirSync(this.watchPath, { recursive: true });
     }
@@ -1632,17 +1773,13 @@ class RecursiveWatcher extends EventEmitter2 {
   }
   startFsWatch() {
     this.fsWatcher = fs.watch(this.watchPath, { recursive: true }, (_eventType, filename) => {
-      if (!filename)
-        return;
+      if (!filename) return;
       const parts = filename.split(path.sep);
-      if (parts.length > this.maxDepth)
-        return;
-      if (!this.filter(filename))
-        return;
+      if (parts.length > this.maxDepth) return;
+      if (!this.filter(filename)) return;
       const fullPath = path.join(this.watchPath, filename);
       const existing = this.debounceTimers.get(fullPath);
-      if (existing)
-        clearTimeout(existing);
+      if (existing) clearTimeout(existing);
       this.debounceTimers.set(fullPath, setTimeout(() => {
         this.debounceTimers.delete(fullPath);
         try {
@@ -1669,13 +1806,11 @@ class RecursiveWatcher extends EventEmitter2 {
     });
     this.chokidarWatcher.on("add", (filePath) => {
       const rel = path.relative(this.watchPath, filePath);
-      if (this.filter(rel))
-        this.callback(filePath, "add");
+      if (this.filter(rel)) this.callback(filePath, "add");
     });
     this.chokidarWatcher.on("change", (filePath) => {
       const rel = path.relative(this.watchPath, filePath);
-      if (this.filter(rel))
-        this.callback(filePath, "change");
+      if (this.filter(rel)) this.callback(filePath, "change");
     });
     this.chokidarWatcher.on("error", (err) => {
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
@@ -1705,10 +1840,10 @@ class RecursiveWatcher extends EventEmitter2 {
   get isWatching() {
     return this.fsWatcher !== null || this.chokidarWatcher !== null;
   }
-}
+};
 
 // src/sessionWatcher.ts
-class SessionWatcher extends EventEmitter3 {
+var SessionWatcher = class extends import_events3.EventEmitter {
   watcher = null;
   projectsPath;
   constructor(projectsPath) {
@@ -1736,11 +1871,10 @@ class SessionWatcher extends EventEmitter3 {
   }
   emitExistingFilesSorted() {
     const files = [];
-    const RECENT_THRESHOLD_MS = 10 * 60 * 1000;
+    const RECENT_THRESHOLD_MS = 10 * 60 * 1e3;
     const now = Date.now();
     const scanDir = (dir, depth) => {
-      if (depth > 2)
-        return;
+      if (depth > 2) return;
       try {
         const entries = fs2.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
@@ -1782,8 +1916,7 @@ class SessionWatcher extends EventEmitter3 {
   handleFileEvent(filePath, eventType) {
     const relative5 = path2.relative(this.projectsPath, filePath);
     const parts = relative5.split(path2.sep);
-    if (parts.length < 2)
-      return;
+    if (parts.length < 2) return;
     const projectDirName = parts[0];
     const sessionFileName = parts[1];
     const sessionId = sessionFileName.replace(".jsonl", "");
@@ -1794,33 +1927,32 @@ class SessionWatcher extends EventEmitter3 {
       projectPath: projectDirName
     });
   }
-}
+};
 
 // src/cursorWatcher.ts
-import { EventEmitter as EventEmitter4 } from "events";
-import * as path3 from "path";
-import * as fs3 from "fs";
-import { Database } from "bun:sqlite";
-
-class CursorWatcher extends EventEmitter4 {
+var import_events4 = require("events");
+var path3 = __toESM(require("path"), 1);
+var fs3 = __toESM(require("fs"), 1);
+var import_bun_sqlite = require("bun:sqlite");
+var CursorWatcher = class extends import_events4.EventEmitter {
   pollInterval = null;
   cursorPath;
-  workspaceStates = new Map;
+  workspaceStates = /* @__PURE__ */ new Map();
   pollFrequencyMs;
   isFirstPoll = true;
-  constructor(cursorPath, pollFrequencyMs = 2000) {
+  constructor(cursorPath, pollFrequencyMs = 2e3) {
     super();
     this.cursorPath = cursorPath || this.detectCursorPath();
     this.pollFrequencyMs = pollFrequencyMs;
   }
   detectCursorPath() {
-    const platform = process.platform;
+    const platform3 = process.platform;
     const home = process.env.HOME || "";
-    if (platform === "darwin") {
+    if (platform3 === "darwin") {
       return path3.join(home, "Library", "Application Support", "Cursor");
-    } else if (platform === "linux") {
+    } else if (platform3 === "linux") {
       return path3.join(home, ".config", "Cursor");
-    } else if (platform === "win32") {
+    } else if (platform3 === "win32") {
       return path3.join(process.env.APPDATA || "", "Cursor");
     }
     return path3.join(home, ".cursor");
@@ -1829,7 +1961,11 @@ class CursorWatcher extends EventEmitter4 {
     if (this.pollInterval) {
       return;
     }
-    const workspaceStoragePath = path3.join(this.cursorPath, "User", "workspaceStorage");
+    const workspaceStoragePath = path3.join(
+      this.cursorPath,
+      "User",
+      "workspaceStorage"
+    );
     if (!fs3.existsSync(workspaceStoragePath)) {
       return;
     }
@@ -1853,7 +1989,11 @@ class CursorWatcher extends EventEmitter4 {
       }
       const workspaces = [];
       for (const workspaceHash of workspaceDirs) {
-        const dbPath = path3.join(workspaceStoragePath, workspaceHash, "state.vscdb");
+        const dbPath = path3.join(
+          workspaceStoragePath,
+          workspaceHash,
+          "state.vscdb"
+        );
         if (!fs3.existsSync(dbPath)) {
           continue;
         }
@@ -1907,12 +2047,16 @@ class CursorWatcher extends EventEmitter4 {
   checkWorkspaceForChanges(workspaceHash, dbPath) {
     let db = null;
     try {
-      db = new Database(dbPath, { readonly: true });
-      const tableExists = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='ItemTable'").get();
+      db = new import_bun_sqlite.Database(dbPath, { readonly: true });
+      const tableExists = db.query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='ItemTable'"
+      ).get();
       if (!tableExists) {
         return;
       }
-      const maxRowIdResult = db.query("SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata'").get();
+      const maxRowIdResult = db.query(
+        "SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata'"
+      ).get();
       const maxRowId = maxRowIdResult?.maxRowId ?? 0;
       const state = this.workspaceStates.get(workspaceHash);
       const workspaceStorageDir = path3.dirname(dbPath);
@@ -1947,13 +2091,13 @@ class CursorWatcher extends EventEmitter4 {
       }
     }
   }
-}
+};
 
 // src/cursorTranscriptWatcher.ts
-import { EventEmitter as EventEmitter5 } from "events";
-import * as path4 from "path";
-import * as fs4 from "fs";
-class CursorTranscriptWatcher extends EventEmitter5 {
+var import_events5 = require("events");
+var path4 = __toESM(require("path"), 1);
+var fs4 = __toESM(require("fs"), 1);
+var CursorTranscriptWatcher = class extends import_events5.EventEmitter {
   watcher = null;
   historyPath;
   constructor(historyPath) {
@@ -2023,13 +2167,13 @@ class CursorTranscriptWatcher extends EventEmitter5 {
   extractSessionId(filePath) {
     return path4.basename(filePath, ".txt");
   }
-}
+};
 
 // src/codexWatcher.ts
-import { EventEmitter as EventEmitter6 } from "events";
-import * as path5 from "path";
-import * as fs5 from "fs";
-class CodexWatcher extends EventEmitter6 {
+var import_events6 = require("events");
+var path5 = __toESM(require("path"), 1);
+var fs5 = __toESM(require("fs"), 1);
+var CodexWatcher = class extends import_events6.EventEmitter {
   watcher = null;
   historyPath;
   constructor(historyPath) {
@@ -2093,10 +2237,12 @@ class CodexWatcher extends EventEmitter6 {
   }
   extractSessionId(filePath) {
     const filename = path5.basename(filePath, ".jsonl");
-    const match = filename.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+    const match = filename.match(
+      /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+    );
     return match ? match[1] : filename;
   }
-}
+};
 
 // src/sessionProcessMatcher.ts
 function isResumeInvocation(agentType, commandLine) {
@@ -2106,21 +2252,20 @@ function isResumeInvocation(agentType, commandLine) {
   return /\s--resume(\s|$)/.test(commandLine);
 }
 function hasCodexSessionFileOpen(lsofOutput, sessionId) {
-  if (!lsofOutput || !sessionId)
-    return false;
-  return lsofOutput.split(`
-`).some((line) => line.includes(".codex/sessions/") && line.includes(sessionId) && line.includes(".jsonl"));
+  if (!lsofOutput || !sessionId) return false;
+  return lsofOutput.split("\n").some(
+    (line) => line.includes(".codex/sessions/") && line.includes(sessionId) && line.includes(".jsonl")
+  );
 }
 function choosePreferredCodexCandidate(candidates) {
-  if (candidates.length === 0)
-    return null;
+  if (candidates.length === 0) return null;
   return candidates.find((c) => !c.tmuxTarget) || candidates[0];
 }
 function matchStartedConversation(entries, {
   tmuxSessionName,
   projectPath,
   now = Date.now(),
-  ttlMs = 300000
+  ttlMs = 3e5
 }) {
   const startedEntries = Array.isArray(entries) ? entries : [...entries];
   if (tmuxSessionName) {
@@ -2130,8 +2275,7 @@ function matchStartedConversation(entries, {
       }
     }
   }
-  if (!projectPath)
-    return null;
+  if (!projectPath) return null;
   for (const [conversationId, entry] of startedEntries) {
     if (entry.projectPath === projectPath && now - entry.startedAt < ttlMs) {
       return conversationId;
@@ -2141,20 +2285,19 @@ function matchStartedConversation(entries, {
 }
 function matchSingleFreshStartedConversation(entries, {
   now = Date.now(),
-  freshnessMs = 120000
+  freshnessMs = 12e4
 } = {}) {
   const startedEntries = Array.isArray(entries) ? entries : [...entries];
   const fresh = startedEntries.filter(([, entry]) => now - entry.startedAt < freshnessMs);
-  if (fresh.length !== 1)
-    return null;
+  if (fresh.length !== 1) return null;
   return fresh[0][0];
 }
 
 // src/geminiWatcher.ts
-import { EventEmitter as EventEmitter7 } from "events";
-import * as path6 from "path";
-import * as fs6 from "fs";
-class GeminiWatcher extends EventEmitter7 {
+var import_events7 = require("events");
+var path6 = __toESM(require("path"), 1);
+var fs6 = __toESM(require("fs"), 1);
+var GeminiWatcher = class extends import_events7.EventEmitter {
   watcher = null;
   basePath;
   constructor(basePath) {
@@ -2218,7 +2361,9 @@ class GeminiWatcher extends EventEmitter7 {
   }
   extractSessionId(filePath) {
     const filename = path6.basename(filePath, ".json");
-    const match = filename.match(/([0-9a-f]{8})$/i);
+    const match = filename.match(
+      /([0-9a-f]{8})$/i
+    );
     return match ? filename : filename;
   }
   extractProjectHash(filePath) {
@@ -2229,12 +2374,11 @@ class GeminiWatcher extends EventEmitter7 {
     }
     return "";
   }
-}
+};
 
 // src/parser.ts
 function parseSessionLine(line) {
-  if (!line.trim())
-    return null;
+  if (!line.trim()) return null;
   try {
     return JSON.parse(line);
   } catch (err) {
@@ -2269,13 +2413,10 @@ function extractMessages(entries) {
       });
       continue;
     }
-    if (entry.isMeta || entry.isCompactSummary || entry.isVisibleInTranscriptOnly)
-      continue;
+    if (entry.isMeta || entry.isCompactSummary || entry.isVisibleInTranscriptOnly) continue;
     const normalizedType = entry.type === "human" ? "user" : entry.type;
-    if (normalizedType !== "user" && normalizedType !== "assistant")
-      continue;
-    if (!entry.message)
-      continue;
+    if (normalizedType !== "user" && normalizedType !== "assistant") continue;
+    if (!entry.message) continue;
     let role;
     let textContent = "";
     let thinking = "";
@@ -2333,69 +2474,63 @@ function extractMessages(entries) {
         role,
         content: textContent,
         timestamp,
-        thinking: thinking || undefined,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        toolResults: toolResults.length > 0 ? toolResults : undefined,
-        images: images.length > 0 ? images : undefined
+        thinking: thinking || void 0,
+        toolCalls: toolCalls.length > 0 ? toolCalls : void 0,
+        toolResults: toolResults.length > 0 ? toolResults : void 0,
+        images: images.length > 0 ? images : void 0
       });
     }
   }
   return messages;
 }
 function parseSessionFile(content) {
-  const lines = content.split(`
-`);
+  const lines = content.split("\n");
   const entries = lines.map(parseSessionLine).filter((e) => e !== null);
   return extractMessages(entries);
 }
 function extractSlug(content) {
-  const lines = content.split(`
-`);
+  const lines = content.split("\n");
   for (const line of lines) {
     const entry = parseSessionLine(line);
     if (entry?.slug) {
       return entry.slug;
     }
   }
-  return;
+  return void 0;
 }
 function extractParentUuid(content) {
-  const lines = content.split(`
-`);
+  const lines = content.split("\n");
   for (const line of lines) {
     const entry = parseSessionLine(line);
     if (entry?.type === "user") {
-      return entry.parentUuid || undefined;
+      return entry.parentUuid || void 0;
     }
   }
-  return;
+  return void 0;
 }
 function extractSummaryTitle(content) {
-  const lines = content.split(`
-`);
+  const lines = content.split("\n");
   for (const line of lines) {
     const entry = parseSessionLine(line);
     if (entry?.type === "summary" && entry?.summary) {
       return entry.summary;
     }
   }
-  return;
+  return void 0;
 }
 function extractCwd(content) {
-  const lines = content.split(`
-`);
+  const lines = content.split("\n");
   for (const line of lines) {
     const entry = parseSessionLine(line);
     if (entry?.cwd) {
       return entry.cwd;
     }
   }
-  return;
+  return void 0;
 }
 function detectCliFlags(content) {
   const flags = [];
-  const firstUserLine = content.split(`
-`).find((l) => l.includes('"type":"user"'));
+  const firstUserLine = content.split("\n").find((l) => l.includes('"type":"user"'));
   if (firstUserLine) {
     try {
       const parsed = JSON.parse(firstUserLine);
@@ -2411,9 +2546,7 @@ function detectCliFlags(content) {
   return flags.length > 0 ? flags.join(" ") : null;
 }
 function sanitizeCodexText(content) {
-  return content.replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "").replace(/\n{3,}/g, `
-
-`);
+  return content.replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "").replace(/\n{3,}/g, "\n\n");
 }
 function parseCodexImageItem(item) {
   if (typeof item.image_data === "string" && typeof item.media_type === "string") {
@@ -2422,12 +2555,10 @@ function parseCodexImageItem(item) {
       data: item.image_data
     };
   }
-  const imageUrl = typeof item.image_url === "string" ? item.image_url : typeof item.url === "string" ? item.url : undefined;
-  if (!imageUrl)
-    return null;
+  const imageUrl = typeof item.image_url === "string" ? item.image_url : typeof item.url === "string" ? item.url : void 0;
+  if (!imageUrl) return null;
   const match = imageUrl.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
-  if (!match)
-    return null;
+  if (!match) return null;
   return {
     mediaType: match[1],
     data: match[2]
@@ -2457,14 +2588,12 @@ function extractCodexTextAndImages(content) {
     }
   }
   return {
-    text: sanitizeCodexText(textParts.join(`
-`)),
+    text: sanitizeCodexText(textParts.join("\n")),
     images
   };
 }
 function parseCodexSessionFile(content) {
-  const lines = content.split(`
-`);
+  const lines = content.split("\n");
   const messages = [];
   let currentAssistantContent = "";
   let currentAssistantThinking = "";
@@ -2478,10 +2607,10 @@ function parseCodexSessionFile(content) {
         role: "assistant",
         content: currentAssistantContent.trim(),
         timestamp: lastTimestamp,
-        thinking: currentAssistantThinking.trim() || undefined,
-        toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : undefined,
-        toolResults: currentToolResults.length > 0 ? [...currentToolResults] : undefined,
-        images: currentAssistantImages.length > 0 ? [...currentAssistantImages] : undefined
+        thinking: currentAssistantThinking.trim() || void 0,
+        toolCalls: currentToolCalls.length > 0 ? [...currentToolCalls] : void 0,
+        toolResults: currentToolResults.length > 0 ? [...currentToolResults] : void 0,
+        images: currentAssistantImages.length > 0 ? [...currentAssistantImages] : void 0
       });
       currentAssistantContent = "";
       currentAssistantThinking = "";
@@ -2491,23 +2620,20 @@ function parseCodexSessionFile(content) {
     }
   };
   for (const line of lines) {
-    if (!line.trim())
-      continue;
+    if (!line.trim()) continue;
     let entry;
     try {
       entry = JSON.parse(line);
     } catch {
       continue;
     }
-    if (entry.type !== "response_item")
-      continue;
+    if (entry.type !== "response_item") continue;
     const payload = entry.payload;
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
     lastTimestamp = timestamp;
     if (payload.type === "message") {
       const role = payload.role;
-      if (role === "developer" || role === "system")
-        continue;
+      if (role === "developer" || role === "system") continue;
       const { text, images } = extractCodexTextAndImages(payload.content);
       const trimmedText = text.trim();
       if (role === "user") {
@@ -2518,13 +2644,12 @@ function parseCodexSessionFile(content) {
             role: "user",
             content: trimmedText,
             timestamp,
-            images: images.length > 0 ? images : undefined
+            images: images.length > 0 ? images : void 0
           });
         }
       } else if (role === "assistant") {
         if (trimmedText) {
-          currentAssistantContent += (currentAssistantContent ? `
-` : "") + trimmedText;
+          currentAssistantContent += (currentAssistantContent ? "\n" : "") + trimmedText;
         }
         if (images.length > 0) {
           currentAssistantImages.push(...images);
@@ -2533,12 +2658,9 @@ function parseCodexSessionFile(content) {
     } else if (payload.type === "reasoning") {
       const contentArray = Array.isArray(payload.content) ? payload.content : [];
       const summaryArray = Array.isArray(payload.summary) ? payload.summary : [];
-      const thinkingText = contentArray.length > 0 ? contentArray.map((c) => c.text || "").join(`
-`) : summaryArray.map((c) => c.text || "").join(`
-`);
+      const thinkingText = contentArray.length > 0 ? contentArray.map((c) => c.text || "").join("\n") : summaryArray.map((c) => c.text || "").join("\n");
       if (thinkingText) {
-        currentAssistantThinking += (currentAssistantThinking ? `
-` : "") + thinkingText;
+        currentAssistantThinking += (currentAssistantThinking ? "\n" : "") + thinkingText;
       }
     } else if (payload.type === "function_call") {
       let args = {};
@@ -2570,11 +2692,13 @@ function parseCodexSessionFile(content) {
         content: typeof payload.output === "string" ? payload.output : outputParsed.text
       });
       if (outputParsed.images.length > 0) {
-        currentAssistantImages.push(...outputParsed.images.map((img) => ({
-          mediaType: img.mediaType,
-          data: img.data,
-          toolUseId: payload.call_id || undefined
-        })));
+        currentAssistantImages.push(
+          ...outputParsed.images.map((img) => ({
+            mediaType: img.mediaType,
+            data: img.data,
+            toolUseId: payload.call_id || void 0
+          }))
+        );
       }
     } else if (payload.type === "custom_tool_call") {
       currentToolCalls.push({
@@ -2589,11 +2713,13 @@ function parseCodexSessionFile(content) {
         content: typeof payload.output === "string" ? payload.output : outputParsed.text
       });
       if (outputParsed.images.length > 0) {
-        currentAssistantImages.push(...outputParsed.images.map((img) => ({
-          mediaType: img.mediaType,
-          data: img.data,
-          toolUseId: payload.call_id || undefined
-        })));
+        currentAssistantImages.push(
+          ...outputParsed.images.map((img) => ({
+            mediaType: img.mediaType,
+            data: img.data,
+            toolUseId: payload.call_id || void 0
+          }))
+        );
       }
     }
   }
@@ -2601,11 +2727,9 @@ function parseCodexSessionFile(content) {
   return messages;
 }
 function extractCodexCwd(content) {
-  const lines = content.split(`
-`);
+  const lines = content.split("\n");
   for (const line of lines) {
-    if (!line.trim())
-      continue;
+    if (!line.trim()) continue;
     try {
       const entry = JSON.parse(line);
       if (entry.type === "session_meta" && entry.payload?.cwd) {
@@ -2614,12 +2738,11 @@ function extractCodexCwd(content) {
     } catch {
     }
   }
-  return;
+  return void 0;
 }
 function parseCursorTranscriptFile(content) {
   const messages = [];
-  const lines = content.split(`
-`);
+  const lines = content.split("\n");
   let currentRole = null;
   let buffer = [];
   const flush = () => {
@@ -2627,8 +2750,7 @@ function parseCursorTranscriptFile(content) {
       buffer = [];
       return;
     }
-    const raw = buffer.join(`
-`).trim();
+    const raw = buffer.join("\n").trim();
     buffer = [];
     if (!raw) {
       return;
@@ -2644,9 +2766,8 @@ function parseCursorTranscriptFile(content) {
     if (currentRole === "assistant") {
       const thinkMatches = raw.match(/<think>([\s\S]*?)<\/think>/gi);
       if (thinkMatches) {
-        const extracted = thinkMatches.map((m) => m.replace(/<\/?think>/gi, "").trim()).filter(Boolean).join(`
-`);
-        thinking = extracted || undefined;
+        const extracted = thinkMatches.map((m) => m.replace(/<\/?think>/gi, "").trim()).filter(Boolean).join("\n");
+        thinking = extracted || void 0;
         contentText = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
       }
     }
@@ -2684,16 +2805,14 @@ function parseGeminiSessionFile(content) {
   }
   const messages = [];
   for (const msg of session.messages) {
-    if (msg.type === "info")
-      continue;
+    if (msg.type === "info") continue;
     const timestamp = msg.timestamp ? new Date(msg.timestamp).getTime() : Date.now();
     let role;
     let textContent = "";
     if (msg.type === "user") {
       role = "user";
       if (Array.isArray(msg.content)) {
-        textContent = msg.content.map((c) => c.text).join(`
-`);
+        textContent = msg.content.map((c) => c.text).join("\n");
       } else if (typeof msg.content === "string") {
         textContent = msg.content;
       }
@@ -2702,17 +2821,14 @@ function parseGeminiSessionFile(content) {
       if (typeof msg.content === "string") {
         textContent = msg.content;
       } else if (Array.isArray(msg.content)) {
-        textContent = msg.content.map((c) => c.text).join(`
-`);
+        textContent = msg.content.map((c) => c.text).join("\n");
       }
     } else {
       continue;
     }
     let thinking;
     if (msg.thoughts && msg.thoughts.length > 0) {
-      thinking = msg.thoughts.map((t) => t.subject ? `${t.subject}: ${t.description}` : t.description).join(`
-
-`);
+      thinking = msg.thoughts.map((t) => t.subject ? `${t.subject}: ${t.description}` : t.description).join("\n\n");
     }
     if (textContent || thinking) {
       messages.push({
@@ -2720,7 +2836,7 @@ function parseGeminiSessionFile(content) {
         role,
         content: textContent,
         timestamp,
-        thinking: thinking || undefined
+        thinking: thinking || void 0
       });
     }
   }
@@ -2728,15 +2844,14 @@ function parseGeminiSessionFile(content) {
 }
 
 // src/cursorProcessor.ts
-import { Database as Database2 } from "bun:sqlite";
+var import_bun_sqlite2 = require("bun:sqlite");
 function extractTextFromInitText(initText) {
   if (!initText.startsWith("{")) {
     return initText.trim();
   }
   try {
-    let walk = function(node) {
-      if (!node || typeof node !== "object")
-        return;
+    let walk2 = function(node) {
+      if (!node || typeof node !== "object") return;
       const n = node;
       if (n.type === "mention" && typeof n.mentionName === "string") {
         texts.push(`@${n.mentionName}`);
@@ -2745,13 +2860,14 @@ function extractTextFromInitText(initText) {
       }
       if (Array.isArray(n.children)) {
         for (const child of n.children) {
-          walk(child);
+          walk2(child);
         }
       }
     };
+    var walk = walk2;
     const data = JSON.parse(initText);
     const texts = [];
-    walk(data.root);
+    walk2(data.root);
     return texts.join("").trim();
   } catch {
     return initText.trim();
@@ -2765,8 +2881,7 @@ function parseCursorChatData(jsonStr) {
       return messages;
     }
     for (const tab of data.tabs) {
-      if (!tab.bubbles || !Array.isArray(tab.bubbles))
-        continue;
+      if (!tab.bubbles || !Array.isArray(tab.bubbles)) continue;
       for (const bubble of tab.bubbles) {
         let content = "";
         let role;
@@ -2803,8 +2918,10 @@ function parseCursorChatData(jsonStr) {
 function extractMessagesFromCursorDb(dbPath, skipCount = 0) {
   let db = null;
   try {
-    db = new Database2(dbPath, { readonly: true });
-    const row = db.query("SELECT rowid, value FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata' ORDER BY rowid DESC LIMIT 1").get();
+    db = new import_bun_sqlite2.Database(dbPath, { readonly: true });
+    const row = db.query(
+      "SELECT rowid, value FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata' ORDER BY rowid DESC LIMIT 1"
+    ).get();
     if (!row) {
       return { messages: [], maxRowId: 0, totalCount: 0 };
     }
@@ -2819,8 +2936,8 @@ function extractMessagesFromCursorDb(dbPath, skipCount = 0) {
 }
 
 // src/positionTracker.ts
-import * as fs7 from "fs";
-import * as path7 from "path";
+var fs7 = __toESM(require("fs"), 1);
+var path7 = __toESM(require("path"), 1);
 var CONFIG_DIR = process.env.HOME + "/.codecast";
 var POSITIONS_FILE = path7.join(CONFIG_DIR, "positions.json");
 function ensureConfigDir() {
@@ -2853,8 +2970,8 @@ function setPosition(filePath, offset) {
 }
 
 // src/syncLedger.ts
-import * as fs8 from "fs";
-import * as path8 from "path";
+var fs8 = __toESM(require("fs"), 1);
+var path8 = __toESM(require("path"), 1);
 var CONFIG_DIR2 = process.env.HOME + "/.codecast";
 var LEDGER_FILE = path8.join(CONFIG_DIR2, "sync-ledger.json");
 var POSITIONS_FILE2 = path8.join(CONFIG_DIR2, "positions.json");
@@ -2893,7 +3010,7 @@ function getSyncRecord(filePath) {
     return ledger[filePath];
   }
   const positions = loadPositions2();
-  if (positions[filePath] !== undefined) {
+  if (positions[filePath] !== void 0) {
     return {
       lastSyncedAt: 0,
       lastSyncedPosition: positions[filePath],
@@ -2921,13 +3038,12 @@ function markSynced(filePath, position, messageCount, conversationId) {
     conversationId
   });
 }
-function findUnsyncedFiles(baseDir, maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+function findUnsyncedFiles(baseDir, maxAgeMs = 7 * 24 * 60 * 60 * 1e3) {
   const ledger = loadLedger();
   const positions = loadPositions2();
   const now = Date.now();
   const unsynced = [];
-  if (!fs8.existsSync(baseDir))
-    return unsynced;
+  if (!fs8.existsSync(baseDir)) return unsynced;
   const scanDir = (dir) => {
     try {
       const entries = fs8.readdirSync(dir, { withFileTypes: true });
@@ -2939,15 +3055,14 @@ function findUnsyncedFiles(baseDir, maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
           try {
             const stats = fs8.statSync(fullPath);
             const fileAge = now - stats.mtimeMs;
-            if (fileAge > maxAgeMs)
-              continue;
+            if (fileAge > maxAgeMs) continue;
             const record = ledger[fullPath];
             const legacyPosition = positions[fullPath];
             if (record) {
               if (stats.mtimeMs > record.lastSyncedAt || stats.size > record.lastSyncedPosition) {
                 unsynced.push(fullPath);
               }
-            } else if (legacyPosition !== undefined) {
+            } else if (legacyPosition !== void 0) {
               if (stats.size > legacyPosition) {
                 unsynced.push(fullPath);
               }
@@ -2969,33 +3084,32 @@ function findUnsyncedFiles(baseDir, maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
 var version = "1.31.2";
 
 // node_modules/convex/dist/esm/values/base64.js
-var exports_base64 = {};
-__export(exports_base64, {
-  toByteArray: () => toByteArray,
-  fromByteArrayUrlSafeNoPadding: () => fromByteArrayUrlSafeNoPadding,
+var base64_exports = {};
+__export(base64_exports, {
+  byteLength: () => byteLength,
   fromByteArray: () => fromByteArray,
-  byteLength: () => byteLength
+  fromByteArrayUrlSafeNoPadding: () => fromByteArrayUrlSafeNoPadding,
+  toByteArray: () => toByteArray
 });
 var lookup = [];
 var revLookup = [];
 var Arr = Uint8Array;
 var code = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-for (i = 0, len = code.length;i < len; ++i) {
+for (i = 0, len = code.length; i < len; ++i) {
   lookup[i] = code[i];
   revLookup[code.charCodeAt(i)] = i;
 }
 var i;
 var len;
-revLookup[45] = 62;
-revLookup[95] = 63;
+revLookup["-".charCodeAt(0)] = 62;
+revLookup["_".charCodeAt(0)] = 63;
 function getLens(b64) {
   var len = b64.length;
   if (len % 4 > 0) {
     throw new Error("Invalid string. Length must be a multiple of 4");
   }
   var validLen = b64.indexOf("=");
-  if (validLen === -1)
-    validLen = len;
+  if (validLen === -1) validLen = len;
   var placeHoldersLen = validLen === len ? 0 : 4 - validLen % 4;
   return [validLen, placeHoldersLen];
 }
@@ -3013,26 +3127,26 @@ function toByteArray(b64) {
   var lens = getLens(b64);
   var validLen = lens[0];
   var placeHoldersLen = lens[1];
-  var arr = new Arr(_byteLength(b64, validLen, placeHoldersLen));
+  var arr2 = new Arr(_byteLength(b64, validLen, placeHoldersLen));
   var curByte = 0;
   var len = placeHoldersLen > 0 ? validLen - 4 : validLen;
   var i;
-  for (i = 0;i < len; i += 4) {
+  for (i = 0; i < len; i += 4) {
     tmp = revLookup[b64.charCodeAt(i)] << 18 | revLookup[b64.charCodeAt(i + 1)] << 12 | revLookup[b64.charCodeAt(i + 2)] << 6 | revLookup[b64.charCodeAt(i + 3)];
-    arr[curByte++] = tmp >> 16 & 255;
-    arr[curByte++] = tmp >> 8 & 255;
-    arr[curByte++] = tmp & 255;
+    arr2[curByte++] = tmp >> 16 & 255;
+    arr2[curByte++] = tmp >> 8 & 255;
+    arr2[curByte++] = tmp & 255;
   }
   if (placeHoldersLen === 2) {
     tmp = revLookup[b64.charCodeAt(i)] << 2 | revLookup[b64.charCodeAt(i + 1)] >> 4;
-    arr[curByte++] = tmp & 255;
+    arr2[curByte++] = tmp & 255;
   }
   if (placeHoldersLen === 1) {
     tmp = revLookup[b64.charCodeAt(i)] << 10 | revLookup[b64.charCodeAt(i + 1)] << 4 | revLookup[b64.charCodeAt(i + 2)] >> 2;
-    arr[curByte++] = tmp >> 8 & 255;
-    arr[curByte++] = tmp & 255;
+    arr2[curByte++] = tmp >> 8 & 255;
+    arr2[curByte++] = tmp & 255;
   }
-  return arr;
+  return arr2;
 }
 function tripletToBase64(num) {
   return lookup[num >> 18 & 63] + lookup[num >> 12 & 63] + lookup[num >> 6 & 63] + lookup[num & 63];
@@ -3040,7 +3154,7 @@ function tripletToBase64(num) {
 function encodeChunk(uint8, start, end) {
   var tmp;
   var output = [];
-  for (var i = start;i < end; i += 3) {
+  for (var i = start; i < end; i += 3) {
     tmp = (uint8[i] << 16 & 16711680) + (uint8[i + 1] << 8 & 65280) + (uint8[i + 2] & 255);
     output.push(tripletToBase64(tmp));
   }
@@ -3052,15 +3166,23 @@ function fromByteArray(uint8) {
   var extraBytes = len % 3;
   var parts = [];
   var maxChunkLength = 16383;
-  for (var i = 0, len2 = len - extraBytes;i < len2; i += maxChunkLength) {
-    parts.push(encodeChunk(uint8, i, i + maxChunkLength > len2 ? len2 : i + maxChunkLength));
+  for (var i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
+    parts.push(
+      encodeChunk(
+        uint8,
+        i,
+        i + maxChunkLength > len2 ? len2 : i + maxChunkLength
+      )
+    );
   }
   if (extraBytes === 1) {
     tmp = uint8[len - 1];
     parts.push(lookup[tmp >> 2] + lookup[tmp << 4 & 63] + "==");
   } else if (extraBytes === 2) {
     tmp = (uint8[len - 2] << 8) + uint8[len - 1];
-    parts.push(lookup[tmp >> 10] + lookup[tmp >> 4 & 63] + lookup[tmp << 2 & 63] + "=");
+    parts.push(
+      lookup[tmp >> 10] + lookup[tmp >> 4 & 63] + lookup[tmp << 2 & 63] + "="
+    );
   }
   return parts.join("");
 }
@@ -3070,37 +3192,51 @@ function fromByteArrayUrlSafeNoPadding(uint8) {
 
 // node_modules/convex/dist/esm/common/index.js
 function parseArgs(args) {
-  if (args === undefined) {
+  if (args === void 0) {
     return {};
   }
   if (!isSimpleObject(args)) {
-    throw new Error(`The arguments to a Convex function must be an object. Received: ${args}`);
+    throw new Error(
+      `The arguments to a Convex function must be an object. Received: ${args}`
+    );
   }
   return args;
 }
 function validateDeploymentUrl(deploymentUrl) {
   if (typeof deploymentUrl === "undefined") {
-    throw new Error(`Client created with undefined deployment address. If you used an environment variable, check that it's set.`);
+    throw new Error(
+      `Client created with undefined deployment address. If you used an environment variable, check that it's set.`
+    );
   }
   if (typeof deploymentUrl !== "string") {
-    throw new Error(`Invalid deployment address: found ${deploymentUrl}".`);
+    throw new Error(
+      `Invalid deployment address: found ${deploymentUrl}".`
+    );
   }
   if (!(deploymentUrl.startsWith("http:") || deploymentUrl.startsWith("https:"))) {
-    throw new Error(`Invalid deployment address: Must start with "https://" or "http://". Found "${deploymentUrl}".`);
+    throw new Error(
+      `Invalid deployment address: Must start with "https://" or "http://". Found "${deploymentUrl}".`
+    );
   }
   try {
     new URL(deploymentUrl);
   } catch {
-    throw new Error(`Invalid deployment address: "${deploymentUrl}" is not a valid URL. If you believe this URL is correct, use the \`skipConvexDeploymentUrlCheck\` option to bypass this.`);
+    throw new Error(
+      `Invalid deployment address: "${deploymentUrl}" is not a valid URL. If you believe this URL is correct, use the \`skipConvexDeploymentUrlCheck\` option to bypass this.`
+    );
   }
   if (deploymentUrl.endsWith(".convex.site")) {
-    throw new Error(`Invalid deployment address: "${deploymentUrl}" ends with .convex.site, which is used for HTTP Actions. Convex deployment URLs typically end with .convex.cloud? If you believe this URL is correct, use the \`skipConvexDeploymentUrlCheck\` option to bypass this.`);
+    throw new Error(
+      `Invalid deployment address: "${deploymentUrl}" ends with .convex.site, which is used for HTTP Actions. Convex deployment URLs typically end with .convex.cloud? If you believe this URL is correct, use the \`skipConvexDeploymentUrlCheck\` option to bypass this.`
+    );
   }
 }
 function isSimpleObject(value) {
   const isObject = typeof value === "object";
   const prototype = Object.getPrototypeOf(value);
-  const isSimple = prototype === null || prototype === Object.prototype || prototype?.constructor?.name === "Object";
+  const isSimple = prototype === null || prototype === Object.prototype || // Objects generated from other contexts (e.g. across Node.js `vm` modules) will not satisfy the previous
+  // conditions but are still simple objects.
+  prototype?.constructor?.name === "Object";
   return isObject && isSimple;
 }
 
@@ -3119,8 +3255,7 @@ function slowBigIntToBase64(value) {
     value -= MIN_INT64 + MIN_INT64;
   }
   let hex = value.toString(16);
-  if (hex.length % 2 === 1)
-    hex = "0" + hex;
+  if (hex.length % 2 === 1) hex = "0" + hex;
   const bytes = new Uint8Array(new ArrayBuffer(8));
   let i = 0;
   for (const hexByte of hex.match(/.{2}/g).reverse()) {
@@ -3132,7 +3267,9 @@ function slowBigIntToBase64(value) {
 function slowBase64ToBigInt(encoded) {
   const integerBytes = toByteArray(encoded);
   if (integerBytes.byteLength !== 8) {
-    throw new Error(`Received ${integerBytes.byteLength} bytes, expected 8 for $integer`);
+    throw new Error(
+      `Received ${integerBytes.byteLength} bytes, expected 8 for $integer`
+    );
   }
   let value = ZERO;
   let power = ZERO;
@@ -3147,7 +3284,9 @@ function slowBase64ToBigInt(encoded) {
 }
 function modernBigIntToBase64(value) {
   if (value < MIN_INT64 || MAX_INT64 < value) {
-    throw new Error(`BigInt ${value} does not fit into a 64-bit signed integer.`);
+    throw new Error(
+      `BigInt ${value} does not fit into a 64-bit signed integer.`
+    );
   }
   const buffer = new ArrayBuffer(8);
   new DataView(buffer).setBigInt64(0, value, true);
@@ -3156,7 +3295,9 @@ function modernBigIntToBase64(value) {
 function modernBase64ToBigInt(encoded) {
   const integerBytes = toByteArray(encoded);
   if (integerBytes.byteLength !== 8) {
-    throw new Error(`Received ${integerBytes.byteLength} bytes, expected 8 for $integer`);
+    throw new Error(
+      `Received ${integerBytes.byteLength} bytes, expected 8 for $integer`
+    );
   }
   const intBytesView = new DataView(integerBytes.buffer);
   return intBytesView.getBigInt64(0, true);
@@ -3166,15 +3307,19 @@ var base64ToBigInt = DataView.prototype.getBigInt64 ? modernBase64ToBigInt : slo
 var MAX_IDENTIFIER_LEN = 1024;
 function validateObjectField(k) {
   if (k.length > MAX_IDENTIFIER_LEN) {
-    throw new Error(`Field name ${k} exceeds maximum field name length ${MAX_IDENTIFIER_LEN}.`);
+    throw new Error(
+      `Field name ${k} exceeds maximum field name length ${MAX_IDENTIFIER_LEN}.`
+    );
   }
   if (k.startsWith("$")) {
     throw new Error(`Field name ${k} starts with a '$', which is reserved.`);
   }
-  for (let i = 0;i < k.length; i += 1) {
+  for (let i = 0; i < k.length; i += 1) {
     const charCode = k.charCodeAt(i);
     if (charCode < 32 || charCode >= 127) {
-      throw new Error(`Field name ${k} has invalid character '${k[i]}': Field names can only contain non-control ASCII characters`);
+      throw new Error(
+        `Field name ${k} has invalid character '${k[i]}': Field names can only contain non-control ASCII characters`
+      );
     }
   }
 }
@@ -3218,7 +3363,9 @@ function jsonToConvex(value) {
       }
       const floatBytes = toByteArray(value.$float);
       if (floatBytes.byteLength !== 8) {
-        throw new Error(`Received ${floatBytes.byteLength} bytes, expected 8 for $float`);
+        throw new Error(
+          `Received ${floatBytes.byteLength} bytes, expected 8 for $float`
+        );
       }
       const floatBytesView = new DataView(floatBytes.buffer);
       const float = floatBytesView.getFloat64(0, LITTLE_ENDIAN);
@@ -3228,23 +3375,27 @@ function jsonToConvex(value) {
       return float;
     }
     if (key === "$set") {
-      throw new Error(`Received a Set which is no longer supported as a Convex type.`);
+      throw new Error(
+        `Received a Set which is no longer supported as a Convex type.`
+      );
     }
     if (key === "$map") {
-      throw new Error(`Received a Map which is no longer supported as a Convex type.`);
+      throw new Error(
+        `Received a Map which is no longer supported as a Convex type.`
+      );
     }
   }
   const out = {};
-  for (const [k, v] of Object.entries(value)) {
+  for (const [k, v2] of Object.entries(value)) {
     validateObjectField(k);
-    out[k] = jsonToConvex(v);
+    out[k] = jsonToConvex(v2);
   }
   return out;
 }
 var MAX_VALUE_FOR_ERROR_LEN = 16384;
 function stringifyValueForError(value) {
   const str = JSON.stringify(value, (_key, value2) => {
-    if (value2 === undefined) {
+    if (value2 === void 0) {
       return "undefined";
     }
     if (typeof value2 === "bigint") {
@@ -3256,7 +3407,7 @@ function stringifyValueForError(value) {
     const rest = "[...truncated]";
     let truncateAt = MAX_VALUE_FOR_ERROR_LEN - rest.length;
     const codePoint = str.codePointAt(truncateAt - 1);
-    if (codePoint !== undefined && codePoint > 65535) {
+    if (codePoint !== void 0 && codePoint > 65535) {
       truncateAt -= 1;
     }
     return str.substring(0, truncateAt) + rest;
@@ -3264,16 +3415,22 @@ function stringifyValueForError(value) {
   return str;
 }
 function convexToJsonInternal(value, originalValue, context, includeTopLevelUndefined) {
-  if (value === undefined) {
-    const contextText = context && ` (present at path ${context} in original object ${stringifyValueForError(originalValue)})`;
-    throw new Error(`undefined is not a valid Convex value${contextText}. To learn about Convex's supported types, see https://docs.convex.dev/using/types.`);
+  if (value === void 0) {
+    const contextText = context && ` (present at path ${context} in original object ${stringifyValueForError(
+      originalValue
+    )})`;
+    throw new Error(
+      `undefined is not a valid Convex value${contextText}. To learn about Convex's supported types, see https://docs.convex.dev/using/types.`
+    );
   }
   if (value === null) {
     return value;
   }
   if (typeof value === "bigint") {
     if (value < MIN_INT64 || MAX_INT64 < value) {
-      throw new Error(`BigInt ${value} does not fit into a 64-bit signed integer.`);
+      throw new Error(
+        `BigInt ${value} does not fit into a 64-bit signed integer.`
+      );
     }
     return { $integer: bigIntToBase64(value) };
   }
@@ -3296,46 +3453,68 @@ function convexToJsonInternal(value, originalValue, context, includeTopLevelUnde
     return { $bytes: fromByteArray(new Uint8Array(value)) };
   }
   if (Array.isArray(value)) {
-    return value.map((value2, i) => convexToJsonInternal(value2, originalValue, context + `[${i}]`, false));
+    return value.map(
+      (value2, i) => convexToJsonInternal(value2, originalValue, context + `[${i}]`, false)
+    );
   }
   if (value instanceof Set) {
-    throw new Error(errorMessageForUnsupportedType(context, "Set", [...value], originalValue));
+    throw new Error(
+      errorMessageForUnsupportedType(context, "Set", [...value], originalValue)
+    );
   }
   if (value instanceof Map) {
-    throw new Error(errorMessageForUnsupportedType(context, "Map", [...value], originalValue));
+    throw new Error(
+      errorMessageForUnsupportedType(context, "Map", [...value], originalValue)
+    );
   }
   if (!isSimpleObject(value)) {
     const theType = value?.constructor?.name;
     const typeName = theType ? `${theType} ` : "";
-    throw new Error(errorMessageForUnsupportedType(context, typeName, value, originalValue));
+    throw new Error(
+      errorMessageForUnsupportedType(context, typeName, value, originalValue)
+    );
   }
   const out = {};
   const entries = Object.entries(value);
   entries.sort(([k1, _v1], [k2, _v2]) => k1 === k2 ? 0 : k1 < k2 ? -1 : 1);
-  for (const [k, v] of entries) {
-    if (v !== undefined) {
+  for (const [k, v2] of entries) {
+    if (v2 !== void 0) {
       validateObjectField(k);
-      out[k] = convexToJsonInternal(v, originalValue, context + `.${k}`, false);
+      out[k] = convexToJsonInternal(v2, originalValue, context + `.${k}`, false);
     } else if (includeTopLevelUndefined) {
       validateObjectField(k);
-      out[k] = convexOrUndefinedToJsonInternal(v, originalValue, context + `.${k}`);
+      out[k] = convexOrUndefinedToJsonInternal(
+        v2,
+        originalValue,
+        context + `.${k}`
+      );
     }
   }
   return out;
 }
 function errorMessageForUnsupportedType(context, typeName, value, originalValue) {
   if (context) {
-    return `${typeName}${stringifyValueForError(value)} is not a supported Convex type (present at path ${context} in original object ${stringifyValueForError(originalValue)}). To learn about Convex's supported types, see https://docs.convex.dev/using/types.`;
+    return `${typeName}${stringifyValueForError(
+      value
+    )} is not a supported Convex type (present at path ${context} in original object ${stringifyValueForError(
+      originalValue
+    )}). To learn about Convex's supported types, see https://docs.convex.dev/using/types.`;
   } else {
-    return `${typeName}${stringifyValueForError(value)} is not a supported Convex type.`;
+    return `${typeName}${stringifyValueForError(
+      value
+    )} is not a supported Convex type.`;
   }
 }
 function convexOrUndefinedToJsonInternal(value, originalValue, context) {
-  if (value === undefined) {
+  if (value === void 0) {
     return { $undefined: null };
   } else {
-    if (originalValue === undefined) {
-      throw new Error(`Programming error. Current value is ${stringifyValueForError(value)} but original value is undefined`);
+    if (originalValue === void 0) {
+      throw new Error(
+        `Programming error. Current value is ${stringifyValueForError(
+          value
+        )} but original value is undefined`
+      );
     }
     return convexToJsonInternal(value, originalValue, context, false);
   }
@@ -3343,15 +3522,15 @@ function convexOrUndefinedToJsonInternal(value, originalValue, context) {
 function convexToJson(value) {
   return convexToJsonInternal(value, value, "", false);
 }
+
 // node_modules/convex/dist/esm/values/errors.js
 var __defProp2 = Object.defineProperty;
-var __defNormalProp = (obj, key, value) => (key in obj) ? __defProp2(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp2(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 var _a;
 var _b;
 var IDENTIFYING_FIELD = Symbol.for("ConvexError");
-
-class ConvexError extends (_b = Error, _a = IDENTIFYING_FIELD, _b) {
+var ConvexError = class extends (_b = Error, _a = IDENTIFYING_FIELD, _b) {
   constructor(data) {
     super(typeof data === "string" ? data : stringifyValueForError(data));
     __publicField(this, "name", "ConvexError");
@@ -3359,10 +3538,16 @@ class ConvexError extends (_b = Error, _a = IDENTIFYING_FIELD, _b) {
     __publicField(this, _a, true);
     this.data = data;
   }
-}
+};
+
+// node_modules/convex/dist/esm/values/compare_utf8.js
+var arr = () => Array.from({ length: 4 }, () => 0);
+var aBytes = arr();
+var bBytes = arr();
+
 // node_modules/convex/dist/esm/browser/logging.js
 var __defProp3 = Object.defineProperty;
-var __defNormalProp2 = (obj, key, value) => (key in obj) ? __defProp3(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp2 = (obj, key, value) => key in obj ? __defProp3(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField2 = (obj, key, value) => __defNormalProp2(obj, typeof key !== "symbol" ? key + "" : key, value);
 var INFO_COLOR = "color:rgb(0, 145, 255)";
 function prefix_for_source(source) {
@@ -3377,8 +3562,7 @@ function prefix_for_source(source) {
       return "?";
   }
 }
-
-class DefaultLogger {
+var DefaultLogger = class {
   constructor(options) {
     __publicField2(this, "_onLogLineFuncs");
     __publicField2(this, "_verbose");
@@ -3387,8 +3571,8 @@ class DefaultLogger {
   }
   addLogLineListener(func) {
     let id = Math.random().toString(36).substring(2, 15);
-    for (let i = 0;i < 10; i++) {
-      if (this._onLogLineFuncs[id] === undefined) {
+    for (let i = 0; i < 10; i++) {
+      if (this._onLogLineFuncs[id] === void 0) {
         break;
       }
       id = Math.random().toString(36).substring(2, 15);
@@ -3420,7 +3604,7 @@ class DefaultLogger {
       func("error", ...args);
     }
   }
-}
+};
 function instantiateDefaultLogger(options) {
   const logger = new DefaultLogger(options);
   logger.addLogLineListener((level, ...args) => {
@@ -3438,6 +3622,7 @@ function instantiateDefaultLogger(options) {
         console.error(...args);
         break;
       default: {
+        level;
         console.log(...args);
       }
     }
@@ -3455,7 +3640,9 @@ function logForFunction(logger, type, source, udfPath, message) {
   if (type === "info") {
     const match = message.match(/^\[.*?\] /);
     if (match === null) {
-      logger.error(`[CONVEX ${prefix}(${udfPath})] Could not parse console.log`);
+      logger.error(
+        `[CONVEX ${prefix}(${udfPath})] Could not parse console.log`
+      );
       return;
     }
     const level = message.slice(1, match[0].length - 2);
@@ -3484,18 +3671,18 @@ function forwardData(result, error) {
 function canonicalizeUdfPath(udfPath) {
   const pieces = udfPath.split(":");
   let moduleName;
-  let functionName;
+  let functionName2;
   if (pieces.length === 1) {
     moduleName = pieces[0];
-    functionName = "default";
+    functionName2 = "default";
   } else {
     moduleName = pieces.slice(0, pieces.length - 1).join(":");
-    functionName = pieces[pieces.length - 1];
+    functionName2 = pieces[pieces.length - 1];
   }
   if (moduleName.endsWith(".js")) {
     moduleName = moduleName.slice(0, -3);
   }
-  return `${moduleName}:${functionName}`;
+  return `${moduleName}:${functionName2}`;
 }
 function serializePathAndArgs(udfPath, args) {
   return JSON.stringify({
@@ -3519,10 +3706,9 @@ function serializedQueryTokenIsPaginated(token) {
 
 // node_modules/convex/dist/esm/browser/sync/local_state.js
 var __defProp4 = Object.defineProperty;
-var __defNormalProp3 = (obj, key, value) => (key in obj) ? __defProp4(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp3 = (obj, key, value) => key in obj ? __defProp4(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField3 = (obj, key, value) => __defNormalProp3(obj, typeof key !== "symbol" ? key + "" : key, value);
-
-class LocalSyncState {
+var LocalSyncState = class {
   constructor() {
     __publicField3(this, "nextQueryId");
     __publicField3(this, "querySetVersion");
@@ -3537,12 +3723,12 @@ class LocalSyncState {
     this.nextQueryId = 0;
     this.querySetVersion = 0;
     this.identityVersion = 0;
-    this.querySet = /* @__PURE__ */ new Map;
-    this.queryIdToToken = /* @__PURE__ */ new Map;
-    this.outstandingQueriesOlderThanRestart = /* @__PURE__ */ new Set;
+    this.querySet = /* @__PURE__ */ new Map();
+    this.queryIdToToken = /* @__PURE__ */ new Map();
+    this.outstandingQueriesOlderThanRestart = /* @__PURE__ */ new Set();
     this.outstandingAuthOlderThanRestart = false;
     this.paused = false;
-    this.pendingQuerySetModifications = /* @__PURE__ */ new Map;
+    this.pendingQuerySetModifications = /* @__PURE__ */ new Map();
   }
   hasSyncedPastLastReconnect() {
     return this.outstandingQueriesOlderThanRestart.size === 0 && !this.outstandingAuthOlderThanRestart;
@@ -3554,7 +3740,7 @@ class LocalSyncState {
     const canonicalizedUdfPath = canonicalizeUdfPath(udfPath);
     const queryToken = serializePathAndArgs(canonicalizedUdfPath, args);
     const existingEntry = this.querySet.get(queryToken);
-    if (existingEntry !== undefined) {
+    if (existingEntry !== void 0) {
       existingEntry.numSubscribers += 1;
       return {
         queryToken,
@@ -3608,9 +3794,9 @@ class LocalSyncState {
         case "QueryFailed": {
           this.outstandingQueriesOlderThanRestart.delete(modification.queryId);
           const journal = modification.journal;
-          if (journal !== undefined) {
+          if (journal !== void 0) {
             const queryToken = this.queryIdToToken.get(modification.queryId);
-            if (queryToken !== undefined) {
+            if (queryToken !== void 0) {
               this.querySet.get(queryToken).journal = journal;
             }
           }
@@ -3621,6 +3807,7 @@ class LocalSyncState {
           break;
         }
         default: {
+          modification;
           throw new Error(`Invalid modification ${modification.type}`);
         }
       }
@@ -3630,7 +3817,7 @@ class LocalSyncState {
     const canonicalizedUdfPath = canonicalizeUdfPath(udfPath);
     const queryToken = serializePathAndArgs(canonicalizedUdfPath, args);
     const existingEntry = this.querySet.get(queryToken);
-    if (existingEntry !== undefined) {
+    if (existingEntry !== void 0) {
       return existingEntry.id;
     }
     return null;
@@ -3674,7 +3861,7 @@ class LocalSyncState {
     };
   }
   clearAuth() {
-    this.auth = undefined;
+    this.auth = void 0;
     this.markAuthCompletion();
     const baseVersion = this.identityVersion;
     if (!this.paused) {
@@ -3739,7 +3926,7 @@ class LocalSyncState {
     };
     if (!this.auth) {
       this.identityVersion = 0;
-      return [querySet, undefined];
+      return [querySet, void 0];
     }
     this.outstandingAuthOlderThanRestart = true;
     const authenticate = {
@@ -3758,13 +3945,15 @@ class LocalSyncState {
       type: "ModifyQuerySet",
       baseVersion: this.querySetVersion,
       newVersion: ++this.querySetVersion,
-      modifications: Array.from(this.pendingQuerySetModifications.values())
-    } : undefined;
-    const authenticate = this.auth !== undefined ? {
+      modifications: Array.from(
+        this.pendingQuerySetModifications.values()
+      )
+    } : void 0;
+    const authenticate = this.auth !== void 0 ? {
       type: "Authenticate",
       baseVersion: this.identityVersion++,
       ...this.auth
-    } : undefined;
+    } : void 0;
     this.unpause();
     return [querySet, authenticate];
   }
@@ -3804,14 +3993,13 @@ class LocalSyncState {
       };
     }
   }
-}
+};
 
 // node_modules/convex/dist/esm/browser/sync/request_manager.js
 var __defProp5 = Object.defineProperty;
-var __defNormalProp4 = (obj, key, value) => (key in obj) ? __defProp5(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp4 = (obj, key, value) => key in obj ? __defProp5(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField4 = (obj, key, value) => __defNormalProp4(obj, typeof key !== "symbol" ? key + "" : key, value);
-
-class RequestManager {
+var RequestManager = class {
   constructor(logger, markConnectionStateDirty) {
     this.logger = logger;
     this.markConnectionStateDirty = markConnectionStateDirty;
@@ -3819,15 +4007,15 @@ class RequestManager {
     __publicField4(this, "requestsOlderThanRestart");
     __publicField4(this, "inflightMutationsCount", 0);
     __publicField4(this, "inflightActionsCount", 0);
-    this.inflightRequests = /* @__PURE__ */ new Map;
-    this.requestsOlderThanRestart = /* @__PURE__ */ new Set;
+    this.inflightRequests = /* @__PURE__ */ new Map();
+    this.requestsOlderThanRestart = /* @__PURE__ */ new Set();
   }
   request(message, sent) {
-    const result = new Promise((resolve3) => {
+    const result = new Promise((resolve4) => {
       const status = sent ? "Requested" : "NotSent";
       this.inflightRequests.set(message.requestId, {
         message,
-        status: { status, requestedAt: /* @__PURE__ */ new Date, onResult: resolve3 }
+        status: { status, requestedAt: /* @__PURE__ */ new Date(), onResult: resolve4 }
       });
       if (message.type === "Mutation") {
         this.inflightMutationsCount++;
@@ -3838,9 +4026,15 @@ class RequestManager {
     this.markConnectionStateDirty();
     return result;
   }
+  /**
+   * Update the state after receiving a response.
+   *
+   * @returns A RequestId if the request is complete and its optimistic update
+   * can be dropped, null otherwise.
+   */
   onResponse(response) {
     const requestInfo = this.inflightRequests.get(response.requestId);
-    if (requestInfo === undefined) {
+    if (requestInfo === void 0) {
       return null;
     }
     if (requestInfo.status.status === "Completed") {
@@ -3868,7 +4062,7 @@ class RequestManager {
       result = {
         success: false,
         errorMessage,
-        errorData: errorData !== undefined ? jsonToConvex(errorData) : undefined,
+        errorData: errorData !== void 0 ? jsonToConvex(errorData) : void 0,
         logLines: response.logLines
       };
       onResolve = () => status.onResult(result);
@@ -3893,8 +4087,9 @@ class RequestManager {
     };
     return null;
   }
+  // Remove and returns completed requests.
   removeCompleted(ts) {
-    const completeRequests = /* @__PURE__ */ new Map;
+    const completeRequests = /* @__PURE__ */ new Map();
     for (const [requestId, requestInfo] of this.inflightRequests.entries()) {
       const status = requestInfo.status;
       if (status.status === "Completed" && status.ts.lessThanOrEqual(ts)) {
@@ -3953,6 +4148,10 @@ class RequestManager {
     }
     return allMessages;
   }
+  /**
+   * @returns true if there are any requests that have been requested but have
+   * not be completed yet.
+   */
   hasIncompleteRequests() {
     for (const requestInfo of this.inflightRequests.values()) {
       if (requestInfo.status.status === "Requested") {
@@ -3961,9 +4160,17 @@ class RequestManager {
     }
     return false;
   }
+  /**
+   * @returns true if there are any inflight requests, including ones that have
+   * completed on the server, but have not been applied.
+   */
   hasInflightRequests() {
     return this.inflightRequests.size > 0;
   }
+  /**
+   * @returns true if there are any inflight requests, that have been hanging around
+   * since prior to the most recent restart.
+   */
   hasSyncedPastLastReconnect() {
     return this.requestsOlderThanRestart.size === 0;
   }
@@ -3981,13 +4188,19 @@ class RequestManager {
     }
     return new Date(oldestInflightRequest);
   }
+  /**
+   * @returns The number of mutations currently in flight.
+   */
   inflightMutations() {
     return this.inflightMutationsCount;
   }
+  /**
+   * @returns The number of actions currently in flight.
+   */
   inflightActions() {
     return this.inflightActionsCount;
   }
-}
+};
 
 // node_modules/convex/dist/esm/server/functionName.js
 var functionName = Symbol.for("functionName");
@@ -4023,16 +4236,21 @@ function getFunctionAddress(functionReference) {
 // node_modules/convex/dist/esm/server/api.js
 function getFunctionName(functionReference) {
   const address = getFunctionAddress(functionReference);
-  if (address.name === undefined) {
-    if (address.functionHandle !== undefined) {
-      throw new Error(`Expected function reference like "api.file.func" or "internal.file.func", but received function handle ${address.functionHandle}`);
-    } else if (address.reference !== undefined) {
-      throw new Error(`Expected function reference in the current component like "api.file.func" or "internal.file.func", but received reference ${address.reference}`);
+  if (address.name === void 0) {
+    if (address.functionHandle !== void 0) {
+      throw new Error(
+        `Expected function reference like "api.file.func" or "internal.file.func", but received function handle ${address.functionHandle}`
+      );
+    } else if (address.reference !== void 0) {
+      throw new Error(
+        `Expected function reference in the current component like "api.file.func" or "internal.file.func", but received reference ${address.reference}`
+      );
     }
-    throw new Error(`Expected function reference like "api.file.func" or "internal.file.func", but received ${JSON.stringify(address)}`);
+    throw new Error(
+      `Expected function reference like "api.file.func" or "internal.file.func", but received ${JSON.stringify(address)}`
+    );
   }
-  if (typeof functionReference === "string")
-    return functionReference;
+  if (typeof functionReference === "string") return functionReference;
   const name = functionReference[functionName];
   if (!name) {
     throw new Error(`${functionReference} is not a functionReference`);
@@ -4048,19 +4266,21 @@ function createApi(pathParts = []) {
       } else if (prop === functionName) {
         if (pathParts.length < 2) {
           const found = ["api", ...pathParts].join(".");
-          throw new Error(`API path is expected to be of the form \`api.moduleName.functionName\`. Found: \`${found}\``);
+          throw new Error(
+            `API path is expected to be of the form \`api.moduleName.functionName\`. Found: \`${found}\``
+          );
         }
-        const path9 = pathParts.slice(0, -1).join("/");
+        const path14 = pathParts.slice(0, -1).join("/");
         const exportName = pathParts[pathParts.length - 1];
         if (exportName === "default") {
-          return path9;
+          return path14;
         } else {
-          return path9 + ":" + exportName;
+          return path14 + ":" + exportName;
         }
       } else if (prop === Symbol.toStringTag) {
         return "FunctionReference";
       } else {
-        return;
+        return void 0;
       }
     }
   };
@@ -4070,10 +4290,9 @@ var anyApi = createApi();
 
 // node_modules/convex/dist/esm/browser/sync/optimistic_updates_impl.js
 var __defProp6 = Object.defineProperty;
-var __defNormalProp5 = (obj, key, value) => (key in obj) ? __defProp6(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp5 = (obj, key, value) => key in obj ? __defProp6(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField5 = (obj, key, value) => __defNormalProp5(obj, typeof key !== "symbol" ? key + "" : key, value);
-
-class OptimisticLocalStoreImpl {
+var OptimisticLocalStoreImpl = class _OptimisticLocalStoreImpl {
   constructor(queryResults) {
     __publicField5(this, "queryResults");
     __publicField5(this, "modifiedQueries");
@@ -4083,11 +4302,13 @@ class OptimisticLocalStoreImpl {
   getQuery(query, ...args) {
     const queryArgs = parseArgs(args[0]);
     const name = getFunctionName(query);
-    const queryResult = this.queryResults.get(serializePathAndArgs(name, queryArgs));
-    if (queryResult === undefined) {
-      return;
+    const queryResult = this.queryResults.get(
+      serializePathAndArgs(name, queryArgs)
+    );
+    if (queryResult === void 0) {
+      return void 0;
     }
-    return OptimisticLocalStoreImpl.queryValue(queryResult.result);
+    return _OptimisticLocalStoreImpl.queryValue(queryResult.result);
   }
   getAllQueries(query) {
     const queriesWithName = [];
@@ -4096,7 +4317,7 @@ class OptimisticLocalStoreImpl {
       if (queryResult.udfPath === canonicalizeUdfPath(name)) {
         queriesWithName.push({
           args: queryResult.args,
-          value: OptimisticLocalStoreImpl.queryValue(queryResult.result)
+          value: _OptimisticLocalStoreImpl.queryValue(queryResult.result)
         });
       }
     }
@@ -4107,12 +4328,13 @@ class OptimisticLocalStoreImpl {
     const name = getFunctionName(queryReference);
     const queryToken = serializePathAndArgs(name, queryArgs);
     let result;
-    if (value === undefined) {
-      result = undefined;
+    if (value === void 0) {
+      result = void 0;
     } else {
       result = {
         success: true,
         value,
+        // It's an optimistic update, so there are no function logs to show.
         logLines: []
       };
     }
@@ -4125,23 +4347,25 @@ class OptimisticLocalStoreImpl {
     this.modifiedQueries.push(queryToken);
   }
   static queryValue(result) {
-    if (result === undefined) {
-      return;
+    if (result === void 0) {
+      return void 0;
     } else if (result.success) {
       return result.value;
     } else {
-      return;
+      return void 0;
     }
   }
-}
-
-class OptimisticQueryResults {
+};
+var OptimisticQueryResults = class {
   constructor() {
     __publicField5(this, "queryResults");
     __publicField5(this, "optimisticUpdates");
-    this.queryResults = /* @__PURE__ */ new Map;
+    this.queryResults = /* @__PURE__ */ new Map();
     this.optimisticUpdates = [];
   }
+  /**
+   * Apply all optimistic updates on top of server query results
+   */
   ingestQueryResultsFromServer(serverQueryResults, optimisticUpdatesToDrop) {
     this.optimisticUpdates = this.optimisticUpdates.filter((updateAndId) => {
       return !optimisticUpdatesToDrop.has(updateAndId.mutationId);
@@ -4155,7 +4379,7 @@ class OptimisticQueryResults {
     const changedQueries = [];
     for (const [queryToken, query] of this.queryResults) {
       const oldQuery = oldQueryResults.get(queryToken);
-      if (oldQuery === undefined || oldQuery.result !== query.result) {
+      if (oldQuery === void 0 || oldQuery.result !== query.result) {
         changedQueries.push(queryToken);
       }
     }
@@ -4170,45 +4394,60 @@ class OptimisticQueryResults {
     update(localStore);
     return localStore.modifiedQueries;
   }
+  /**
+   * "Raw" with respect to errors vs values, but query results still have
+   * optimistic updates applied.
+   *
+   * @internal
+   */
   rawQueryResult(queryToken) {
     const query = this.queryResults.get(queryToken);
-    if (query === undefined) {
-      return;
+    if (query === void 0) {
+      return void 0;
     }
     return query.result;
   }
   queryResult(queryToken) {
     const query = this.queryResults.get(queryToken);
-    if (query === undefined) {
-      return;
+    if (query === void 0) {
+      return void 0;
     }
     const result = query.result;
-    if (result === undefined) {
-      return;
+    if (result === void 0) {
+      return void 0;
     } else if (result.success) {
       return result.value;
     } else {
-      if (result.errorData !== undefined) {
-        throw forwardData(result, new ConvexError(createHybridErrorStacktrace("query", query.udfPath, result)));
+      if (result.errorData !== void 0) {
+        throw forwardData(
+          result,
+          new ConvexError(
+            createHybridErrorStacktrace("query", query.udfPath, result)
+          )
+        );
       }
-      throw new Error(createHybridErrorStacktrace("query", query.udfPath, result));
+      throw new Error(
+        createHybridErrorStacktrace("query", query.udfPath, result)
+      );
     }
   }
   hasQueryResult(queryToken) {
-    return this.queryResults.get(queryToken) !== undefined;
+    return this.queryResults.get(queryToken) !== void 0;
   }
+  /**
+   * @internal
+   */
   queryLogs(queryToken) {
     const query = this.queryResults.get(queryToken);
     return query?.result?.logLines;
   }
-}
+};
 
 // node_modules/convex/dist/esm/vendor/long.js
 var __defProp7 = Object.defineProperty;
-var __defNormalProp6 = (obj, key, value) => (key in obj) ? __defProp7(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp6 = (obj, key, value) => key in obj ? __defProp7(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField6 = (obj, key, value) => __defNormalProp6(obj, typeof key !== "symbol" ? key + "" : key, value);
-
-class Long {
+var Long = class _Long {
   constructor(low, high) {
     __publicField6(this, "low");
     __publicField6(this, "high");
@@ -4220,9 +4459,14 @@ class Long {
   static isLong(obj) {
     return (obj && obj.__isUnsignedLong__) === true;
   }
+  // prettier-ignore
   static fromBytesLE(bytes) {
-    return new Long(bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24, bytes[4] | bytes[5] << 8 | bytes[6] << 16 | bytes[7] << 24);
+    return new _Long(
+      bytes[0] | bytes[1] << 8 | bytes[2] << 16 | bytes[3] << 24,
+      bytes[4] | bytes[5] << 8 | bytes[6] << 16 | bytes[7] << 24
+    );
   }
+  // prettier-ignore
   toBytesLE() {
     const hi = this.high;
     const lo = this.low;
@@ -4238,43 +4482,38 @@ class Long {
     ];
   }
   static fromNumber(value) {
-    if (isNaN(value))
-      return UZERO;
-    if (value < 0)
-      return UZERO;
-    if (value >= TWO_PWR_64_DBL)
-      return MAX_UNSIGNED_VALUE;
-    return new Long(value % TWO_PWR_32_DBL | 0, value / TWO_PWR_32_DBL | 0);
+    if (isNaN(value)) return UZERO;
+    if (value < 0) return UZERO;
+    if (value >= TWO_PWR_64_DBL) return MAX_UNSIGNED_VALUE;
+    return new _Long(value % TWO_PWR_32_DBL | 0, value / TWO_PWR_32_DBL | 0);
   }
   toString() {
     return (BigInt(this.high) * BigInt(TWO_PWR_32_DBL) + BigInt(this.low)).toString();
   }
   equals(other) {
-    if (!Long.isLong(other))
-      other = Long.fromValue(other);
-    if (this.high >>> 31 === 1 && other.high >>> 31 === 1)
-      return false;
+    if (!_Long.isLong(other)) other = _Long.fromValue(other);
+    if (this.high >>> 31 === 1 && other.high >>> 31 === 1) return false;
     return this.high === other.high && this.low === other.low;
   }
   notEquals(other) {
     return !this.equals(other);
   }
   comp(other) {
-    if (!Long.isLong(other))
-      other = Long.fromValue(other);
-    if (this.equals(other))
-      return 0;
+    if (!_Long.isLong(other)) other = _Long.fromValue(other);
+    if (this.equals(other)) return 0;
     return other.high >>> 0 > this.high >>> 0 || other.high === this.high && other.low >>> 0 > this.low >>> 0 ? -1 : 1;
   }
   lessThanOrEqual(other) {
-    return this.comp(other) <= 0;
+    return this.comp(
+      /* validates */
+      other
+    ) <= 0;
   }
   static fromValue(val) {
-    if (typeof val === "number")
-      return Long.fromNumber(val);
-    return new Long(val.low, val.high);
+    if (typeof val === "number") return _Long.fromNumber(val);
+    return new _Long(val.low, val.high);
   }
-}
+};
 var UZERO = new Long(0, 0);
 var TWO_PWR_16_DBL = 1 << 16;
 var TWO_PWR_32_DBL = TWO_PWR_16_DBL * TWO_PWR_16_DBL;
@@ -4283,24 +4522,25 @@ var MAX_UNSIGNED_VALUE = new Long(4294967295 | 0, 4294967295 | 0);
 
 // node_modules/convex/dist/esm/browser/sync/remote_query_set.js
 var __defProp8 = Object.defineProperty;
-var __defNormalProp7 = (obj, key, value) => (key in obj) ? __defProp8(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp7 = (obj, key, value) => key in obj ? __defProp8(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField7 = (obj, key, value) => __defNormalProp7(obj, typeof key !== "symbol" ? key + "" : key, value);
-
-class RemoteQuerySet {
+var RemoteQuerySet = class {
   constructor(queryPath, logger) {
     __publicField7(this, "version");
     __publicField7(this, "remoteQuerySet");
     __publicField7(this, "queryPath");
     __publicField7(this, "logger");
     this.version = { querySet: 0, ts: Long.fromNumber(0), identity: 0 };
-    this.remoteQuerySet = /* @__PURE__ */ new Map;
+    this.remoteQuerySet = /* @__PURE__ */ new Map();
     this.queryPath = queryPath;
     this.logger = logger;
   }
   transition(transition) {
     const start = transition.startVersion;
     if (this.version.querySet !== start.querySet || this.version.ts.notEquals(start.ts) || this.version.identity !== start.identity) {
-      throw new Error(`Invalid start version: ${start.ts.toString()}:${start.querySet}:${start.identity}, transitioning from ${this.version.ts.toString()}:${this.version.querySet}:${this.version.identity}`);
+      throw new Error(
+        `Invalid start version: ${start.ts.toString()}:${start.querySet}:${start.identity}, transitioning from ${this.version.ts.toString()}:${this.version.querySet}:${this.version.identity}`
+      );
     }
     for (const modification of transition.modifications) {
       switch (modification.type) {
@@ -4330,7 +4570,7 @@ class RemoteQuerySet {
           this.remoteQuerySet.set(modification.queryId, {
             success: false,
             errorMessage: modification.errorMessage,
-            errorData: errorData !== undefined ? jsonToConvex(errorData) : undefined,
+            errorData: errorData !== void 0 ? jsonToConvex(errorData) : void 0,
             logLines: modification.logLines
           });
           break;
@@ -4340,6 +4580,7 @@ class RemoteQuerySet {
           break;
         }
         default: {
+          modification;
           throw new Error(`Invalid modification ${modification.type}`);
         }
       }
@@ -4352,16 +4593,16 @@ class RemoteQuerySet {
   timestamp() {
     return this.version.ts;
   }
-}
+};
 
 // node_modules/convex/dist/esm/browser/sync/protocol.js
 function u64ToLong(encoded) {
-  const integerBytes = exports_base64.toByteArray(encoded);
+  const integerBytes = base64_exports.toByteArray(encoded);
   return Long.fromBytesLE(Array.from(integerBytes));
 }
 function longToU64(raw) {
   const integerBytes = new Uint8Array(raw.toBytesLE());
-  return exports_base64.fromByteArray(integerBytes);
+  return base64_exports.fromByteArray(integerBytes);
 }
 function parseServerMessage(encoded) {
   switch (encoded.type) {
@@ -4393,9 +4634,10 @@ function parseServerMessage(encoded) {
       };
     }
     default: {
+      encoded;
     }
   }
-  return;
+  return void 0;
 }
 function encodeClientMessage(message) {
   switch (message.type) {
@@ -4407,32 +4649,33 @@ function encodeClientMessage(message) {
       return { ...message };
     }
     case "Connect": {
-      if (message.maxObservedTimestamp !== undefined) {
+      if (message.maxObservedTimestamp !== void 0) {
         return {
           ...message,
           maxObservedTimestamp: longToU64(message.maxObservedTimestamp)
         };
       } else {
-        return { ...message, maxObservedTimestamp: undefined };
+        return { ...message, maxObservedTimestamp: void 0 };
       }
     }
     default: {
+      message;
     }
   }
-  return;
+  return void 0;
 }
 
 // node_modules/convex/dist/esm/browser/sync/web_socket_manager.js
 var __defProp9 = Object.defineProperty;
-var __defNormalProp8 = (obj, key, value) => (key in obj) ? __defProp9(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp8 = (obj, key, value) => key in obj ? __defProp9(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField8 = (obj, key, value) => __defNormalProp8(obj, typeof key !== "symbol" ? key + "" : key, value);
-var CLOSE_NORMAL = 1000;
+var CLOSE_NORMAL = 1e3;
 var CLOSE_GOING_AWAY = 1001;
 var CLOSE_NO_STATUS = 1005;
 var CLOSE_NOT_FOUND = 4040;
 var firstTime;
 function monotonicMillis() {
-  if (firstTime === undefined) {
+  if (firstTime === void 0) {
     firstTime = Date.now();
   }
   if (typeof performance === "undefined" || !performance.now) {
@@ -4444,33 +4687,37 @@ function prettyNow() {
   return `t=${Math.round((monotonicMillis() - firstTime) / 100) / 10}s`;
 }
 var serverDisconnectErrors = {
-  InternalServerError: { timeout: 1000 },
-  SubscriptionsWorkerFullError: { timeout: 3000 },
-  TooManyConcurrentRequests: { timeout: 3000 },
-  CommitterFullError: { timeout: 3000 },
-  AwsTooManyRequestsException: { timeout: 3000 },
-  ExecuteFullError: { timeout: 3000 },
-  SystemTimeoutError: { timeout: 3000 },
-  ExpiredInQueue: { timeout: 3000 },
-  VectorIndexesUnavailable: { timeout: 1000 },
-  SearchIndexesUnavailable: { timeout: 1000 },
-  TableSummariesUnavailable: { timeout: 1000 },
-  VectorIndexTooLarge: { timeout: 3000 },
-  SearchIndexTooLarge: { timeout: 3000 },
-  TooManyWritesInTimePeriod: { timeout: 3000 }
+  // A known error, e.g. during a restart or push
+  InternalServerError: { timeout: 1e3 },
+  // ErrorMetadata::overloaded() messages that we realy should back off
+  SubscriptionsWorkerFullError: { timeout: 3e3 },
+  TooManyConcurrentRequests: { timeout: 3e3 },
+  CommitterFullError: { timeout: 3e3 },
+  AwsTooManyRequestsException: { timeout: 3e3 },
+  ExecuteFullError: { timeout: 3e3 },
+  SystemTimeoutError: { timeout: 3e3 },
+  ExpiredInQueue: { timeout: 3e3 },
+  // ErrorMetadata::feature_temporarily_unavailable() that typically indicate a deploy just happened
+  VectorIndexesUnavailable: { timeout: 1e3 },
+  SearchIndexesUnavailable: { timeout: 1e3 },
+  TableSummariesUnavailable: { timeout: 1e3 },
+  // More ErrorMetadata::overloaded()
+  VectorIndexTooLarge: { timeout: 3e3 },
+  SearchIndexTooLarge: { timeout: 3e3 },
+  TooManyWritesInTimePeriod: { timeout: 3e3 }
 };
 function classifyDisconnectError(s) {
-  if (s === undefined)
-    return "Unknown";
-  for (const prefix of Object.keys(serverDisconnectErrors)) {
+  if (s === void 0) return "Unknown";
+  for (const prefix of Object.keys(
+    serverDisconnectErrors
+  )) {
     if (s.startsWith(prefix)) {
       return prefix;
     }
   }
   return "Unknown";
 }
-
-class WebSocketManager {
+var WebSocketManager = class {
   constructor(uri, callbacks, webSocketConstructor, logger, markConnectionStateDirty, debug) {
     this.markConnectionStateDirty = markConnectionStateDirty;
     this.debug = debug;
@@ -4495,10 +4742,10 @@ class WebSocketManager {
     this.socket = { state: "disconnected" };
     this.connectionCount = 0;
     this.lastCloseReason = "InitialConnect";
-    this.defaultInitialBackoff = 1000;
-    this.maxBackoff = 16000;
+    this.defaultInitialBackoff = 1e3;
+    this.maxBackoff = 16e3;
     this.retries = 0;
-    this.serverInactivityThreshold = 60000;
+    this.serverInactivityThreshold = 6e4;
     this.reconnectDueToServerInactivityTimeout = null;
     this.uri = uri;
     this.onOpen = callbacks.onOpen;
@@ -4510,7 +4757,9 @@ class WebSocketManager {
   }
   setSocketState(state) {
     this.socket = state;
-    this._logVerbose(`socket state changed: ${this.socket.state}, paused: ${"paused" in this.socket ? this.socket.paused : undefined}`);
+    this._logVerbose(
+      `socket state changed: ${this.socket.state}, paused: ${"paused" in this.socket ? this.socket.paused : void 0}`
+    );
     this.markConnectionStateDirty();
   }
   assembleTransition(chunk) {
@@ -4528,7 +4777,9 @@ class WebSocketManager {
     if (chunk.partNumber !== this.transitionChunkBuffer.chunks.length) {
       const expectedLength = this.transitionChunkBuffer.chunks.length;
       this.transitionChunkBuffer = null;
-      throw new Error(`TransitionChunk received out of order: expected part ${expectedLength}, got ${chunk.partNumber}`);
+      throw new Error(
+        `TransitionChunk received out of order: expected part ${expectedLength}, got ${chunk.partNumber}`
+      );
     }
     this.transitionChunkBuffer.chunks.push(chunk.chunk);
     if (this.transitionChunkBuffer.chunks.length === chunk.totalParts) {
@@ -4536,7 +4787,9 @@ class WebSocketManager {
       this.transitionChunkBuffer = null;
       const transition = parseServerMessage(JSON.parse(fullJson));
       if (transition.type !== "Transition") {
-        throw new Error(`Expected Transition, got ${transition.type} after assembling chunks`);
+        throw new Error(
+          `Expected Transition, got ${transition.type} after assembling chunks`
+        );
       }
       return transition;
     }
@@ -4547,7 +4800,9 @@ class WebSocketManager {
       return;
     }
     if (this.socket.state !== "disconnected" && this.socket.state !== "stopped") {
-      throw new Error("Didn't start connection from disconnected state: " + this.socket.state);
+      throw new Error(
+        "Didn't start connection from disconnected state: " + this.socket.state
+      );
     }
     const ws = new this.webSocketConstructor(this.uri);
     this._logVerbose("constructed WebSocket");
@@ -4578,7 +4833,12 @@ class WebSocketManager {
       }
       if (this.lastCloseReason !== "InitialConnect") {
         if (this.lastCloseReason) {
-          this.logger.log("WebSocket reconnected at", prettyNow(), "after disconnect due to", this.lastCloseReason);
+          this.logger.log(
+            "WebSocket reconnected at",
+            prettyNow(),
+            "after disconnect due to",
+            this.lastCloseReason
+          );
         } else {
           this.logger.log("WebSocket reconnected at", prettyNow());
         }
@@ -4607,11 +4867,15 @@ class WebSocketManager {
           return;
         }
         serverMessage = transition;
-        this._logVerbose(`assembled full ws message of type ${serverMessage.type}`);
+        this._logVerbose(
+          `assembled full ws message of type ${serverMessage.type}`
+        );
       }
       if (this.transitionChunkBuffer !== null) {
         this.transitionChunkBuffer = null;
-        this.logger.log(`Received unexpected ${serverMessage.type} while buffering TransitionChunks`);
+        this.logger.log(
+          `Received unexpected ${serverMessage.type} while buffering TransitionChunks`
+        );
       }
       if (serverMessage.type === "Transition") {
         this.reportLargeTransition({
@@ -4631,7 +4895,8 @@ class WebSocketManager {
       if (this.lastCloseReason === null) {
         this.lastCloseReason = event.reason || `closed with code ${event.code}`;
       }
-      if (event.code !== CLOSE_NORMAL && event.code !== CLOSE_GOING_AWAY && event.code !== CLOSE_NO_STATUS && event.code !== CLOSE_NOT_FOUND) {
+      if (event.code !== CLOSE_NORMAL && event.code !== CLOSE_GOING_AWAY && // This commonly gets fired on mobile apps when the app is backgrounded
+      event.code !== CLOSE_NO_STATUS && event.code !== CLOSE_NOT_FOUND) {
         let msg = `WebSocket closed with code ${event.code}`;
         if (event.reason) {
           msg += `: ${event.reason}`;
@@ -4646,9 +4911,16 @@ class WebSocketManager {
       return;
     };
   }
+  /**
+   * @returns The state of the {@link Socket}.
+   */
   socketState() {
     return this.socket.state;
   }
+  /**
+   * @param message - A ClientMessage to send.
+   * @returns Whether the message (might have been) sent.
+   */
   sendMessage(message) {
     const messageForLog = {
       type: message.type,
@@ -4664,13 +4936,23 @@ class WebSocketManager {
         this.socket.ws.send(request);
         sent = true;
       } catch (error) {
-        this.logger.log(`Failed to send message on WebSocket, reconnecting: ${error}`);
+        this.logger.log(
+          `Failed to send message on WebSocket, reconnecting: ${error}`
+        );
         this.closeAndReconnect("FailedToSendMessage");
       }
-      this._logVerbose(`${sent ? "sent" : "failed to send"} message with type ${message.type}: ${JSON.stringify(messageForLog)}`);
+      this._logVerbose(
+        `${sent ? "sent" : "failed to send"} message with type ${message.type}: ${JSON.stringify(
+          messageForLog
+        )}`
+      );
       return true;
     }
-    this._logVerbose(`message not sent (socket state: ${this.socket.state}, paused: ${"paused" in this.socket ? this.socket.paused : undefined}): ${JSON.stringify(messageForLog)}`);
+    this._logVerbose(
+      `message not sent (socket state: ${this.socket.state}, paused: ${"paused" in this.socket ? this.socket.paused : void 0}): ${JSON.stringify(
+        messageForLog
+      )}`
+    );
     return false;
   }
   resetServerInactivityTimeout() {
@@ -4687,11 +4969,16 @@ class WebSocketManager {
   }
   scheduleReconnect(reason) {
     this.socket = { state: "disconnected" };
-    const backoff = this.nextBackoff(reason);
+    const backoff2 = this.nextBackoff(reason);
     this.markConnectionStateDirty();
-    this.logger.log(`Attempting reconnect in ${Math.round(backoff)}ms`);
-    setTimeout(() => this.connect(), backoff);
+    this.logger.log(`Attempting reconnect in ${Math.round(backoff2)}ms`);
+    setTimeout(() => this.connect(), backoff2);
   }
+  /**
+   * Close the WebSocket and schedule a reconnect.
+   *
+   * This should be used when we hit an error and would like to restart the session.
+   */
   closeAndReconnect(closeReason) {
     this._logVerbose(`begin closeAndReconnect with reason ${closeReason}`);
     switch (this.socket.state) {
@@ -4702,7 +4989,7 @@ class WebSocketManager {
       case "connecting":
       case "ready": {
         this.lastCloseReason = closeReason;
-        this.close();
+        void this.close();
         this.scheduleReconnect("client");
         return;
       }
@@ -4711,6 +4998,13 @@ class WebSocketManager {
       }
     }
   }
+  /**
+   * Close the WebSocket, being careful to clear the onclose handler to avoid re-entrant
+   * calls. Use this instead of directly calling `ws.close()`
+   *
+   * It is the callers responsibility to update the state after this method is called so that the
+   * closed socket is not accessible or used again after this method is called
+   */
   close() {
     this.transitionChunkBuffer = null;
     switch (this.socket.state) {
@@ -4754,6 +5048,10 @@ class WebSocketManager {
       }
     }
   }
+  /**
+   * Close the WebSocket and do not reconnect.
+   * @returns A Promise that resolves when the WebSocket `onClose` callback is called.
+   */
   terminate() {
     if (this.reconnectDueToServerInactivityTimeout) {
       clearTimeout(this.reconnectDueToServerInactivityTimeout);
@@ -4770,7 +5068,9 @@ class WebSocketManager {
       }
       default: {
         this.socket;
-        throw new Error(`Invalid websocket state: ${this.socket.state}`);
+        throw new Error(
+          `Invalid websocket state: ${this.socket.state}`
+        );
       }
     }
   }
@@ -4792,6 +5092,10 @@ class WebSocketManager {
       }
     }
   }
+  /**
+   * Create a new WebSocket after a previous `stop()`, unless `terminate()` was
+   * called before.
+   */
   tryRestart() {
     switch (this.socket.state) {
       case "stopped":
@@ -4825,6 +5129,9 @@ class WebSocketManager {
       }
     }
   }
+  /**
+   * Resume the state machine if previously paused.
+   */
   resume() {
     switch (this.socket.state) {
       case "connecting":
@@ -4876,19 +5183,29 @@ class WebSocketManager {
     transition,
     messageLength
   }) {
-    if (transition.clientClockSkew === undefined || transition.serverTs === undefined) {
+    if (transition.clientClockSkew === void 0 || transition.serverTs === void 0) {
       return;
     }
-    const transitionTransitTime = monotonicMillis() - transition.clientClockSkew - transition.serverTs / 1e6;
+    const transitionTransitTime = monotonicMillis() - // client time now
+    // clientClockSkew = (server time + upstream latency) - client time
+    // clientClockSkew is "how many milliseconds behind (slow) is the client clock"
+    // but the latency of the Connect message inflates this, making it appear further behind
+    transition.clientClockSkew - transition.serverTs / 1e6;
     const prettyTransitionTime = `${Math.round(transitionTransitTime)}ms`;
     const prettyMessageMB = `${Math.round(messageLength / 1e4) / 100}MB`;
-    const bytesPerSecond = messageLength / (transitionTransitTime / 1000);
+    const bytesPerSecond = messageLength / (transitionTransitTime / 1e3);
     const prettyBytesPerSecond = `${Math.round(bytesPerSecond / 1e4) / 100}MB per second`;
-    this._logVerbose(`received ${prettyMessageMB} transition in ${prettyTransitionTime} at ${prettyBytesPerSecond}`);
-    if (messageLength > 20000000) {
-      this.logger.log(`received query results totaling more that 20MB (${prettyMessageMB}) which will take a long time to download on slower connections`);
-    } else if (transitionTransitTime > 20000) {
-      this.logger.log(`received query results totaling ${prettyMessageMB} which took more than 20s to arrive (${prettyTransitionTime})`);
+    this._logVerbose(
+      `received ${prettyMessageMB} transition in ${prettyTransitionTime} at ${prettyBytesPerSecond}`
+    );
+    if (messageLength > 2e7) {
+      this.logger.log(
+        `received query results totaling more that 20MB (${prettyMessageMB}) which will take a long time to download on slower connections`
+      );
+    } else if (transitionTransitTime > 2e4) {
+      this.logger.log(
+        `received query results totaling ${prettyMessageMB} which took more than 20s to arrive (${prettyTransitionTime})`
+      );
     }
     if (this.debug) {
       this.sendMessage({
@@ -4898,7 +5215,7 @@ class WebSocketManager {
       });
     }
   }
-}
+};
 
 // node_modules/convex/dist/esm/browser/sync/session.js
 function newSessionId() {
@@ -4906,23 +5223,25 @@ function newSessionId() {
 }
 function uuidv4() {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = Math.random() * 16 | 0, v = c === "x" ? r : r & 3 | 8;
-    return v.toString(16);
+    const r = Math.random() * 16 | 0, v2 = c === "x" ? r : r & 3 | 8;
+    return v2.toString(16);
   });
 }
 
 // node_modules/convex/dist/esm/vendor/jwt-decode/index.js
-class InvalidTokenError extends Error {
-}
+var InvalidTokenError = class extends Error {
+};
 InvalidTokenError.prototype.name = "InvalidTokenError";
 function b64DecodeUnicode(str) {
-  return decodeURIComponent(atob(str).replace(/(.)/g, (_m, p) => {
-    let code2 = p.charCodeAt(0).toString(16).toUpperCase();
-    if (code2.length < 2) {
-      code2 = "0" + code2;
-    }
-    return "%" + code2;
-  }));
+  return decodeURIComponent(
+    atob(str).replace(/(.)/g, (_m, p) => {
+      let code2 = p.charCodeAt(0).toString(16).toUpperCase();
+      if (code2.length < 2) {
+        code2 = "0" + code2;
+      }
+      return "%" + code2;
+    })
+  );
 }
 function base64UrlDecode(str) {
   let output = str.replace(/-/g, "+").replace(/_/g, "/");
@@ -4952,29 +5271,34 @@ function jwtDecode(token, options) {
   const pos = options.header === true ? 0 : 1;
   const part = token.split(".")[pos];
   if (typeof part !== "string") {
-    throw new InvalidTokenError(`Invalid token specified: missing part #${pos + 1}`);
+    throw new InvalidTokenError(
+      `Invalid token specified: missing part #${pos + 1}`
+    );
   }
   let decoded;
   try {
     decoded = base64UrlDecode(part);
   } catch (e) {
-    throw new InvalidTokenError(`Invalid token specified: invalid base64 for part #${pos + 1} (${e.message})`);
+    throw new InvalidTokenError(
+      `Invalid token specified: invalid base64 for part #${pos + 1} (${e.message})`
+    );
   }
   try {
     return JSON.parse(decoded);
   } catch (e) {
-    throw new InvalidTokenError(`Invalid token specified: invalid json for part #${pos + 1} (${e.message})`);
+    throw new InvalidTokenError(
+      `Invalid token specified: invalid json for part #${pos + 1} (${e.message})`
+    );
   }
 }
 
 // node_modules/convex/dist/esm/browser/sync/authentication_manager.js
 var __defProp10 = Object.defineProperty;
-var __defNormalProp9 = (obj, key, value) => (key in obj) ? __defProp10(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp9 = (obj, key, value) => key in obj ? __defProp10(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField9 = (obj, key, value) => __defNormalProp9(obj, typeof key !== "symbol" ? key + "" : key, value);
-var MAXIMUM_REFRESH_DELAY = 20 * 24 * 60 * 60 * 1000;
+var MAXIMUM_REFRESH_DELAY = 20 * 24 * 60 * 60 * 1e3;
 var MAX_TOKEN_CONFIRMATION_ATTEMPTS = 2;
-
-class AuthenticationManager {
+var AuthenticationManager = class {
   constructor(syncState, callbacks, config) {
     __publicField9(this, "authState", { state: "noAuth" });
     __publicField9(this, "configVersion", 0);
@@ -5026,7 +5350,9 @@ class AuthenticationManager {
     this.resumeSocket();
   }
   onTransition(serverMessage) {
-    if (!this.syncState.isCurrentOrNewerAuthVersion(serverMessage.endVersion.identity)) {
+    if (!this.syncState.isCurrentOrNewerAuthVersion(
+      serverMessage.endVersion.identity
+    )) {
       return;
     }
     if (serverMessage.endVersion.identity <= serverMessage.startVersion.identity) {
@@ -5034,7 +5360,7 @@ class AuthenticationManager {
     }
     if (this.authState.state === "waitingForServerConfirmationOfCachedToken") {
       this._logVerbose("server confirmed auth token is valid");
-      this.refetchToken();
+      void this.refetchToken();
       this.authState.config.onAuthChange(true);
       return;
     }
@@ -5057,13 +5383,24 @@ class AuthenticationManager {
       this._logVerbose("ignoring auth error for previous auth attempt");
       return;
     }
-    this.tryToReauthenticate(serverMessage);
+    void this.tryToReauthenticate(serverMessage);
     return;
   }
+  // This is similar to `refetchToken` defined below, in fact we
+  // don't represent them as different states, but it is different
+  // in that we pause the WebSocket so that mutations
+  // don't retry with bad auth.
   async tryToReauthenticate(serverMessage) {
     this._logVerbose(`attempting to reauthenticate: ${serverMessage.error}`);
-    if (this.authState.state === "noAuth" || this.authState.state === "waitingForServerConfirmationOfFreshToken" && this.tokenConfirmationAttempts >= MAX_TOKEN_CONFIRMATION_ATTEMPTS) {
-      this.logger.error(`Failed to authenticate: "${serverMessage.error}", check your server auth config`);
+    if (
+      // No way to fetch another token, kaboom
+      this.authState.state === "noAuth" || // We failed on a fresh token. After a small number of retries, we give up
+      // and clear the auth state to avoid infinite retries.
+      this.authState.state === "waitingForServerConfirmationOfFreshToken" && this.tokenConfirmationAttempts >= MAX_TOKEN_CONFIRMATION_ATTEMPTS
+    ) {
+      this.logger.error(
+        `Failed to authenticate: "${serverMessage.error}", check your server auth config`
+      );
       if (this.syncState.hasAuth()) {
         this.syncState.clearAuth();
       }
@@ -5074,12 +5411,17 @@ class AuthenticationManager {
     }
     if (this.authState.state === "waitingForServerConfirmationOfFreshToken") {
       this.tokenConfirmationAttempts++;
-      this._logVerbose(`retrying reauthentication, ${MAX_TOKEN_CONFIRMATION_ATTEMPTS - this.tokenConfirmationAttempts} attempts remaining`);
+      this._logVerbose(
+        `retrying reauthentication, ${MAX_TOKEN_CONFIRMATION_ATTEMPTS - this.tokenConfirmationAttempts} attempts remaining`
+      );
     }
     await this.stopSocket();
-    const token = await this.fetchTokenAndGuardAgainstRace(this.authState.config.fetchToken, {
-      forceRefreshToken: true
-    });
+    const token = await this.fetchTokenAndGuardAgainstRace(
+      this.authState.config.fetchToken,
+      {
+        forceRefreshToken: true
+      }
+    );
     if (token.isFromOutdatedConfig) {
       return;
     }
@@ -5100,14 +5442,20 @@ class AuthenticationManager {
     }
     this.tryRestartSocket();
   }
+  // Force refetch the token and schedule another refetch
+  // before the token expires - an active client should never
+  // need to reauthenticate.
   async refetchToken() {
     if (this.authState.state === "noAuth") {
       return;
     }
     this._logVerbose("refetching auth token");
-    const token = await this.fetchTokenAndGuardAgainstRace(this.authState.config.fetchToken, {
-      forceRefreshToken: true
-    });
+    const token = await this.fetchTokenAndGuardAgainstRace(
+      this.authState.config.fetchToken,
+      {
+        forceRefreshToken: true
+      }
+    );
     if (token.isFromOutdatedConfig) {
       return;
     }
@@ -5133,7 +5481,9 @@ class AuthenticationManager {
       }
       this.setAndReportAuthFailed(this.authState.config.onAuthChange);
     }
-    this._logVerbose("restarting WS after auth token fetch (if currently stopped)");
+    this._logVerbose(
+      "restarting WS after auth token fetch (if currently stopped)"
+    );
     this.tryRestartSocket();
   }
   scheduleTokenRefetch(token) {
@@ -5142,41 +5492,60 @@ class AuthenticationManager {
     }
     const decodedToken = this.decodeToken(token);
     if (!decodedToken) {
-      this.logger.error("Auth token is not a valid JWT, cannot refetch the token");
+      this.logger.error(
+        "Auth token is not a valid JWT, cannot refetch the token"
+      );
       return;
     }
     const { iat, exp } = decodedToken;
     if (!iat || !exp) {
-      this.logger.error("Auth token does not have required fields, cannot refetch the token");
+      this.logger.error(
+        "Auth token does not have required fields, cannot refetch the token"
+      );
       return;
     }
     const tokenValiditySeconds = exp - iat;
     if (tokenValiditySeconds <= 2) {
-      this.logger.error("Auth token does not live long enough, cannot refetch the token");
+      this.logger.error(
+        "Auth token does not live long enough, cannot refetch the token"
+      );
       return;
     }
-    let delay = Math.min(MAXIMUM_REFRESH_DELAY, (tokenValiditySeconds - this.refreshTokenLeewaySeconds) * 1000);
-    if (delay <= 0) {
-      this.logger.warn(`Refetching auth token immediately, configured leeway ${this.refreshTokenLeewaySeconds}s is larger than the token's lifetime ${tokenValiditySeconds}s`);
-      delay = 0;
+    let delay2 = Math.min(
+      MAXIMUM_REFRESH_DELAY,
+      (tokenValiditySeconds - this.refreshTokenLeewaySeconds) * 1e3
+    );
+    if (delay2 <= 0) {
+      this.logger.warn(
+        `Refetching auth token immediately, configured leeway ${this.refreshTokenLeewaySeconds}s is larger than the token's lifetime ${tokenValiditySeconds}s`
+      );
+      delay2 = 0;
     }
     const refetchTokenTimeoutId = setTimeout(() => {
       this._logVerbose("running scheduled token refetch");
-      this.refetchToken();
-    }, delay);
+      void this.refetchToken();
+    }, delay2);
     this.setAuthState({
       state: "waitingForScheduledRefetch",
       refetchTokenTimeoutId,
       config: this.authState.config
     });
-    this._logVerbose(`scheduled preemptive auth token refetching in ${delay}ms`);
+    this._logVerbose(
+      `scheduled preemptive auth token refetching in ${delay2}ms`
+    );
   }
+  // Protects against simultaneous calls to `setConfig`
+  // while we're fetching a token
   async fetchTokenAndGuardAgainstRace(fetchToken, fetchArgs) {
     const originalConfigVersion = ++this.configVersion;
-    this._logVerbose(`fetching token with config version ${originalConfigVersion}`);
+    this._logVerbose(
+      `fetching token with config version ${originalConfigVersion}`
+    );
     const token = await fetchToken(fetchArgs);
     if (this.configVersion !== originalConfigVersion) {
-      this._logVerbose(`stale config version, expected ${originalConfigVersion}, got ${this.configVersion}`);
+      this._logVerbose(
+        `stale config version, expected ${originalConfigVersion}, got ${this.configVersion}`
+      );
       return { isFromOutdatedConfig: true };
     }
     return { isFromOutdatedConfig: false, value: token };
@@ -5199,7 +5568,9 @@ class AuthenticationManager {
       state: newAuth.state,
       token: `...${newAuth.token.slice(-7)}`
     } : { state: newAuth.state };
-    this._logVerbose(`setting auth state to ${JSON.stringify(authStateForLog)}`);
+    this._logVerbose(
+      `setting auth state to ${JSON.stringify(authStateForLog)}`
+    );
     switch (newAuth.state) {
       case "waitingForScheduledRefetch":
       case "notRefetching":
@@ -5211,6 +5582,7 @@ class AuthenticationManager {
       case "initialRefetch":
         break;
       default: {
+        newAuth;
       }
     }
     if (this.authState.state === "waitingForScheduledRefetch") {
@@ -5223,14 +5595,16 @@ class AuthenticationManager {
     try {
       return jwtDecode(token);
     } catch (e) {
-      this._logVerbose(`Error decoding token: ${e instanceof Error ? e.message : "Unknown error"}`);
+      this._logVerbose(
+        `Error decoding token: ${e instanceof Error ? e.message : "Unknown error"}`
+      );
       return null;
     }
   }
   _logVerbose(message) {
     this.logger.logVerbose(`${message} [v${this.configVersion}]`);
   }
-}
+};
 
 // node_modules/convex/dist/esm/browser/sync/metrics.js
 var markNames = [
@@ -5240,8 +5614,7 @@ var markNames = [
 ];
 function mark(name, sessionId) {
   const detail = { sessionId };
-  if (typeof performance === "undefined" || !performance.mark)
-    return;
+  if (typeof performance === "undefined" || !performance.mark) return;
   performance.mark(name, { detail });
 }
 function performanceMarkToJson(mark2) {
@@ -5266,10 +5639,17 @@ function getMarksReport(sessionId) {
 
 // node_modules/convex/dist/esm/browser/sync/client.js
 var __defProp11 = Object.defineProperty;
-var __defNormalProp10 = (obj, key, value) => (key in obj) ? __defProp11(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp10 = (obj, key, value) => key in obj ? __defProp11(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField10 = (obj, key, value) => __defNormalProp10(obj, typeof key !== "symbol" ? key + "" : key, value);
-
-class BaseConvexClient {
+var BaseConvexClient = class {
+  /**
+   * @param address - The url of your Convex deployment, often provided
+   * by an environment variable. E.g. `https://small-mouse-123.convex.cloud`.
+   * @param onTransition - A callback receiving an array of query tokens
+   * corresponding to query results that have changed -- additional handlers
+   * can be added via `addOnTransitionHandler`.
+   * @param options - See {@link BaseConvexClientOptions} for a full description.
+   */
   constructor(address, onTransition, options) {
     __publicField10(this, "address");
     __publicField10(this, "state");
@@ -5280,17 +5660,17 @@ class BaseConvexClient {
     __publicField10(this, "optimisticQueryResults");
     __publicField10(this, "_transitionHandlerCounter", 0);
     __publicField10(this, "_nextRequestId");
-    __publicField10(this, "_onTransitionFns", /* @__PURE__ */ new Map);
+    __publicField10(this, "_onTransitionFns", /* @__PURE__ */ new Map());
     __publicField10(this, "_sessionId");
     __publicField10(this, "firstMessageReceived", false);
     __publicField10(this, "debug");
     __publicField10(this, "logger");
     __publicField10(this, "maxObservedTimestamp");
-    __publicField10(this, "connectionStateSubscribers", /* @__PURE__ */ new Map);
+    __publicField10(this, "connectionStateSubscribers", /* @__PURE__ */ new Map());
     __publicField10(this, "nextConnectionStateSubscriberId", 0);
     __publicField10(this, "_lastPublishedConnectionState");
     __publicField10(this, "markConnectionStateDirty", () => {
-      Promise.resolve().then(() => {
+      void Promise.resolve().then(() => {
         const curConnectionState = this.connectionState();
         if (JSON.stringify(curConnectionState) !== JSON.stringify(this._lastPublishedConnectionState)) {
           this._lastPublishedConnectionState = curConnectionState;
@@ -5306,7 +5686,9 @@ class BaseConvexClient {
       }
     });
     if (typeof address === "object") {
-      throw new Error("Passing a ClientConfig object is no longer supported. Pass the URL of the Convex deployment as a string directly.");
+      throw new Error(
+        "Passing a ClientConfig object is no longer supported. Pass the URL of the Convex deployment as a string directly."
+      );
     }
     if (options?.skipConvexDeploymentUrlCheck !== true) {
       validateDeploymentUrl(address);
@@ -5315,7 +5697,9 @@ class BaseConvexClient {
     const authRefreshTokenLeewaySeconds = options.authRefreshTokenLeewaySeconds ?? 2;
     let webSocketConstructor = options.webSocketConstructor;
     if (!webSocketConstructor && typeof WebSocket === "undefined") {
-      throw new Error("No WebSocket global variable defined! To use Convex in an environment without WebSocket try the HTTP client: https://docs.convex.dev/api/classes/browser.ConvexHttpClient");
+      throw new Error(
+        "No WebSocket global variable defined! To use Convex in an environment without WebSocket try the HTTP client: https://docs.convex.dev/api/classes/browser.ConvexHttpClient"
+      );
     }
     webSocketConstructor = webSocketConstructor || WebSocket;
     this.debug = options.reportDebugInfoToConvex ?? false;
@@ -5336,31 +5720,41 @@ class BaseConvexClient {
       throw new Error(`Unknown parent protocol ${protocol}`);
     }
     const wsUri = `${wsProtocol}://${origin}/api/${version}/sync`;
-    this.state = new LocalSyncState;
-    this.remoteQuerySet = new RemoteQuerySet((queryId) => this.state.queryPath(queryId), this.logger);
-    this.requestManager = new RequestManager(this.logger, this.markConnectionStateDirty);
+    this.state = new LocalSyncState();
+    this.remoteQuerySet = new RemoteQuerySet(
+      (queryId) => this.state.queryPath(queryId),
+      this.logger
+    );
+    this.requestManager = new RequestManager(
+      this.logger,
+      this.markConnectionStateDirty
+    );
     const pauseSocket = () => {
       this.webSocketManager.pause();
       this.state.pause();
     };
-    this.authenticationManager = new AuthenticationManager(this.state, {
-      authenticate: (token) => {
-        const message = this.state.setAuth(token);
-        this.webSocketManager.sendMessage(message);
-        return message.baseVersion;
+    this.authenticationManager = new AuthenticationManager(
+      this.state,
+      {
+        authenticate: (token) => {
+          const message = this.state.setAuth(token);
+          this.webSocketManager.sendMessage(message);
+          return message.baseVersion;
+        },
+        stopSocket: () => this.webSocketManager.stop(),
+        tryRestartSocket: () => this.webSocketManager.tryRestart(),
+        pauseSocket,
+        resumeSocket: () => this.webSocketManager.resume(),
+        clearAuth: () => {
+          this.clearAuth();
+        }
       },
-      stopSocket: () => this.webSocketManager.stop(),
-      tryRestartSocket: () => this.webSocketManager.tryRestart(),
-      pauseSocket,
-      resumeSocket: () => this.webSocketManager.resume(),
-      clearAuth: () => {
-        this.clearAuth();
+      {
+        logger: this.logger,
+        refreshTokenLeewaySeconds: authRefreshTokenLeewaySeconds
       }
-    }, {
-      logger: this.logger,
-      refreshTokenLeewaySeconds: authRefreshTokenLeewaySeconds
-    });
-    this.optimisticQueryResults = new OptimisticQueryResults;
+    );
+    this.optimisticQueryResults = new OptimisticQueryResults();
     this.addOnTransitionHandler((transition) => {
       onTransition(transition.queries.map((q) => q.token));
     });
@@ -5369,7 +5763,9 @@ class BaseConvexClient {
     const { unsavedChangesWarning } = options;
     if (typeof window === "undefined" || typeof window.addEventListener === "undefined") {
       if (unsavedChangesWarning === true) {
-        throw new Error("unsavedChangesWarning requested, but window.addEventListener not found! Remove {unsavedChangesWarning: true} from Convex client options.");
+        throw new Error(
+          "unsavedChangesWarning requested, but window.addEventListener not found! Remove {unsavedChangesWarning: true} from Convex client options."
+        );
       }
     } else if (unsavedChangesWarning !== false) {
       window.addEventListener("beforeunload", (e) => {
@@ -5381,111 +5777,143 @@ class BaseConvexClient {
         }
       });
     }
-    this.webSocketManager = new WebSocketManager(wsUri, {
-      onOpen: (reconnectMetadata) => {
-        this.mark("convexWebSocketOpen");
-        this.webSocketManager.sendMessage({
-          ...reconnectMetadata,
-          type: "Connect",
-          sessionId: this._sessionId,
-          maxObservedTimestamp: this.maxObservedTimestamp
-        });
-        const oldRemoteQueryResults = new Set(this.remoteQuerySet.remoteQueryResults().keys());
-        this.remoteQuerySet = new RemoteQuerySet((queryId) => this.state.queryPath(queryId), this.logger);
-        const [querySetModification, authModification] = this.state.restart(oldRemoteQueryResults);
-        if (authModification) {
-          this.webSocketManager.sendMessage(authModification);
-        }
-        this.webSocketManager.sendMessage(querySetModification);
-        for (const message of this.requestManager.restart()) {
-          this.webSocketManager.sendMessage(message);
-        }
-      },
-      onResume: () => {
-        const [querySetModification, authModification] = this.state.resume();
-        if (authModification) {
-          this.webSocketManager.sendMessage(authModification);
-        }
-        if (querySetModification) {
+    this.webSocketManager = new WebSocketManager(
+      wsUri,
+      {
+        onOpen: (reconnectMetadata) => {
+          this.mark("convexWebSocketOpen");
+          this.webSocketManager.sendMessage({
+            ...reconnectMetadata,
+            type: "Connect",
+            sessionId: this._sessionId,
+            maxObservedTimestamp: this.maxObservedTimestamp
+          });
+          const oldRemoteQueryResults = new Set(
+            this.remoteQuerySet.remoteQueryResults().keys()
+          );
+          this.remoteQuerySet = new RemoteQuerySet(
+            (queryId) => this.state.queryPath(queryId),
+            this.logger
+          );
+          const [querySetModification, authModification] = this.state.restart(
+            oldRemoteQueryResults
+          );
+          if (authModification) {
+            this.webSocketManager.sendMessage(authModification);
+          }
           this.webSocketManager.sendMessage(querySetModification);
-        }
-        for (const message of this.requestManager.resume()) {
-          this.webSocketManager.sendMessage(message);
-        }
-      },
-      onMessage: (serverMessage) => {
-        if (!this.firstMessageReceived) {
-          this.firstMessageReceived = true;
-          this.mark("convexFirstMessageReceived");
-          this.reportMarks();
-        }
-        switch (serverMessage.type) {
-          case "Transition": {
-            this.observedTimestamp(serverMessage.endVersion.ts);
-            this.authenticationManager.onTransition(serverMessage);
-            this.remoteQuerySet.transition(serverMessage);
-            this.state.transition(serverMessage);
-            const completedRequests = this.requestManager.removeCompleted(this.remoteQuerySet.timestamp());
-            this.notifyOnQueryResultChanges(completedRequests);
-            break;
+          for (const message of this.requestManager.restart()) {
+            this.webSocketManager.sendMessage(message);
           }
-          case "MutationResponse": {
-            if (serverMessage.success) {
-              this.observedTimestamp(serverMessage.ts);
+        },
+        onResume: () => {
+          const [querySetModification, authModification] = this.state.resume();
+          if (authModification) {
+            this.webSocketManager.sendMessage(authModification);
+          }
+          if (querySetModification) {
+            this.webSocketManager.sendMessage(querySetModification);
+          }
+          for (const message of this.requestManager.resume()) {
+            this.webSocketManager.sendMessage(message);
+          }
+        },
+        onMessage: (serverMessage) => {
+          if (!this.firstMessageReceived) {
+            this.firstMessageReceived = true;
+            this.mark("convexFirstMessageReceived");
+            this.reportMarks();
+          }
+          switch (serverMessage.type) {
+            case "Transition": {
+              this.observedTimestamp(serverMessage.endVersion.ts);
+              this.authenticationManager.onTransition(serverMessage);
+              this.remoteQuerySet.transition(serverMessage);
+              this.state.transition(serverMessage);
+              const completedRequests = this.requestManager.removeCompleted(
+                this.remoteQuerySet.timestamp()
+              );
+              this.notifyOnQueryResultChanges(completedRequests);
+              break;
             }
-            const completedMutationInfo = this.requestManager.onResponse(serverMessage);
-            if (completedMutationInfo !== null) {
-              this.notifyOnQueryResultChanges(/* @__PURE__ */ new Map([
-                [
-                  completedMutationInfo.requestId,
-                  completedMutationInfo.result
-                ]
-              ]));
+            case "MutationResponse": {
+              if (serverMessage.success) {
+                this.observedTimestamp(serverMessage.ts);
+              }
+              const completedMutationInfo = this.requestManager.onResponse(serverMessage);
+              if (completedMutationInfo !== null) {
+                this.notifyOnQueryResultChanges(
+                  /* @__PURE__ */ new Map([
+                    [
+                      completedMutationInfo.requestId,
+                      completedMutationInfo.result
+                    ]
+                  ])
+                );
+              }
+              break;
             }
-            break;
+            case "ActionResponse": {
+              this.requestManager.onResponse(serverMessage);
+              break;
+            }
+            case "AuthError": {
+              this.authenticationManager.onAuthError(serverMessage);
+              break;
+            }
+            case "FatalError": {
+              const error = logFatalError(this.logger, serverMessage.error);
+              void this.webSocketManager.terminate();
+              throw error;
+            }
+            default: {
+              serverMessage;
+            }
           }
-          case "ActionResponse": {
-            this.requestManager.onResponse(serverMessage);
-            break;
-          }
-          case "AuthError": {
-            this.authenticationManager.onAuthError(serverMessage);
-            break;
-          }
-          case "FatalError": {
-            const error = logFatalError(this.logger, serverMessage.error);
-            this.webSocketManager.terminate();
-            throw error;
-          }
-          default: {
-          }
-        }
-        return {
-          hasSyncedPastLastReconnect: this.hasSyncedPastLastReconnect()
-        };
+          return {
+            hasSyncedPastLastReconnect: this.hasSyncedPastLastReconnect()
+          };
+        },
+        onServerDisconnectError: options.onServerDisconnectError
       },
-      onServerDisconnectError: options.onServerDisconnectError
-    }, webSocketConstructor, this.logger, this.markConnectionStateDirty, this.debug);
+      webSocketConstructor,
+      this.logger,
+      this.markConnectionStateDirty,
+      this.debug
+    );
     this.mark("convexClientConstructed");
     if (options.expectAuth) {
       pauseSocket();
     }
   }
+  /**
+   * Return true if there is outstanding work from prior to the time of the most recent restart.
+   * This indicates that the client has not proven itself to have gotten past the issue that
+   * potentially led to the restart. Use this to influence when to reset backoff after a failure.
+   */
   hasSyncedPastLastReconnect() {
     const hasSyncedPastLastReconnect = this.requestManager.hasSyncedPastLastReconnect() || this.state.hasSyncedPastLastReconnect();
     return hasSyncedPastLastReconnect;
   }
   observedTimestamp(observedTs) {
-    if (this.maxObservedTimestamp === undefined || this.maxObservedTimestamp.lessThanOrEqual(observedTs)) {
+    if (this.maxObservedTimestamp === void 0 || this.maxObservedTimestamp.lessThanOrEqual(observedTs)) {
       this.maxObservedTimestamp = observedTs;
     }
   }
   getMaxObservedTimestamp() {
     return this.maxObservedTimestamp;
   }
+  /**
+   * Compute the current query results based on the remoteQuerySet and the
+   * current optimistic updates and call `onTransition` for all the changed
+   * queries.
+   *
+   * @param completedMutations - A set of mutation IDs whose optimistic updates
+   * are no longer needed.
+   */
   notifyOnQueryResultChanges(completedRequests) {
     const remoteQueryResults = this.remoteQuerySet.remoteQueryResults();
-    const queryTokenToValue = /* @__PURE__ */ new Map;
+    const queryTokenToValue = /* @__PURE__ */ new Map();
     for (const [queryId, result] of remoteQueryResults) {
       const queryToken = this.state.queryToken(queryId);
       if (queryToken !== null) {
@@ -5497,7 +5925,10 @@ class BaseConvexClient {
         queryTokenToValue.set(queryToken, query);
       }
     }
-    const changedQueryTokens = this.optimisticQueryResults.ingestQueryResultsFromServer(queryTokenToValue, new Set(completedRequests.keys()));
+    const changedQueryTokens = this.optimisticQueryResults.ingestQueryResultsFromServer(
+      queryTokenToValue,
+      new Set(completedRequests.keys())
+    );
     this.handleTransition({
       queries: changedQueryTokens.map((token) => {
         const optimisticResult = this.optimisticQueryResults.rawQueryResult(token);
@@ -5509,10 +5940,12 @@ class BaseConvexClient {
           }
         };
       }),
-      reflectedMutations: Array.from(completedRequests).map(([requestId, result]) => ({
-        requestId,
-        result
-      })),
+      reflectedMutations: Array.from(completedRequests).map(
+        ([requestId, result]) => ({
+          requestId,
+          result
+        })
+      ),
       timestamp: this.remoteQuerySet.timestamp()
     });
   }
@@ -5521,11 +5954,23 @@ class BaseConvexClient {
       fn(transition);
     }
   }
+  /**
+   * Add a handler that will be called on a transition.
+   *
+   * Any external side effects (e.g. setting React state) should be handled here.
+   *
+   * @param fn
+   *
+   * @returns
+   */
   addOnTransitionHandler(fn) {
     const id = this._transitionHandlerCounter++;
     this._onTransitionFns.set(id, fn);
     return () => this._onTransitionFns.delete(id);
   }
+  /**
+   * Get the current JWT auth token and decoded claims.
+   */
   getCurrentAuthClaims() {
     const authToken = this.state.getAuth();
     let decoded = {};
@@ -5536,16 +5981,25 @@ class BaseConvexClient {
         decoded = {};
       }
     } else {
-      return;
+      return void 0;
     }
     return { token: authToken.value, decoded };
   }
+  /**
+   * Set the authentication token to be used for subsequent queries and mutations.
+   * `fetchToken` will be called automatically again if a token expires.
+   * `fetchToken` should return `null` if the token cannot be retrieved, for example
+   * when the user's rights were permanently revoked.
+   * @param fetchToken - an async function returning the JWT-encoded OpenID Connect Identity Token
+   * @param onChange - a callback that will be called when the authentication status changes
+   */
   setAuth(fetchToken, onChange) {
-    this.authenticationManager.setConfig(fetchToken, onChange);
+    void this.authenticationManager.setConfig(fetchToken, onChange);
   }
   hasAuth() {
     return this.state.hasAuth();
   }
+  /** @internal */
   setAdminAuth(value, fakeUserIdentity) {
     const message = this.state.setAdminAuth(value, fakeUserIdentity);
     this.webSocketManager.sendMessage(message);
@@ -5554,9 +6008,28 @@ class BaseConvexClient {
     const message = this.state.clearAuth();
     this.webSocketManager.sendMessage(message);
   }
+  /**
+     * Subscribe to a query function.
+     *
+     * Whenever this query's result changes, the `onTransition` callback
+     * passed into the constructor will be called.
+     *
+     * @param name - The name of the query.
+     * @param args - An arguments object for the query. If this is omitted, the
+     * arguments will be `{}`.
+     * @param options - A {@link SubscribeOptions} options object for this query.
+  
+     * @returns An object containing a {@link QueryToken} corresponding to this
+     * query and an `unsubscribe` callback.
+     */
   subscribe(name, args, options) {
     const argsObject = parseArgs(args);
-    const { modification, queryToken, unsubscribe } = this.state.subscribe(name, argsObject, options?.journal, options?.componentPath);
+    const { modification, queryToken, unsubscribe } = this.state.subscribe(
+      name,
+      argsObject,
+      options?.journal,
+      options?.componentPath
+    );
     if (modification !== null) {
       this.webSocketManager.sendMessage(modification);
     }
@@ -5570,27 +6043,66 @@ class BaseConvexClient {
       }
     };
   }
+  /**
+   * A query result based only on the current, local state.
+   *
+   * The only way this will return a value is if we're already subscribed to the
+   * query or its value has been set optimistically.
+   */
   localQueryResult(udfPath, args) {
     const argsObject = parseArgs(args);
     const queryToken = serializePathAndArgs(udfPath, argsObject);
     return this.optimisticQueryResults.queryResult(queryToken);
   }
+  /**
+   * Get query result by query token based on current, local state
+   *
+   * The only way this will return a value is if we're already subscribed to the
+   * query or its value has been set optimistically.
+   *
+   * @internal
+   */
   localQueryResultByToken(queryToken) {
     return this.optimisticQueryResults.queryResult(queryToken);
   }
+  /**
+   * Whether local query result is available for a token.
+   *
+   * This method does not throw if the result is an error.
+   *
+   * @internal
+   */
   hasLocalQueryResultByToken(queryToken) {
     return this.optimisticQueryResults.hasQueryResult(queryToken);
   }
+  /**
+   * @internal
+   */
   localQueryLogs(udfPath, args) {
     const argsObject = parseArgs(args);
     const queryToken = serializePathAndArgs(udfPath, argsObject);
     return this.optimisticQueryResults.queryLogs(queryToken);
   }
+  /**
+   * Retrieve the current {@link QueryJournal} for this query function.
+   *
+   * If we have not yet received a result for this query, this will be `undefined`.
+   *
+   * @param name - The name of the query.
+   * @param args - The arguments object for this query.
+   * @returns The query's {@link QueryJournal} or `undefined`.
+   */
   queryJournal(name, args) {
     const argsObject = parseArgs(args);
     const queryToken = serializePathAndArgs(name, argsObject);
     return this.state.queryJournal(queryToken);
   }
+  /**
+   * Get the current {@link ConnectionState} between the client and the Convex
+   * backend.
+   *
+   * @returns The {@link ConnectionState} with the Convex backend.
+   */
   connectionState() {
     const wsConnectionState = this.webSocketManager.connectionState();
     return {
@@ -5604,6 +6116,16 @@ class BaseConvexClient {
       inflightActions: this.requestManager.inflightActions()
     };
   }
+  /**
+   * Subscribe to the {@link ConnectionState} between the client and the Convex
+   * backend, calling a callback each time it changes.
+   *
+   * Subscribed callbacks will be called when any part of ConnectionState changes.
+   * ConnectionState may grow in future versions (e.g. to provide a array of
+   * inflight requests) in which case callbacks would be called more frequently.
+   *
+   * @returns An unsubscribe function to stop listening.
+   */
   subscribeToConnectionState(cb) {
     const id = this.nextConnectionStateSubscriberId++;
     this.connectionStateSubscribers.set(id, cb);
@@ -5611,42 +6133,76 @@ class BaseConvexClient {
       this.connectionStateSubscribers.delete(id);
     };
   }
+  /**
+     * Execute a mutation function.
+     *
+     * @param name - The name of the mutation.
+     * @param args - An arguments object for the mutation. If this is omitted,
+     * the arguments will be `{}`.
+     * @param options - A {@link MutationOptions} options object for this mutation.
+  
+     * @returns - A promise of the mutation's result.
+     */
   async mutation(name, args, options) {
     const result = await this.mutationInternal(name, args, options);
     if (!result.success) {
-      if (result.errorData !== undefined) {
-        throw forwardData(result, new ConvexError(createHybridErrorStacktrace("mutation", name, result)));
+      if (result.errorData !== void 0) {
+        throw forwardData(
+          result,
+          new ConvexError(
+            createHybridErrorStacktrace("mutation", name, result)
+          )
+        );
       }
       throw new Error(createHybridErrorStacktrace("mutation", name, result));
     }
     return result.value;
   }
+  /**
+   * @internal
+   */
   async mutationInternal(udfPath, args, options, componentPath) {
-    const { mutationPromise } = this.enqueueMutation(udfPath, args, options, componentPath);
+    const { mutationPromise } = this.enqueueMutation(
+      udfPath,
+      args,
+      options,
+      componentPath
+    );
     return mutationPromise;
   }
+  /**
+   * @internal
+   */
   enqueueMutation(udfPath, args, options, componentPath) {
     const mutationArgs = parseArgs(args);
     this.tryReportLongDisconnect();
     const requestId = this.nextRequestId;
     this._nextRequestId++;
-    if (options !== undefined) {
+    if (options !== void 0) {
       const optimisticUpdate = options.optimisticUpdate;
-      if (optimisticUpdate !== undefined) {
+      if (optimisticUpdate !== void 0) {
         const wrappedUpdate = (localQueryStore) => {
-          const result = optimisticUpdate(localQueryStore, mutationArgs);
+          const result = optimisticUpdate(
+            localQueryStore,
+            mutationArgs
+          );
           if (result instanceof Promise) {
-            this.logger.warn("Optimistic update handler returned a Promise. Optimistic updates should be synchronous.");
+            this.logger.warn(
+              "Optimistic update handler returned a Promise. Optimistic updates should be synchronous."
+            );
           }
         };
-        const changedQueryTokens = this.optimisticQueryResults.applyOptimisticUpdate(wrappedUpdate, requestId);
+        const changedQueryTokens = this.optimisticQueryResults.applyOptimisticUpdate(
+          wrappedUpdate,
+          requestId
+        );
         const changedQueries = changedQueryTokens.map((token) => {
           const localResult = this.localQueryResultByToken(token);
           return {
             token,
             modification: {
               kind: "Updated",
-              result: localResult === undefined ? undefined : {
+              result: localResult === void 0 ? void 0 : {
                 success: true,
                 value: localResult,
                 logLines: []
@@ -5675,16 +6231,30 @@ class BaseConvexClient {
       mutationPromise
     };
   }
+  /**
+   * Execute an action function.
+   *
+   * @param name - The name of the action.
+   * @param args - An arguments object for the action. If this is omitted,
+   * the arguments will be `{}`.
+   * @returns A promise of the action's result.
+   */
   async action(name, args) {
     const result = await this.actionInternal(name, args);
     if (!result.success) {
-      if (result.errorData !== undefined) {
-        throw forwardData(result, new ConvexError(createHybridErrorStacktrace("action", name, result)));
+      if (result.errorData !== void 0) {
+        throw forwardData(
+          result,
+          new ConvexError(createHybridErrorStacktrace("action", name, result))
+        );
       }
       throw new Error(createHybridErrorStacktrace("action", name, result));
     }
     return result.value;
   }
+  /**
+   * @internal
+   */
   async actionInternal(udfPath, args, componentPath) {
     const actionArgs = parseArgs(args);
     const requestId = this.nextRequestId;
@@ -5700,19 +6270,43 @@ class BaseConvexClient {
     const mightBeSent = this.webSocketManager.sendMessage(message);
     return this.requestManager.request(message, mightBeSent);
   }
+  /**
+   * Close any network handles associated with this client and stop all subscriptions.
+   *
+   * Call this method when you're done with an {@link BaseConvexClient} to
+   * dispose of its sockets and resources.
+   *
+   * @returns A `Promise` fulfilled when the connection has been completely closed.
+   */
   async close() {
     this.authenticationManager.stop();
     return this.webSocketManager.terminate();
   }
+  /**
+   * Return the address for this client, useful for creating a new client.
+   *
+   * Not guaranteed to match the address with which this client was constructed:
+   * it may be canonicalized.
+   */
   get url() {
     return this.address;
   }
+  /**
+   * @internal
+   */
   get nextRequestId() {
     return this._nextRequestId;
   }
+  /**
+   * @internal
+   */
   get sessionId() {
     return this._sessionId;
   }
+  /**
+   * Reports performance marks to the server. This should only be called when
+   * we have a functional websocket.
+   */
   reportMarks() {
     if (this.debug) {
       const report = getMarksReport(this.sessionId);
@@ -5728,7 +6322,7 @@ class BaseConvexClient {
       return;
     }
     const timeOfOldestRequest = this.connectionState().timeOfOldestInflightRequest;
-    if (timeOfOldestRequest === null || Date.now() - timeOfOldestRequest.getTime() <= 60 * 1000) {
+    if (timeOfOldestRequest === null || Date.now() - timeOfOldestRequest.getTime() <= 60 * 1e3) {
       return;
     }
     const endpoint = `${this.address}/api/debug_event`;
@@ -5741,24 +6335,47 @@ class BaseConvexClient {
       body: JSON.stringify({ event: "LongWebsocketDisconnect" })
     }).then((response) => {
       if (!response.ok) {
-        this.logger.warn("Analytics request failed with response:", response.body);
+        this.logger.warn(
+          "Analytics request failed with response:",
+          response.body
+        );
       }
     }).catch((error) => {
       this.logger.warn("Analytics response failed with error:", error);
     });
   }
-}
+};
 
 // node_modules/convex/dist/esm/browser/simple_client-node.js
-import { createRequire } from "module";
-import { resolve as nodePathResolve } from "path";
+var import_module = require("module");
+var import_path = require("path");
+
 // node_modules/convex/dist/esm/browser/http_client.js
 var __defProp12 = Object.defineProperty;
-var __defNormalProp11 = (obj, key, value) => (key in obj) ? __defProp12(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp11 = (obj, key, value) => key in obj ? __defProp12(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField11 = (obj, key, value) => __defNormalProp11(obj, typeof key !== "symbol" ? key + "" : key, value);
 var STATUS_CODE_UDF_FAILED = 560;
-var specifiedFetch = undefined;
-class ConvexHttpClient {
+var specifiedFetch = void 0;
+var ConvexHttpClient = class {
+  /**
+   * Create a new {@link ConvexHttpClient}.
+   *
+   * @param address - The url of your Convex deployment, often provided
+   * by an environment variable. E.g. `https://small-mouse-123.convex.cloud`.
+   * @param options - An object of options.
+   * - `skipConvexDeploymentUrlCheck` - Skip validating that the Convex deployment URL looks like
+   * `https://happy-animal-123.convex.cloud` or localhost. This can be useful if running a self-hosted
+   * Convex backend that uses a different URL.
+   * - `logger` - A logger or a boolean. If not provided, logs to the console.
+   * You can construct your own logger to customize logging to log elsewhere
+   * or not log at all, or use `false` as a shorthand for a no-op logger.
+   * A logger is an object with 4 methods: log(), warn(), error(), and logVerbose().
+   * These methods can receive multiple arguments of any types, like console.log().
+   * - `auth` - A JWT containing identity claims accessible in Convex functions.
+   * This identity may expire so it may be necessary to call `setAuth()` later,
+   * but for short-lived clients it's convenient to specify this value here.
+   * - `fetch` - A custom fetch implementation to use for all HTTP requests made by this client.
+   */
   constructor(address, options) {
     __publicField11(this, "address");
     __publicField11(this, "auth");
@@ -5771,7 +6388,9 @@ class ConvexHttpClient {
     __publicField11(this, "mutationQueue", []);
     __publicField11(this, "isProcessingQueue", false);
     if (typeof options === "boolean") {
-      throw new Error("skipConvexDeploymentUrlCheck as the second argument is no longer supported. Please pass an options object, `{ skipConvexDeploymentUrlCheck: true }`.");
+      throw new Error(
+        "skipConvexDeploymentUrlCheck as the second argument is no longer supported. Please pass an options object, `{ skipConvexDeploymentUrlCheck: true }`."
+      );
     }
     const opts = options ?? {};
     if (opts.skipConvexDeploymentUrlCheck !== true) {
@@ -5780,26 +6399,51 @@ class ConvexHttpClient {
     this.logger = options?.logger === false ? instantiateNoopLogger({ verbose: false }) : options?.logger !== true && options?.logger ? options.logger : instantiateDefaultLogger({ verbose: false });
     this.address = address;
     this.debug = true;
-    this.auth = undefined;
-    this.adminAuth = undefined;
+    this.auth = void 0;
+    this.adminAuth = void 0;
     this.fetch = options?.fetch;
     if (options?.auth) {
       this.setAuth(options.auth);
     }
   }
+  /**
+   * Obtain the {@link ConvexHttpClient}'s URL to its backend.
+   * @deprecated Use url, which returns the url without /api at the end.
+   *
+   * @returns The URL to the Convex backend, including the client's API version.
+   */
   backendUrl() {
     return `${this.address}/api`;
   }
+  /**
+   * Return the address for this client, useful for creating a new client.
+   *
+   * Not guaranteed to match the address with which this client was constructed:
+   * it may be canonicalized.
+   */
   get url() {
     return this.address;
   }
+  /**
+   * Set the authentication token to be used for subsequent queries and mutations.
+   *
+   * Should be called whenever the token changes (i.e. due to expiration and refresh).
+   *
+   * @param value - JWT-encoded OpenID Connect identity token.
+   */
   setAuth(value) {
     this.clearAuth();
     this.auth = value;
   }
+  /**
+   * Set admin auth token to allow calling internal queries, mutations, and actions
+   * and acting as an identity.
+   *
+   * @internal
+   */
   setAdminAuth(token, actingAsIdentity) {
     this.clearAuth();
-    if (actingAsIdentity !== undefined) {
+    if (actingAsIdentity !== void 0) {
       const bytes = new TextEncoder().encode(JSON.stringify(actingAsIdentity));
       const actingAsIdentityEncoded = btoa(String.fromCodePoint(...bytes));
       this.adminAuth = `${token}:${actingAsIdentityEncoded}`;
@@ -5807,16 +6451,48 @@ class ConvexHttpClient {
       this.adminAuth = token;
     }
   }
+  /**
+   * Clear the current authentication token if set.
+   */
   clearAuth() {
-    this.auth = undefined;
-    this.adminAuth = undefined;
+    this.auth = void 0;
+    this.adminAuth = void 0;
   }
+  /**
+   * Sets whether the result log lines should be printed on the console or not.
+   *
+   * @internal
+   */
   setDebug(debug) {
     this.debug = debug;
   }
+  /**
+   * Used to customize the fetch behavior in some runtimes.
+   *
+   * @internal
+   */
   setFetchOptions(fetchOptions) {
     this.fetchOptions = fetchOptions;
   }
+  /**
+   * This API is experimental: it may change or disappear.
+   *
+   * Execute a Convex query function at the same timestamp as every other
+   * consistent query execution run by this HTTP client.
+   *
+   * This doesn't make sense for long-lived ConvexHttpClients as Convex
+   * backends can read a limited amount into the past: beyond 30 seconds
+   * in the past may not be available.
+   *
+   * Create a new client to use a consistent time.
+   *
+   * @param name - The name of the query.
+   * @param args - The arguments object for the query. If this is omitted,
+   * the arguments will be `{}`.
+   * @returns A promise of the query's result.
+   *
+   * @deprecated This API is experimental: it may change or disappear.
+   */
   async consistentQuery(query, ...args) {
     const queryArgs = parseArgs(args[0]);
     const timestampPromise = this.getTimestamp();
@@ -5845,6 +6521,14 @@ class ConvexHttpClient {
     const { ts } = await response.json();
     return ts;
   }
+  /**
+   * Execute a Convex query function.
+   *
+   * @param name - The name of the query.
+   * @param args - The arguments object for the query. If this is omitted,
+   * the arguments will be `{}`.
+   * @returns A promise of the query's result.
+   */
   async query(query, ...args) {
     const queryArgs = parseArgs(args[0]);
     return await this.queryInner(query, queryArgs, {});
@@ -5862,7 +6546,7 @@ class ConvexHttpClient {
       headers["Authorization"] = `Bearer ${this.auth}`;
     }
     const localFetch = this.fetch || specifiedFetch || fetch;
-    const timestamp = options.timestampPromise ? await options.timestampPromise : undefined;
+    const timestamp = options.timestampPromise ? await options.timestampPromise : void 0;
     const body = JSON.stringify({
       path: name,
       format: "convex_encoded_json",
@@ -5889,8 +6573,11 @@ class ConvexHttpClient {
       case "success":
         return jsonToConvex(respJSON.value);
       case "error":
-        if (respJSON.errorData !== undefined) {
-          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
+        if (respJSON.errorData !== void 0) {
+          throw forwardErrorData(
+            respJSON.errorData,
+            new ConvexError(respJSON.errorMessage)
+          );
         }
         throw new Error(respJSON.errorMessage);
       default:
@@ -5933,8 +6620,11 @@ class ConvexHttpClient {
       case "success":
         return jsonToConvex(respJSON.value);
       case "error":
-        if (respJSON.errorData !== undefined) {
-          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
+        if (respJSON.errorData !== void 0) {
+          throw forwardErrorData(
+            respJSON.errorData,
+            new ConvexError(respJSON.errorMessage)
+          );
         }
         throw new Error(respJSON.errorMessage);
       default:
@@ -5947,10 +6637,10 @@ class ConvexHttpClient {
     }
     this.isProcessingQueue = true;
     while (this.mutationQueue.length > 0) {
-      const { mutation, args, resolve: resolve3, reject } = this.mutationQueue.shift();
+      const { mutation, args, resolve: resolve4, reject } = this.mutationQueue.shift();
       try {
         const result = await this.mutationInner(mutation, args);
-        resolve3(result);
+        resolve4(result);
       } catch (error) {
         reject(error);
       }
@@ -5958,11 +6648,20 @@ class ConvexHttpClient {
     this.isProcessingQueue = false;
   }
   enqueueMutation(mutation, args) {
-    return new Promise((resolve3, reject) => {
-      this.mutationQueue.push({ mutation, args, resolve: resolve3, reject });
-      this.processMutationQueue();
+    return new Promise((resolve4, reject) => {
+      this.mutationQueue.push({ mutation, args, resolve: resolve4, reject });
+      void this.processMutationQueue();
     });
   }
+  /**
+   * Execute a Convex mutation function. Mutations are queued by default.
+   *
+   * @param name - The name of the mutation.
+   * @param args - The arguments object for the mutation. If this is omitted,
+   * the arguments will be `{}`.
+   * @param options - An optional object containing
+   * @returns A promise of the mutation's result.
+   */
   async mutation(mutation, ...args) {
     const [fnArgs, options] = args;
     const mutationArgs = parseArgs(fnArgs);
@@ -5973,6 +6672,14 @@ class ConvexHttpClient {
       return await this.mutationInner(mutation, mutationArgs);
     }
   }
+  /**
+   * Execute a Convex action function. Actions are not queued.
+   *
+   * @param name - The name of the action.
+   * @param args - The arguments object for the action. If this is omitted,
+   * the arguments will be `{}`.
+   * @returns A promise of the action's result.
+   */
   async action(action, ...args) {
     const actionArgs = parseArgs(args[0]);
     const name = getFunctionName(action);
@@ -6010,14 +6717,27 @@ class ConvexHttpClient {
       case "success":
         return jsonToConvex(respJSON.value);
       case "error":
-        if (respJSON.errorData !== undefined) {
-          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
+        if (respJSON.errorData !== void 0) {
+          throw forwardErrorData(
+            respJSON.errorData,
+            new ConvexError(respJSON.errorMessage)
+          );
         }
         throw new Error(respJSON.errorMessage);
       default:
         throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
     }
   }
+  /**
+   * Execute a Convex function of an unknown type. These function calls are not queued.
+   *
+   * @param name - The name of the function.
+   * @param args - The arguments object for the function. If this is omitted,
+   * the arguments will be `{}`.
+   * @returns A promise of the function's result.
+   *
+   * @internal
+   */
   async function(anyFunction, componentPath, ...args) {
     const functionArgs = parseArgs(args[0]);
     const name = typeof anyFunction === "string" ? anyFunction : getFunctionName(anyFunction);
@@ -6056,15 +6776,18 @@ class ConvexHttpClient {
       case "success":
         return jsonToConvex(respJSON.value);
       case "error":
-        if (respJSON.errorData !== undefined) {
-          throw forwardErrorData(respJSON.errorData, new ConvexError(respJSON.errorMessage));
+        if (respJSON.errorData !== void 0) {
+          throw forwardErrorData(
+            respJSON.errorData,
+            new ConvexError(respJSON.errorMessage)
+          );
         }
         throw new Error(respJSON.errorMessage);
       default:
         throw new Error(`Invalid response: ${JSON.stringify(respJSON)}`);
     }
   }
-}
+};
 function forwardErrorData(errorData, error) {
   error.data = jsonToConvex(errorData);
   return error;
@@ -6080,21 +6803,34 @@ function asPaginationResult(value) {
 
 // node_modules/convex/dist/esm/browser/sync/paginated_query_client.js
 var __defProp13 = Object.defineProperty;
-var __defNormalProp12 = (obj, key, value) => (key in obj) ? __defProp13(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp12 = (obj, key, value) => key in obj ? __defProp13(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField12 = (obj, key, value) => __defNormalProp12(obj, typeof key !== "symbol" ? key + "" : key, value);
-
-class PaginatedQueryClient {
+var PaginatedQueryClient = class {
   constructor(client, onTransition) {
     this.client = client;
     this.onTransition = onTransition;
-    __publicField12(this, "paginatedQuerySet", /* @__PURE__ */ new Map);
+    __publicField12(this, "paginatedQuerySet", /* @__PURE__ */ new Map());
     __publicField12(this, "lastTransitionTs");
     this.lastTransitionTs = Long.fromNumber(0);
-    this.client.addOnTransitionHandler((transition) => this.onBaseTransition(transition));
+    this.client.addOnTransitionHandler(
+      (transition) => this.onBaseTransition(transition)
+    );
   }
+  /**
+   * Subscribe to a paginated query.
+   *
+   * @param name - The name of the paginated query function
+   * @param args - Arguments for the query (excluding paginationOpts)
+   * @param options - Pagination options including initialNumItems
+   * @returns Object with paginatedQueryToken and unsubscribe function
+   */
   subscribe(name, args, options) {
     const canonicalizedUdfPath = canonicalizeUdfPath(name);
-    const token = serializePaginatedPathAndArgs(canonicalizedUdfPath, args, options);
+    const token = serializePaginatedPathAndArgs(
+      canonicalizedUdfPath,
+      args,
+      options
+    );
     const unsubscribe = () => this.removePaginatedQuerySubscriber(token);
     const existingEntry = this.paginatedQuerySet.get(token);
     if (existingEntry) {
@@ -6112,8 +6848,8 @@ class PaginatedQueryClient {
       options: { initialNumItems: options.initialNumItems },
       nextPageKey: 0,
       pageKeys: [],
-      pageKeyToQuery: /* @__PURE__ */ new Map,
-      ongoingSplits: /* @__PURE__ */ new Map,
+      pageKeyToQuery: /* @__PURE__ */ new Map(),
+      ongoingSplits: /* @__PURE__ */ new Map(),
       skip: false,
       id: options.id
     });
@@ -6123,15 +6859,27 @@ class PaginatedQueryClient {
       unsubscribe
     };
   }
+  /**
+   * Get current results for a paginated query based on local state.
+   *
+   * Throws an error when one of the pages has errored.
+   */
   localQueryResult(name, args, options) {
     const canonicalizedUdfPath = canonicalizeUdfPath(name);
-    const token = serializePaginatedPathAndArgs(canonicalizedUdfPath, args, options);
+    const token = serializePaginatedPathAndArgs(
+      canonicalizedUdfPath,
+      args,
+      options
+    );
     return this.localQueryResultByToken(token);
   }
+  /**
+   * @internal
+   */
   localQueryResultByToken(token) {
     const paginatedQuery = this.paginatedQuerySet.get(token);
     if (!paginatedQuery) {
-      return;
+      return void 0;
     }
     const activePages = this.activePageQueryTokens(paginatedQuery);
     if (activePages.length === 0) {
@@ -6148,7 +6896,7 @@ class PaginatedQueryClient {
     let isDone = false;
     for (const pageToken of activePages) {
       const result = this.client.localQueryResultByToken(pageToken);
-      if (result === undefined) {
+      if (result === void 0) {
         hasUndefined = true;
         isDone = false;
         continue;
@@ -6178,7 +6926,10 @@ class PaginatedQueryClient {
     const changed = this.queriesContainingTokens(changedBaseTokens);
     let paginatedQueries = [];
     if (changed.length > 0) {
-      this.processPaginatedQuerySplits(changed, (token) => this.client.localQueryResultByToken(token));
+      this.processPaginatedQuerySplits(
+        changed,
+        (token) => this.client.localQueryResultByToken(token)
+      );
       paginatedQueries = changed.map((token) => ({
         token,
         modification: {
@@ -6193,6 +6944,17 @@ class PaginatedQueryClient {
     };
     this.onTransition(extendedTransition);
   }
+  /**
+   * Load more items for a paginated query.
+   *
+   * This *always* causes a transition, the status of the query
+   * has probably changed from "CanLoadMore" to "LoadingMore".
+   * Data might have changed too: maybe a subscription to this page
+   * query already exists (unlikely but possible) or this page query
+   * has an optimistic update providing some initial data.
+   *
+   * @internal
+   */
   loadMoreOfPaginatedQuery(token, numItems) {
     this.mustGetPaginatedQuery(token);
     const lastPageToken = this.queryTokenForLastPageOfPaginatedQuery(token);
@@ -6204,7 +6966,11 @@ class PaginatedQueryClient {
     if (paginationResult.isDone) {
       return false;
     }
-    this.addPageToPaginatedQuery(token, paginationResult.continueCursor, numItems);
+    this.addPageToPaginatedQuery(
+      token,
+      paginationResult.continueCursor,
+      numItems
+    );
     const loadMoreTransition = {
       timestamp: this.lastTransitionTs,
       reflectedMutations: [],
@@ -6222,6 +6988,9 @@ class PaginatedQueryClient {
     this.onTransition(loadMoreTransition);
     return true;
   }
+  /**
+   * @internal
+   */
   queriesContainingTokens(queryTokens) {
     if (queryTokens.length === 0) {
       return [];
@@ -6238,14 +7007,22 @@ class PaginatedQueryClient {
     }
     return changed;
   }
+  /**
+   * @internal
+   */
   processPaginatedQuerySplits(changed, getResult) {
     for (const paginatedQueryToken of changed) {
       const paginatedQuery = this.mustGetPaginatedQuery(paginatedQueryToken);
       const { ongoingSplits, pageKeyToQuery, pageKeys } = paginatedQuery;
       for (const [pageKey, [splitKey1, splitKey2]] of ongoingSplits) {
-        const bothNewPagesLoaded = getResult(pageKeyToQuery.get(splitKey1).queryToken) !== undefined && getResult(pageKeyToQuery.get(splitKey2).queryToken) !== undefined;
+        const bothNewPagesLoaded = getResult(pageKeyToQuery.get(splitKey1).queryToken) !== void 0 && getResult(pageKeyToQuery.get(splitKey2).queryToken) !== void 0;
         if (bothNewPagesLoaded) {
-          this.completePaginatedQuerySplit(paginatedQuery, pageKey, splitKey1, splitKey2);
+          this.completePaginatedQuerySplit(
+            paginatedQuery,
+            pageKey,
+            splitKey1,
+            splitKey2
+          );
         }
       }
       for (const pageKey of pageKeys) {
@@ -6258,9 +7035,16 @@ class PaginatedQueryClient {
           continue;
         }
         const result = asPaginationResult(pageResult);
-        const shouldSplit = result.splitCursor && (result.pageStatus === "SplitRecommended" || result.pageStatus === "SplitRequired" || result.page.length > paginatedQuery.options.initialNumItems * 2);
+        const shouldSplit = result.splitCursor && (result.pageStatus === "SplitRecommended" || result.pageStatus === "SplitRequired" || // This client-driven page splitting condition will change in the future.
+        result.page.length > paginatedQuery.options.initialNumItems * 2);
         if (shouldSplit) {
-          this.splitPaginatedQueryPage(paginatedQuery, pageKey, result.splitCursor, result.continueCursor);
+          this.splitPaginatedQueryPage(
+            paginatedQuery,
+            pageKey,
+            result.splitCursor,
+            // we just checked
+            result.continueCursor
+          );
         }
       }
     }
@@ -6273,26 +7057,36 @@ class PaginatedQueryClient {
       numItems: paginatedQuery.options.initialNumItems,
       id: paginatedQuery.id
     };
-    const firstSubscription = this.client.subscribe(paginatedQuery.canonicalizedUdfPath, {
-      ...paginatedQuery.args,
-      paginationOpts: {
-        ...paginationOpts,
-        cursor: null,
-        endCursor: splitCursor
+    const firstSubscription = this.client.subscribe(
+      paginatedQuery.canonicalizedUdfPath,
+      {
+        ...paginatedQuery.args,
+        paginationOpts: {
+          ...paginationOpts,
+          cursor: null,
+          // Start from beginning for first split
+          endCursor: splitCursor
+        }
       }
-    });
+    );
     paginatedQuery.pageKeyToQuery.set(splitKey1, firstSubscription);
-    const secondSubscription = this.client.subscribe(paginatedQuery.canonicalizedUdfPath, {
-      ...paginatedQuery.args,
-      paginationOpts: {
-        ...paginationOpts,
-        cursor: splitCursor,
-        endCursor: continueCursor
+    const secondSubscription = this.client.subscribe(
+      paginatedQuery.canonicalizedUdfPath,
+      {
+        ...paginatedQuery.args,
+        paginationOpts: {
+          ...paginationOpts,
+          cursor: splitCursor,
+          endCursor: continueCursor
+        }
       }
-    });
+    );
     paginatedQuery.pageKeyToQuery.set(splitKey2, secondSubscription);
     paginatedQuery.ongoingSplits.set(pageKey, [splitKey1, splitKey2]);
   }
+  /**
+   * @internal
+   */
   addPageToPaginatedQuery(token, continueCursor, numItems) {
     const paginatedQuery = this.mustGetPaginatedQuery(token);
     const pageKey = paginatedQuery.nextPageKey++;
@@ -6305,7 +7099,10 @@ class PaginatedQueryClient {
       ...paginatedQuery.args,
       paginationOpts
     };
-    const subscription = this.client.subscribe(paginatedQuery.canonicalizedUdfPath, pageArgs);
+    const subscription = this.client.subscribe(
+      paginatedQuery.canonicalizedUdfPath,
+      pageArgs
+    );
     paginatedQuery.pageKeys.push(pageKey);
     paginatedQuery.pageKeyToQuery.set(pageKey, subscription);
     return subscription;
@@ -6332,16 +7129,21 @@ class PaginatedQueryClient {
     paginatedQuery.ongoingSplits.delete(pageKey);
     originalQuery.unsubscribe();
   }
+  /** The query tokens for all active pages, in result order */
   activePageQueryTokens(paginatedQuery) {
-    return paginatedQuery.pageKeys.map((pageKey) => paginatedQuery.pageKeyToQuery.get(pageKey).queryToken);
+    return paginatedQuery.pageKeys.map(
+      (pageKey) => paginatedQuery.pageKeyToQuery.get(pageKey).queryToken
+    );
   }
   allQueryTokens(paginatedQuery) {
-    return Array.from(paginatedQuery.pageKeyToQuery.values()).map((sub) => sub.queryToken);
+    return Array.from(paginatedQuery.pageKeyToQuery.values()).map(
+      (sub) => sub.queryToken
+    );
   }
   queryTokenForLastPageOfPaginatedQuery(token) {
     const paginatedQuery = this.mustGetPaginatedQuery(token);
     const lastPageKey = paginatedQuery.pageKeys[paginatedQuery.pageKeys.length - 1];
-    if (lastPageKey === undefined) {
+    if (lastPageKey === void 0) {
       throw new Error(`No pages for paginated query ${token}`);
     }
     return paginatedQuery.pageKeyToQuery.get(lastPageKey).queryToken;
@@ -6353,18 +7155,22 @@ class PaginatedQueryClient {
     }
     return paginatedQuery;
   }
-}
+};
 
 // node_modules/convex/dist/esm/browser/simple_client.js
 var __defProp14 = Object.defineProperty;
-var __defNormalProp13 = (obj, key, value) => (key in obj) ? __defProp14(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __defNormalProp13 = (obj, key, value) => key in obj ? __defProp14(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField13 = (obj, key, value) => __defNormalProp13(obj, typeof key !== "symbol" ? key + "" : key, value);
 var defaultWebSocketConstructor;
 function setDefaultWebSocketConstructor(ws) {
   defaultWebSocketConstructor = ws;
 }
-
-class ConvexClient {
+var ConvexClient = class {
+  /**
+   * Construct a client and immediately initiate a WebSocket connection to the passed address.
+   *
+   * @public
+   */
   constructor(address, options = {}) {
     __publicField13(this, "listeners");
     __publicField13(this, "_client");
@@ -6385,33 +7191,80 @@ class ConvexClient {
       baseOptions.unsavedChangesWarning = false;
     }
     if (!this.disabled) {
-      this._client = new BaseConvexClient(address, () => {
-      }, baseOptions);
-      this._paginatedClient = new PaginatedQueryClient(this._client, (transition) => this._transition(transition));
+      this._client = new BaseConvexClient(
+        address,
+        () => {
+        },
+        // NOP, let the paginated query client do it all
+        baseOptions
+      );
+      this._paginatedClient = new PaginatedQueryClient(
+        this._client,
+        (transition) => this._transition(transition)
+      );
     }
-    this.listeners = /* @__PURE__ */ new Set;
+    this.listeners = /* @__PURE__ */ new Set();
   }
+  /**
+   * Once closed no registered callbacks will fire again.
+   */
   get closed() {
     return this._closed;
   }
   get client() {
-    if (this._client)
-      return this._client;
+    if (this._client) return this._client;
     throw new Error("ConvexClient is disabled");
   }
+  /**
+   * @internal
+   */
   get paginatedClient() {
-    if (this._paginatedClient)
-      return this._paginatedClient;
+    if (this._paginatedClient) return this._paginatedClient;
     throw new Error("ConvexClient is disabled");
   }
   get disabled() {
     return this._disabled;
   }
+  /**
+   * Call a callback whenever a new result for a query is received. The callback
+   * will run soon after being registered if a result for the query is already
+   * in memory.
+   *
+   * The return value is an {@link Unsubscribe} object which is both a function
+   * an an object with properties. Both of the patterns below work with this object:
+   *
+   *```ts
+   * // call the return value as a function
+   * const unsubscribe = client.onUpdate(api.messages.list, {}, (messages) => {
+   *   console.log(messages);
+   * });
+   * unsubscribe();
+   *
+   * // unpack the return value into its properties
+   * const {
+   *   getCurrentValue,
+   *   unsubscribe,
+   * } = client.onUpdate(api.messages.list, {}, (messages) => {
+   *   console.log(messages);
+   * });
+   *```
+   *
+   * @param query - A {@link server.FunctionReference} for the public query to run.
+   * @param args - The arguments to run the query with.
+   * @param callback - Function to call when the query result updates.
+   * @param onError - Function to call when the query result updates with an error.
+   * If not provided, errors will be thrown instead of calling the callback.
+   *
+   * @return an {@link Unsubscribe} function to stop calling the onUpdate function.
+   */
   onUpdate(query, args, callback, onError) {
     if (this.disabled) {
       return this.createDisabledUnsubscribe();
     }
-    const { queryToken, unsubscribe } = this.client.subscribe(getFunctionName(query), args);
+    const { queryToken, unsubscribe } = this.client.subscribe(
+      getFunctionName(query),
+      args
+    );
     const queryInfo = {
       queryToken,
       callback,
@@ -6420,11 +7273,14 @@ class ConvexClient {
       hasEverRun: false,
       query,
       args,
-      paginationOptions: undefined
+      paginationOptions: void 0
     };
     this.listeners.add(queryInfo);
-    if (this.queryResultReady(queryToken) && this.callNewListenersWithCurrentValuesTimer === undefined) {
-      this.callNewListenersWithCurrentValuesTimer = setTimeout(() => this.callNewListenersWithCurrentValues(), 0);
+    if (this.queryResultReady(queryToken) && this.callNewListenersWithCurrentValuesTimer === void 0) {
+      this.callNewListenersWithCurrentValuesTimer = setTimeout(
+        () => this.callNewListenersWithCurrentValues(),
+        0
+      );
     }
     const unsubscribeProps = {
       unsubscribe: () => {
@@ -6441,6 +7297,21 @@ class ConvexClient {
     Object.assign(ret, unsubscribeProps);
     return ret;
   }
+  /**
+   * Call a callback whenever a new result for a paginated query is received.
+   *
+   * This is an experimental preview: the final API may change.
+   * In particular, caching behavior, page splitting, and required paginated query options
+   * may change.
+   *
+   * @param query - A {@link server.FunctionReference} for the public query to run.
+   * @param args - The arguments to run the query with.
+   * @param options - Options for the paginated query including initialNumItems and id.
+   * @param callback - Function to call when the query result updates.
+   * @param onError - Function to call when the query result updates with an error.
+   *
+   * @return an {@link Unsubscribe} function to stop calling the callback.
+   */
   onPaginatedUpdate_experimental(query, args, options, callback, onError) {
     if (this.disabled) {
       return this.createDisabledUnsubscribe();
@@ -6449,7 +7320,12 @@ class ConvexClient {
       initialNumItems: options.initialNumItems,
       id: -1
     };
-    const { paginatedQueryToken, unsubscribe } = this.paginatedClient.subscribe(getFunctionName(query), args, paginationOptions);
+    const { paginatedQueryToken, unsubscribe } = this.paginatedClient.subscribe(
+      getFunctionName(query),
+      args,
+      // Simple client doesn't use IDs, there's no expectation that these queries remain separate.
+      paginationOptions
+    );
     const queryInfo = {
       queryToken: paginatedQueryToken,
       callback,
@@ -6461,8 +7337,11 @@ class ConvexClient {
       paginationOptions
     };
     this.listeners.add(queryInfo);
-    if (!!this.paginatedClient.localQueryResultByToken(paginatedQueryToken) && this.callNewListenersWithCurrentValuesTimer === undefined) {
-      this.callNewListenersWithCurrentValuesTimer = setTimeout(() => this.callNewListenersWithCurrentValues(), 0);
+    if (!!this.paginatedClient.localQueryResultByToken(paginatedQueryToken) && this.callNewListenersWithCurrentValuesTimer === void 0) {
+      this.callNewListenersWithCurrentValuesTimer = setTimeout(
+        () => this.callNewListenersWithCurrentValues(),
+        0
+      );
     }
     const unsubscribeProps = {
       unsubscribe: () => {
@@ -6473,17 +7352,24 @@ class ConvexClient {
         unsubscribe();
       },
       getCurrentValue: () => {
-        const result = this.paginatedClient.localQueryResult(getFunctionName(query), args, paginationOptions);
+        const result = this.paginatedClient.localQueryResult(
+          getFunctionName(query),
+          args,
+          paginationOptions
+        );
         return result;
       },
       getQueryLogs: () => []
+      // Paginated queries don't aggregate their logs
     };
     const ret = unsubscribeProps.unsubscribe;
     Object.assign(ret, unsubscribeProps);
     return ret;
   }
+  // Run all callbacks that have never been run before if they have a query
+  // result available now.
   callNewListenersWithCurrentValues() {
-    this.callNewListenersWithCurrentValuesTimer = undefined;
+    this.callNewListenersWithCurrentValuesTimer = void 0;
     this._transition({ queries: [], paginatedQueries: [] }, true);
   }
   queryResultReady(queryToken) {
@@ -6494,45 +7380,57 @@ class ConvexClient {
     };
     const unsubscribeProps = {
       unsubscribe: disabledUnsubscribe,
-      getCurrentValue: () => {
-        return;
-      },
-      getQueryLogs: () => {
-        return;
-      }
+      getCurrentValue: () => void 0,
+      getQueryLogs: () => void 0
     };
     Object.assign(disabledUnsubscribe, unsubscribeProps);
     return disabledUnsubscribe;
   }
   async close() {
-    if (this.disabled)
-      return;
+    if (this.disabled) return;
     this.listeners.clear();
     this._closed = true;
     if (this._paginatedClient) {
-      this._paginatedClient = undefined;
+      this._paginatedClient = void 0;
     }
     return this.client.close();
   }
+  /**
+   * Get the current JWT auth token and decoded claims.
+   */
   getAuth() {
-    if (this.disabled)
-      return;
+    if (this.disabled) return;
     return this.client.getCurrentAuthClaims();
   }
+  /**
+   * Set the authentication token to be used for subsequent queries and mutations.
+   * `fetchToken` will be called automatically again if a token expires.
+   * `fetchToken` should return `null` if the token cannot be retrieved, for example
+   * when the user's rights were permanently revoked.
+   * @param fetchToken - an async function returning the JWT (typically an OpenID Connect Identity Token)
+   * @param onChange - a callback that will be called when the authentication status changes
+   */
   setAuth(fetchToken, onChange) {
-    if (this.disabled)
-      return;
-    this.client.setAuth(fetchToken, onChange ?? (() => {
-    }));
+    if (this.disabled) return;
+    this.client.setAuth(
+      fetchToken,
+      onChange ?? (() => {
+      })
+    );
   }
+  /**
+   * @internal
+   */
   setAdminAuth(token, identity) {
     if (this.closed) {
       throw new Error("ConvexClient has already been closed.");
     }
-    if (this.disabled)
-      return;
+    if (this.disabled) return;
     this.client.setAdminAuth(token, identity);
   }
+  /**
+   * @internal
+   */
   _transition({
     queries,
     paginatedQueries
@@ -6555,88 +7453,139 @@ class ConvexClient {
             newValue = this.client.localQueryResultByToken(queryToken);
           }
         } catch (error) {
-          if (!(error instanceof Error))
-            throw error;
+          if (!(error instanceof Error)) throw error;
           if (onError) {
-            onError(error, "Second argument to onUpdate onError is reserved for later use");
+            onError(
+              error,
+              "Second argument to onUpdate onError is reserved for later use"
+            );
           } else {
-            Promise.reject(error);
+            void Promise.reject(error);
           }
           continue;
         }
-        callback(newValue, "Second argument to onUpdate callback is reserved for later use");
+        callback(
+          newValue,
+          "Second argument to onUpdate callback is reserved for later use"
+        );
       }
     }
   }
+  /**
+   * Execute a mutation function.
+   *
+   * @param mutation - A {@link server.FunctionReference} for the public mutation
+   * to run.
+   * @param args - An arguments object for the mutation.
+   * @param options - A {@link MutationOptions} options object for the mutation.
+   * @returns A promise of the mutation's result.
+   */
   async mutation(mutation, args, options) {
-    if (this.disabled)
-      throw new Error("ConvexClient is disabled");
+    if (this.disabled) throw new Error("ConvexClient is disabled");
     return await this.client.mutation(getFunctionName(mutation), args, options);
   }
+  /**
+   * Execute an action function.
+   *
+   * @param action - A {@link server.FunctionReference} for the public action
+   * to run.
+   * @param args - An arguments object for the action.
+   * @returns A promise of the action's result.
+   */
   async action(action, args) {
-    if (this.disabled)
-      throw new Error("ConvexClient is disabled");
+    if (this.disabled) throw new Error("ConvexClient is disabled");
     return await this.client.action(getFunctionName(action), args);
   }
+  /**
+   * Fetch a query result once.
+   *
+   * @param query - A {@link server.FunctionReference} for the public query
+   * to run.
+   * @param args - An arguments object for the query.
+   * @returns A promise of the query's result.
+   */
   async query(query, args) {
-    if (this.disabled)
-      throw new Error("ConvexClient is disabled");
+    if (this.disabled) throw new Error("ConvexClient is disabled");
     const value = this.client.localQueryResult(getFunctionName(query), args);
-    if (value !== undefined)
-      return Promise.resolve(value);
-    return new Promise((resolve3, reject) => {
-      const { unsubscribe } = this.onUpdate(query, args, (value2) => {
-        unsubscribe();
-        resolve3(value2);
-      }, (e) => {
-        unsubscribe();
-        reject(e);
-      });
+    if (value !== void 0) return Promise.resolve(value);
+    return new Promise((resolve4, reject) => {
+      const { unsubscribe } = this.onUpdate(
+        query,
+        args,
+        (value2) => {
+          unsubscribe();
+          resolve4(value2);
+        },
+        (e) => {
+          unsubscribe();
+          reject(e);
+        }
+      );
     });
   }
+  /**
+   * Get the current {@link ConnectionState} between the client and the Convex
+   * backend.
+   *
+   * @returns The {@link ConnectionState} with the Convex backend.
+   */
   connectionState() {
-    if (this.disabled)
-      throw new Error("ConvexClient is disabled");
+    if (this.disabled) throw new Error("ConvexClient is disabled");
     return this.client.connectionState();
   }
+  /**
+   * Subscribe to the {@link ConnectionState} between the client and the Convex
+   * backend, calling a callback each time it changes.
+   *
+   * Subscribed callbacks will be called when any part of ConnectionState changes.
+   * ConnectionState may grow in future versions (e.g. to provide a array of
+   * inflight requests) in which case callbacks would be called more frequently.
+   *
+   * @returns An unsubscribe function to stop listening.
+   */
   subscribeToConnectionState(cb) {
-    if (this.disabled)
-      return () => {
-      };
+    if (this.disabled) return () => {
+    };
     return this.client.subscribeToConnectionState(cb);
   }
-}
+};
 
 // node_modules/convex/dist/esm/browser/simple_client-node.js
-var __dirname = "/Users/ashot/src/codecast/packages/cli/node_modules/convex/dist/esm/browser";
-var require2 = createRequire(nodePathResolve("."));
-var __create = Object.create;
+var require2 = (0, import_module.createRequire)((0, import_path.resolve)("."));
+var __create2 = Object.create;
 var __defProp15 = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __getOwnPropDesc2 = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames2 = Object.getOwnPropertyNames;
+var __getProtoOf2 = Object.getPrototypeOf;
+var __hasOwnProp2 = Object.prototype.hasOwnProperty;
 var __require = /* @__PURE__ */ ((x) => typeof require2 !== "undefined" ? require2 : typeof Proxy !== "undefined" ? new Proxy(x, {
   get: (a, b) => (typeof require2 !== "undefined" ? require2 : a)[b]
 }) : x)(function(x) {
-  if (typeof require2 !== "undefined")
-    return require2.apply(this, arguments);
+  if (typeof require2 !== "undefined") return require2.apply(this, arguments);
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
 var __commonJS = (cb, mod) => function __require2() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  return mod || (0, cb[__getOwnPropNames2(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
-var __copyProps = (to, from, except, desc) => {
+var __copyProps2 = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp15(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    for (let key of __getOwnPropNames2(from))
+      if (!__hasOwnProp2.call(to, key) && key !== except)
+        __defProp15(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc2(from, key)) || desc.enumerable });
   }
   return to;
 };
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule ? __defProp15(target, "default", { value: mod, enumerable: true }) : target, mod));
+var __toESM2 = (mod, isNodeMode, target) => (target = mod != null ? __create2(__getProtoOf2(mod)) : {}, __copyProps2(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp15(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var require_stream = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/stream.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/stream.js"(exports2, module2) {
+    "use strict";
     var { Duplex } = __require("stream");
     function emitClose(stream) {
       stream.emit("close");
@@ -6664,18 +7613,15 @@ var require_stream = __commonJS({
       });
       ws.on("message", function message(msg, isBinary) {
         const data = !isBinary && duplex._readableState.objectMode ? msg.toString() : msg;
-        if (!duplex.push(data))
-          ws.pause();
+        if (!duplex.push(data)) ws.pause();
       });
       ws.once("error", function error(err) {
-        if (duplex.destroyed)
-          return;
+        if (duplex.destroyed) return;
         terminateOnDestroy = false;
         duplex.destroy(err);
       });
       ws.once("close", function close() {
-        if (duplex.destroyed)
-          return;
+        if (duplex.destroyed) return;
         duplex.push(null);
       });
       duplex._destroy = function(err, callback) {
@@ -6690,26 +7636,22 @@ var require_stream = __commonJS({
           callback(err2);
         });
         ws.once("close", function close() {
-          if (!called)
-            callback(err);
+          if (!called) callback(err);
           process.nextTick(emitClose, duplex);
         });
-        if (terminateOnDestroy)
-          ws.terminate();
+        if (terminateOnDestroy) ws.terminate();
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open() {
+          ws.once("open", function open2() {
             duplex._final(callback);
           });
           return;
         }
-        if (ws._socket === null)
-          return;
+        if (ws._socket === null) return;
         if (ws._socket._writableState.finished) {
           callback();
-          if (duplex._readableState.endEmitted)
-            duplex.destroy();
+          if (duplex._readableState.endEmitted) duplex.destroy();
         } else {
           ws._socket.once("finish", function finish() {
             callback();
@@ -6718,12 +7660,11 @@ var require_stream = __commonJS({
         }
       };
       duplex._read = function() {
-        if (ws.isPaused)
-          ws.resume();
+        if (ws.isPaused) ws.resume();
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open() {
+          ws.once("open", function open2() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -6734,16 +7675,16 @@ var require_stream = __commonJS({
       duplex.on("error", duplexOnError);
       return duplex;
     }
-    module.exports = createWebSocketStream2;
+    module2.exports = createWebSocketStream2;
   }
 });
 var require_constants = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/constants.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/constants.js"(exports2, module2) {
+    "use strict";
     var BINARY_TYPES = ["nodebuffer", "arraybuffer", "fragments"];
     var hasBlob = typeof Blob !== "undefined";
-    if (hasBlob)
-      BINARY_TYPES.push("blob");
-    module.exports = {
+    if (hasBlob) BINARY_TYPES.push("blob");
+    module2.exports = {
       BINARY_TYPES,
       EMPTY_BUFFER: Buffer.alloc(0),
       GUID: "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
@@ -6758,49 +7699,44 @@ var require_constants = __commonJS({
   }
 });
 var require_node_gyp_build = __commonJS({
-  "../common/temp/node_modules/.pnpm/node-gyp-build@4.8.4/node_modules/node-gyp-build/node-gyp-build.js"(exports, module) {
-    var fs9 = __require("fs");
-    var path9 = __require("path");
-    var os = __require("os");
+  "../common/temp/node_modules/.pnpm/node-gyp-build@4.8.4/node_modules/node-gyp-build/node-gyp-build.js"(exports2, module2) {
+    var fs15 = __require("fs");
+    var path14 = __require("path");
+    var os3 = __require("os");
     var runtimeRequire = typeof __webpack_require__ === "function" ? __non_webpack_require__ : __require;
     var vars = process.config && process.config.variables || {};
     var prebuildsOnly = !!process.env.PREBUILDS_ONLY;
     var abi = process.versions.modules;
     var runtime = isElectron() ? "electron" : isNwjs() ? "node-webkit" : "node";
-    var arch = process.env.npm_config_arch || os.arch();
-    var platform = process.env.npm_config_platform || os.platform();
-    var libc = process.env.LIBC || (isAlpine(platform) ? "musl" : "glibc");
-    var armv = process.env.ARM_VERSION || (arch === "arm64" ? "8" : vars.arm_version) || "";
+    var arch2 = process.env.npm_config_arch || os3.arch();
+    var platform3 = process.env.npm_config_platform || os3.platform();
+    var libc = process.env.LIBC || (isAlpine(platform3) ? "musl" : "glibc");
+    var armv = process.env.ARM_VERSION || (arch2 === "arm64" ? "8" : vars.arm_version) || "";
     var uv = (process.versions.uv || "").split(".")[0];
-    module.exports = load;
+    module2.exports = load;
     function load(dir) {
       return runtimeRequire(load.resolve(dir));
     }
     load.resolve = load.path = function(dir) {
-      dir = path9.resolve(dir || ".");
+      dir = path14.resolve(dir || ".");
       try {
-        var name = runtimeRequire(path9.join(dir, "package.json")).name.toUpperCase().replace(/-/g, "_");
-        if (process.env[name + "_PREBUILD"])
-          dir = process.env[name + "_PREBUILD"];
+        var name = runtimeRequire(path14.join(dir, "package.json")).name.toUpperCase().replace(/-/g, "_");
+        if (process.env[name + "_PREBUILD"]) dir = process.env[name + "_PREBUILD"];
       } catch (err) {
       }
       if (!prebuildsOnly) {
-        var release = getFirst(path9.join(dir, "build/Release"), matchBuild);
-        if (release)
-          return release;
-        var debug = getFirst(path9.join(dir, "build/Debug"), matchBuild);
-        if (debug)
-          return debug;
+        var release = getFirst(path14.join(dir, "build/Release"), matchBuild);
+        if (release) return release;
+        var debug = getFirst(path14.join(dir, "build/Debug"), matchBuild);
+        if (debug) return debug;
       }
-      var prebuild = resolve3(dir);
-      if (prebuild)
-        return prebuild;
-      var nearby = resolve3(path9.dirname(process.execPath));
-      if (nearby)
-        return nearby;
+      var prebuild = resolve4(dir);
+      if (prebuild) return prebuild;
+      var nearby = resolve4(path14.dirname(process.execPath));
+      if (nearby) return nearby;
       var target = [
-        "platform=" + platform,
-        "arch=" + arch,
+        "platform=" + platform3,
+        "arch=" + arch2,
         "runtime=" + runtime,
         "abi=" + abi,
         "uv=" + uv,
@@ -6809,71 +7745,61 @@ var require_node_gyp_build = __commonJS({
         "node=" + process.versions.node,
         process.versions.electron ? "electron=" + process.versions.electron : "",
         typeof __webpack_require__ === "function" ? "webpack=true" : ""
+        // eslint-disable-line
       ].filter(Boolean).join(" ");
-      throw new Error("No native build was found for " + target + `
-    loaded from: ` + dir + `
-`);
-      function resolve3(dir2) {
-        var tuples = readdirSync7(path9.join(dir2, "prebuilds")).map(parseTuple);
-        var tuple = tuples.filter(matchTuple(platform, arch)).sort(compareTuples)[0];
-        if (!tuple)
-          return;
-        var prebuilds = path9.join(dir2, "prebuilds", tuple.name);
-        var parsed = readdirSync7(prebuilds).map(parseTags);
+      throw new Error("No native build was found for " + target + "\n    loaded from: " + dir + "\n");
+      function resolve4(dir2) {
+        var tuples = readdirSync9(path14.join(dir2, "prebuilds")).map(parseTuple);
+        var tuple = tuples.filter(matchTuple(platform3, arch2)).sort(compareTuples)[0];
+        if (!tuple) return;
+        var prebuilds = path14.join(dir2, "prebuilds", tuple.name);
+        var parsed = readdirSync9(prebuilds).map(parseTags);
         var candidates = parsed.filter(matchTags(runtime, abi));
         var winner = candidates.sort(compareTags(runtime))[0];
-        if (winner)
-          return path9.join(prebuilds, winner.file);
+        if (winner) return path14.join(prebuilds, winner.file);
       }
     };
-    function readdirSync7(dir) {
+    function readdirSync9(dir) {
       try {
-        return fs9.readdirSync(dir);
+        return fs15.readdirSync(dir);
       } catch (err) {
         return [];
       }
     }
     function getFirst(dir, filter) {
-      var files = readdirSync7(dir).filter(filter);
-      return files[0] && path9.join(dir, files[0]);
+      var files = readdirSync9(dir).filter(filter);
+      return files[0] && path14.join(dir, files[0]);
     }
     function matchBuild(name) {
       return /\.node$/.test(name);
     }
     function parseTuple(name) {
-      var arr = name.split("-");
-      if (arr.length !== 2)
-        return;
-      var platform2 = arr[0];
-      var architectures = arr[1].split("+");
-      if (!platform2)
-        return;
-      if (!architectures.length)
-        return;
-      if (!architectures.every(Boolean))
-        return;
-      return { name, platform: platform2, architectures };
+      var arr2 = name.split("-");
+      if (arr2.length !== 2) return;
+      var platform22 = arr2[0];
+      var architectures = arr2[1].split("+");
+      if (!platform22) return;
+      if (!architectures.length) return;
+      if (!architectures.every(Boolean)) return;
+      return { name, platform: platform22, architectures };
     }
-    function matchTuple(platform2, arch2) {
+    function matchTuple(platform22, arch22) {
       return function(tuple) {
-        if (tuple == null)
-          return false;
-        if (tuple.platform !== platform2)
-          return false;
-        return tuple.architectures.includes(arch2);
+        if (tuple == null) return false;
+        if (tuple.platform !== platform22) return false;
+        return tuple.architectures.includes(arch22);
       };
     }
     function compareTuples(a, b) {
       return a.architectures.length - b.architectures.length;
     }
     function parseTags(file) {
-      var arr = file.split(".");
-      var extension = arr.pop();
+      var arr2 = file.split(".");
+      var extension = arr2.pop();
       var tags = { file, specificity: 0 };
-      if (extension !== "node")
-        return;
-      for (var i = 0;i < arr.length; i++) {
-        var tag = arr[i];
+      if (extension !== "node") return;
+      for (var i = 0; i < arr2.length; i++) {
+        var tag = arr2[i];
         if (tag === "node" || tag === "electron" || tag === "node-webkit") {
           tags.runtime = tag;
         } else if (tag === "napi") {
@@ -6895,18 +7821,12 @@ var require_node_gyp_build = __commonJS({
     }
     function matchTags(runtime2, abi2) {
       return function(tags) {
-        if (tags == null)
-          return false;
-        if (tags.runtime && tags.runtime !== runtime2 && !runtimeAgnostic(tags))
-          return false;
-        if (tags.abi && tags.abi !== abi2 && !tags.napi)
-          return false;
-        if (tags.uv && tags.uv !== uv)
-          return false;
-        if (tags.armv && tags.armv !== armv)
-          return false;
-        if (tags.libc && tags.libc !== libc)
-          return false;
+        if (tags == null) return false;
+        if (tags.runtime && tags.runtime !== runtime2 && !runtimeAgnostic(tags)) return false;
+        if (tags.abi && tags.abi !== abi2 && !tags.napi) return false;
+        if (tags.uv && tags.uv !== uv) return false;
+        if (tags.armv && tags.armv !== armv) return false;
+        if (tags.libc && tags.libc !== libc) return false;
         return true;
       };
     }
@@ -6930,14 +7850,12 @@ var require_node_gyp_build = __commonJS({
       return !!(process.versions && process.versions.nw);
     }
     function isElectron() {
-      if (process.versions && process.versions.electron)
-        return true;
-      if (process.env.ELECTRON_RUN_AS_NODE)
-        return true;
+      if (process.versions && process.versions.electron) return true;
+      if (process.env.ELECTRON_RUN_AS_NODE) return true;
       return typeof window !== "undefined" && window.process && window.process.type === "renderer";
     }
-    function isAlpine(platform2) {
-      return platform2 === "linux" && fs9.existsSync("/etc/alpine-release");
+    function isAlpine(platform22) {
+      return platform22 === "linux" && fs15.existsSync("/etc/alpine-release");
     }
     load.parseTags = parseTags;
     load.matchTags = matchTags;
@@ -6948,52 +7866,53 @@ var require_node_gyp_build = __commonJS({
   }
 });
 var require_node_gyp_build2 = __commonJS({
-  "../common/temp/node_modules/.pnpm/node-gyp-build@4.8.4/node_modules/node-gyp-build/index.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/node-gyp-build@4.8.4/node_modules/node-gyp-build/index.js"(exports2, module2) {
     var runtimeRequire = typeof __webpack_require__ === "function" ? __non_webpack_require__ : __require;
     if (typeof runtimeRequire.addon === "function") {
-      module.exports = runtimeRequire.addon.bind(runtimeRequire);
+      module2.exports = runtimeRequire.addon.bind(runtimeRequire);
     } else {
-      module.exports = require_node_gyp_build();
+      module2.exports = require_node_gyp_build();
     }
   }
 });
 var require_fallback = __commonJS({
-  "../common/temp/node_modules/.pnpm/bufferutil@4.0.9/node_modules/bufferutil/fallback.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/bufferutil@4.0.9/node_modules/bufferutil/fallback.js"(exports2, module2) {
+    "use strict";
     var mask = (source, mask2, output, offset, length) => {
-      for (var i = 0;i < length; i++) {
+      for (var i = 0; i < length; i++) {
         output[offset + i] = source[i] ^ mask2[i & 3];
       }
     };
     var unmask = (buffer, mask2) => {
       const length = buffer.length;
-      for (var i = 0;i < length; i++) {
+      for (var i = 0; i < length; i++) {
         buffer[i] ^= mask2[i & 3];
       }
     };
-    module.exports = { mask, unmask };
+    module2.exports = { mask, unmask };
   }
 });
 var require_bufferutil = __commonJS({
-  "../common/temp/node_modules/.pnpm/bufferutil@4.0.9/node_modules/bufferutil/index.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/bufferutil@4.0.9/node_modules/bufferutil/index.js"(exports2, module2) {
+    "use strict";
     try {
-      module.exports = require_node_gyp_build2()(__dirname);
+      module2.exports = require_node_gyp_build2()(__dirname);
     } catch (e) {
-      module.exports = require_fallback();
+      module2.exports = require_fallback();
     }
   }
 });
 var require_buffer_util = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/buffer-util.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/buffer-util.js"(exports2, module2) {
+    "use strict";
     var { EMPTY_BUFFER } = require_constants();
     var FastBuffer = Buffer[Symbol.species];
     function concat(list, totalLength) {
-      if (list.length === 0)
-        return EMPTY_BUFFER;
-      if (list.length === 1)
-        return list[0];
+      if (list.length === 0) return EMPTY_BUFFER;
+      if (list.length === 1) return list[0];
       const target = Buffer.allocUnsafe(totalLength);
       let offset = 0;
-      for (let i = 0;i < list.length; i++) {
+      for (let i = 0; i < list.length; i++) {
         const buf = list[i];
         target.set(buf, offset);
         offset += buf.length;
@@ -7004,12 +7923,12 @@ var require_buffer_util = __commonJS({
       return target;
     }
     function _mask(source, mask, output, offset, length) {
-      for (let i = 0;i < length; i++) {
+      for (let i = 0; i < length; i++) {
         output[offset + i] = source[i] ^ mask[i & 3];
       }
     }
     function _unmask(buffer, mask) {
-      for (let i = 0;i < buffer.length; i++) {
+      for (let i = 0; i < buffer.length; i++) {
         buffer[i] ^= mask[i & 3];
       }
     }
@@ -7021,8 +7940,7 @@ var require_buffer_util = __commonJS({
     }
     function toBuffer(data) {
       toBuffer.readOnly = true;
-      if (Buffer.isBuffer(data))
-        return data;
+      if (Buffer.isBuffer(data)) return data;
       let buf;
       if (data instanceof ArrayBuffer) {
         buf = new FastBuffer(data);
@@ -7034,7 +7952,7 @@ var require_buffer_util = __commonJS({
       }
       return buf;
     }
-    module.exports = {
+    module2.exports = {
       concat,
       mask: _mask,
       toArrayBuffer,
@@ -7044,17 +7962,13 @@ var require_buffer_util = __commonJS({
     if (!process.env.WS_NO_BUFFER_UTIL) {
       try {
         const bufferUtil = require_bufferutil();
-        module.exports.mask = function(source, mask, output, offset, length) {
-          if (length < 48)
-            _mask(source, mask, output, offset, length);
-          else
-            bufferUtil.mask(source, mask, output, offset, length);
+        module2.exports.mask = function(source, mask, output, offset, length) {
+          if (length < 48) _mask(source, mask, output, offset, length);
+          else bufferUtil.mask(source, mask, output, offset, length);
         };
-        module.exports.unmask = function(buffer, mask) {
-          if (buffer.length < 32)
-            _unmask(buffer, mask);
-          else
-            bufferUtil.unmask(buffer, mask);
+        module2.exports.unmask = function(buffer, mask) {
+          if (buffer.length < 32) _unmask(buffer, mask);
+          else bufferUtil.unmask(buffer, mask);
         };
       } catch (e) {
       }
@@ -7062,10 +7976,17 @@ var require_buffer_util = __commonJS({
   }
 });
 var require_limiter = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/limiter.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/limiter.js"(exports2, module2) {
+    "use strict";
     var kDone = Symbol("kDone");
     var kRun = Symbol("kRun");
     var Limiter = class {
+      /**
+       * Creates a new `Limiter`.
+       *
+       * @param {Number} [concurrency=Infinity] The maximum number of jobs allowed
+       *     to run concurrently
+       */
       constructor(concurrency) {
         this[kDone] = () => {
           this.pending--;
@@ -7075,13 +7996,23 @@ var require_limiter = __commonJS({
         this.jobs = [];
         this.pending = 0;
       }
+      /**
+       * Adds a job to the queue.
+       *
+       * @param {Function} job The job to run
+       * @public
+       */
       add(job) {
         this.jobs.push(job);
         this[kRun]();
       }
+      /**
+       * Removes a job from the queue and runs it if possible.
+       *
+       * @private
+       */
       [kRun]() {
-        if (this.pending === this.concurrency)
-          return;
+        if (this.pending === this.concurrency) return;
         if (this.jobs.length) {
           const job = this.jobs.shift();
           this.pending++;
@@ -7089,11 +8020,12 @@ var require_limiter = __commonJS({
         }
       }
     };
-    module.exports = Limiter;
+    module2.exports = Limiter;
   }
 });
 var require_permessage_deflate = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/permessage-deflate.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/permessage-deflate.js"(exports2, module2) {
+    "use strict";
     var zlib = __require("zlib");
     var bufferUtil = require_buffer_util();
     var Limiter = require_limiter();
@@ -7107,22 +8039,55 @@ var require_permessage_deflate = __commonJS({
     var kError = Symbol("error");
     var zlibLimiter;
     var PerMessageDeflate = class {
+      /**
+       * Creates a PerMessageDeflate instance.
+       *
+       * @param {Object} [options] Configuration options
+       * @param {(Boolean|Number)} [options.clientMaxWindowBits] Advertise support
+       *     for, or request, a custom client window size
+       * @param {Boolean} [options.clientNoContextTakeover=false] Advertise/
+       *     acknowledge disabling of client context takeover
+       * @param {Number} [options.concurrencyLimit=10] The number of concurrent
+       *     calls to zlib
+       * @param {(Boolean|Number)} [options.serverMaxWindowBits] Request/confirm the
+       *     use of a custom server window size
+       * @param {Boolean} [options.serverNoContextTakeover=false] Request/accept
+       *     disabling of server context takeover
+       * @param {Number} [options.threshold=1024] Size (in bytes) below which
+       *     messages should not be compressed if context takeover is disabled
+       * @param {Object} [options.zlibDeflateOptions] Options to pass to zlib on
+       *     deflate
+       * @param {Object} [options.zlibInflateOptions] Options to pass to zlib on
+       *     inflate
+       * @param {Boolean} [isServer=false] Create the instance in either server or
+       *     client mode
+       * @param {Number} [maxPayload=0] The maximum allowed message length
+       */
       constructor(options, isServer, maxPayload) {
         this._maxPayload = maxPayload | 0;
         this._options = options || {};
-        this._threshold = this._options.threshold !== undefined ? this._options.threshold : 1024;
+        this._threshold = this._options.threshold !== void 0 ? this._options.threshold : 1024;
         this._isServer = !!isServer;
         this._deflate = null;
         this._inflate = null;
         this.params = null;
         if (!zlibLimiter) {
-          const concurrency = this._options.concurrencyLimit !== undefined ? this._options.concurrencyLimit : 10;
+          const concurrency = this._options.concurrencyLimit !== void 0 ? this._options.concurrencyLimit : 10;
           zlibLimiter = new Limiter(concurrency);
         }
       }
+      /**
+       * @type {String}
+       */
       static get extensionName() {
         return "permessage-deflate";
       }
+      /**
+       * Create an extension negotiation offer.
+       *
+       * @return {Object} Extension parameters
+       * @public
+       */
       offer() {
         const params = {};
         if (this._options.serverNoContextTakeover) {
@@ -7141,11 +8106,23 @@ var require_permessage_deflate = __commonJS({
         }
         return params;
       }
+      /**
+       * Accept an extension negotiation offer/response.
+       *
+       * @param {Array} configurations The extension negotiation offers/reponse
+       * @return {Object} Accepted configuration
+       * @public
+       */
       accept(configurations) {
         configurations = this.normalizeParams(configurations);
         this.params = this._isServer ? this.acceptAsServer(configurations) : this.acceptAsClient(configurations);
         return this.params;
       }
+      /**
+       * Releases all resources used by the extension.
+       *
+       * @public
+       */
       cleanup() {
         if (this._inflate) {
           this._inflate.close();
@@ -7156,10 +8133,21 @@ var require_permessage_deflate = __commonJS({
           this._deflate.close();
           this._deflate = null;
           if (callback) {
-            callback(new Error("The deflate stream was closed while data was being processed"));
+            callback(
+              new Error(
+                "The deflate stream was closed while data was being processed"
+              )
+            );
           }
         }
       }
+      /**
+       *  Accept an extension negotiation offer.
+       *
+       * @param {Array} offers The extension negotiation offers
+       * @return {Object} Accepted configuration
+       * @private
+       */
       acceptAsServer(offers) {
         const opts = this._options;
         const accepted = offers.find((params) => {
@@ -7187,6 +8175,13 @@ var require_permessage_deflate = __commonJS({
         }
         return accepted;
       }
+      /**
+       * Accept the extension negotiation response.
+       *
+       * @param {Array} response The extension negotiation response
+       * @return {Object} Accepted configuration
+       * @private
+       */
       acceptAsClient(response) {
         const params = response[0];
         if (this._options.clientNoContextTakeover === false && params.client_no_context_takeover) {
@@ -7197,10 +8192,19 @@ var require_permessage_deflate = __commonJS({
             params.client_max_window_bits = this._options.clientMaxWindowBits;
           }
         } else if (this._options.clientMaxWindowBits === false || typeof this._options.clientMaxWindowBits === "number" && params.client_max_window_bits > this._options.clientMaxWindowBits) {
-          throw new Error('Unexpected or invalid parameter "client_max_window_bits"');
+          throw new Error(
+            'Unexpected or invalid parameter "client_max_window_bits"'
+          );
         }
         return params;
       }
+      /**
+       * Normalize parameters.
+       *
+       * @param {Array} configurations The extension negotiation offers/reponse
+       * @return {Array} The offers/response with normalized parameters
+       * @private
+       */
       normalizeParams(configurations) {
         configurations.forEach((params) => {
           Object.keys(params).forEach((key) => {
@@ -7213,21 +8217,29 @@ var require_permessage_deflate = __commonJS({
               if (value !== true) {
                 const num = +value;
                 if (!Number.isInteger(num) || num < 8 || num > 15) {
-                  throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+                  throw new TypeError(
+                    `Invalid value for parameter "${key}": ${value}`
+                  );
                 }
                 value = num;
               } else if (!this._isServer) {
-                throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+                throw new TypeError(
+                  `Invalid value for parameter "${key}": ${value}`
+                );
               }
             } else if (key === "server_max_window_bits") {
               const num = +value;
               if (!Number.isInteger(num) || num < 8 || num > 15) {
-                throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+                throw new TypeError(
+                  `Invalid value for parameter "${key}": ${value}`
+                );
               }
               value = num;
             } else if (key === "client_no_context_takeover" || key === "server_no_context_takeover") {
               if (value !== true) {
-                throw new TypeError(`Invalid value for parameter "${key}": ${value}`);
+                throw new TypeError(
+                  `Invalid value for parameter "${key}": ${value}`
+                );
               }
             } else {
               throw new Error(`Unknown parameter "${key}"`);
@@ -7237,6 +8249,14 @@ var require_permessage_deflate = __commonJS({
         });
         return configurations;
       }
+      /**
+       * Decompress data. Concurrency limited.
+       *
+       * @param {Buffer} data Compressed data
+       * @param {Boolean} fin Specifies whether or not this is the last fragment
+       * @param {Function} callback Callback
+       * @public
+       */
       decompress(data, fin, callback) {
         zlibLimiter.add((done) => {
           this._decompress(data, fin, (err, result) => {
@@ -7245,6 +8265,14 @@ var require_permessage_deflate = __commonJS({
           });
         });
       }
+      /**
+       * Compress data. Concurrency limited.
+       *
+       * @param {(Buffer|String)} data Data to compress
+       * @param {Boolean} fin Specifies whether or not this is the last fragment
+       * @param {Function} callback Callback
+       * @public
+       */
       compress(data, fin, callback) {
         zlibLimiter.add((done) => {
           this._compress(data, fin, (err, result) => {
@@ -7253,6 +8281,14 @@ var require_permessage_deflate = __commonJS({
           });
         });
       }
+      /**
+       * Decompress data.
+       *
+       * @param {Buffer} data Compressed data
+       * @param {Boolean} fin Specifies whether or not this is the last fragment
+       * @param {Function} callback Callback
+       * @private
+       */
       _decompress(data, fin, callback) {
         const endpoint = this._isServer ? "client" : "server";
         if (!this._inflate) {
@@ -7270,8 +8306,7 @@ var require_permessage_deflate = __commonJS({
         }
         this._inflate[kCallback] = callback;
         this._inflate.write(data);
-        if (fin)
-          this._inflate.write(TRAILER);
+        if (fin) this._inflate.write(TRAILER);
         this._inflate.flush(() => {
           const err = this._inflate[kError];
           if (err) {
@@ -7280,7 +8315,10 @@ var require_permessage_deflate = __commonJS({
             callback(err);
             return;
           }
-          const data2 = bufferUtil.concat(this._inflate[kBuffers], this._inflate[kTotalLength]);
+          const data2 = bufferUtil.concat(
+            this._inflate[kBuffers],
+            this._inflate[kTotalLength]
+          );
           if (this._inflate._readableState.endEmitted) {
             this._inflate.close();
             this._inflate = null;
@@ -7294,6 +8332,14 @@ var require_permessage_deflate = __commonJS({
           callback(null, data2);
         });
       }
+      /**
+       * Compress data.
+       *
+       * @param {(Buffer|String)} data Data to compress
+       * @param {Boolean} fin Specifies whether or not this is the last fragment
+       * @param {Function} callback Callback
+       * @private
+       */
       _compress(data, fin, callback) {
         const endpoint = this._isServer ? "server" : "client";
         if (!this._deflate) {
@@ -7313,7 +8359,10 @@ var require_permessage_deflate = __commonJS({
           if (!this._deflate) {
             return;
           }
-          let data2 = bufferUtil.concat(this._deflate[kBuffers], this._deflate[kTotalLength]);
+          let data2 = bufferUtil.concat(
+            this._deflate[kBuffers],
+            this._deflate[kTotalLength]
+          );
           if (fin) {
             data2 = new FastBuffer(data2.buffer, data2.byteOffset, data2.length - 4);
           }
@@ -7327,7 +8376,7 @@ var require_permessage_deflate = __commonJS({
         });
       }
     };
-    module.exports = PerMessageDeflate;
+    module2.exports = PerMessageDeflate;
     function deflateOnData(chunk) {
       this[kBuffers].push(chunk);
       this[kTotalLength] += chunk.length;
@@ -7352,7 +8401,8 @@ var require_permessage_deflate = __commonJS({
   }
 });
 var require_validation = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/validation.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/validation.js"(exports2, module2) {
+    "use strict";
     var { isUtf8 } = __require("buffer");
     var { hasBlob } = require_constants();
     var tokenChars = [
@@ -7372,6 +8422,7 @@ var require_validation = __commonJS({
       0,
       0,
       0,
+      // 0 - 15
       0,
       0,
       0,
@@ -7388,6 +8439,7 @@ var require_validation = __commonJS({
       0,
       0,
       0,
+      // 16 - 31
       0,
       1,
       0,
@@ -7404,6 +8456,7 @@ var require_validation = __commonJS({
       1,
       1,
       0,
+      // 32 - 47
       1,
       1,
       1,
@@ -7420,6 +8473,7 @@ var require_validation = __commonJS({
       0,
       0,
       0,
+      // 48 - 63
       0,
       1,
       1,
@@ -7436,6 +8490,7 @@ var require_validation = __commonJS({
       1,
       1,
       1,
+      // 64 - 79
       1,
       1,
       1,
@@ -7452,6 +8507,7 @@ var require_validation = __commonJS({
       0,
       1,
       1,
+      // 80 - 95
       1,
       1,
       1,
@@ -7468,6 +8524,7 @@ var require_validation = __commonJS({
       1,
       1,
       1,
+      // 96 - 111
       1,
       1,
       1,
@@ -7484,9 +8541,10 @@ var require_validation = __commonJS({
       0,
       1,
       0
+      // 112 - 127
     ];
     function isValidStatusCode(code2) {
-      return code2 >= 1000 && code2 <= 1014 && code2 !== 1004 && code2 !== 1005 && code2 !== 1006 || code2 >= 3000 && code2 <= 4999;
+      return code2 >= 1e3 && code2 <= 1014 && code2 !== 1004 && code2 !== 1005 && code2 !== 1006 || code2 >= 3e3 && code2 <= 4999;
     }
     function _isValidUTF8(buf) {
       const len = buf.length;
@@ -7500,12 +8558,14 @@ var require_validation = __commonJS({
           }
           i += 2;
         } else if ((buf[i] & 240) === 224) {
-          if (i + 2 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || buf[i] === 224 && (buf[i + 1] & 224) === 128 || buf[i] === 237 && (buf[i + 1] & 224) === 160) {
+          if (i + 2 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || buf[i] === 224 && (buf[i + 1] & 224) === 128 || // Overlong
+          buf[i] === 237 && (buf[i + 1] & 224) === 160) {
             return false;
           }
           i += 3;
         } else if ((buf[i] & 248) === 240) {
-          if (i + 3 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || (buf[i + 3] & 192) !== 128 || buf[i] === 240 && (buf[i + 1] & 240) === 128 || buf[i] === 244 && buf[i + 1] > 143 || buf[i] > 244) {
+          if (i + 3 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || (buf[i + 3] & 192) !== 128 || buf[i] === 240 && (buf[i + 1] & 240) === 128 || // Overlong
+          buf[i] === 244 && buf[i + 1] > 143 || buf[i] > 244) {
             return false;
           }
           i += 4;
@@ -7518,20 +8578,20 @@ var require_validation = __commonJS({
     function isBlob(value) {
       return hasBlob && typeof value === "object" && typeof value.arrayBuffer === "function" && typeof value.type === "string" && typeof value.stream === "function" && (value[Symbol.toStringTag] === "Blob" || value[Symbol.toStringTag] === "File");
     }
-    module.exports = {
+    module2.exports = {
       isBlob,
       isValidStatusCode,
       isValidUTF8: _isValidUTF8,
       tokenChars
     };
     if (isUtf8) {
-      module.exports.isValidUTF8 = function(buf) {
+      module2.exports.isValidUTF8 = function(buf) {
         return buf.length < 24 ? _isValidUTF8(buf) : isUtf8(buf);
       };
     } else if (!process.env.WS_NO_UTF_8_VALIDATE) {
       try {
         const isValidUTF8 = __require("utf-8-validate");
-        module.exports.isValidUTF8 = function(buf) {
+        module2.exports.isValidUTF8 = function(buf) {
           return buf.length < 32 ? _isValidUTF8(buf) : isValidUTF8(buf);
         };
       } catch (e) {
@@ -7540,7 +8600,8 @@ var require_validation = __commonJS({
   }
 });
 var require_receiver = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/receiver.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/receiver.js"(exports2, module2) {
+    "use strict";
     var { Writable } = __require("stream");
     var PerMessageDeflate = require_permessage_deflate();
     var {
@@ -7560,20 +8621,36 @@ var require_receiver = __commonJS({
     var INFLATING = 5;
     var DEFER_EVENT = 6;
     var Receiver2 = class extends Writable {
+      /**
+       * Creates a Receiver instance.
+       *
+       * @param {Object} [options] Options object
+       * @param {Boolean} [options.allowSynchronousEvents=true] Specifies whether
+       *     any of the `'message'`, `'ping'`, and `'pong'` events can be emitted
+       *     multiple times in the same tick
+       * @param {String} [options.binaryType=nodebuffer] The type for binary data
+       * @param {Object} [options.extensions] An object containing the negotiated
+       *     extensions
+       * @param {Boolean} [options.isServer=false] Specifies whether to operate in
+       *     client or server mode
+       * @param {Number} [options.maxPayload=0] The maximum allowed message length
+       * @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
+       *     not to skip UTF-8 validation for text and close messages
+       */
       constructor(options = {}) {
         super();
-        this._allowSynchronousEvents = options.allowSynchronousEvents !== undefined ? options.allowSynchronousEvents : true;
+        this._allowSynchronousEvents = options.allowSynchronousEvents !== void 0 ? options.allowSynchronousEvents : true;
         this._binaryType = options.binaryType || BINARY_TYPES[0];
         this._extensions = options.extensions || {};
         this._isServer = !!options.isServer;
         this._maxPayload = options.maxPayload | 0;
         this._skipUTF8Validation = !!options.skipUTF8Validation;
-        this[kWebSocket] = undefined;
+        this[kWebSocket] = void 0;
         this._bufferedBytes = 0;
         this._buffers = [];
         this._compressed = false;
         this._payloadLength = 0;
-        this._mask = undefined;
+        this._mask = void 0;
         this._fragmented = 0;
         this._masked = false;
         this._fin = false;
@@ -7585,20 +8662,37 @@ var require_receiver = __commonJS({
         this._loop = false;
         this._state = GET_INFO;
       }
+      /**
+       * Implements `Writable.prototype._write()`.
+       *
+       * @param {Buffer} chunk The chunk of data to write
+       * @param {String} encoding The character encoding of `chunk`
+       * @param {Function} cb Callback
+       * @private
+       */
       _write(chunk, encoding, cb) {
-        if (this._opcode === 8 && this._state == GET_INFO)
-          return cb();
+        if (this._opcode === 8 && this._state == GET_INFO) return cb();
         this._bufferedBytes += chunk.length;
         this._buffers.push(chunk);
         this.startLoop(cb);
       }
+      /**
+       * Consumes `n` bytes from the buffered data.
+       *
+       * @param {Number} n The number of bytes to consume
+       * @return {Buffer} The consumed bytes
+       * @private
+       */
       consume(n) {
         this._bufferedBytes -= n;
-        if (n === this._buffers[0].length)
-          return this._buffers.shift();
+        if (n === this._buffers[0].length) return this._buffers.shift();
         if (n < this._buffers[0].length) {
           const buf = this._buffers[0];
-          this._buffers[0] = new FastBuffer(buf.buffer, buf.byteOffset + n, buf.length - n);
+          this._buffers[0] = new FastBuffer(
+            buf.buffer,
+            buf.byteOffset + n,
+            buf.length - n
+          );
           return new FastBuffer(buf.buffer, buf.byteOffset, n);
         }
         const dst = Buffer.allocUnsafe(n);
@@ -7609,12 +8703,22 @@ var require_receiver = __commonJS({
             dst.set(this._buffers.shift(), offset);
           } else {
             dst.set(new Uint8Array(buf.buffer, buf.byteOffset, n), offset);
-            this._buffers[0] = new FastBuffer(buf.buffer, buf.byteOffset + n, buf.length - n);
+            this._buffers[0] = new FastBuffer(
+              buf.buffer,
+              buf.byteOffset + n,
+              buf.length - n
+            );
           }
           n -= buf.length;
         } while (n > 0);
         return dst;
       }
+      /**
+       * Starts the parsing loop.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
       startLoop(cb) {
         this._loop = true;
         do {
@@ -7640,9 +8744,14 @@ var require_receiver = __commonJS({
               return;
           }
         } while (this._loop);
-        if (!this._errored)
-          cb();
+        if (!this._errored) cb();
       }
+      /**
+       * Reads the first two bytes of a frame.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
       getInfo(cb) {
         if (this._bufferedBytes < 2) {
           this._loop = false;
@@ -7650,13 +8759,25 @@ var require_receiver = __commonJS({
         }
         const buf = this.consume(2);
         if ((buf[0] & 48) !== 0) {
-          const error = this.createError(RangeError, "RSV2 and RSV3 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_2_3");
+          const error = this.createError(
+            RangeError,
+            "RSV2 and RSV3 must be clear",
+            true,
+            1002,
+            "WS_ERR_UNEXPECTED_RSV_2_3"
+          );
           cb(error);
           return;
         }
         const compressed = (buf[0] & 64) === 64;
         if (compressed && !this._extensions[PerMessageDeflate.extensionName]) {
-          const error = this.createError(RangeError, "RSV1 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_1");
+          const error = this.createError(
+            RangeError,
+            "RSV1 must be clear",
+            true,
+            1002,
+            "WS_ERR_UNEXPECTED_RSV_1"
+          );
           cb(error);
           return;
         }
@@ -7665,65 +8786,121 @@ var require_receiver = __commonJS({
         this._payloadLength = buf[1] & 127;
         if (this._opcode === 0) {
           if (compressed) {
-            const error = this.createError(RangeError, "RSV1 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_1");
+            const error = this.createError(
+              RangeError,
+              "RSV1 must be clear",
+              true,
+              1002,
+              "WS_ERR_UNEXPECTED_RSV_1"
+            );
             cb(error);
             return;
           }
           if (!this._fragmented) {
-            const error = this.createError(RangeError, "invalid opcode 0", true, 1002, "WS_ERR_INVALID_OPCODE");
+            const error = this.createError(
+              RangeError,
+              "invalid opcode 0",
+              true,
+              1002,
+              "WS_ERR_INVALID_OPCODE"
+            );
             cb(error);
             return;
           }
           this._opcode = this._fragmented;
         } else if (this._opcode === 1 || this._opcode === 2) {
           if (this._fragmented) {
-            const error = this.createError(RangeError, `invalid opcode ${this._opcode}`, true, 1002, "WS_ERR_INVALID_OPCODE");
+            const error = this.createError(
+              RangeError,
+              `invalid opcode ${this._opcode}`,
+              true,
+              1002,
+              "WS_ERR_INVALID_OPCODE"
+            );
             cb(error);
             return;
           }
           this._compressed = compressed;
         } else if (this._opcode > 7 && this._opcode < 11) {
           if (!this._fin) {
-            const error = this.createError(RangeError, "FIN must be set", true, 1002, "WS_ERR_EXPECTED_FIN");
+            const error = this.createError(
+              RangeError,
+              "FIN must be set",
+              true,
+              1002,
+              "WS_ERR_EXPECTED_FIN"
+            );
             cb(error);
             return;
           }
           if (compressed) {
-            const error = this.createError(RangeError, "RSV1 must be clear", true, 1002, "WS_ERR_UNEXPECTED_RSV_1");
+            const error = this.createError(
+              RangeError,
+              "RSV1 must be clear",
+              true,
+              1002,
+              "WS_ERR_UNEXPECTED_RSV_1"
+            );
             cb(error);
             return;
           }
           if (this._payloadLength > 125 || this._opcode === 8 && this._payloadLength === 1) {
-            const error = this.createError(RangeError, `invalid payload length ${this._payloadLength}`, true, 1002, "WS_ERR_INVALID_CONTROL_PAYLOAD_LENGTH");
+            const error = this.createError(
+              RangeError,
+              `invalid payload length ${this._payloadLength}`,
+              true,
+              1002,
+              "WS_ERR_INVALID_CONTROL_PAYLOAD_LENGTH"
+            );
             cb(error);
             return;
           }
         } else {
-          const error = this.createError(RangeError, `invalid opcode ${this._opcode}`, true, 1002, "WS_ERR_INVALID_OPCODE");
+          const error = this.createError(
+            RangeError,
+            `invalid opcode ${this._opcode}`,
+            true,
+            1002,
+            "WS_ERR_INVALID_OPCODE"
+          );
           cb(error);
           return;
         }
-        if (!this._fin && !this._fragmented)
-          this._fragmented = this._opcode;
+        if (!this._fin && !this._fragmented) this._fragmented = this._opcode;
         this._masked = (buf[1] & 128) === 128;
         if (this._isServer) {
           if (!this._masked) {
-            const error = this.createError(RangeError, "MASK must be set", true, 1002, "WS_ERR_EXPECTED_MASK");
+            const error = this.createError(
+              RangeError,
+              "MASK must be set",
+              true,
+              1002,
+              "WS_ERR_EXPECTED_MASK"
+            );
             cb(error);
             return;
           }
         } else if (this._masked) {
-          const error = this.createError(RangeError, "MASK must be clear", true, 1002, "WS_ERR_UNEXPECTED_MASK");
+          const error = this.createError(
+            RangeError,
+            "MASK must be clear",
+            true,
+            1002,
+            "WS_ERR_UNEXPECTED_MASK"
+          );
           cb(error);
           return;
         }
-        if (this._payloadLength === 126)
-          this._state = GET_PAYLOAD_LENGTH_16;
-        else if (this._payloadLength === 127)
-          this._state = GET_PAYLOAD_LENGTH_64;
-        else
-          this.haveLength(cb);
+        if (this._payloadLength === 126) this._state = GET_PAYLOAD_LENGTH_16;
+        else if (this._payloadLength === 127) this._state = GET_PAYLOAD_LENGTH_64;
+        else this.haveLength(cb);
       }
+      /**
+       * Gets extended payload length (7+16).
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
       getPayloadLength16(cb) {
         if (this._bufferedBytes < 2) {
           this._loop = false;
@@ -7732,6 +8909,12 @@ var require_receiver = __commonJS({
         this._payloadLength = this.consume(2).readUInt16BE(0);
         this.haveLength(cb);
       }
+      /**
+       * Gets extended payload length (7+64).
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
       getPayloadLength64(cb) {
         if (this._bufferedBytes < 8) {
           this._loop = false;
@@ -7740,27 +8923,48 @@ var require_receiver = __commonJS({
         const buf = this.consume(8);
         const num = buf.readUInt32BE(0);
         if (num > Math.pow(2, 53 - 32) - 1) {
-          const error = this.createError(RangeError, "Unsupported WebSocket frame: payload length > 2^53 - 1", false, 1009, "WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH");
+          const error = this.createError(
+            RangeError,
+            "Unsupported WebSocket frame: payload length > 2^53 - 1",
+            false,
+            1009,
+            "WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH"
+          );
           cb(error);
           return;
         }
         this._payloadLength = num * Math.pow(2, 32) + buf.readUInt32BE(4);
         this.haveLength(cb);
       }
+      /**
+       * Payload length has been read.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
       haveLength(cb) {
         if (this._payloadLength && this._opcode < 8) {
           this._totalPayloadLength += this._payloadLength;
           if (this._totalPayloadLength > this._maxPayload && this._maxPayload > 0) {
-            const error = this.createError(RangeError, "Max payload size exceeded", false, 1009, "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
+            const error = this.createError(
+              RangeError,
+              "Max payload size exceeded",
+              false,
+              1009,
+              "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH"
+            );
             cb(error);
             return;
           }
         }
-        if (this._masked)
-          this._state = GET_MASK;
-        else
-          this._state = GET_DATA;
+        if (this._masked) this._state = GET_MASK;
+        else this._state = GET_DATA;
       }
+      /**
+       * Reads mask bytes.
+       *
+       * @private
+       */
       getMask() {
         if (this._bufferedBytes < 4) {
           this._loop = false;
@@ -7769,6 +8973,12 @@ var require_receiver = __commonJS({
         this._mask = this.consume(4);
         this._state = GET_DATA;
       }
+      /**
+       * Reads data bytes.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
       getData(cb) {
         let data = EMPTY_BUFFER;
         if (this._payloadLength) {
@@ -7796,25 +9006,42 @@ var require_receiver = __commonJS({
         }
         this.dataMessage(cb);
       }
+      /**
+       * Decompresses data.
+       *
+       * @param {Buffer} data Compressed data
+       * @param {Function} cb Callback
+       * @private
+       */
       decompress(data, cb) {
         const perMessageDeflate = this._extensions[PerMessageDeflate.extensionName];
         perMessageDeflate.decompress(data, this._fin, (err, buf) => {
-          if (err)
-            return cb(err);
+          if (err) return cb(err);
           if (buf.length) {
             this._messageLength += buf.length;
             if (this._messageLength > this._maxPayload && this._maxPayload > 0) {
-              const error = this.createError(RangeError, "Max payload size exceeded", false, 1009, "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
+              const error = this.createError(
+                RangeError,
+                "Max payload size exceeded",
+                false,
+                1009,
+                "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH"
+              );
               cb(error);
               return;
             }
             this._fragments.push(buf);
           }
           this.dataMessage(cb);
-          if (this._state === GET_INFO)
-            this.startLoop(cb);
+          if (this._state === GET_INFO) this.startLoop(cb);
         });
       }
+      /**
+       * Handles a data message.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
       dataMessage(cb) {
         if (!this._fin) {
           this._state = GET_INFO;
@@ -7851,7 +9078,13 @@ var require_receiver = __commonJS({
         } else {
           const buf = concat(fragments, messageLength);
           if (!this._skipUTF8Validation && !isValidUTF8(buf)) {
-            const error = this.createError(Error, "invalid UTF-8 sequence", true, 1007, "WS_ERR_INVALID_UTF8");
+            const error = this.createError(
+              Error,
+              "invalid UTF-8 sequence",
+              true,
+              1007,
+              "WS_ERR_INVALID_UTF8"
+            );
             cb(error);
             return;
           }
@@ -7868,6 +9101,13 @@ var require_receiver = __commonJS({
           }
         }
       }
+      /**
+       * Handles a control message.
+       *
+       * @param {Buffer} data Data to handle
+       * @return {(Error|RangeError|undefined)} A possible error
+       * @private
+       */
       controlMessage(data, cb) {
         if (this._opcode === 8) {
           if (data.length === 0) {
@@ -7877,13 +9117,29 @@ var require_receiver = __commonJS({
           } else {
             const code2 = data.readUInt16BE(0);
             if (!isValidStatusCode(code2)) {
-              const error = this.createError(RangeError, `invalid status code ${code2}`, true, 1002, "WS_ERR_INVALID_CLOSE_CODE");
+              const error = this.createError(
+                RangeError,
+                `invalid status code ${code2}`,
+                true,
+                1002,
+                "WS_ERR_INVALID_CLOSE_CODE"
+              );
               cb(error);
               return;
             }
-            const buf = new FastBuffer(data.buffer, data.byteOffset + 2, data.length - 2);
+            const buf = new FastBuffer(
+              data.buffer,
+              data.byteOffset + 2,
+              data.length - 2
+            );
             if (!this._skipUTF8Validation && !isValidUTF8(buf)) {
-              const error = this.createError(Error, "invalid UTF-8 sequence", true, 1007, "WS_ERR_INVALID_UTF8");
+              const error = this.createError(
+                Error,
+                "invalid UTF-8 sequence",
+                true,
+                1007,
+                "WS_ERR_INVALID_UTF8"
+              );
               cb(error);
               return;
             }
@@ -7906,21 +9162,36 @@ var require_receiver = __commonJS({
           });
         }
       }
+      /**
+       * Builds an error object.
+       *
+       * @param {function(new:Error|RangeError)} ErrorCtor The error constructor
+       * @param {String} message The error message
+       * @param {Boolean} prefix Specifies whether or not to add a default prefix to
+       *     `message`
+       * @param {Number} statusCode The status code
+       * @param {String} errorCode The exposed error code
+       * @return {(Error|RangeError)} The error
+       * @private
+       */
       createError(ErrorCtor, message, prefix, statusCode, errorCode) {
         this._loop = false;
         this._errored = true;
-        const err = new ErrorCtor(prefix ? `Invalid WebSocket frame: ${message}` : message);
+        const err = new ErrorCtor(
+          prefix ? `Invalid WebSocket frame: ${message}` : message
+        );
         Error.captureStackTrace(err, this.createError);
         err.code = errorCode;
         err[kStatusCode] = statusCode;
         return err;
       }
     };
-    module.exports = Receiver2;
+    module2.exports = Receiver2;
   }
 });
 var require_sender = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/sender.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/sender.js"(exports2, module2) {
+    "use strict";
     var { Duplex } = __require("stream");
     var { randomFillSync } = __require("crypto");
     var PerMessageDeflate = require_permessage_deflate();
@@ -7936,6 +9207,14 @@ var require_sender = __commonJS({
     var DEFLATING = 1;
     var GET_BLOB_DATA = 2;
     var Sender2 = class _Sender {
+      /**
+       * Creates a Sender instance.
+       *
+       * @param {Duplex} socket The connection socket
+       * @param {Object} [extensions] An object containing the negotiated extensions
+       * @param {Function} [generateMask] The function used to generate the masking
+       *     key
+       */
       constructor(socket, extensions, generateMask) {
         this._extensions = extensions || {};
         if (generateMask) {
@@ -7949,8 +9228,29 @@ var require_sender = __commonJS({
         this._queue = [];
         this._state = DEFAULT;
         this.onerror = NOOP;
-        this[kWebSocket] = undefined;
+        this[kWebSocket] = void 0;
       }
+      /**
+       * Frames a piece of data according to the HyBi WebSocket protocol.
+       *
+       * @param {(Buffer|String)} data The data to frame
+       * @param {Object} options Options object
+       * @param {Boolean} [options.fin=false] Specifies whether or not to set the
+       *     FIN bit
+       * @param {Function} [options.generateMask] The function used to generate the
+       *     masking key
+       * @param {Boolean} [options.mask=false] Specifies whether or not to mask
+       *     `data`
+       * @param {Buffer} [options.maskBuffer] The buffer used to store the masking
+       *     key
+       * @param {Number} options.opcode The opcode
+       * @param {Boolean} [options.readOnly=false] Specifies whether `data` can be
+       *     modified
+       * @param {Boolean} [options.rsv1=false] Specifies whether or not to set the
+       *     RSV1 bit
+       * @return {(Buffer|String)[]} The framed data
+       * @public
+       */
       static frame(data, options) {
         let mask;
         let merge = false;
@@ -7962,7 +9262,7 @@ var require_sender = __commonJS({
             options.generateMask(mask);
           } else {
             if (randomPoolPointer === RANDOM_POOL_SIZE) {
-              if (randomPool === undefined) {
+              if (randomPool === void 0) {
                 randomPool = Buffer.alloc(RANDOM_POOL_SIZE);
               }
               randomFillSync(randomPool, 0, RANDOM_POOL_SIZE);
@@ -7978,7 +9278,7 @@ var require_sender = __commonJS({
         }
         let dataLength;
         if (typeof data === "string") {
-          if ((!options.mask || skipMasking) && options[kByteLength] !== undefined) {
+          if ((!options.mask || skipMasking) && options[kByteLength] !== void 0) {
             dataLength = options[kByteLength];
           } else {
             data = Buffer.from(data);
@@ -7998,8 +9298,7 @@ var require_sender = __commonJS({
         }
         const target = Buffer.allocUnsafe(merge ? dataLength + offset : offset);
         target[0] = options.fin ? options.opcode | 128 : options.opcode;
-        if (options.rsv1)
-          target[0] |= 64;
+        if (options.rsv1) target[0] |= 64;
         target[1] = payloadLength;
         if (payloadLength === 126) {
           target.writeUInt16BE(dataLength, 2);
@@ -8007,15 +9306,13 @@ var require_sender = __commonJS({
           target[2] = target[3] = 0;
           target.writeUIntBE(dataLength, 4, 6);
         }
-        if (!options.mask)
-          return [target, data];
+        if (!options.mask) return [target, data];
         target[1] |= 128;
         target[offset - 4] = mask[0];
         target[offset - 3] = mask[1];
         target[offset - 2] = mask[2];
         target[offset - 1] = mask[3];
-        if (skipMasking)
-          return [target, data];
+        if (skipMasking) return [target, data];
         if (merge) {
           applyMask(data, mask, target, offset, dataLength);
           return [target];
@@ -8023,13 +9320,22 @@ var require_sender = __commonJS({
         applyMask(data, mask, data, 0, dataLength);
         return [target, data];
       }
+      /**
+       * Sends a close message to the other peer.
+       *
+       * @param {Number} [code] The status code component of the body
+       * @param {(String|Buffer)} [data] The message component of the body
+       * @param {Boolean} [mask=false] Specifies whether or not to mask the message
+       * @param {Function} [cb] Callback
+       * @public
+       */
       close(code2, data, mask, cb) {
         let buf;
-        if (code2 === undefined) {
+        if (code2 === void 0) {
           buf = EMPTY_BUFFER;
         } else if (typeof code2 !== "number" || !isValidStatusCode(code2)) {
           throw new TypeError("First argument must be a valid error code number");
-        } else if (data === undefined || !data.length) {
+        } else if (data === void 0 || !data.length) {
           buf = Buffer.allocUnsafe(2);
           buf.writeUInt16BE(code2, 0);
         } else {
@@ -8061,6 +9367,14 @@ var require_sender = __commonJS({
           this.sendFrame(_Sender.frame(buf, options), cb);
         }
       }
+      /**
+       * Sends a ping message to the other peer.
+       *
+       * @param {*} data The message to send
+       * @param {Boolean} [mask=false] Specifies whether or not to mask `data`
+       * @param {Function} [cb] Callback
+       * @public
+       */
       ping(data, mask, cb) {
         let byteLength2;
         let readOnly;
@@ -8100,6 +9414,14 @@ var require_sender = __commonJS({
           this.sendFrame(_Sender.frame(data, options), cb);
         }
       }
+      /**
+       * Sends a pong message to the other peer.
+       *
+       * @param {*} data The message to send
+       * @param {Boolean} [mask=false] Specifies whether or not to mask `data`
+       * @param {Function} [cb] Callback
+       * @public
+       */
       pong(data, mask, cb) {
         let byteLength2;
         let readOnly;
@@ -8139,6 +9461,22 @@ var require_sender = __commonJS({
           this.sendFrame(_Sender.frame(data, options), cb);
         }
       }
+      /**
+       * Sends a data message to the other peer.
+       *
+       * @param {*} data The message to send
+       * @param {Object} options Options object
+       * @param {Boolean} [options.binary=false] Specifies whether `data` is binary
+       *     or text
+       * @param {Boolean} [options.compress=false] Specifies whether or not to
+       *     compress `data`
+       * @param {Boolean} [options.fin=false] Specifies whether the fragment is the
+       *     last one
+       * @param {Boolean} [options.mask=false] Specifies whether or not to mask
+       *     `data`
+       * @param {Function} [cb] Callback
+       * @public
+       */
       send(data, options, cb) {
         const perMessageDeflate = this._extensions[PerMessageDeflate.extensionName];
         let opcode = options.binary ? 2 : 1;
@@ -8166,8 +9504,7 @@ var require_sender = __commonJS({
           rsv1 = false;
           opcode = 0;
         }
-        if (options.fin)
-          this._firstFragment = true;
+        if (options.fin) this._firstFragment = true;
         const opts = {
           [kByteLength]: byteLength2,
           fin: options.fin,
@@ -8190,12 +9527,37 @@ var require_sender = __commonJS({
           this.dispatch(data, this._compress, opts, cb);
         }
       }
+      /**
+       * Gets the contents of a blob as binary data.
+       *
+       * @param {Blob} blob The blob
+       * @param {Boolean} [compress=false] Specifies whether or not to compress
+       *     the data
+       * @param {Object} options Options object
+       * @param {Boolean} [options.fin=false] Specifies whether or not to set the
+       *     FIN bit
+       * @param {Function} [options.generateMask] The function used to generate the
+       *     masking key
+       * @param {Boolean} [options.mask=false] Specifies whether or not to mask
+       *     `data`
+       * @param {Buffer} [options.maskBuffer] The buffer used to store the masking
+       *     key
+       * @param {Number} options.opcode The opcode
+       * @param {Boolean} [options.readOnly=false] Specifies whether `data` can be
+       *     modified
+       * @param {Boolean} [options.rsv1=false] Specifies whether or not to set the
+       *     RSV1 bit
+       * @param {Function} [cb] Callback
+       * @private
+       */
       getBlobData(blob, compress, options, cb) {
         this._bufferedBytes += options[kByteLength];
         this._state = GET_BLOB_DATA;
         blob.arrayBuffer().then((arrayBuffer) => {
           if (this._socket.destroyed) {
-            const err = new Error("The socket was closed while the blob was being read");
+            const err = new Error(
+              "The socket was closed while the blob was being read"
+            );
             process.nextTick(callCallbacks, this, err, cb);
             return;
           }
@@ -8212,6 +9574,29 @@ var require_sender = __commonJS({
           process.nextTick(onError, this, err, cb);
         });
       }
+      /**
+       * Dispatches a message.
+       *
+       * @param {(Buffer|String)} data The message to send
+       * @param {Boolean} [compress=false] Specifies whether or not to compress
+       *     `data`
+       * @param {Object} options Options object
+       * @param {Boolean} [options.fin=false] Specifies whether or not to set the
+       *     FIN bit
+       * @param {Function} [options.generateMask] The function used to generate the
+       *     masking key
+       * @param {Boolean} [options.mask=false] Specifies whether or not to mask
+       *     `data`
+       * @param {Buffer} [options.maskBuffer] The buffer used to store the masking
+       *     key
+       * @param {Number} options.opcode The opcode
+       * @param {Boolean} [options.readOnly=false] Specifies whether `data` can be
+       *     modified
+       * @param {Boolean} [options.rsv1=false] Specifies whether or not to set the
+       *     RSV1 bit
+       * @param {Function} [cb] Callback
+       * @private
+       */
       dispatch(data, compress, options, cb) {
         if (!compress) {
           this.sendFrame(_Sender.frame(data, options), cb);
@@ -8222,7 +9607,9 @@ var require_sender = __commonJS({
         this._state = DEFLATING;
         perMessageDeflate.compress(data, options.fin, (_, buf) => {
           if (this._socket.destroyed) {
-            const err = new Error("The socket was closed while data was being compressed");
+            const err = new Error(
+              "The socket was closed while data was being compressed"
+            );
             callCallbacks(this, err, cb);
             return;
           }
@@ -8233,6 +9620,11 @@ var require_sender = __commonJS({
           this.dequeue();
         });
       }
+      /**
+       * Executes queued send operations.
+       *
+       * @private
+       */
       dequeue() {
         while (this._state === DEFAULT && this._queue.length) {
           const params = this._queue.shift();
@@ -8240,10 +9632,23 @@ var require_sender = __commonJS({
           Reflect.apply(params[0], this, params.slice(1));
         }
       }
+      /**
+       * Enqueues a send operation.
+       *
+       * @param {Array} params Send operation parameters.
+       * @private
+       */
       enqueue(params) {
         this._bufferedBytes += params[3][kByteLength];
         this._queue.push(params);
       }
+      /**
+       * Sends a frame.
+       *
+       * @param {Buffer[]} list The frame to send
+       * @param {Function} [cb] Callback
+       * @private
+       */
       sendFrame(list, cb) {
         if (list.length === 2) {
           this._socket.cork();
@@ -8255,15 +9660,13 @@ var require_sender = __commonJS({
         }
       }
     };
-    module.exports = Sender2;
+    module2.exports = Sender2;
     function callCallbacks(sender, err, cb) {
-      if (typeof cb === "function")
-        cb(err);
-      for (let i = 0;i < sender._queue.length; i++) {
+      if (typeof cb === "function") cb(err);
+      for (let i = 0; i < sender._queue.length; i++) {
         const params = sender._queue[i];
         const callback = params[params.length - 1];
-        if (typeof callback === "function")
-          callback(err);
+        if (typeof callback === "function") callback(err);
       }
     }
     function onError(sender, err, cb) {
@@ -8273,7 +9676,8 @@ var require_sender = __commonJS({
   }
 });
 var require_event_target = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/event-target.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/event-target.js"(exports2, module2) {
+    "use strict";
     var { kForOnEventAttribute, kListener } = require_constants();
     var kCode = Symbol("kCode");
     var kData = Symbol("kData");
@@ -8284,13 +9688,25 @@ var require_event_target = __commonJS({
     var kType = Symbol("kType");
     var kWasClean = Symbol("kWasClean");
     var Event = class {
+      /**
+       * Create a new `Event`.
+       *
+       * @param {String} type The name of the event
+       * @throws {TypeError} If the `type` argument is not specified
+       */
       constructor(type) {
         this[kTarget] = null;
         this[kType] = type;
       }
+      /**
+       * @type {*}
+       */
       get target() {
         return this[kTarget];
       }
+      /**
+       * @type {String}
+       */
       get type() {
         return this[kType];
       }
@@ -8298,18 +9714,40 @@ var require_event_target = __commonJS({
     Object.defineProperty(Event.prototype, "target", { enumerable: true });
     Object.defineProperty(Event.prototype, "type", { enumerable: true });
     var CloseEvent = class extends Event {
+      /**
+       * Create a new `CloseEvent`.
+       *
+       * @param {String} type The name of the event
+       * @param {Object} [options] A dictionary object that allows for setting
+       *     attributes via object members of the same name
+       * @param {Number} [options.code=0] The status code explaining why the
+       *     connection was closed
+       * @param {String} [options.reason=''] A human-readable string explaining why
+       *     the connection was closed
+       * @param {Boolean} [options.wasClean=false] Indicates whether or not the
+       *     connection was cleanly closed
+       */
       constructor(type, options = {}) {
         super(type);
-        this[kCode] = options.code === undefined ? 0 : options.code;
-        this[kReason] = options.reason === undefined ? "" : options.reason;
-        this[kWasClean] = options.wasClean === undefined ? false : options.wasClean;
+        this[kCode] = options.code === void 0 ? 0 : options.code;
+        this[kReason] = options.reason === void 0 ? "" : options.reason;
+        this[kWasClean] = options.wasClean === void 0 ? false : options.wasClean;
       }
+      /**
+       * @type {Number}
+       */
       get code() {
         return this[kCode];
       }
+      /**
+       * @type {String}
+       */
       get reason() {
         return this[kReason];
       }
+      /**
+       * @type {Boolean}
+       */
       get wasClean() {
         return this[kWasClean];
       }
@@ -8318,14 +9756,29 @@ var require_event_target = __commonJS({
     Object.defineProperty(CloseEvent.prototype, "reason", { enumerable: true });
     Object.defineProperty(CloseEvent.prototype, "wasClean", { enumerable: true });
     var ErrorEvent = class extends Event {
+      /**
+       * Create a new `ErrorEvent`.
+       *
+       * @param {String} type The name of the event
+       * @param {Object} [options] A dictionary object that allows for setting
+       *     attributes via object members of the same name
+       * @param {*} [options.error=null] The error that generated this event
+       * @param {String} [options.message=''] The error message
+       */
       constructor(type, options = {}) {
         super(type);
-        this[kError] = options.error === undefined ? null : options.error;
-        this[kMessage] = options.message === undefined ? "" : options.message;
+        this[kError] = options.error === void 0 ? null : options.error;
+        this[kMessage] = options.message === void 0 ? "" : options.message;
       }
+      /**
+       * @type {*}
+       */
       get error() {
         return this[kError];
       }
+      /**
+       * @type {String}
+       */
       get message() {
         return this[kMessage];
       }
@@ -8333,16 +9786,39 @@ var require_event_target = __commonJS({
     Object.defineProperty(ErrorEvent.prototype, "error", { enumerable: true });
     Object.defineProperty(ErrorEvent.prototype, "message", { enumerable: true });
     var MessageEvent = class extends Event {
+      /**
+       * Create a new `MessageEvent`.
+       *
+       * @param {String} type The name of the event
+       * @param {Object} [options] A dictionary object that allows for setting
+       *     attributes via object members of the same name
+       * @param {*} [options.data=null] The message content
+       */
       constructor(type, options = {}) {
         super(type);
-        this[kData] = options.data === undefined ? null : options.data;
+        this[kData] = options.data === void 0 ? null : options.data;
       }
+      /**
+       * @type {*}
+       */
       get data() {
         return this[kData];
       }
     };
     Object.defineProperty(MessageEvent.prototype, "data", { enumerable: true });
     var EventTarget = {
+      /**
+       * Register an event listener.
+       *
+       * @param {String} type A string representing the event type to listen for
+       * @param {(Function|Object)} handler The listener to add
+       * @param {Object} [options] An options object specifies characteristics about
+       *     the event listener
+       * @param {Boolean} [options.once=false] A `Boolean` indicating that the
+       *     listener should be invoked at most once after being added. If `true`,
+       *     the listener would be automatically removed when invoked.
+       * @public
+       */
       addEventListener(type, handler, options = {}) {
         for (const listener of this.listeners(type)) {
           if (!options[kForOnEventAttribute] && listener[kListener] === handler && !listener[kForOnEventAttribute]) {
@@ -8394,6 +9870,13 @@ var require_event_target = __commonJS({
           this.on(type, wrapper);
         }
       },
+      /**
+       * Remove an event listener.
+       *
+       * @param {String} type A string representing the event type to remove
+       * @param {(Function|Object)} handler The listener to remove
+       * @public
+       */
       removeEventListener(type, handler) {
         for (const listener of this.listeners(type)) {
           if (listener[kListener] === handler && !listener[kForOnEventAttribute]) {
@@ -8403,7 +9886,7 @@ var require_event_target = __commonJS({
         }
       }
     };
-    module.exports = {
+    module2.exports = {
       CloseEvent,
       ErrorEvent,
       Event,
@@ -8420,13 +9903,12 @@ var require_event_target = __commonJS({
   }
 });
 var require_extension = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/extension.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/extension.js"(exports2, module2) {
+    "use strict";
     var { tokenChars } = require_validation();
     function push(dest, name, elem) {
-      if (dest[name] === undefined)
-        dest[name] = [elem];
-      else
-        dest[name].push(elem);
+      if (dest[name] === void 0) dest[name] = [elem];
+      else dest[name].push(elem);
     }
     function parse(header) {
       const offers = /* @__PURE__ */ Object.create(null);
@@ -8440,21 +9922,18 @@ var require_extension = __commonJS({
       let code2 = -1;
       let end = -1;
       let i = 0;
-      for (;i < header.length; i++) {
+      for (; i < header.length; i++) {
         code2 = header.charCodeAt(i);
-        if (extensionName === undefined) {
+        if (extensionName === void 0) {
           if (end === -1 && tokenChars[code2] === 1) {
-            if (start === -1)
-              start = i;
+            if (start === -1) start = i;
           } else if (i !== 0 && (code2 === 32 || code2 === 9)) {
-            if (end === -1 && start !== -1)
-              end = i;
+            if (end === -1 && start !== -1) end = i;
           } else if (code2 === 59 || code2 === 44) {
             if (start === -1) {
               throw new SyntaxError(`Unexpected character at index ${i}`);
             }
-            if (end === -1)
-              end = i;
+            if (end === -1) end = i;
             const name = header.slice(start, end);
             if (code2 === 44) {
               push(offers, name, params);
@@ -8466,24 +9945,21 @@ var require_extension = __commonJS({
           } else {
             throw new SyntaxError(`Unexpected character at index ${i}`);
           }
-        } else if (paramName === undefined) {
+        } else if (paramName === void 0) {
           if (end === -1 && tokenChars[code2] === 1) {
-            if (start === -1)
-              start = i;
+            if (start === -1) start = i;
           } else if (code2 === 32 || code2 === 9) {
-            if (end === -1 && start !== -1)
-              end = i;
+            if (end === -1 && start !== -1) end = i;
           } else if (code2 === 59 || code2 === 44) {
             if (start === -1) {
               throw new SyntaxError(`Unexpected character at index ${i}`);
             }
-            if (end === -1)
-              end = i;
+            if (end === -1) end = i;
             push(params, header.slice(start, end), true);
             if (code2 === 44) {
               push(offers, extensionName, params);
               params = /* @__PURE__ */ Object.create(null);
-              extensionName = undefined;
+              extensionName = void 0;
             }
             start = end = -1;
           } else if (code2 === 61 && start !== -1 && end === -1) {
@@ -8497,15 +9973,12 @@ var require_extension = __commonJS({
             if (tokenChars[code2] !== 1) {
               throw new SyntaxError(`Unexpected character at index ${i}`);
             }
-            if (start === -1)
-              start = i;
-            else if (!mustUnescape)
-              mustUnescape = true;
+            if (start === -1) start = i;
+            else if (!mustUnescape) mustUnescape = true;
             isEscaping = false;
           } else if (inQuotes) {
             if (tokenChars[code2] === 1) {
-              if (start === -1)
-                start = i;
+              if (start === -1) start = i;
             } else if (code2 === 34 && start !== -1) {
               inQuotes = false;
               end = i;
@@ -8517,17 +9990,14 @@ var require_extension = __commonJS({
           } else if (code2 === 34 && header.charCodeAt(i - 1) === 61) {
             inQuotes = true;
           } else if (end === -1 && tokenChars[code2] === 1) {
-            if (start === -1)
-              start = i;
+            if (start === -1) start = i;
           } else if (start !== -1 && (code2 === 32 || code2 === 9)) {
-            if (end === -1)
-              end = i;
+            if (end === -1) end = i;
           } else if (code2 === 59 || code2 === 44) {
             if (start === -1) {
               throw new SyntaxError(`Unexpected character at index ${i}`);
             }
-            if (end === -1)
-              end = i;
+            if (end === -1) end = i;
             let value = header.slice(start, end);
             if (mustUnescape) {
               value = value.replace(/\\/g, "");
@@ -8537,9 +10007,9 @@ var require_extension = __commonJS({
             if (code2 === 44) {
               push(offers, extensionName, params);
               params = /* @__PURE__ */ Object.create(null);
-              extensionName = undefined;
+              extensionName = void 0;
             }
-            paramName = undefined;
+            paramName = void 0;
             start = end = -1;
           } else {
             throw new SyntaxError(`Unexpected character at index ${i}`);
@@ -8549,13 +10019,12 @@ var require_extension = __commonJS({
       if (start === -1 || inQuotes || code2 === 32 || code2 === 9) {
         throw new SyntaxError("Unexpected end of input");
       }
-      if (end === -1)
-        end = i;
+      if (end === -1) end = i;
       const token = header.slice(start, end);
-      if (extensionName === undefined) {
+      if (extensionName === void 0) {
         push(offers, token, params);
       } else {
-        if (paramName === undefined) {
+        if (paramName === void 0) {
           push(params, token, true);
         } else if (mustUnescape) {
           push(params, paramName, token.replace(/\\/g, ""));
@@ -8569,29 +10038,30 @@ var require_extension = __commonJS({
     function format(extensions) {
       return Object.keys(extensions).map((extension) => {
         let configurations = extensions[extension];
-        if (!Array.isArray(configurations))
-          configurations = [configurations];
+        if (!Array.isArray(configurations)) configurations = [configurations];
         return configurations.map((params) => {
-          return [extension].concat(Object.keys(params).map((k) => {
-            let values = params[k];
-            if (!Array.isArray(values))
-              values = [values];
-            return values.map((v) => v === true ? k : `${k}=${v}`).join("; ");
-          })).join("; ");
+          return [extension].concat(
+            Object.keys(params).map((k) => {
+              let values = params[k];
+              if (!Array.isArray(values)) values = [values];
+              return values.map((v2) => v2 === true ? k : `${k}=${v2}`).join("; ");
+            })
+          ).join("; ");
         }).join(", ");
       }).join(", ");
     }
-    module.exports = { format, parse };
+    module2.exports = { format, parse };
   }
 });
 var require_websocket = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket.js"(exports2, module2) {
+    "use strict";
     var EventEmitter8 = __require("events");
     var https = __require("https");
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes, createHash } = __require("crypto");
+    var { randomBytes, createHash: createHash2 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate = require_permessage_deflate();
@@ -8613,12 +10083,19 @@ var require_websocket = __commonJS({
     } = require_event_target();
     var { format, parse } = require_extension();
     var { toBuffer } = require_buffer_util();
-    var closeTimeout = 30 * 1000;
+    var closeTimeout = 30 * 1e3;
     var kAborted = Symbol("kAborted");
     var protocolVersions = [8, 13];
     var readyStates = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
     var subprotocolRegex = /^[!#$%&'*+\-.0-9A-Z^_`|a-z~]+$/;
     var WebSocket2 = class _WebSocket extends EventEmitter8 {
+      /**
+       * Create a new `WebSocket`.
+       *
+       * @param {(String|URL)} address The URL to which to connect
+       * @param {(String|String[])} [protocols] The subprotocols
+       * @param {Object} [options] Connection options
+       */
       constructor(address, protocols, options) {
         super();
         this._binaryType = BINARY_TYPES[0];
@@ -8639,7 +10116,7 @@ var require_websocket = __commonJS({
           this._bufferedAmount = 0;
           this._isServer = false;
           this._redirects = 0;
-          if (protocols === undefined) {
+          if (protocols === void 0) {
             protocols = [];
           } else if (!Array.isArray(protocols)) {
             if (typeof protocols === "object" && protocols !== null) {
@@ -8655,48 +10132,101 @@ var require_websocket = __commonJS({
           this._isServer = true;
         }
       }
+      /**
+       * For historical reasons, the custom "nodebuffer" type is used by the default
+       * instead of "blob".
+       *
+       * @type {String}
+       */
       get binaryType() {
         return this._binaryType;
       }
       set binaryType(type) {
-        if (!BINARY_TYPES.includes(type))
-          return;
+        if (!BINARY_TYPES.includes(type)) return;
         this._binaryType = type;
-        if (this._receiver)
-          this._receiver._binaryType = type;
+        if (this._receiver) this._receiver._binaryType = type;
       }
+      /**
+       * @type {Number}
+       */
       get bufferedAmount() {
-        if (!this._socket)
-          return this._bufferedAmount;
+        if (!this._socket) return this._bufferedAmount;
         return this._socket._writableState.length + this._sender._bufferedBytes;
       }
+      /**
+       * @type {String}
+       */
       get extensions() {
         return Object.keys(this._extensions).join();
       }
+      /**
+       * @type {Boolean}
+       */
       get isPaused() {
         return this._paused;
       }
+      /**
+       * @type {Function}
+       */
+      /* istanbul ignore next */
       get onclose() {
         return null;
       }
+      /**
+       * @type {Function}
+       */
+      /* istanbul ignore next */
       get onerror() {
         return null;
       }
+      /**
+       * @type {Function}
+       */
+      /* istanbul ignore next */
       get onopen() {
         return null;
       }
+      /**
+       * @type {Function}
+       */
+      /* istanbul ignore next */
       get onmessage() {
         return null;
       }
+      /**
+       * @type {String}
+       */
       get protocol() {
         return this._protocol;
       }
+      /**
+       * @type {Number}
+       */
       get readyState() {
         return this._readyState;
       }
+      /**
+       * @type {String}
+       */
       get url() {
         return this._url;
       }
+      /**
+       * Set up the socket and the internal resources.
+       *
+       * @param {Duplex} socket The network socket between the server and client
+       * @param {Buffer} head The first packet of the upgraded stream
+       * @param {Object} options Options object
+       * @param {Boolean} [options.allowSynchronousEvents=false] Specifies whether
+       *     any of the `'message'`, `'ping'`, and `'pong'` events can be emitted
+       *     multiple times in the same tick
+       * @param {Function} [options.generateMask] The function used to generate the
+       *     masking key
+       * @param {Number} [options.maxPayload=0] The maximum allowed message size
+       * @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
+       *     not to skip UTF-8 validation for text and close messages
+       * @private
+       */
       setSocket(socket, head, options) {
         const receiver = new Receiver2({
           allowSynchronousEvents: options.allowSynchronousEvents,
@@ -8720,12 +10250,9 @@ var require_websocket = __commonJS({
         receiver.on("ping", receiverOnPing);
         receiver.on("pong", receiverOnPong);
         sender.onerror = senderOnError;
-        if (socket.setTimeout)
-          socket.setTimeout(0);
-        if (socket.setNoDelay)
-          socket.setNoDelay();
-        if (head.length > 0)
-          socket.unshift(head);
+        if (socket.setTimeout) socket.setTimeout(0);
+        if (socket.setNoDelay) socket.setNoDelay();
+        if (head.length > 0) socket.unshift(head);
         socket.on("close", socketOnClose);
         socket.on("data", socketOnData);
         socket.on("end", socketOnEnd);
@@ -8733,6 +10260,11 @@ var require_websocket = __commonJS({
         this._readyState = _WebSocket.OPEN;
         this.emit("open");
       }
+      /**
+       * Emit the `'close'` event.
+       *
+       * @private
+       */
       emitClose() {
         if (!this._socket) {
           this._readyState = _WebSocket.CLOSED;
@@ -8746,9 +10278,28 @@ var require_websocket = __commonJS({
         this._readyState = _WebSocket.CLOSED;
         this.emit("close", this._closeCode, this._closeMessage);
       }
+      /**
+       * Start a closing handshake.
+       *
+       *          +----------+   +-----------+   +----------+
+       *     - - -|ws.close()|-->|close frame|-->|ws.close()|- - -
+       *    |     +----------+   +-----------+   +----------+     |
+       *          +----------+   +-----------+         |
+       * CLOSING  |ws.close()|<--|close frame|<--+-----+       CLOSING
+       *          +----------+   +-----------+   |
+       *    |           |                        |   +---+        |
+       *                +------------------------+-->|fin| - - - -
+       *    |         +---+                      |   +---+
+       *     - - - - -|fin|<---------------------+
+       *              +---+
+       *
+       * @param {Number} [code] Status code explaining why the connection is closing
+       * @param {(String|Buffer)} [data] The reason why the connection is
+       *     closing
+       * @public
+       */
       close(code2, data) {
-        if (this.readyState === _WebSocket.CLOSED)
-          return;
+        if (this.readyState === _WebSocket.CLOSED) return;
         if (this.readyState === _WebSocket.CONNECTING) {
           const msg = "WebSocket was closed before the connection was established";
           abortHandshake(this, this._req, msg);
@@ -8762,8 +10313,7 @@ var require_websocket = __commonJS({
         }
         this._readyState = _WebSocket.CLOSING;
         this._sender.close(code2, data, !this._isServer, (err) => {
-          if (err)
-            return;
+          if (err) return;
           this._closeFrameSent = true;
           if (this._closeFrameReceived || this._receiver._writableState.errorEmitted) {
             this._socket.end();
@@ -8771,6 +10321,11 @@ var require_websocket = __commonJS({
         });
         setCloseTimer(this);
       }
+      /**
+       * Pause the socket.
+       *
+       * @public
+       */
       pause() {
         if (this.readyState === _WebSocket.CONNECTING || this.readyState === _WebSocket.CLOSED) {
           return;
@@ -8778,56 +10333,87 @@ var require_websocket = __commonJS({
         this._paused = true;
         this._socket.pause();
       }
+      /**
+       * Send a ping.
+       *
+       * @param {*} [data] The data to send
+       * @param {Boolean} [mask] Indicates whether or not to mask `data`
+       * @param {Function} [cb] Callback which is executed when the ping is sent
+       * @public
+       */
       ping(data, mask, cb) {
         if (this.readyState === _WebSocket.CONNECTING) {
           throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
         }
         if (typeof data === "function") {
           cb = data;
-          data = mask = undefined;
+          data = mask = void 0;
         } else if (typeof mask === "function") {
           cb = mask;
-          mask = undefined;
+          mask = void 0;
         }
-        if (typeof data === "number")
-          data = data.toString();
+        if (typeof data === "number") data = data.toString();
         if (this.readyState !== _WebSocket.OPEN) {
           sendAfterClose(this, data, cb);
           return;
         }
-        if (mask === undefined)
-          mask = !this._isServer;
+        if (mask === void 0) mask = !this._isServer;
         this._sender.ping(data || EMPTY_BUFFER, mask, cb);
       }
+      /**
+       * Send a pong.
+       *
+       * @param {*} [data] The data to send
+       * @param {Boolean} [mask] Indicates whether or not to mask `data`
+       * @param {Function} [cb] Callback which is executed when the pong is sent
+       * @public
+       */
       pong(data, mask, cb) {
         if (this.readyState === _WebSocket.CONNECTING) {
           throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
         }
         if (typeof data === "function") {
           cb = data;
-          data = mask = undefined;
+          data = mask = void 0;
         } else if (typeof mask === "function") {
           cb = mask;
-          mask = undefined;
+          mask = void 0;
         }
-        if (typeof data === "number")
-          data = data.toString();
+        if (typeof data === "number") data = data.toString();
         if (this.readyState !== _WebSocket.OPEN) {
           sendAfterClose(this, data, cb);
           return;
         }
-        if (mask === undefined)
-          mask = !this._isServer;
+        if (mask === void 0) mask = !this._isServer;
         this._sender.pong(data || EMPTY_BUFFER, mask, cb);
       }
+      /**
+       * Resume the socket.
+       *
+       * @public
+       */
       resume() {
         if (this.readyState === _WebSocket.CONNECTING || this.readyState === _WebSocket.CLOSED) {
           return;
         }
         this._paused = false;
-        if (!this._receiver._writableState.needDrain)
-          this._socket.resume();
+        if (!this._receiver._writableState.needDrain) this._socket.resume();
       }
+      /**
+       * Send a data message.
+       *
+       * @param {*} data The message to send
+       * @param {Object} [options] Options object
+       * @param {Boolean} [options.binary] Specifies whether `data` is binary or
+       *     text
+       * @param {Boolean} [options.compress] Specifies whether or not to compress
+       *     `data`
+       * @param {Boolean} [options.fin=true] Specifies whether the fragment is the
+       *     last one
+       * @param {Boolean} [options.mask] Specifies whether or not to mask `data`
+       * @param {Function} [cb] Callback which is executed when data is written out
+       * @public
+       */
       send(data, options, cb) {
         if (this.readyState === _WebSocket.CONNECTING) {
           throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
@@ -8836,8 +10422,7 @@ var require_websocket = __commonJS({
           cb = options;
           options = {};
         }
-        if (typeof data === "number")
-          data = data.toString();
+        if (typeof data === "number") data = data.toString();
         if (this.readyState !== _WebSocket.OPEN) {
           sendAfterClose(this, data, cb);
           return;
@@ -8854,9 +10439,13 @@ var require_websocket = __commonJS({
         }
         this._sender.send(data || EMPTY_BUFFER, opts, cb);
       }
+      /**
+       * Forcibly close the connection.
+       *
+       * @public
+       */
       terminate() {
-        if (this.readyState === _WebSocket.CLOSED)
-          return;
+        if (this.readyState === _WebSocket.CLOSED) return;
         if (this.readyState === _WebSocket.CONNECTING) {
           const msg = "WebSocket was closed before the connection was established";
           abortHandshake(this, this._req, msg);
@@ -8916,8 +10505,7 @@ var require_websocket = __commonJS({
         enumerable: true,
         get() {
           for (const listener of this.listeners(method)) {
-            if (listener[kForOnEventAttribute])
-              return listener[kListener];
+            if (listener[kForOnEventAttribute]) return listener[kListener];
           }
           return null;
         },
@@ -8928,8 +10516,7 @@ var require_websocket = __commonJS({
               break;
             }
           }
-          if (typeof handler !== "function")
-            return;
+          if (typeof handler !== "function") return;
           this.addEventListener(method, handler, {
             [kForOnEventAttribute]: true
           });
@@ -8938,7 +10525,7 @@ var require_websocket = __commonJS({
     });
     WebSocket2.prototype.addEventListener = addEventListener;
     WebSocket2.prototype.removeEventListener = removeEventListener;
-    module.exports = WebSocket2;
+    module2.exports = WebSocket2;
     function initAsClient(websocket, address, protocols, options) {
       const opts = {
         allowSynchronousEvents: true,
@@ -8950,18 +10537,20 @@ var require_websocket = __commonJS({
         followRedirects: false,
         maxRedirects: 10,
         ...options,
-        socketPath: undefined,
-        hostname: undefined,
-        protocol: undefined,
-        timeout: undefined,
+        socketPath: void 0,
+        hostname: void 0,
+        protocol: void 0,
+        timeout: void 0,
         method: "GET",
-        host: undefined,
-        path: undefined,
-        port: undefined
+        host: void 0,
+        path: void 0,
+        port: void 0
       };
       websocket._autoPong = opts.autoPong;
       if (!protocolVersions.includes(opts.protocolVersion)) {
-        throw new RangeError(`Unsupported protocol version: ${opts.protocolVersion} (supported versions: ${protocolVersions.join(", ")})`);
+        throw new RangeError(
+          `Unsupported protocol version: ${opts.protocolVersion} (supported versions: ${protocolVersions.join(", ")})`
+        );
       }
       let parsedUrl;
       if (address instanceof URL2) {
@@ -9001,7 +10590,7 @@ var require_websocket = __commonJS({
       const defaultPort = isSecure ? 443 : 80;
       const key = randomBytes(16).toString("base64");
       const request = isSecure ? https.request : http.request;
-      const protocolSet = /* @__PURE__ */ new Set;
+      const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
       opts.createConnection = opts.createConnection || (isSecure ? tlsConnect : netConnect);
       opts.defaultPort = opts.defaultPort || defaultPort;
@@ -9017,7 +10606,11 @@ var require_websocket = __commonJS({
       opts.path = parsedUrl.pathname + parsedUrl.search;
       opts.timeout = opts.handshakeTimeout;
       if (opts.perMessageDeflate) {
-        perMessageDeflate = new PerMessageDeflate(opts.perMessageDeflate !== true ? opts.perMessageDeflate : {}, false, opts.maxPayload);
+        perMessageDeflate = new PerMessageDeflate(
+          opts.perMessageDeflate !== true ? opts.perMessageDeflate : {},
+          false,
+          opts.maxPayload
+        );
         opts.headers["Sec-WebSocket-Extensions"] = format({
           [PerMessageDeflate.extensionName]: perMessageDeflate.offer()
         });
@@ -9025,7 +10618,9 @@ var require_websocket = __commonJS({
       if (protocols.length) {
         for (const protocol of protocols) {
           if (typeof protocol !== "string" || !subprotocolRegex.test(protocol) || protocolSet.has(protocol)) {
-            throw new SyntaxError("An invalid or duplicated subprotocol was specified");
+            throw new SyntaxError(
+              "An invalid or duplicated subprotocol was specified"
+            );
           }
           protocolSet.add(protocol);
         }
@@ -9064,9 +10659,8 @@ var require_websocket = __commonJS({
           if (!isSameHost || websocket._originalSecure && !isSecure) {
             delete opts.headers.authorization;
             delete opts.headers.cookie;
-            if (!isSameHost)
-              delete opts.headers.host;
-            opts.auth = undefined;
+            if (!isSameHost) delete opts.headers.host;
+            opts.auth = void 0;
           }
         }
         if (opts.auth && !options.headers.authorization) {
@@ -9085,8 +10679,7 @@ var require_websocket = __commonJS({
         });
       }
       req.on("error", (err) => {
-        if (req === null || req[kAborted])
-          return;
+        if (req === null || req[kAborted]) return;
         req = websocket._req = null;
         emitErrorAndClose(websocket, err);
       });
@@ -9109,27 +10702,30 @@ var require_websocket = __commonJS({
           }
           initAsClient(websocket, addr, protocols, options);
         } else if (!websocket.emit("unexpected-response", req, res)) {
-          abortHandshake(websocket, req, `Unexpected server response: ${res.statusCode}`);
+          abortHandshake(
+            websocket,
+            req,
+            `Unexpected server response: ${res.statusCode}`
+          );
         }
       });
       req.on("upgrade", (res, socket, head) => {
         websocket.emit("upgrade", res);
-        if (websocket.readyState !== WebSocket2.CONNECTING)
-          return;
+        if (websocket.readyState !== WebSocket2.CONNECTING) return;
         req = websocket._req = null;
         const upgrade = res.headers.upgrade;
-        if (upgrade === undefined || upgrade.toLowerCase() !== "websocket") {
+        if (upgrade === void 0 || upgrade.toLowerCase() !== "websocket") {
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        const digest = createHash2("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
         }
         const serverProt = res.headers["sec-websocket-protocol"];
         let protError;
-        if (serverProt !== undefined) {
+        if (serverProt !== void 0) {
           if (!protocolSet.size) {
             protError = "Server sent a subprotocol but none was requested";
           } else if (!protocolSet.has(serverProt)) {
@@ -9142,10 +10738,9 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, protError);
           return;
         }
-        if (serverProt)
-          websocket._protocol = serverProt;
+        if (serverProt) websocket._protocol = serverProt;
         const secWebSocketExtensions = res.headers["sec-websocket-extensions"];
-        if (secWebSocketExtensions !== undefined) {
+        if (secWebSocketExtensions !== void 0) {
           if (!perMessageDeflate) {
             const message = "Server sent a Sec-WebSocket-Extensions header but no extension was requested";
             abortHandshake(websocket, socket, message);
@@ -9198,7 +10793,7 @@ var require_websocket = __commonJS({
       return net.connect(options);
     }
     function tlsConnect(options) {
-      options.path = undefined;
+      options.path = void 0;
       if (!options.servername && options.servername !== "") {
         options.servername = net.isIP(options.host) ? "" : options.host;
       }
@@ -9224,13 +10819,13 @@ var require_websocket = __commonJS({
     function sendAfterClose(websocket, data, cb) {
       if (data) {
         const length = isBlob(data) ? data.size : toBuffer(data).length;
-        if (websocket._socket)
-          websocket._sender._bufferedBytes += length;
-        else
-          websocket._bufferedAmount += length;
+        if (websocket._socket) websocket._sender._bufferedBytes += length;
+        else websocket._bufferedAmount += length;
       }
       if (cb) {
-        const err = new Error(`WebSocket is not open: readyState ${websocket.readyState} (${readyStates[websocket.readyState]})`);
+        const err = new Error(
+          `WebSocket is not open: readyState ${websocket.readyState} (${readyStates[websocket.readyState]})`
+        );
         process.nextTick(cb, err);
       }
     }
@@ -9239,23 +10834,19 @@ var require_websocket = __commonJS({
       websocket._closeFrameReceived = true;
       websocket._closeMessage = reason;
       websocket._closeCode = code2;
-      if (websocket._socket[kWebSocket] === undefined)
-        return;
+      if (websocket._socket[kWebSocket] === void 0) return;
       websocket._socket.removeListener("data", socketOnData);
       process.nextTick(resume, websocket._socket);
-      if (code2 === 1005)
-        websocket.close();
-      else
-        websocket.close(code2, reason);
+      if (code2 === 1005) websocket.close();
+      else websocket.close(code2, reason);
     }
     function receiverOnDrain() {
       const websocket = this[kWebSocket];
-      if (!websocket.isPaused)
-        websocket._socket.resume();
+      if (!websocket.isPaused) websocket._socket.resume();
     }
     function receiverOnError(err) {
       const websocket = this[kWebSocket];
-      if (websocket._socket[kWebSocket] !== undefined) {
+      if (websocket._socket[kWebSocket] !== void 0) {
         websocket._socket.removeListener("data", socketOnData);
         process.nextTick(resume, websocket._socket);
         websocket.close(err[kStatusCode]);
@@ -9273,8 +10864,7 @@ var require_websocket = __commonJS({
     }
     function receiverOnPing(data) {
       const websocket = this[kWebSocket];
-      if (websocket._autoPong)
-        websocket.pong(data, !this._isServer, NOOP);
+      if (websocket._autoPong) websocket.pong(data, !this._isServer, NOOP);
       websocket.emit("ping", data);
     }
     function receiverOnPong(data) {
@@ -9285,8 +10875,7 @@ var require_websocket = __commonJS({
     }
     function senderOnError(err) {
       const websocket = this[kWebSocket];
-      if (websocket.readyState === WebSocket2.CLOSED)
-        return;
+      if (websocket.readyState === WebSocket2.CLOSED) return;
       if (websocket.readyState === WebSocket2.OPEN) {
         websocket._readyState = WebSocket2.CLOSING;
         setCloseTimer(websocket);
@@ -9298,7 +10887,10 @@ var require_websocket = __commonJS({
       }
     }
     function setCloseTimer(websocket) {
-      websocket._closeTimer = setTimeout(websocket._socket.destroy.bind(websocket._socket), closeTimeout);
+      websocket._closeTimer = setTimeout(
+        websocket._socket.destroy.bind(websocket._socket),
+        closeTimeout
+      );
     }
     function socketOnClose() {
       const websocket = this[kWebSocket];
@@ -9311,7 +10903,7 @@ var require_websocket = __commonJS({
         websocket._receiver.write(chunk);
       }
       websocket._receiver.end();
-      this[kWebSocket] = undefined;
+      this[kWebSocket] = void 0;
       clearTimeout(websocket._closeTimer);
       if (websocket._receiver._writableState.finished || websocket._receiver._writableState.errorEmitted) {
         websocket.emitClose();
@@ -9343,27 +10935,25 @@ var require_websocket = __commonJS({
   }
 });
 var require_subprotocol = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/subprotocol.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/subprotocol.js"(exports2, module2) {
+    "use strict";
     var { tokenChars } = require_validation();
     function parse(header) {
-      const protocols = /* @__PURE__ */ new Set;
+      const protocols = /* @__PURE__ */ new Set();
       let start = -1;
       let end = -1;
       let i = 0;
-      for (i;i < header.length; i++) {
+      for (i; i < header.length; i++) {
         const code2 = header.charCodeAt(i);
         if (end === -1 && tokenChars[code2] === 1) {
-          if (start === -1)
-            start = i;
+          if (start === -1) start = i;
         } else if (i !== 0 && (code2 === 32 || code2 === 9)) {
-          if (end === -1 && start !== -1)
-            end = i;
+          if (end === -1 && start !== -1) end = i;
         } else if (code2 === 44) {
           if (start === -1) {
             throw new SyntaxError(`Unexpected character at index ${i}`);
           }
-          if (end === -1)
-            end = i;
+          if (end === -1) end = i;
           const protocol2 = header.slice(start, end);
           if (protocols.has(protocol2)) {
             throw new SyntaxError(`The "${protocol2}" subprotocol is duplicated`);
@@ -9384,15 +10974,16 @@ var require_subprotocol = __commonJS({
       protocols.add(protocol);
       return protocols;
     }
-    module.exports = { parse };
+    module2.exports = { parse };
   }
 });
 var require_websocket_server = __commonJS({
-  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket-server.js"(exports, module) {
+  "../common/temp/node_modules/.pnpm/ws@8.18.0_bufferutil@4.0.9/node_modules/ws/lib/websocket-server.js"(exports2, module2) {
+    "use strict";
     var EventEmitter8 = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash } = __require("crypto");
+    var { createHash: createHash2 } = __require("crypto");
     var extension = require_extension();
     var PerMessageDeflate = require_permessage_deflate();
     var subprotocol = require_subprotocol();
@@ -9403,6 +10994,37 @@ var require_websocket_server = __commonJS({
     var CLOSING = 1;
     var CLOSED = 2;
     var WebSocketServer2 = class extends EventEmitter8 {
+      /**
+       * Create a `WebSocketServer` instance.
+       *
+       * @param {Object} options Configuration options
+       * @param {Boolean} [options.allowSynchronousEvents=true] Specifies whether
+       *     any of the `'message'`, `'ping'`, and `'pong'` events can be emitted
+       *     multiple times in the same tick
+       * @param {Boolean} [options.autoPong=true] Specifies whether or not to
+       *     automatically send a pong in response to a ping
+       * @param {Number} [options.backlog=511] The maximum length of the queue of
+       *     pending connections
+       * @param {Boolean} [options.clientTracking=true] Specifies whether or not to
+       *     track clients
+       * @param {Function} [options.handleProtocols] A hook to handle protocols
+       * @param {String} [options.host] The hostname where to bind the server
+       * @param {Number} [options.maxPayload=104857600] The maximum allowed message
+       *     size
+       * @param {Boolean} [options.noServer=false] Enable no server mode
+       * @param {String} [options.path] Accept only connections matching this path
+       * @param {(Boolean|Object)} [options.perMessageDeflate=false] Enable/disable
+       *     permessage-deflate
+       * @param {Number} [options.port] The port where to bind the server
+       * @param {(http.Server|https.Server)} [options.server] A pre-created HTTP/S
+       *     server to use
+       * @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
+       *     not to skip UTF-8 validation for text and close messages
+       * @param {Function} [options.verifyClient] A hook to reject connections
+       * @param {Function} [options.WebSocket=WebSocket] Specifies the `WebSocket`
+       *     class to use. It must be the `WebSocket` class or class that extends it
+       * @param {Function} [callback] A listener for the `listening` event
+       */
       constructor(options, callback) {
         super();
         options = {
@@ -9416,6 +11038,7 @@ var require_websocket_server = __commonJS({
           verifyClient: null,
           noServer: false,
           backlog: null,
+          // use default (511 as implemented in net.js)
           server: null,
           host: null,
           path: null,
@@ -9424,7 +11047,9 @@ var require_websocket_server = __commonJS({
           ...options
         };
         if (options.port == null && !options.server && !options.noServer || options.port != null && (options.server || options.noServer) || options.server && options.noServer) {
-          throw new TypeError('One and only one of the "port", "server", or "noServer" options must be specified');
+          throw new TypeError(
+            'One and only one of the "port", "server", or "noServer" options must be specified'
+          );
         }
         if (options.port != null) {
           this._server = http.createServer((req, res) => {
@@ -9435,7 +11060,12 @@ var require_websocket_server = __commonJS({
             });
             res.end(body);
           });
-          this._server.listen(options.port, options.host, options.backlog, callback);
+          this._server.listen(
+            options.port,
+            options.host,
+            options.backlog,
+            callback
+          );
         } else if (options.server) {
           this._server = options.server;
         }
@@ -9449,23 +11079,37 @@ var require_websocket_server = __commonJS({
             }
           });
         }
-        if (options.perMessageDeflate === true)
-          options.perMessageDeflate = {};
+        if (options.perMessageDeflate === true) options.perMessageDeflate = {};
         if (options.clientTracking) {
-          this.clients = /* @__PURE__ */ new Set;
+          this.clients = /* @__PURE__ */ new Set();
           this._shouldEmitClose = false;
         }
         this.options = options;
         this._state = RUNNING;
       }
+      /**
+       * Returns the bound address, the address family name, and port of the server
+       * as reported by the operating system if listening on an IP socket.
+       * If the server is listening on a pipe or UNIX domain socket, the name is
+       * returned as a string.
+       *
+       * @return {(Object|String|null)} The address of the server
+       * @public
+       */
       address() {
         if (this.options.noServer) {
           throw new Error('The server is operating in "noServer" mode');
         }
-        if (!this._server)
-          return null;
+        if (!this._server) return null;
         return this._server.address();
       }
+      /**
+       * Stop the server from accepting new connections and emit the `'close'` event
+       * when all existing connections are closed.
+       *
+       * @param {Function} [cb] A one-time listener for the `'close'` event
+       * @public
+       */
       close(cb) {
         if (this._state === CLOSED) {
           if (cb) {
@@ -9476,10 +11120,8 @@ var require_websocket_server = __commonJS({
           process.nextTick(emitClose, this);
           return;
         }
-        if (cb)
-          this.once("close", cb);
-        if (this._state === CLOSING)
-          return;
+        if (cb) this.once("close", cb);
+        if (this._state === CLOSING) return;
         this._state = CLOSING;
         if (this.options.noServer || this.options.server) {
           if (this._server) {
@@ -9504,15 +11146,30 @@ var require_websocket_server = __commonJS({
           });
         }
       }
+      /**
+       * See if a given request should be handled by this server instance.
+       *
+       * @param {http.IncomingMessage} req Request object to inspect
+       * @return {Boolean} `true` if the request is valid, else `false`
+       * @public
+       */
       shouldHandle(req) {
         if (this.options.path) {
           const index = req.url.indexOf("?");
           const pathname = index !== -1 ? req.url.slice(0, index) : req.url;
-          if (pathname !== this.options.path)
-            return false;
+          if (pathname !== this.options.path) return false;
         }
         return true;
       }
+      /**
+       * Handle a HTTP Upgrade request.
+       *
+       * @param {http.IncomingMessage} req The request object
+       * @param {Duplex} socket The network socket between the server and client
+       * @param {Buffer} head The first packet of the upgraded stream
+       * @param {Function} cb Callback
+       * @public
+       */
       handleUpgrade(req, socket, head, cb) {
         socket.on("error", socketOnError);
         const key = req.headers["sec-websocket-key"];
@@ -9523,12 +11180,12 @@ var require_websocket_server = __commonJS({
           abortHandshakeOrEmitwsClientError(this, req, socket, 405, message);
           return;
         }
-        if (upgrade === undefined || upgrade.toLowerCase() !== "websocket") {
+        if (upgrade === void 0 || upgrade.toLowerCase() !== "websocket") {
           const message = "Invalid Upgrade header";
           abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
           return;
         }
-        if (key === undefined || !keyRegex.test(key)) {
+        if (key === void 0 || !keyRegex.test(key)) {
           const message = "Missing or invalid Sec-WebSocket-Key header";
           abortHandshakeOrEmitwsClientError(this, req, socket, 400, message);
           return;
@@ -9543,8 +11200,8 @@ var require_websocket_server = __commonJS({
           return;
         }
         const secWebSocketProtocol = req.headers["sec-websocket-protocol"];
-        let protocols = /* @__PURE__ */ new Set;
-        if (secWebSocketProtocol !== undefined) {
+        let protocols = /* @__PURE__ */ new Set();
+        if (secWebSocketProtocol !== void 0) {
           try {
             protocols = subprotocol.parse(secWebSocketProtocol);
           } catch (err) {
@@ -9555,8 +11212,12 @@ var require_websocket_server = __commonJS({
         }
         const secWebSocketExtensions = req.headers["sec-websocket-extensions"];
         const extensions = {};
-        if (this.options.perMessageDeflate && secWebSocketExtensions !== undefined) {
-          const perMessageDeflate = new PerMessageDeflate(this.options.perMessageDeflate, true, this.options.maxPayload);
+        if (this.options.perMessageDeflate && secWebSocketExtensions !== void 0) {
+          const perMessageDeflate = new PerMessageDeflate(
+            this.options.perMessageDeflate,
+            true,
+            this.options.maxPayload
+          );
           try {
             const offers = extension.parse(secWebSocketExtensions);
             if (offers[PerMessageDeflate.extensionName]) {
@@ -9580,31 +11241,51 @@ var require_websocket_server = __commonJS({
               if (!verified) {
                 return abortHandshake(socket, code2 || 401, message, headers);
               }
-              this.completeUpgrade(extensions, key, protocols, req, socket, head, cb);
+              this.completeUpgrade(
+                extensions,
+                key,
+                protocols,
+                req,
+                socket,
+                head,
+                cb
+              );
             });
             return;
           }
-          if (!this.options.verifyClient(info))
-            return abortHandshake(socket, 401);
+          if (!this.options.verifyClient(info)) return abortHandshake(socket, 401);
         }
         this.completeUpgrade(extensions, key, protocols, req, socket, head, cb);
       }
+      /**
+       * Upgrade the connection to WebSocket.
+       *
+       * @param {Object} extensions The accepted extensions
+       * @param {String} key The value of the `Sec-WebSocket-Key` header
+       * @param {Set} protocols The subprotocols
+       * @param {http.IncomingMessage} req The request object
+       * @param {Duplex} socket The network socket between the server and client
+       * @param {Buffer} head The first packet of the upgraded stream
+       * @param {Function} cb Callback
+       * @throws {Error} If called more than once with the same socket
+       * @private
+       */
       completeUpgrade(extensions, key, protocols, req, socket, head, cb) {
-        if (!socket.readable || !socket.writable)
-          return socket.destroy();
+        if (!socket.readable || !socket.writable) return socket.destroy();
         if (socket[kWebSocket]) {
-          throw new Error("server.handleUpgrade() was called more than once with the same socket, possibly due to a misconfiguration");
+          throw new Error(
+            "server.handleUpgrade() was called more than once with the same socket, possibly due to a misconfiguration"
+          );
         }
-        if (this._state > RUNNING)
-          return abortHandshake(socket, 503);
-        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        if (this._state > RUNNING) return abortHandshake(socket, 503);
+        const digest = createHash2("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
           "Connection: Upgrade",
           `Sec-WebSocket-Accept: ${digest}`
         ];
-        const ws = new this.options.WebSocket(null, undefined, this.options);
+        const ws = new this.options.WebSocket(null, void 0, this.options);
         if (protocols.size) {
           const protocol = this.options.handleProtocols ? this.options.handleProtocols(protocols, req) : protocols.values().next().value;
           if (protocol) {
@@ -9621,9 +11302,7 @@ var require_websocket_server = __commonJS({
           ws._extensions = extensions;
         }
         this.emit("headers", headers, req);
-        socket.write(headers.concat(`\r
-`).join(`\r
-`));
+        socket.write(headers.concat("\r\n").join("\r\n"));
         socket.removeListener("error", socketOnError);
         ws.setSocket(socket, head, {
           allowSynchronousEvents: this.options.allowSynchronousEvents,
@@ -9642,10 +11321,9 @@ var require_websocket_server = __commonJS({
         cb(ws, req);
       }
     };
-    module.exports = WebSocketServer2;
+    module2.exports = WebSocketServer2;
     function addListeners(server, map) {
-      for (const event of Object.keys(map))
-        server.on(event, map[event]);
+      for (const event of Object.keys(map)) server.on(event, map[event]);
       return function removeListeners() {
         for (const event of Object.keys(map)) {
           server.removeListener(event, map[event]);
@@ -9668,11 +11346,10 @@ var require_websocket_server = __commonJS({
         ...headers
       };
       socket.once("finish", socket.destroy);
-      socket.end(`HTTP/1.1 ${code2} ${http.STATUS_CODES[code2]}\r
-` + Object.keys(headers).map((h) => `${h}: ${headers[h]}`).join(`\r
-`) + `\r
-\r
-` + message);
+      socket.end(
+        `HTTP/1.1 ${code2} ${http.STATUS_CODES[code2]}\r
+` + Object.keys(headers).map((h) => `${h}: ${headers[h]}`).join("\r\n") + "\r\n\r\n" + message
+      );
     }
     function abortHandshakeOrEmitwsClientError(server, req, socket, code2, message) {
       if (server.listenerCount("wsClientError")) {
@@ -9685,14 +11362,15 @@ var require_websocket_server = __commonJS({
     }
   }
 });
-var import_stream = __toESM(require_stream(), 1);
-var import_receiver = __toESM(require_receiver(), 1);
-var import_sender = __toESM(require_sender(), 1);
-var import_websocket = __toESM(require_websocket(), 1);
-var import_websocket_server = __toESM(require_websocket_server(), 1);
+var import_stream = __toESM2(require_stream(), 1);
+var import_receiver = __toESM2(require_receiver(), 1);
+var import_sender = __toESM2(require_sender(), 1);
+var import_websocket = __toESM2(require_websocket(), 1);
+var import_websocket_server = __toESM2(require_websocket_server(), 1);
 var wrapper_default = import_websocket.default;
 var nodeWebSocket = wrapper_default;
 setDefaultWebSocketConstructor(nodeWebSocket);
+
 // src/redact.ts
 var API_KEY_PATTERNS = [
   /sk-[a-zA-Z0-9]{20,}/g,
@@ -9708,7 +11386,7 @@ var API_KEY_PATTERNS = [
   /xox[baprs]-[a-zA-Z0-9-]{10,}/g
 ];
 function redactSecrets(content) {
-  let result = typeof content === "string" ? content : content === null || content === undefined ? "" : typeof content === "object" ? JSON.stringify(content) : String(content);
+  let result = typeof content === "string" ? content : content === null || content === void 0 ? "" : typeof content === "object" ? JSON.stringify(content) : String(content);
   for (const pattern of API_KEY_PATTERNS) {
     pattern.lastIndex = 0;
     result = result.replace(pattern, "[REDACTED_API_KEY]");
@@ -9716,16 +11394,14 @@ function redactSecrets(content) {
   return result;
 }
 function maskToken(token) {
-  if (!token)
-    return "(not set)";
-  if (token.length <= 8)
-    return "*****";
+  if (!token) return "(not set)";
+  if (token.length <= 8) return "*****";
   return `${token.slice(0, 3)}...${token.slice(-3)}`;
 }
 
 // src/hash.ts
-import * as crypto2 from "crypto";
-import * as path9 from "path";
+var crypto2 = __toESM(require("crypto"), 1);
+var path9 = __toESM(require("path"), 1);
 function hashPath(inputPath) {
   const normalized = path9.normalize(inputPath);
   return crypto2.createHash("sha256").update(normalized).digest("hex");
@@ -9733,20 +11409,18 @@ function hashPath(inputPath) {
 
 // src/syncService.ts
 var MAX_CONTENT_SIZE = 1e5;
-var MAX_TOOL_RESULT_SIZE = 50000;
-var MAX_IMAGE_SIZE = 5000000;
+var MAX_TOOL_RESULT_SIZE = 5e4;
+var MAX_IMAGE_SIZE = 5e6;
 var MAX_IMAGES_PER_MESSAGE = 10;
 var MIN_REQUEST_INTERVAL_MS = 100;
-
-class AuthExpiredError extends Error {
+var AuthExpiredError = class extends Error {
   constructor(message = "Authentication token expired") {
     super(message);
     this.name = "AuthExpiredError";
   }
-}
+};
 function truncate(str, maxLen) {
-  if (str.length <= maxLen)
-    return str;
+  if (str.length <= maxLen) return str;
   return str.slice(0, maxLen) + `
 ... [truncated ${str.length - maxLen} chars]`;
 }
@@ -9757,8 +11431,7 @@ function isAuthError(error) {
   }
   return message.includes("invalid token") || message.includes("token expired") || message.includes("token not found") || message.includes("authentication failed") || message.includes("auth") && message.includes("expired");
 }
-
-class SyncService {
+var SyncService = class {
   client;
   subscriptionClient;
   userId;
@@ -9776,7 +11449,7 @@ class SyncService {
       const now = Date.now();
       const elapsed = now - this.lastRequestTime;
       if (elapsed < MIN_REQUEST_INTERVAL_MS) {
-        await new Promise((resolve3) => setTimeout(resolve3, MIN_REQUEST_INTERVAL_MS - elapsed));
+        await new Promise((resolve4) => setTimeout(resolve4, MIN_REQUEST_INTERVAL_MS - elapsed));
       }
       this.lastRequestTime = Date.now();
     });
@@ -9797,7 +11470,10 @@ class SyncService {
   }
   async uploadImage(base64Data, mediaType) {
     try {
-      const uploadUrl = await this.client.mutation("images:generateUploadUrl", { api_token: this.apiToken });
+      const uploadUrl = await this.client.mutation(
+        "images:generateUploadUrl",
+        { api_token: this.apiToken }
+      );
       const binaryData = Buffer.from(base64Data, "base64");
       if (binaryData.length > MAX_IMAGE_SIZE) {
         return null;
@@ -9818,35 +11494,38 @@ class SyncService {
   }
   async createConversation(params) {
     await this.throttle();
-    const projectHash = params.projectPath ? hashPath(params.projectPath) : undefined;
+    const projectHash = params.projectPath ? hashPath(params.projectPath) : void 0;
     const gitInfo = params.gitInfo;
     try {
-      const result = await this.client.mutation("conversations:createConversation", {
-        user_id: params.userId,
-        team_id: params.teamId,
-        agent_type: params.agentType,
-        session_id: params.sessionId,
-        project_hash: projectHash,
-        project_path: params.projectPath,
-        slug: params.slug,
-        title: params.title,
-        started_at: params.startedAt,
-        parent_message_uuid: params.parentMessageUuid,
-        parent_conversation_id: params.parentConversationId,
-        git_commit_hash: gitInfo?.commitHash || params.gitCommitHash,
-        git_branch: gitInfo?.branch,
-        git_remote_url: gitInfo?.remoteUrl,
-        git_status: gitInfo?.status,
-        git_diff: gitInfo?.diff,
-        git_diff_staged: gitInfo?.diffStaged,
-        git_root: gitInfo?.root,
-        cli_flags: params.cliFlags,
-        api_token: this.apiToken
-      });
+      const result = await this.client.mutation(
+        "conversations:createConversation",
+        {
+          user_id: params.userId,
+          team_id: params.teamId,
+          agent_type: params.agentType,
+          session_id: params.sessionId,
+          project_hash: projectHash,
+          project_path: params.projectPath,
+          slug: params.slug,
+          title: params.title,
+          started_at: params.startedAt,
+          parent_message_uuid: params.parentMessageUuid,
+          parent_conversation_id: params.parentConversationId,
+          git_commit_hash: gitInfo?.commitHash || params.gitCommitHash,
+          git_branch: gitInfo?.branch,
+          git_remote_url: gitInfo?.remoteUrl,
+          git_status: gitInfo?.status,
+          git_diff: gitInfo?.diff,
+          git_diff_staged: gitInfo?.diffStaged,
+          git_root: gitInfo?.root,
+          cli_flags: params.cliFlags,
+          api_token: this.apiToken
+        }
+      );
       return result;
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
@@ -9854,14 +11533,17 @@ class SyncService {
   async linkSessions(parentConversationId, childConversationId) {
     await this.throttle();
     try {
-      await this.client.mutation("conversations:linkSessions", {
-        parent_conversation_id: parentConversationId,
-        child_conversation_id: childConversationId,
-        api_token: this.apiToken
-      });
+      await this.client.mutation(
+        "conversations:linkSessions",
+        {
+          parent_conversation_id: parentConversationId,
+          child_conversation_id: childConversationId,
+          api_token: this.apiToken
+        }
+      );
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
@@ -9869,14 +11551,17 @@ class SyncService {
   async linkPlanHandoff(parentConversationId, childConversationId) {
     await this.throttle();
     try {
-      await this.client.mutation("conversations:linkPlanHandoff", {
-        parent_conversation_id: parentConversationId,
-        child_conversation_id: childConversationId,
-        api_token: this.apiToken
-      });
+      await this.client.mutation(
+        "conversations:linkPlanHandoff",
+        {
+          parent_conversation_id: parentConversationId,
+          child_conversation_id: childConversationId,
+          api_token: this.apiToken
+        }
+      );
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
@@ -9884,7 +11569,7 @@ class SyncService {
   async addMessage(params) {
     await this.throttle();
     const redactedContent = truncate(redactSecrets(params.content), MAX_CONTENT_SIZE);
-    const redactedThinking = params.thinking ? truncate(redactSecrets(params.thinking), MAX_CONTENT_SIZE) : undefined;
+    const redactedThinking = params.thinking ? truncate(redactSecrets(params.thinking), MAX_CONTENT_SIZE) : void 0;
     const roleMap = {
       human: "user",
       assistant: "assistant",
@@ -9911,23 +11596,26 @@ class SyncService {
       }
     }
     try {
-      const messageId = await this.client.mutation("messages:addMessage", {
-        conversation_id: params.conversationId,
-        message_uuid: params.messageUuid,
-        role: roleMap[params.role],
-        content: redactedContent,
-        thinking: redactedThinking,
-        tool_calls: toolCalls,
-        tool_results: toolResults,
-        images: images.length > 0 ? images : undefined,
-        subtype: params.subtype,
-        timestamp: params.timestamp,
-        api_token: this.apiToken
-      });
+      const messageId = await this.client.mutation(
+        "messages:addMessage",
+        {
+          conversation_id: params.conversationId,
+          message_uuid: params.messageUuid,
+          role: roleMap[params.role],
+          content: redactedContent,
+          thinking: redactedThinking,
+          tool_calls: toolCalls,
+          tool_results: toolResults,
+          images: images.length > 0 ? images : void 0,
+          subtype: params.subtype,
+          timestamp: params.timestamp,
+          api_token: this.apiToken
+        }
+      );
       return messageId;
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
@@ -9944,7 +11632,7 @@ class SyncService {
     const preparedMessages = [];
     for (const msg of params.messages) {
       const redactedContent = truncate(redactSecrets(msg.content), MAX_CONTENT_SIZE);
-      const redactedThinking = msg.thinking ? truncate(redactSecrets(msg.thinking), MAX_CONTENT_SIZE) : undefined;
+      const redactedThinking = msg.thinking ? truncate(redactSecrets(msg.thinking), MAX_CONTENT_SIZE) : void 0;
       const toolCalls = msg.toolCalls?.map((tc) => ({
         id: tc.id,
         name: tc.name,
@@ -9972,7 +11660,7 @@ class SyncService {
         thinking: redactedThinking,
         tool_calls: toolCalls,
         tool_results: toolResults,
-        images: images.length > 0 ? images : undefined,
+        images: images.length > 0 ? images : void 0,
         subtype: msg.subtype,
         timestamp: msg.timestamp
       });
@@ -9980,21 +11668,24 @@ class SyncService {
     const BATCH_SIZE = 25;
     let totalInserted = 0;
     const allIds = [];
-    for (let i = 0;i < preparedMessages.length; i += BATCH_SIZE) {
+    for (let i = 0; i < preparedMessages.length; i += BATCH_SIZE) {
       const batch = preparedMessages.slice(i, i + BATCH_SIZE);
       await this.throttle();
       try {
-        const result = await this.client.mutation("messages:addMessages", {
-          conversation_id: params.conversationId,
-          messages: batch,
-          api_token: this.apiToken
-        });
+        const result = await this.client.mutation(
+          "messages:addMessages",
+          {
+            conversation_id: params.conversationId,
+            messages: batch,
+            api_token: this.apiToken
+          }
+        );
         const typed = result;
         totalInserted += typed.inserted;
         allIds.push(...typed.ids);
       } catch (error) {
         if (isAuthError(error)) {
-          throw new AuthExpiredError;
+          throw new AuthExpiredError();
         }
         throw error;
       }
@@ -10015,7 +11706,7 @@ class SyncService {
       });
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
@@ -10026,15 +11717,18 @@ class SyncService {
     }
     const filePathHash = hashPath(filePath);
     try {
-      const position = await this.client.query("syncCursors:getSyncCursor", {
-        user_id: this.userId,
-        file_path_hash: filePathHash,
-        api_token: this.apiToken
-      });
+      const position = await this.client.query(
+        "syncCursors:getSyncCursor",
+        {
+          user_id: this.userId,
+          file_path_hash: filePathHash,
+          api_token: this.apiToken
+        }
+      );
       return position ?? 0;
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
@@ -10048,7 +11742,7 @@ class SyncService {
       });
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
@@ -10107,7 +11801,7 @@ class SyncService {
       });
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
@@ -10120,56 +11814,64 @@ class SyncService {
       });
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
   }
   async setSessionError(conversationId, error) {
-    if (!this.apiToken)
-      return;
+    if (!this.apiToken) return;
     try {
-      await this.client.mutation("conversations:setSessionError", {
-        conversation_id: conversationId,
-        error,
-        api_token: this.apiToken
-      });
+      await this.client.mutation(
+        "conversations:setSessionError",
+        {
+          conversation_id: conversationId,
+          error,
+          api_token: this.apiToken
+        }
+      );
     } catch {
     }
   }
   async markSessionCompleted(conversationId) {
-    if (!this.apiToken)
-      return;
+    if (!this.apiToken) return;
     try {
-      await this.client.mutation("conversations:markSessionCompleted", {
-        conversation_id: conversationId,
-        api_token: this.apiToken
-      });
+      await this.client.mutation(
+        "conversations:markSessionCompleted",
+        {
+          conversation_id: conversationId,
+          api_token: this.apiToken
+        }
+      );
     } catch {
     }
   }
   async markSessionActive(conversationId) {
-    if (!this.apiToken)
-      return;
+    if (!this.apiToken) return;
     try {
-      await this.client.mutation("conversations:markSessionActive", {
-        conversation_id: conversationId,
-        api_token: this.apiToken
-      });
+      await this.client.mutation(
+        "conversations:markSessionActive",
+        {
+          conversation_id: conversationId,
+          api_token: this.apiToken
+        }
+      );
     } catch {
     }
   }
   async updateSessionAgentStatus(conversationId, status, clientTs, permissionMode) {
-    if (!this.apiToken)
-      return;
+    if (!this.apiToken) return;
     try {
-      await this.client.mutation("managedSessions:updateAgentStatus", {
-        conversation_id: conversationId,
-        agent_status: status,
-        client_ts: clientTs || Date.now(),
-        api_token: this.apiToken,
-        ...permissionMode ? { permission_mode: permissionMode } : {}
-      });
+      await this.client.mutation(
+        "managedSessions:updateAgentStatus",
+        {
+          conversation_id: conversationId,
+          agent_status: status,
+          client_ts: clientTs || Date.now(),
+          api_token: this.apiToken,
+          ...permissionMode ? { permission_mode: permissionMode } : {}
+        }
+      );
     } catch {
     }
   }
@@ -10186,38 +11888,47 @@ class SyncService {
   }
   async createPermissionRequest(params) {
     try {
-      const permissionId = await this.client.mutation("permissions:createPermissionRequest", {
-        conversation_id: params.conversation_id,
-        session_id: params.session_id,
-        tool_name: params.tool_name,
-        arguments_preview: params.arguments_preview,
-        api_token: this.apiToken
-      });
+      const permissionId = await this.client.mutation(
+        "permissions:createPermissionRequest",
+        {
+          conversation_id: params.conversation_id,
+          session_id: params.session_id,
+          tool_name: params.tool_name,
+          arguments_preview: params.arguments_preview,
+          api_token: this.apiToken
+        }
+      );
       return permissionId;
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
   }
   async getPermissionDecision(sessionId) {
     try {
-      const decision = await this.client.query("permissions:getPermissionDecision", {
-        session_id: sessionId,
-        api_token: this.apiToken
-      });
+      const decision = await this.client.query(
+        "permissions:getPermissionDecision",
+        {
+          session_id: sessionId,
+          api_token: this.apiToken
+        }
+      );
       return decision;
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
   }
   async getMinCliVersion() {
     try {
-      const version2 = await this.client.query("systemConfig:getMinCliVersion", {});
+      const version2 = await this.client.query(
+        "systemConfig:getMinCliVersion",
+        {}
+      );
       return version2;
     } catch {
       return null;
@@ -10228,26 +11939,31 @@ class SyncService {
       return null;
     }
     try {
-      const result = await this.client.mutation("daemonLogs:insertBatch", {
-        api_token: this.apiToken,
-        logs
-      });
+      const result = await this.client.mutation(
+        "daemonLogs:insertBatch",
+        {
+          api_token: this.apiToken,
+          logs
+        }
+      );
       return result;
     } catch {
       return null;
     }
   }
   async createSessionNotification(params) {
-    if (!this.apiToken)
-      return;
+    if (!this.apiToken) return;
     try {
-      await this.client.mutation("notifications:createSessionNotification", {
-        api_token: this.apiToken,
-        conversation_id: params.conversation_id,
-        type: params.type,
-        title: params.title,
-        message: params.message
-      });
+      await this.client.mutation(
+        "notifications:createSessionNotification",
+        {
+          api_token: this.apiToken,
+          conversation_id: params.conversation_id,
+          type: params.type,
+          title: params.title,
+          message: params.message
+        }
+      );
     } catch {
     }
   }
@@ -10256,94 +11972,107 @@ class SyncService {
       return [];
     }
     try {
-      const result = await this.client.query("conversations:getMessageCountsForReconciliation", {
-        session_ids: sessionIds,
-        api_token: this.apiToken
-      });
+      const result = await this.client.query(
+        "conversations:getMessageCountsForReconciliation",
+        {
+          session_ids: sessionIds,
+          api_token: this.apiToken
+        }
+      );
       return result;
     } catch (error) {
       if (isAuthError(error)) {
-        throw new AuthExpiredError;
+        throw new AuthExpiredError();
       }
       throw error;
     }
   }
+  // --- Agent Tasks ---
   async getDueTasks(limit) {
-    if (!this.apiToken)
-      return [];
+    if (!this.apiToken) return [];
     try {
-      const result = await this.client.query("agentTasks:getDueTasks", { api_token: this.apiToken, limit });
+      const result = await this.client.query(
+        "agentTasks:getDueTasks",
+        { api_token: this.apiToken, limit }
+      );
       return result || [];
     } catch {
       return [];
     }
   }
   async claimTask(taskId, daemonId) {
-    if (!this.apiToken)
-      return null;
+    if (!this.apiToken) return null;
     try {
-      return await this.client.mutation("agentTasks:claimTask", { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId });
+      return await this.client.mutation(
+        "agentTasks:claimTask",
+        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
+      );
     } catch {
       return null;
     }
   }
   async renewTaskLease(taskId, daemonId) {
-    if (!this.apiToken)
-      return false;
+    if (!this.apiToken) return false;
     try {
-      const result = await this.client.mutation("agentTasks:renewLease", { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId });
+      const result = await this.client.mutation(
+        "agentTasks:renewLease",
+        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
+      );
       return result;
     } catch {
       return false;
     }
   }
   async completeTaskRun(taskId, daemonId, summary, conversationId) {
-    if (!this.apiToken)
-      return false;
+    if (!this.apiToken) return false;
     try {
-      const result = await this.client.mutation("agentTasks:completeTaskRun", {
-        api_token: this.apiToken,
-        task_id: taskId,
-        daemon_id: daemonId,
-        summary,
-        conversation_id: conversationId
-      });
+      const result = await this.client.mutation(
+        "agentTasks:completeTaskRun",
+        {
+          api_token: this.apiToken,
+          task_id: taskId,
+          daemon_id: daemonId,
+          summary,
+          conversation_id: conversationId
+        }
+      );
       return result;
     } catch {
       return false;
     }
   }
   async failTaskRun(taskId, daemonId, error) {
-    if (!this.apiToken)
-      return false;
+    if (!this.apiToken) return false;
     try {
-      const result = await this.client.mutation("agentTasks:failTaskRun", { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error });
+      const result = await this.client.mutation(
+        "agentTasks:failTaskRun",
+        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error }
+      );
       return result;
     } catch {
       return false;
     }
   }
-}
+};
 
 // src/retryQueue.ts
-import fs9 from "fs";
+var import_fs3 = __toESM(require("fs"), 1);
 function parseRateLimitDelay(error) {
   const match = error.match(/wait (\d+) seconds/i);
   if (match) {
-    return parseInt(match[1], 10) * 1000 + 1000;
+    return parseInt(match[1], 10) * 1e3 + 1e3;
   }
   if (error.toLowerCase().includes("rate limit")) {
-    return 15000;
+    return 15e3;
   }
   return null;
 }
-var DEFAULT_INITIAL_DELAY = 1000;
-var DEFAULT_MAX_DELAY = 30000;
+var DEFAULT_INITIAL_DELAY = 1e3;
+var DEFAULT_MAX_DELAY = 3e4;
 var DEFAULT_MAX_ATTEMPTS = 10;
 var DEFAULT_CONCURRENCY = 5;
-
-class RetryQueue {
-  queue = new Map;
+var RetryQueue = class {
+  queue = /* @__PURE__ */ new Map();
   timer = null;
   executor = null;
   initialDelayMs;
@@ -10367,15 +12096,14 @@ class RetryQueue {
     this.load();
   }
   load() {
-    if (!this.persistPath)
-      return;
+    if (!this.persistPath) return;
     try {
-      if (fs9.existsSync(this.persistPath)) {
-        const data = JSON.parse(fs9.readFileSync(this.persistPath, "utf-8"));
+      if (import_fs3.default.existsSync(this.persistPath)) {
+        const data = JSON.parse(import_fs3.default.readFileSync(this.persistPath, "utf-8"));
         if (Array.isArray(data)) {
           for (const op of data) {
             if (op.id && op.type && op.params) {
-              op.nextRetryAt = Date.now() + 1000;
+              op.nextRetryAt = Date.now() + 1e3;
               this.queue.set(op.id, op);
             }
           }
@@ -10394,11 +12122,10 @@ class RetryQueue {
     }
   }
   persist() {
-    if (!this.persistPath)
-      return;
+    if (!this.persistPath) return;
     try {
       const data = Array.from(this.queue.values());
-      fs9.writeFileSync(this.persistPath, JSON.stringify(data, null, 2));
+      import_fs3.default.writeFileSync(this.persistPath, JSON.stringify(data, null, 2));
     } catch {
       this.log("Failed to persist retry queue to disk");
     }
@@ -10409,26 +12136,26 @@ class RetryQueue {
   add(type, params, error) {
     const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const rateLimitDelay = error ? parseRateLimitDelay(error) : null;
-    const delay = rateLimitDelay ?? this.initialDelayMs;
+    const delay2 = rateLimitDelay ?? this.initialDelayMs;
     const op = {
       id,
       type,
       params,
       attempts: 0,
-      nextRetryAt: Date.now() + delay,
+      nextRetryAt: Date.now() + delay2,
       createdAt: Date.now(),
       lastError: error,
-      rateLimitDelayMs: rateLimitDelay ?? undefined
+      rateLimitDelayMs: rateLimitDelay ?? void 0
     };
     this.queue.set(id, op);
     this.persist();
-    this.log(`Queued ${type} for retry${rateLimitDelay ? ` (rate limited, ${delay}ms)` : ""} (id: ${id})`);
+    this.log(`Queued ${type} for retry${rateLimitDelay ? ` (rate limited, ${delay2}ms)` : ""} (id: ${id})`);
     this.scheduleNextCheck();
     return id;
   }
   calculateNextDelay(attempts) {
-    const delay = this.initialDelayMs * Math.pow(2, attempts);
-    return Math.min(delay, this.maxDelayMs);
+    const delay2 = this.initialDelayMs * Math.pow(2, attempts);
+    return Math.min(delay2, this.maxDelayMs);
   }
   scheduleNextCheck() {
     this.stopTimer();
@@ -10445,8 +12172,8 @@ class RetryQueue {
     if (this.rateLimitedUntil > now && earliestRetryAt < this.rateLimitedUntil) {
       earliestRetryAt = this.rateLimitedUntil;
     }
-    const delay = Math.max(10, earliestRetryAt - now);
-    this.timer = setTimeout(() => this.processQueue(), delay);
+    const delay2 = Math.max(10, earliestRetryAt - now);
+    this.timer = setTimeout(() => this.processQueue(), delay2);
   }
   stopTimer() {
     if (this.timer) {
@@ -10455,8 +12182,7 @@ class RetryQueue {
     }
   }
   async processQueue() {
-    if (this.processing || !this.executor || this.queue.size === 0)
-      return;
+    if (this.processing || !this.executor || this.queue.size === 0) return;
     this.processing = true;
     const now = Date.now();
     if (this.rateLimitedUntil > now) {
@@ -10478,7 +12204,9 @@ class RetryQueue {
     const batch = readyOps.slice(0, this.concurrency);
     const processOp = async (op) => {
       op.attempts++;
-      this.log(`Retrying ${op.type} (attempt ${op.attempts}/${this.maxAttempts}, id: ${op.id})`);
+      this.log(
+        `Retrying ${op.type} (attempt ${op.attempts}/${this.maxAttempts}, id: ${op.id})`
+      );
       try {
         const success = await this.executor(op);
         if (success) {
@@ -10510,27 +12238,35 @@ class RetryQueue {
   handleFailure(op, error) {
     op.lastError = error;
     const isNetwork = this.isNetworkError(error);
-    if (isNetwork && Date.now() - op.createdAt > 24 * 60 * 60 * 1000) {
-      this.log(`Network op retrying >24h: ${op.type} (${op.attempts} attempts, id: ${op.id}). Still persisting.`, "error");
+    if (isNetwork && Date.now() - op.createdAt > 24 * 60 * 60 * 1e3) {
+      this.log(
+        `Network op retrying >24h: ${op.type} (${op.attempts} attempts, id: ${op.id}). Still persisting.`,
+        "error"
+      );
     }
     if (op.attempts >= this.maxAttempts && !isNetwork) {
-      this.log(`Max retries reached. DROPPED: ${op.type} after ${op.attempts} attempts. Last error: ${error}. Session: ${op.params.sessionId || "unknown"}`, "error");
+      this.log(
+        `Max retries reached. DROPPED: ${op.type} after ${op.attempts} attempts. Last error: ${error}. Session: ${op.params.sessionId || "unknown"}`,
+        "error"
+      );
       this.recordDroppedOperation(op);
       this.queue.delete(op.id);
       return;
     }
     const rateLimitDelay = parseRateLimitDelay(error);
-    const maxDelay = isNetwork ? 5 * 60 * 1000 : this.maxDelayMs;
+    const maxDelay = isNetwork ? 5 * 60 * 1e3 : this.maxDelayMs;
     const effectiveAttempts = isNetwork ? Math.min(op.attempts, 10) : op.attempts;
     const baseDelay = rateLimitDelay ?? this.calculateNextDelay(effectiveAttempts);
     const nextDelay = Math.min(baseDelay, maxDelay);
     op.nextRetryAt = Date.now() + nextDelay;
-    op.rateLimitDelayMs = rateLimitDelay ?? undefined;
-    this.log(`Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms${rateLimitDelay ? " (rate limited)" : ""}${isNetwork ? " (network, indefinite)" : ""} (id: ${op.id})`, "warn");
+    op.rateLimitDelayMs = rateLimitDelay ?? void 0;
+    this.log(
+      `Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms${rateLimitDelay ? " (rate limited)" : ""}${isNetwork ? " (network, indefinite)" : ""} (id: ${op.id})`,
+      "warn"
+    );
   }
   recordDroppedOperation(op) {
-    if (!this.droppedPath)
-      return;
+    if (!this.droppedPath) return;
     const dropped = {
       id: op.id,
       type: op.type,
@@ -10544,36 +12280,36 @@ class RetryQueue {
     };
     try {
       let existing = [];
-      if (fs9.existsSync(this.droppedPath)) {
+      if (import_fs3.default.existsSync(this.droppedPath)) {
         try {
-          existing = JSON.parse(fs9.readFileSync(this.droppedPath, "utf-8"));
+          existing = JSON.parse(import_fs3.default.readFileSync(this.droppedPath, "utf-8"));
         } catch {
           existing = [];
         }
       }
       existing.push(dropped);
-      if (existing.length > 1000) {
-        existing = existing.slice(-1000);
+      if (existing.length > 1e3) {
+        existing = existing.slice(-1e3);
       }
-      fs9.writeFileSync(this.droppedPath, JSON.stringify(existing, null, 2));
+      import_fs3.default.writeFileSync(this.droppedPath, JSON.stringify(existing, null, 2));
       this.log(`Recorded dropped operation to ${this.droppedPath}`);
     } catch (err) {
       this.log(`Failed to record dropped operation: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   getDroppedOperations() {
-    if (!this.droppedPath || !fs9.existsSync(this.droppedPath)) {
+    if (!this.droppedPath || !import_fs3.default.existsSync(this.droppedPath)) {
       return [];
     }
     try {
-      return JSON.parse(fs9.readFileSync(this.droppedPath, "utf-8"));
+      return JSON.parse(import_fs3.default.readFileSync(this.droppedPath, "utf-8"));
     } catch {
       return [];
     }
   }
   clearDroppedOperations() {
-    if (this.droppedPath && fs9.existsSync(this.droppedPath)) {
-      fs9.unlinkSync(this.droppedPath);
+    if (this.droppedPath && import_fs3.default.existsSync(this.droppedPath)) {
+      import_fs3.default.unlinkSync(this.droppedPath);
     }
   }
   getQueueSize() {
@@ -10597,16 +12333,16 @@ class RetryQueue {
         this.log(`Timeout waiting for retry queue to drain (${this.queue.size} operations remaining)`);
         return false;
       }
-      await new Promise((resolve3) => setTimeout(resolve3, 100));
+      await new Promise((resolve4) => setTimeout(resolve4, 100));
     }
     this.log("All retry queue operations completed");
     return true;
   }
-}
+};
 
 // src/invalidateSync.ts
 async function delay(ms) {
-  return new Promise((resolve3) => setTimeout(resolve3, ms));
+  return new Promise((resolve4) => setTimeout(resolve4, ms));
 }
 function exponentialBackoffDelay(currentFailureCount, minDelay, maxDelay, maxFailureCount) {
   const maxDelayRet = minDelay + (maxDelay - minDelay) / maxFailureCount * Math.max(currentFailureCount, maxFailureCount);
@@ -10616,7 +12352,7 @@ function createBackoff(opts) {
   return async (callback) => {
     let currentFailureCount = 0;
     const minDelay = opts?.minDelay ?? 250;
-    const maxDelay = opts?.maxDelay ?? 1000;
+    const maxDelay = opts?.maxDelay ?? 1e3;
     const maxFailureCount = opts?.maxFailureCount ?? 50;
     while (true) {
       try {
@@ -10626,7 +12362,12 @@ function createBackoff(opts) {
           currentFailureCount++;
         }
         opts?.onError?.(e, currentFailureCount);
-        const waitForRequest = exponentialBackoffDelay(currentFailureCount, minDelay, maxDelay, maxFailureCount);
+        const waitForRequest = exponentialBackoffDelay(
+          currentFailureCount,
+          minDelay,
+          maxDelay,
+          maxFailureCount
+        );
         await delay(waitForRequest);
       }
     }
@@ -10637,8 +12378,7 @@ var backoff = createBackoff({
     console.warn(e);
   }
 });
-
-class InvalidateSync {
+var InvalidateSync = class {
   _invalidated = false;
   _invalidatedDouble = false;
   _stopped = false;
@@ -10665,8 +12405,8 @@ class InvalidateSync {
     if (this._stopped) {
       return;
     }
-    await new Promise((resolve3) => {
-      this._pendings.push(resolve3);
+    await new Promise((resolve4) => {
+      this._pendings.push(resolve4);
       this.invalidate();
     });
   }
@@ -10674,8 +12414,8 @@ class InvalidateSync {
     if (this._stopped || !this._invalidated && this._pendings.length === 0) {
       return;
     }
-    await new Promise((resolve3) => {
-      this._pendings.push(resolve3);
+    await new Promise((resolve4) => {
+      this._pendings.push(resolve4);
     });
   }
   stop() {
@@ -10710,10 +12450,10 @@ class InvalidateSync {
       this._notifyPendings();
     }
   };
-}
+};
 
 // src/daemon.ts
-import { promisify as promisify2 } from "util";
+var import_util2 = require("util");
 
 // src/permissionDetector.ts
 var PERMISSION_PATTERNS = [
@@ -10773,10 +12513,9 @@ function extractToolName(content) {
   return "unknown";
 }
 function extractArgumentsPreview(content) {
-  const lines = content.split(`
-`);
+  const lines = content.split("\n");
   const relevantLines = [];
-  for (let i = 0;i < Math.min(lines.length, 5); i++) {
+  for (let i = 0; i < Math.min(lines.length, 5); i++) {
     const line = lines[i].trim();
     if (line && !line.match(/^Allow|^Permission|^Do you want|^\[y\/n\]/i)) {
       relevantLines.push(line);
@@ -10787,9 +12526,9 @@ function extractArgumentsPreview(content) {
 }
 
 // src/permissionHandler.ts
-var POLL_INTERVAL_MS = 1000;
-var TIMEOUT_MS = 5 * 60 * 1000;
-async function handlePermissionRequest(syncService2, conversationId, sessionId, prompt, log) {
+var POLL_INTERVAL_MS = 1e3;
+var TIMEOUT_MS = 5 * 60 * 1e3;
+async function handlePermissionRequest(syncService2, conversationId, sessionId, prompt, log2) {
   try {
     await syncService2.createPermissionRequest({
       conversation_id: conversationId,
@@ -10797,37 +12536,37 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
       tool_name: prompt.tool_name,
       arguments_preview: prompt.arguments_preview
     });
-    log(`Created permission request for tool: ${prompt.tool_name}`);
+    log2(`Created permission request for tool: ${prompt.tool_name}`);
     const startTime = Date.now();
     while (Date.now() - startTime < TIMEOUT_MS) {
       const decision = await syncService2.getPermissionDecision(sessionId);
       if (decision) {
         const approved = decision.status === "approved";
-        log(`Permission ${approved ? "approved" : "denied"} for tool: ${prompt.tool_name}`);
+        log2(`Permission ${approved ? "approved" : "denied"} for tool: ${prompt.tool_name}`);
         return { approved };
       }
-      await new Promise((resolve3) => setTimeout(resolve3, POLL_INTERVAL_MS));
+      await new Promise((resolve4) => setTimeout(resolve4, POLL_INTERVAL_MS));
     }
-    log(`Permission request timed out for tool: ${prompt.tool_name}`);
+    log2(`Permission request timed out for tool: ${prompt.tool_name}`);
     return null;
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    log(`Error handling permission request: ${errMsg}`);
+    log2(`Error handling permission request: ${errMsg}`);
     return null;
   }
 }
 
 // src/update.ts
-import * as fs10 from "fs";
-import * as path10 from "path";
-import * as os from "os";
-var VERSION = "1.0.70";
+var fs10 = __toESM(require("fs"), 1);
+var path10 = __toESM(require("path"), 1);
+var os = __toESM(require("os"), 1);
+var VERSION = "1.0.71";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
-var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
+var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1e3;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
 var UPDATE_STATE_FILE = path10.join(CONFIG_DIR3, "update-state.json");
 function getPlatformKey() {
-  const platform2 = os.platform();
+  const platform3 = os.platform();
   const arch2 = os.arch();
   const platformMap = {
     darwin: "darwin",
@@ -10839,7 +12578,7 @@ function getPlatformKey() {
     x64: "x64",
     x86_64: "x64"
   };
-  const p = platformMap[platform2] || platform2;
+  const p = platformMap[platform3] || platform3;
   const a = archMap[arch2] || arch2;
   return `${p}-${a}`;
 }
@@ -10915,7 +12654,7 @@ async function performUpdate() {
     } catch {
     }
     const state = readUpdateState();
-    state.availableVersion = undefined;
+    state.availableVersion = void 0;
     writeUpdateState(state);
     console.log(`Updated to v${latest.version}`);
     ensureCastAlias();
@@ -10926,15 +12665,13 @@ async function performUpdate() {
   }
 }
 function ensureCastAlias() {
-  if (isDevMode())
-    return;
+  if (isDevMode()) return;
   const exe = process.execPath;
   const dir = path10.dirname(exe);
   const castLink = path10.join(dir, "cast");
   try {
     const target = fs10.readlinkSync(castLink);
-    if (target === exe)
-      return;
+    if (target === exe) return;
     fs10.unlinkSync(castLink);
   } catch (e) {
     if (e?.code === "ENOENT") {
@@ -10949,8 +12686,8 @@ function ensureCastAlias() {
 }
 
 // src/reconciliation.ts
-import * as fs11 from "fs";
-import * as path11 from "path";
+var fs11 = __toESM(require("fs"), 1);
+var path11 = __toESM(require("path"), 1);
 var CONFIG_DIR4 = process.env.HOME + "/.codecast";
 var RECONCILIATION_FILE = path11.join(CONFIG_DIR4, "last-reconciliation.json");
 function saveLastReconciliation(data) {
@@ -10971,7 +12708,7 @@ function countMessagesInFile(filePath) {
 function extractSessionIdFromPath(filePath) {
   return path11.basename(filePath, ".jsonl");
 }
-async function performReconciliation(syncService2, log, maxFiles = 50) {
+async function performReconciliation(syncService2, log2, maxFiles = 50) {
   const result = {
     timestamp: Date.now(),
     checked: 0,
@@ -10983,7 +12720,7 @@ async function performReconciliation(syncService2, log, maxFiles = 50) {
     return result;
   }
   const recentFiles = [];
-  const maxAgeMs = 7 * 24 * 60 * 60 * 1000;
+  const maxAgeMs = 7 * 24 * 60 * 60 * 1e3;
   const now = Date.now();
   const scanDir = (dir) => {
     try {
@@ -11009,18 +12746,18 @@ async function performReconciliation(syncService2, log, maxFiles = 50) {
   recentFiles.sort((a, b) => b.mtime - a.mtime);
   const filesToCheck = recentFiles.slice(0, maxFiles);
   if (filesToCheck.length === 0) {
-    log("Reconciliation: No recent session files found");
+    log2("Reconciliation: No recent session files found");
     return result;
   }
   const sessionIds = filesToCheck.map((f) => extractSessionIdFromPath(f.path));
-  log(`Reconciliation: Checking ${sessionIds.length} sessions against backend`);
+  log2(`Reconciliation: Checking ${sessionIds.length} sessions against backend`);
   let backendCounts = [];
   try {
     backendCounts = await syncService2.getMessageCountsForReconciliation(sessionIds);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     result.errors.push(`Failed to query backend: ${errMsg}`);
-    log(`Reconciliation error: ${errMsg}`, "error");
+    log2(`Reconciliation error: ${errMsg}`, "error");
     return result;
   }
   const backendMap = new Map(backendCounts.map((c) => [c.session_id, c]));
@@ -11037,7 +12774,7 @@ async function performReconciliation(syncService2, log, maxFiles = 50) {
         backendCount: 0,
         status: "missing_backend"
       });
-      log(`Reconciliation: Session ${sessionId.slice(0, 8)}... missing from backend (${localCount} local messages)`, "warn");
+      log2(`Reconciliation: Session ${sessionId.slice(0, 8)}... missing from backend (${localCount} local messages)`, "warn");
     } else if (localCount !== backendData.message_count) {
       result.discrepancies.push({
         sessionId,
@@ -11046,7 +12783,10 @@ async function performReconciliation(syncService2, log, maxFiles = 50) {
         backendCount: backendData.message_count,
         status: "count_mismatch"
       });
-      log(`Reconciliation: Session ${sessionId.slice(0, 8)}... count mismatch (local: ${localCount}, backend: ${backendData.message_count})`, "warn");
+      log2(
+        `Reconciliation: Session ${sessionId.slice(0, 8)}... count mismatch (local: ${localCount}, backend: ${backendData.message_count})`,
+        "warn"
+      );
     }
   }
   saveLastReconciliation({
@@ -11054,18 +12794,21 @@ async function performReconciliation(syncService2, log, maxFiles = 50) {
     discrepancyCount: result.discrepancies.length
   });
   if (result.discrepancies.length === 0) {
-    log(`Reconciliation: All ${result.checked} sessions match backend`);
+    log2(`Reconciliation: All ${result.checked} sessions match backend`);
   } else {
-    log(`Reconciliation: Found ${result.discrepancies.length} discrepancies out of ${result.checked} sessions`, "warn");
+    log2(
+      `Reconciliation: Found ${result.discrepancies.length} discrepancies out of ${result.checked} sessions`,
+      "warn"
+    );
   }
   return result;
 }
-async function repairDiscrepancies(discrepancies, log) {
+async function repairDiscrepancies(discrepancies, log2) {
   let repaired = 0;
   const MAX_RESYNC_BYTES = 5 * 1024 * 1024;
   for (const d of discrepancies) {
     if (d.status === "count_mismatch" && d.backendCount >= d.localCount) {
-      log(`Skipping repair for ${d.sessionId.slice(0, 8)}... backend already has >= local messages (backend: ${d.backendCount}, local: ${d.localCount})`);
+      log2(`Skipping repair for ${d.sessionId.slice(0, 8)}... backend already has >= local messages (backend: ${d.backendCount}, local: ${d.localCount})`);
       continue;
     }
     if (d.status === "missing_backend" || d.status === "count_mismatch") {
@@ -11077,10 +12820,10 @@ async function repairDiscrepancies(discrepancies, log) {
       if (fileSize > MAX_RESYNC_BYTES) {
         const newPosition = Math.max(0, fileSize - MAX_RESYNC_BYTES);
         setPosition(d.filePath, newPosition);
-        log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to ${newPosition} (tail ${MAX_RESYNC_BYTES} bytes of ${fileSize} byte file)`);
+        log2(`Reset sync position for ${d.sessionId.slice(0, 8)}... to ${newPosition} (tail ${MAX_RESYNC_BYTES} bytes of ${fileSize} byte file)`);
       } else {
         setPosition(d.filePath, 0);
-        log(`Reset sync position for ${d.sessionId.slice(0, 8)}... to trigger full re-sync`);
+        log2(`Reset sync position for ${d.sessionId.slice(0, 8)}... to trigger full re-sync`);
       }
       repaired++;
     }
@@ -11089,19 +12832,19 @@ async function repairDiscrepancies(discrepancies, log) {
 }
 
 // src/taskScheduler.ts
-import { exec } from "child_process";
-import { promisify } from "util";
-import * as fs12 from "fs";
-import * as crypto3 from "crypto";
+var import_child_process2 = require("child_process");
+var import_util = require("util");
+var fs12 = __toESM(require("fs"), 1);
+var crypto3 = __toESM(require("crypto"), 1);
 
 // src/tmux.ts
-import { execSync, spawnSync } from "child_process";
+var import_child_process = require("child_process");
 var ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 var _hasTmux = null;
 function hasTmux() {
   if (_hasTmux === null) {
     try {
-      execSync("tmux -V", { stdio: "ignore", timeout: 2000, env: { ...process.env, PATH: ENRICHED_PATH } });
+      (0, import_child_process.execSync)("tmux -V", { stdio: "ignore", timeout: 2e3, env: { ...process.env, PATH: ENRICHED_PATH } });
       _hasTmux = true;
     } catch {
       return false;
@@ -11111,28 +12854,27 @@ function hasTmux() {
 }
 
 // src/taskScheduler.ts
-var _execAsync = promisify(exec);
+var _execAsync = (0, import_util.promisify)(import_child_process2.exec);
 var execAsync = (cmd, opts) => _execAsync(cmd, { timeout: 1e4, ...opts });
-var POLL_INTERVAL_MS2 = 30000;
-var HEARTBEAT_INTERVAL_MS = 60000;
+var POLL_INTERVAL_MS2 = 3e4;
+var HEARTBEAT_INTERVAL_MS = 6e4;
 var MAX_CONCURRENCY = 2;
-
-class TaskScheduler {
+var TaskScheduler = class {
   daemonId;
   syncService;
   config;
   log;
-  running = new Map;
+  running = /* @__PURE__ */ new Map();
   pollTimer = null;
   stopped = false;
-  constructor({ syncService: syncService2, config, log }) {
+  constructor({ syncService: syncService2, config, log: log2 }) {
     this.daemonId = crypto3.randomUUID();
     this.syncService = syncService2;
     this.config = config;
-    this.log = (msg, level) => log(`[TaskSched] ${msg}`, level);
+    this.log = (msg, level) => log2(`[TaskSched] ${msg}`, level);
   }
   start() {
-    this.log(`Started with daemon_id=${this.daemonId.slice(0, 8)}, polling every ${POLL_INTERVAL_MS2 / 1000}s`);
+    this.log(`Started with daemon_id=${this.daemonId.slice(0, 8)}, polling every ${POLL_INTERVAL_MS2 / 1e3}s`);
     this.poll();
     this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS2);
   }
@@ -11149,19 +12891,14 @@ class TaskScheduler {
     this.log("Stopped");
   }
   async poll() {
-    if (this.stopped)
-      return;
-    if (this.running.size >= MAX_CONCURRENCY)
-      return;
+    if (this.stopped) return;
+    if (this.running.size >= MAX_CONCURRENCY) return;
     try {
       const dueTasks = await this.syncService.getDueTasks(MAX_CONCURRENCY - this.running.size);
-      if (!dueTasks || dueTasks.length === 0)
-        return;
+      if (!dueTasks || dueTasks.length === 0) return;
       for (const task of dueTasks) {
-        if (this.running.size >= MAX_CONCURRENCY)
-          break;
-        if (this.running.has(task._id))
-          continue;
+        if (this.running.size >= MAX_CONCURRENCY) break;
+        if (this.running.has(task._id)) continue;
         await this.executeTask(task);
       }
     } catch (err) {
@@ -11197,11 +12934,10 @@ class TaskScheduler {
       args.push("claude", "-p", `"$(cat ${promptFile})"`, "--dangerously-skip-permissions");
       const extraArgs = this.config.claude_args;
       if (extraArgs) {
-        const skip = new Set(["--chrome", "--dangerously-skip-permissions"]);
+        const skip = /* @__PURE__ */ new Set(["--chrome", "--dangerously-skip-permissions"]);
         const extra = extraArgs.split(/\s+/).filter(Boolean);
         for (const arg of extra) {
-          if (!skip.has(arg) && !args.includes(arg))
-            args.push(arg);
+          if (!skip.has(arg) && !args.includes(arg)) args.push(arg);
         }
       }
     }
@@ -11232,7 +12968,7 @@ class TaskScheduler {
       }
       await this.checkTaskCompletion(task._id);
     }, HEARTBEAT_INTERVAL_MS);
-    const maxRuntimeMs = task.max_runtime_ms || 10 * 60 * 1000;
+    const maxRuntimeMs = task.max_runtime_ms || 10 * 60 * 1e3;
     this.running.set(task._id, {
       taskId: task._id,
       tmuxSession,
@@ -11243,8 +12979,7 @@ class TaskScheduler {
   }
   async checkTaskCompletion(taskId) {
     const entry = this.running.get(taskId);
-    if (!entry)
-      return;
+    if (!entry) return;
     try {
       await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
     } catch {
@@ -11260,14 +12995,15 @@ class TaskScheduler {
         await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`);
       } catch {
       }
-      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`);
+      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 6e4)}min)`);
       this.cleanupTask(taskId);
       return;
     }
     try {
-      const { stdout } = await execAsync(`tmux capture-pane -p -J -t '${entry.tmuxSession}' -S -20 2>/dev/null`);
-      const lines = stdout.trim().split(`
-`).filter(Boolean);
+      const { stdout } = await execAsync(
+        `tmux capture-pane -p -J -t '${entry.tmuxSession}' -S -20 2>/dev/null`
+      );
+      const lines = stdout.trim().split("\n").filter(Boolean);
       const lastLine = lines[lines.length - 1]?.trim() || "";
       if (lastLine.endsWith("$") || lastLine.endsWith("%") || lastLine.endsWith("#")) {
         this.log(`Task ${taskId} returned to shell prompt, cleaning up`);
@@ -11318,81 +13054,71 @@ class TaskScheduler {
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);
     }
-    return parts.join(`
-`);
+    return parts.join("\n");
   }
   getRunningCount() {
     return this.running.size;
   }
-}
+};
 function formatTimeAgo(ms) {
-  const minutes = Math.floor(ms / 60000);
-  if (minutes < 60)
-    return `${minutes}m ago`;
+  const minutes = Math.floor(ms / 6e4);
+  if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24)
-    return `${hours}h ago`;
+  if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
 }
 
 // src/jsonlGenerator.ts
-import * as fs13 from "fs";
-import * as path12 from "path";
-import * as crypto4 from "crypto";
+var fs13 = __toESM(require("fs"), 1);
+var path12 = __toESM(require("path"), 1);
+var crypto4 = __toESM(require("crypto"), 1);
 var uuidv42 = () => crypto4.randomUUID();
 function estimateTokensFromText(text) {
-  if (!text)
-    return 0;
+  if (!text) return 0;
   return Math.ceil(text.length / 4);
 }
 function estimateTokensForMessage(msg) {
   let tokens = 0;
-  if (msg.content)
-    tokens += estimateTokensFromText(msg.content);
+  if (msg.content) tokens += estimateTokensFromText(msg.content);
   if (msg.tool_calls) {
     for (const tc of msg.tool_calls) {
-      if (tc.name)
-        tokens += estimateTokensFromText(tc.name);
-      if (tc.input)
-        tokens += estimateTokensFromText(tc.input);
+      if (tc.name) tokens += estimateTokensFromText(tc.name);
+      if (tc.input) tokens += estimateTokensFromText(tc.input);
     }
   }
   if (msg.tool_results) {
     for (const tr of msg.tool_results) {
-      const text = truncate2(tr.content || "", 2000);
+      const text = truncate2(tr.content || "", 2e3);
       tokens += estimateTokensFromText(text);
     }
   }
   return tokens;
 }
 function chooseClaudeTailMessagesForTokenBudget(data, budgetTokens) {
-  if (budgetTokens <= 0)
-    return 0;
+  if (budgetTokens <= 0) return 0;
   const messages = data.messages;
-  if (messages.length === 0)
-    return 0;
+  if (messages.length === 0) return 0;
   const reserved = estimateTokensFromText("[Codecast import]") + 512;
   const budget = Math.max(0, budgetTokens - reserved);
   let used = 0;
   let count = 0;
-  for (let i = messages.length - 1;i >= 0; i -= 1) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
     const t = estimateTokensForMessage(messages[i]);
-    if (count > 0 && used + t > budget)
-      break;
+    if (count > 0 && used + t > budget) break;
     used += t;
     count += 1;
   }
   return Math.max(1, count);
 }
-var REQUEST_TIMEOUT_MS = 30000;
+var REQUEST_TIMEOUT_MS = 3e4;
 var MAX_RETRIES = 3;
 function sleep(ms) {
-  return new Promise((resolve3) => setTimeout(resolve3, ms));
+  return new Promise((resolve4) => setTimeout(resolve4, ms));
 }
 async function fetchJsonWithRetry(url, body, context) {
   let lastErr;
-  for (let attempt = 1;attempt <= MAX_RETRIES; attempt++) {
-    const controller = new AbortController;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch(url, {
@@ -11437,15 +13163,19 @@ async function fetchExport(siteUrl, apiToken, conversationId) {
   let page = 0;
   while (true) {
     page += 1;
-    if (page > 1000) {
+    if (page > 1e3) {
       throw new Error("Export failed: too many pages");
     }
-    const { response: resp, data } = await fetchJsonWithRetry(`${siteUrl}/cli/export`, {
-      api_token: apiToken,
-      conversation_id: conversationId,
-      cursor,
-      limit: 500
-    }, "Export failed");
+    const { response: resp, data } = await fetchJsonWithRetry(
+      `${siteUrl}/cli/export`,
+      {
+        api_token: apiToken,
+        conversation_id: conversationId,
+        cursor,
+        limit: 500
+      },
+      "Export failed"
+    );
     if (data.error) {
       const details = data.details ? ` (${data.details.trim()})` : "";
       const shouldFallbackToRead = !cursor && data.error === "Internal error" && typeof data.details === "string" && data.details.includes("Array length is too long");
@@ -11464,7 +13194,7 @@ async function fetchExport(siteUrl, apiToken, conversationId) {
       conversation = data.conversation;
     }
     allMessages.push(...data.messages);
-    const nextCursor = typeof data.next_cursor === "string" ? data.next_cursor : undefined;
+    const nextCursor = typeof data.next_cursor === "string" ? data.next_cursor : void 0;
     if (data.done || !nextCursor) {
       break;
     }
@@ -11488,12 +13218,16 @@ async function fetchExportViaReadApi(siteUrl, apiToken, conversationId) {
   const allMessages = [];
   while (true) {
     const endLine = startLine + 49;
-    const { response: resp, data } = await fetchJsonWithRetry(`${siteUrl}/cli/read`, {
-      api_token: apiToken,
-      conversation_id: conversationId,
-      start_line: startLine,
-      end_line: endLine
-    }, "Export failed");
+    const { response: resp, data } = await fetchJsonWithRetry(
+      `${siteUrl}/cli/read`,
+      {
+        api_token: apiToken,
+        conversation_id: conversationId,
+        start_line: startLine,
+        end_line: endLine
+      },
+      "Export failed"
+    );
     if (data.error) {
       const details = data.details ? ` (${data.details.trim()})` : "";
       throw new Error(`Export failed: ${data.error}${details}`);
@@ -11533,7 +13267,7 @@ async function fetchExportViaReadApi(siteUrl, apiToken, conversationId) {
   if (!convMeta) {
     throw new Error("Export failed: fallback read missing conversation metadata");
   }
-  const startedAt = allMessages[0]?.timestamp || convMeta.updated_at || new Date().toISOString();
+  const startedAt = allMessages[0]?.timestamp || convMeta.updated_at || (/* @__PURE__ */ new Date()).toISOString();
   return {
     conversation: {
       id: convMeta.id,
@@ -11549,11 +13283,9 @@ async function fetchExportViaReadApi(siteUrl, apiToken, conversationId) {
     messages: allMessages
   };
 }
-function truncate2(text, max = 2000) {
-  if (text.length <= max)
-    return text;
-  return text.slice(0, max) + `
-... (truncated)`;
+function truncate2(text, max = 2e3) {
+  if (text.length <= max) return text;
+  return text.slice(0, max) + "\n... (truncated)";
 }
 function partitionToolResultsByExpected(results, expectedToolUseIds) {
   const matched = [];
@@ -11572,7 +13304,7 @@ function generateClaudeCodeJsonl(data, options = {}) {
   const sessionId = options.sessionId || uuidv42();
   const cwd = data.conversation.project_path || process.cwd();
   let parentUuid = null;
-  let expectedToolUseIds = new Set;
+  let expectedToolUseIds = /* @__PURE__ */ new Set();
   const firstUuid = uuidv42();
   lines.push(JSON.stringify({
     type: "file-history-snapshot",
@@ -11581,7 +13313,7 @@ function generateClaudeCodeJsonl(data, options = {}) {
     isSnapshotUpdate: false
   }));
   let messages = data.messages;
-  const tailMessages = typeof options.tailMessages === "number" ? options.tailMessages : undefined;
+  const tailMessages = typeof options.tailMessages === "number" ? options.tailMessages : void 0;
   if (tailMessages && tailMessages > 0 && messages.length > tailMessages) {
     const cutoffIndex = messages.length - tailMessages;
     const firstUserIndex = messages.findIndex((m) => m.role === "user");
@@ -11591,7 +13323,7 @@ function generateClaudeCodeJsonl(data, options = {}) {
       role: "user",
       timestamp: data.conversation.started_at,
       content: `[Codecast import] This Claude session was truncated to avoid overly-long context (which can break Claude Code /compact).
-` + `Original: ${messages.length} messages. Included: last ${tailMessages} messages` + (firstUser && firstUserIndex < cutoffIndex ? " + first user message." : ".")
+Original: ${messages.length} messages. Included: last ${tailMessages} messages` + (firstUser && firstUserIndex < cutoffIndex ? " + first user message." : ".")
     };
     messages = [notice];
     if (firstUser && firstUserIndex < cutoffIndex) {
@@ -11650,12 +13382,11 @@ function generateClaudeCodeJsonl(data, options = {}) {
         }));
         parentUuid = uuid;
       }
-      expectedToolUseIds = new Set;
+      expectedToolUseIds = /* @__PURE__ */ new Set();
     } else if (msg.role === "assistant") {
       const contentBlocks = [];
-      const assistantToolUseIds = new Set;
-      if (msg.content)
-        contentBlocks.push({ type: "text", text: msg.content });
+      const assistantToolUseIds = /* @__PURE__ */ new Set();
+      if (msg.content) contentBlocks.push({ type: "text", text: msg.content });
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
           let input = {};
@@ -11667,8 +13398,7 @@ function generateClaudeCodeJsonl(data, options = {}) {
           assistantToolUseIds.add(tc.id);
         }
       }
-      if (contentBlocks.length === 0)
-        contentBlocks.push({ type: "text", text: "" });
+      if (contentBlocks.length === 0) contentBlocks.push({ type: "text", text: "" });
       const msgId = `msg_${uuidv42().replace(/-/g, "").slice(0, 24)}`;
       lines.push(JSON.stringify({
         parentUuid,
@@ -11686,7 +13416,7 @@ function generateClaudeCodeJsonl(data, options = {}) {
           content: contentBlocks,
           stop_reason: "end_turn",
           stop_sequence: null,
-          usage: { input_tokens: 1000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 500, service_tier: "standard" }
+          usage: { input_tokens: 1e3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 500, service_tier: "standard" }
         },
         requestId: `req_${uuidv42().replace(/-/g, "").slice(0, 24)}`,
         type: "assistant",
@@ -11719,12 +13449,12 @@ function generateClaudeCodeJsonl(data, options = {}) {
           toolUseResult: inlineMatched.map((tr) => ({ type: "text", text: tr.content || "" }))
         }));
         parentUuid = trUuid;
-        expectedToolUseIds = new Set;
+        expectedToolUseIds = /* @__PURE__ */ new Set();
       }
     }
   }
   const merged = [];
-  for (let i = 0;i < lines.length; i++) {
+  for (let i = 0; i < lines.length; i++) {
     try {
       const cur = JSON.parse(lines[i]);
       if (cur.message?.role === "assistant" && merged.length > 0) {
@@ -11741,9 +13471,7 @@ function generateClaudeCodeJsonl(data, options = {}) {
     }
     merged.push(lines[i]);
   }
-  return { jsonl: merged.join(`
-`) + `
-`, sessionId };
+  return { jsonl: merged.join("\n") + "\n", sessionId };
 }
 function writeClaudeCodeSession(jsonl, sessionId, projectPath) {
   const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
@@ -11827,8 +13555,7 @@ ${tr.content}` }
               sandbox_policy: { type: "danger-full-access" },
               model: "gpt-5.2-codex",
               personality: "friendly",
-              collaboration_mode: { mode: "code", settings: { model: "gpt-5.2-codex", reasoning_effort: "high", developer_instructions: `you are now in code mode.
-` } },
+              collaboration_mode: { mode: "code", settings: { model: "gpt-5.2-codex", reasoning_effort: "high", developer_instructions: "you are now in code mode.\n" } },
               effort: "high",
               summary: "auto"
             }
@@ -11875,12 +13602,10 @@ ${tr.content}` }
       }));
     }
   }
-  return { jsonl: lines.join(`
-`) + `
-`, sessionId };
+  return { jsonl: lines.join("\n") + "\n", sessionId };
 }
 function writeCodexSession(jsonl, sessionId, name) {
-  const now = new Date;
+  const now = /* @__PURE__ */ new Date();
   const dateDir = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}`;
   const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const fileName = `${name || "remote"}-${ts}-${sessionId}.jsonl`;
@@ -11892,24 +13617,24 @@ function writeCodexSession(jsonl, sessionId, name) {
 }
 
 // src/daemon.ts
-var __dirname = "/Users/ashot/src/codecast/packages/cli/src";
-var _execAsync2 = promisify2(exec2);
+var import_meta = {};
+var _execAsync2 = (0, import_util2.promisify)(import_child_process3.exec);
 var ENRICHED_PATH2 = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 var EXEC_TIMEOUT_MS = 1e4;
 var execAsync2 = (cmd, opts) => _execAsync2(cmd, { timeout: EXEC_TIMEOUT_MS, ...opts, env: { ...process.env, PATH: ENRICHED_PATH2, ...opts?.env } });
 var lastTickTime = Date.now();
-var SLEEP_DETECTION_THRESHOLD_MS = 30000;
-var WAKE_GRACE_PERIOD_MS = 5000;
+var SLEEP_DETECTION_THRESHOLD_MS = 3e4;
+var WAKE_GRACE_PERIOD_MS = 5e3;
 var wakeGraceUntil = 0;
 setInterval(() => {
   const now = Date.now();
   const elapsed = now - lastTickTime;
   if (elapsed > SLEEP_DETECTION_THRESHOLD_MS) {
     wakeGraceUntil = now + WAKE_GRACE_PERIOD_MS;
-    log(`Sleep detected (${Math.round(elapsed / 1000)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
+    log(`Sleep detected (${Math.round(elapsed / 1e3)}s gap), grace period until ${new Date(wakeGraceUntil).toISOString()}`);
   }
   lastTickTime = now;
-}, 5000);
+}, 5e3);
 function isInWakeGrace() {
   return Date.now() < wakeGraceUntil;
 }
@@ -11922,32 +13647,28 @@ var VERSION_FILE = path13.join(CONFIG_DIR5, "daemon.version");
 function getPermissionFlags(agentType, config) {
   const modes = config?.agent_permission_modes;
   if (agentType === "claude") {
-    if (modes?.claude === "bypass")
-      return "--permission-mode bypassPermissions";
+    if (modes?.claude === "bypass") return "--permission-mode bypassPermissions";
   } else if (agentType === "codex") {
     const existing = config?.codex_args || "";
-    if (existing.includes("--full-auto") || existing.includes("--ask-for-approval") || existing.includes("--dangerously-bypass"))
-      return null;
-    if (modes?.codex === "full_auto")
-      return "--full-auto";
-    if (modes?.codex === "default")
-      return null;
+    if (existing.includes("--full-auto") || existing.includes("--ask-for-approval") || existing.includes("--dangerously-bypass")) return null;
+    if (modes?.codex === "full_auto") return "--full-auto";
+    if (modes?.codex === "default") return null;
     return "--dangerously-bypass-approvals-and-sandbox";
   } else if (agentType === "gemini") {
   }
   return null;
 }
 var AUTH_FAILURE_THRESHOLD = 5;
-var WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
-var RECONCILIATION_INTERVAL_MS = 60 * 60 * 1000;
-var WATCHDOG_STALE_THRESHOLD_MS = 10 * 60 * 1000;
-var VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000;
-var LOG_FLUSH_INTERVAL_MS = 15 * 1000;
+var WATCHDOG_INTERVAL_MS = 5 * 60 * 1e3;
+var RECONCILIATION_INTERVAL_MS = 60 * 60 * 1e3;
+var WATCHDOG_STALE_THRESHOLD_MS = 10 * 60 * 1e3;
+var VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1e3;
+var LOG_FLUSH_INTERVAL_MS = 15 * 1e3;
 var MAX_LOG_QUEUE_SIZE = 500;
 var LOG_QUEUE_FILE = path13.join(process.env.HOME || "", ".codecast", "log-queue.json");
-var EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000;
-var EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000;
-var HEARTBEAT_STALE_THRESHOLD_MS = 15 * 60 * 1000;
+var EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1e3;
+var EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1e3;
+var HEARTBEAT_STALE_THRESHOLD_MS = 15 * 60 * 1e3;
 var remoteLogQueue = [];
 var syncServiceRef = null;
 var daemonVersion;
@@ -11966,8 +13687,7 @@ function loadPersistedLogQueue() {
   }
 }
 function persistLogQueue() {
-  if (remoteLogQueue.length === 0)
-    return;
+  if (remoteLogQueue.length === 0) return;
   try {
     fs14.writeFileSync(LOG_QUEUE_FILE, JSON.stringify(remoteLogQueue), { mode: 384 });
   } catch {
@@ -11975,8 +13695,7 @@ function persistLogQueue() {
 }
 function getSiteUrl() {
   const config = activeConfig || readConfig();
-  if (!config?.convex_url)
-    return null;
+  if (!config?.convex_url) return null;
   return config.convex_url.replace(".cloud", ".site");
 }
 function getAuthToken() {
@@ -11984,12 +13703,10 @@ function getAuthToken() {
   return config?.auth_token || null;
 }
 async function flushRemoteLogsViaHttp() {
-  if (remoteLogQueue.length === 0)
-    return;
+  if (remoteLogQueue.length === 0) return;
   const siteUrl = getSiteUrl();
   const token = getAuthToken();
-  if (!siteUrl || !token)
-    return;
+  if (!siteUrl || !token) return;
   const logsToSend = remoteLogQueue.splice(0, 100);
   const logsWithMeta = logsToSend.map((l) => ({
     ...l,
@@ -12015,15 +13732,14 @@ async function flushRemoteLogsViaHttp() {
 function sendLogImmediate(level, message, metadata) {
   const siteUrl = getSiteUrl();
   const token = getAuthToken();
-  if (!siteUrl || !token)
-    return;
+  if (!siteUrl || !token) return;
   fetch(`${siteUrl}/cli/log`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       api_token: token,
       level,
-      message: message.slice(0, 2000),
+      message: message.slice(0, 2e3),
       metadata,
       cli_version: daemonVersion,
       platform: platform2
@@ -12032,22 +13748,20 @@ function sendLogImmediate(level, message, metadata) {
   }).catch(() => {
   });
 }
-var IDLE_TIMEOUT_MS = 2 * 60000;
-var IDLE_COOLDOWN_MS = 5 * 60000;
-var idleTimers = new Map;
-var lastIdleNotification = new Map;
-var lastIdleNotifiedSize = new Map;
-var lastErrorNotification = new Map;
-var lastWorkingStatusSent = new Map;
+var IDLE_TIMEOUT_MS = 2 * 6e4;
+var IDLE_COOLDOWN_MS = 5 * 6e4;
+var idleTimers = /* @__PURE__ */ new Map();
+var lastIdleNotifiedSize = /* @__PURE__ */ new Map();
+var lastErrorNotification = /* @__PURE__ */ new Map();
+var lastWorkingStatusSent = /* @__PURE__ */ new Map();
 var WORKING_STATUS_THROTTLE_MS = 1e4;
-var lastHookStatus = new Map;
-var pendingInteractivePrompts = new Map;
+var lastHookStatus = /* @__PURE__ */ new Map();
+var pendingInteractivePrompts = /* @__PURE__ */ new Map();
 var AGENT_STATUS_DIR = path13.join(process.env.HOME || "", ".codecast", "agent-status");
 function sendAgentStatus(syncService2, conversationId, sessionId, status, clientTs, permissionMode) {
   if (status === "working" && !permissionMode) {
     const last = lastWorkingStatusSent.get(sessionId) ?? 0;
-    if (Date.now() - last < WORKING_STATUS_THROTTLE_MS)
-      return;
+    if (Date.now() - last < WORKING_STATUS_THROTTLE_MS) return;
     lastWorkingStatusSent.set(sessionId, Date.now());
   }
   syncService2.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => {
@@ -12070,37 +13784,31 @@ function detectErrorInMessage(content) {
   ];
   for (const pat of patterns) {
     const match = content.match(pat);
-    if (match)
-      return match[0].slice(0, 200);
+    if (match) return match[0].slice(0, 200);
   }
   return null;
 }
 function extractPendingToolUseFromTranscript(transcriptPath) {
   try {
-    if (!transcriptPath || !fs14.existsSync(transcriptPath))
-      return null;
+    if (!transcriptPath || !fs14.existsSync(transcriptPath)) return null;
     const tailContent = readFileTail(transcriptPath, 32768);
-    const lines = tailContent.trim().split(`
-`);
+    const lines = tailContent.trim().split("\n");
     const tail = lines.slice(-20);
     let lastToolUse = null;
-    const completedToolIds = new Set;
+    const completedToolIds = /* @__PURE__ */ new Set();
     for (const line of tail) {
       try {
         const entry = JSON.parse(line);
         const msg = entry.message || entry;
         const blocks = Array.isArray(msg.content) ? msg.content : [];
         for (const block of blocks) {
-          if (block.type === "tool_result")
-            completedToolIds.add(block.tool_use_id);
-          if (block.type === "tool_use")
-            lastToolUse = { name: block.name, input: block.input };
+          if (block.type === "tool_result") completedToolIds.add(block.tool_use_id);
+          if (block.type === "tool_use") lastToolUse = { name: block.name, input: block.input };
         }
       } catch {
       }
     }
-    if (!lastToolUse)
-      return null;
+    if (!lastToolUse) return null;
     let preview = "";
     if (lastToolUse.input) {
       if (typeof lastToolUse.input.command === "string") {
@@ -12122,20 +13830,20 @@ ${preview}`;
     return null;
   }
 }
-var permissionRecordPending = new Set;
-var permissionJustResolved = new Set;
+var permissionRecordPending = /* @__PURE__ */ new Set();
+var permissionJustResolved = /* @__PURE__ */ new Set();
 var syncStats = {
   messagesSynced: 0,
   conversationsCreated: 0,
-  sessionsActive: new Set,
+  sessionsActive: /* @__PURE__ */ new Set(),
   lastReportTime: Date.now(),
   errors: 0,
   warnings: 0
 };
 var lastWatcherEventTime = Date.now();
-var HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1000;
+var HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1e3;
 function log(message, level = "info", metadata) {
-  const timestamp = new Date().toISOString();
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   const levelTag = level === "info" ? "" : `[${level.toUpperCase()}] `;
   const line = `[${timestamp}] ${levelTag}${message}
 `;
@@ -12143,7 +13851,7 @@ function log(message, level = "info", metadata) {
   if (level === "warn" || level === "error") {
     remoteLogQueue.push({
       level,
-      message: message.slice(0, 2000),
+      message: message.slice(0, 2e3),
       metadata,
       timestamp: Date.now()
     });
@@ -12157,7 +13865,7 @@ function logError(message, error, sessionId) {
   log(errMsg, "error", {
     session_id: sessionId,
     error_code: error?.name,
-    stack: error?.stack?.slice(0, 1000)
+    stack: error?.stack?.slice(0, 1e3)
   });
 }
 function logWarn(message, sessionId) {
@@ -12167,7 +13875,7 @@ function logDelivery(message, metadata) {
   log(message, "info", metadata);
   remoteLogQueue.push({
     level: "info",
-    message: `[DELIVERY] ${message.slice(0, 2000)}`,
+    message: `[DELIVERY] ${message.slice(0, 2e3)}`,
     metadata,
     timestamp: Date.now()
   });
@@ -12193,7 +13901,7 @@ function getSystemMetrics() {
     fds = fs14.readdirSync(`/dev/fd`).length;
   } catch {
     try {
-      fds = parseInt(execSync2("lsof -p " + process.pid + " 2>/dev/null | wc -l", { timeout: 5000 }).toString().trim(), 10) || 0;
+      fds = parseInt((0, import_child_process3.execSync)("lsof -p " + process.pid + " 2>/dev/null | wc -l", { timeout: 5e3 }).toString().trim(), 10) || 0;
     } catch {
     }
   }
@@ -12203,15 +13911,15 @@ function getSystemMetrics() {
     heap_total_mb: Math.round(mem.heapTotal / 1024 / 1024),
     uptime_min: Math.round(process.uptime() / 60),
     fds,
-    cpu_user_ms: Math.round(cpu.user / 1000),
-    cpu_system_ms: Math.round(cpu.system / 1000)
+    cpu_user_ms: Math.round(cpu.user / 1e3),
+    cpu_system_ms: Math.round(cpu.system / 1e3)
   };
 }
-var FD_WARN_THRESHOLD = 5000;
+var FD_WARN_THRESHOLD = 5e3;
 var RSS_WARN_THRESHOLD_MB = 1500;
 function logHealthSummary() {
   const now = Date.now();
-  const periodMinutes = Math.round((now - syncStats.lastReportTime) / 60000);
+  const periodMinutes = Math.round((now - syncStats.lastReportTime) / 6e4);
   const sessionsCount = syncStats.sessionsActive.size;
   const metrics = getSystemMetrics();
   const metricStr = `rss=${metrics.rss_mb}MB heap=${metrics.heap_mb}/${metrics.heap_total_mb}MB fds=${metrics.fds} cpu=${metrics.cpu_user_ms}+${metrics.cpu_system_ms}ms uptime=${metrics.uptime_min}min`;
@@ -12222,7 +13930,7 @@ function logHealthSummary() {
     level: "info",
     message: summary,
     metadata: {
-      error_code: syncStats.errors > 0 ? `${syncStats.errors} errors` : undefined
+      error_code: syncStats.errors > 0 ? `${syncStats.errors} errors` : void 0
     },
     timestamp: now
   });
@@ -12256,8 +13964,7 @@ function isAutostartEnabled() {
 }
 async function pollDaemonCommands() {
   const config = readConfig();
-  if (!config?.auth_token || !config?.convex_url)
-    return;
+  if (!config?.auth_token || !config?.convex_url) return;
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     const response = await fetch(`${siteUrl}/cli/heartbeat`, {
@@ -12272,8 +13979,7 @@ async function pollDaemonCommands() {
         has_tmux: hasTmux()
       })
     });
-    if (!response.ok)
-      return;
+    if (!response.ok) return;
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
       log(`[POLL] Received ${data.commands.length} command(s): ${data.commands.map((c) => c.command).join(", ")}`);
@@ -12315,7 +14021,7 @@ async function sendHeartbeat() {
         await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
       }
     }
-    if (data.sync_mode !== undefined) {
+    if (data.sync_mode !== void 0) {
       const currentConfig = readConfig();
       const serverMode = data.sync_mode;
       const serverProjects = data.sync_projects ?? [];
@@ -12330,7 +14036,7 @@ async function sendHeartbeat() {
         }
       }
     }
-    if (data.team_id !== undefined) {
+    if (data.team_id !== void 0) {
       const currentConfig = readConfig();
       if (currentConfig && currentConfig.team_id !== data.team_id) {
         log(`Team ID updated from server: ${data.team_id}`);
@@ -12340,7 +14046,7 @@ async function sendHeartbeat() {
         }
       }
     }
-    if (data.agent_permission_modes !== undefined) {
+    if (data.agent_permission_modes !== void 0) {
       const currentConfig = readConfig();
       const serverModes = data.agent_permission_modes;
       const localModes = currentConfig?.agent_permission_modes;
@@ -12358,8 +14064,7 @@ async function sendHeartbeat() {
 }
 async function executeRemoteCommand(commandId, command, config, commandArgs) {
   const siteUrl = config.convex_url?.replace(".cloud", ".site");
-  if (!siteUrl || !config.auth_token)
-    return;
+  if (!siteUrl || !config.auth_token) return;
   let result;
   let error;
   try {
@@ -12409,7 +14114,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             log("spawnReplacement failed, letting exit handler respawn");
           }
           setTimeout(() => process.exit(0), 500);
-        }, 1000);
+        }, 1e3);
         return;
       }
       case "force_update": {
@@ -12443,7 +14148,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             logLifecycle("update_failed", `Update failed from v${currentVersion}`);
             await flushRemoteLogs();
           }
-        }, 1000);
+        }, 1e3);
         return;
       }
       case "start_session": {
@@ -12460,15 +14165,14 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         if (agentType === "codex") {
           binary = "codex";
           const extraArgs = config.codex_args || "";
-          if (extraArgs)
-            binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
+          if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
           const permFlags = getPermissionFlags(agentType, config);
           if (permFlags) {
             binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
             if (!config.codex_args && !config.agent_permission_modes?.codex) {
               const flagFile = path13.join(CONFIG_DIR5, ".codex-bypass-notified");
               if (!fs14.existsSync(flagFile)) {
-                fs14.writeFileSync(flagFile, new Date().toISOString());
+                fs14.writeFileSync(flagFile, (/* @__PURE__ */ new Date()).toISOString());
                 if (conversationId) {
                   syncService.createSessionNotification({
                     conversation_id: conversationId,
@@ -12486,8 +14190,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         } else {
           binary = "claude";
           const extraArgs = config.claude_args || "";
-          if (extraArgs)
-            binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
+          if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
           const permFlags = getPermissionFlags(agentType, config);
           if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode")) {
             binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
@@ -12496,14 +14199,14 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         const shellCmd = [binary, ...binaryArgs].map((a) => a.includes(" ") ? `'${a.replace(/'/g, "'\\''")}'` : a).join(" ");
         const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; ${shellCmd}`;
         const execPath = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
-        const execOpts = { timeout: 5000, env: { ...process.env, PATH: execPath } };
+        const execOpts = { timeout: 5e3, env: { ...process.env, PATH: execPath } };
         if (!hasTmux()) {
           error = "tmux is not installed";
           break;
         }
         try {
-          execSync2(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
-          execSync2(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
+          (0, import_child_process3.execSync)(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
+          (0, import_child_process3.execSync)(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
           result = JSON.stringify({ tmux_session: tmuxSession, agent_type: agentType, project_path: cwd });
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
           if (conversationId) {
@@ -12567,7 +14270,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const conversationId = parsed.conversation_id;
         const stepsBack = parsed.steps_back;
-        if (!conversationId || stepsBack === undefined || stepsBack < 1) {
+        if (!conversationId || stepsBack === void 0 || stepsBack < 1) {
           error = "Missing conversation_id or invalid steps_back";
           break;
         }
@@ -12598,9 +14301,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         const BUSY_RE = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Wandering|Vibing|Coasting|Working|thinking/;
         const captureLast = async () => {
           const { stdout } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxTarget}' -S -8`);
-          return stdout.split(`
-`).slice(-10).join(`
-`);
+          return stdout.split("\n").slice(-10).join("\n");
         };
         const isAtPrompt = async () => {
           const last = await captureLast();
@@ -12614,7 +14315,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           log(`[REWIND] Session not at prompt, sending Escape`);
           await execAsync2(`tmux send-keys -t '${tmuxTarget}' Escape`);
           let gotPrompt = false;
-          for (let i = 0;i < 60; i++) {
+          for (let i = 0; i < 60; i++) {
             await new Promise((r) => setTimeout(r, 500));
             if (await isAtPrompt()) {
               gotPrompt = true;
@@ -12627,9 +14328,8 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           }
           log(`[REWIND] Got prompt after interrupt`);
         }
-        for (let attempt = 0;attempt < 3; attempt++) {
-          if (await hasEmptyPrompt())
-            break;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (await hasEmptyPrompt()) break;
           log(`[REWIND] Clearing existing prompt text (attempt ${attempt + 1})`);
           await execAsync2(`tmux send-keys -t '${tmuxTarget}' Escape`);
           await new Promise((r) => setTimeout(r, 500));
@@ -12657,7 +14357,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           error = "Missing conversation_id or keys";
           break;
         }
-        const ALLOWED_KEYS = new Set(["BTab", "Escape", "Enter", "Tab", "Up", "Down", "Left", "Right", "Space", "BSpace"]);
+        const ALLOWED_KEYS = /* @__PURE__ */ new Set(["BTab", "Escape", "Enter", "Tab", "Up", "Down", "Left", "Right", "Space", "BSpace"]);
         const keyList = keys.split(" ");
         const invalidKey = keyList.find((k) => !ALLOWED_KEYS.has(k));
         if (invalidKey) {
@@ -12671,13 +14371,12 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           sessionId = reverse[conversationId];
         }
         if (!sessionId) {
-          for (let i = 0;i < 10; i++) {
+          for (let i = 0; i < 10; i++) {
             await new Promise((r) => setTimeout(r, 500));
             const freshCache = readConversationCache();
             const freshReverse = buildReverseConversationCache(freshCache);
             sessionId = freshReverse[conversationId];
-            if (sessionId)
-              break;
+            if (sessionId) break;
           }
         }
         if (!sessionId) {
@@ -12701,7 +14400,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
               groups[groups.length - 1].push(k);
             }
           }
-          for (let i = 0;i < groups.length; i++) {
+          for (let i = 0; i < groups.length; i++) {
             if (i > 0) {
               const prevKey = groups[i - 1][0];
               const needsDelay = prevKey === "Escape" || prevKey === "Enter";
@@ -12775,8 +14474,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             } catch {
             }
             resumeSessionCache.delete(sessionId);
-            if (!result)
-              result = "killed_tmux";
+            if (!result) result = "killed_tmux";
           }
           const hbInterval = resumeHeartbeatIntervals.get(sessionId);
           if (hbInterval) {
@@ -12788,17 +14486,14 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           const shortId = sessionId.slice(0, 8);
           try {
             const { stdout: tmuxList } = await execAsync2("tmux list-sessions -F '#{session_name}' 2>/dev/null");
-            for (const tmuxName of tmuxList.trim().split(`
-`)) {
-              if (!tmuxName || !tmuxName.includes(shortId))
-                continue;
+            for (const tmuxName of tmuxList.trim().split("\n")) {
+              if (!tmuxName || !tmuxName.includes(shortId)) continue;
               const alive = await isTmuxAgentAlive(tmuxName);
               if (!alive) {
                 try {
                   await execAsync2(`tmux kill-session -t '${tmuxName}' 2>/dev/null`);
                   log(`[REMOTE] Killed zombie tmux session ${tmuxName} for session ${shortId}`);
-                  if (!result)
-                    result = "killed_zombie";
+                  if (!result) result = "killed_zombie";
                 } catch {
                 }
               }
@@ -12806,8 +14501,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           } catch {
           }
         }
-        if (!result)
-          result = sessionId ? "no_process" : "no_session";
+        if (!result) result = sessionId ? "no_process" : "no_session";
         break;
       }
       case "resume_session": {
@@ -12887,10 +14581,10 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             const tmuxSession = `cc-claude-${shortId}`;
             let extraFlags = config.claude_args || "";
             const fullCmd = `unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT; claude${extraFlags ? " " + extraFlags : ""}`;
-            const execOpts = { timeout: 5000, env: { ...process.env, PATH: ENRICHED_PATH2 } };
+            const execOpts = { timeout: 5e3, env: { ...process.env, PATH: ENRICHED_PATH2 } };
             try {
-              execSync2(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
-              execSync2(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
+              (0, import_child_process3.execSync)(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`, execOpts);
+              (0, import_child_process3.execSync)(`tmux send-keys -t '${tmuxSession}' '${fullCmd.replace(/'/g, "'\\''")}' Enter`, execOpts);
               startedSessionTmux.set(conversationId, {
                 tmuxSession,
                 projectPath: cwd,
@@ -12907,7 +14601,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             }
           }
         } else {
-          error = `Failed to resume session ${sessionId.slice(0, 8)} — session file may not exist locally`;
+          error = `Failed to resume session ${sessionId.slice(0, 8)} \u2014 session file may not exist locally`;
         }
         break;
       }
@@ -12951,8 +14645,7 @@ function readConfig() {
 }
 function patchConfig(updates) {
   const config = readConfig();
-  if (!config)
-    return;
+  if (!config) return;
   Object.assign(config, updates);
   fs14.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 384 });
 }
@@ -12992,11 +14685,9 @@ function generateTitleFromMessage(content) {
     return "";
   }
   const cmdNameMatch = trimmed.match(/<command-name>([^<]*)<\/command-name>/);
-  if (cmdNameMatch)
-    return `/${cmdNameMatch[1].replace(/^\//, "")}`;
+  if (cmdNameMatch) return `/${cmdNameMatch[1].replace(/^\//, "")}`;
   const cmdMsgMatch = trimmed.match(/<command-message>([^<]*)<\/command-message>/);
-  if (cmdMsgMatch)
-    return `/${cmdMsgMatch[1].replace(/^\//, "")}`;
+  if (cmdMsgMatch) return `/${cmdMsgMatch[1].replace(/^\//, "")}`;
   const cleaned = trimmed.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, "").replace(/<[^>]+>/g, "").trim();
   const result = cleaned || trimmed;
   if (result.length <= 50) {
@@ -13071,19 +14762,19 @@ function isProjectAllowedToSync(projectPath, config) {
 function getGitInfo(projectPath) {
   const execGit = (args) => {
     try {
-      return execSync2(`git ${args}`, {
+      return (0, import_child_process3.execSync)(`git ${args}`, {
         cwd: projectPath,
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "ignore"],
         maxBuffer: 10 * 1024 * 1024
       }).trim();
     } catch {
-      return;
+      return void 0;
     }
   };
   const commitHash = execGit("rev-parse HEAD");
   if (!commitHash) {
-    return;
+    return void 0;
   }
   const branch = execGit("rev-parse --abbrev-ref HEAD");
   const remoteUrl = execGit("remote get-url origin");
@@ -13096,8 +14787,8 @@ function getGitInfo(projectPath) {
     branch,
     remoteUrl,
     status,
-    diff: diff ? diff.slice(0, 1e5) : undefined,
-    diffStaged: diffStaged ? diffStaged.slice(0, 1e5) : undefined,
+    diff: diff ? diff.slice(0, 1e5) : void 0,
+    diffStaged: diffStaged ? diffStaged.slice(0, 1e5) : void 0,
     root
   };
 }
@@ -13112,7 +14803,7 @@ function decodeProjectDirName(dirName) {
       continue;
     }
     let matched = false;
-    for (let len = tokens.length - i;len >= 1; len--) {
+    for (let len = tokens.length - i; len >= 1; len--) {
       const candidate = tokens.slice(i, i + len).join("-");
       if (fs14.existsSync(path13.join(resolved, candidate))) {
         resolved = path13.join(resolved, candidate);
@@ -13277,8 +14968,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
     if (conversationId) {
       let titleContent;
       try {
-        titleContent = newContent + `
-` + readFileTail(filePath, 4096);
+        titleContent = newContent + "\n" + readFileTail(filePath, 4096);
       } catch (err) {
         if (err.code === "EACCES" || err.code === "EPERM") {
           log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
@@ -13310,8 +15000,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
         const headMessages = parseSessionFile(headContent);
         const userMsgs = headMessages.filter((m) => m.role === "user").slice(0, 3);
         for (const msg of userMsgs) {
-          if (!msg.content)
-            continue;
+          if (!msg.content) continue;
           const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
           if (handoffMatch) {
             const jsonlPath = handoffMatch[1];
@@ -13354,11 +15043,11 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
         const parentMessageUuid = extractParentUuid(headContent);
         const firstMessageTimestamp = messages[0]?.timestamp;
         const dirName = path13.basename(path13.dirname(filePath));
-        const decodedPath = dirName ? decodeProjectDirName(dirName) : undefined;
+        const decodedPath = dirName ? decodeProjectDirName(dirName) : void 0;
         const actualProjectPath = (decodedPath && fs14.existsSync(decodedPath) ? decodedPath : null) || extractCwd(headContent) || projectPath;
-        const gitInfo = actualProjectPath ? getGitInfo(actualProjectPath) : undefined;
+        const gitInfo = actualProjectPath ? getGitInfo(actualProjectPath) : void 0;
         const firstUserMessage = messages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
         let isPlanHandoff = false;
         if (!parentConversationId) {
           const parts = filePath.split(path13.sep);
@@ -13378,8 +15067,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
         if (!parentConversationId) {
           const userMessages = messages.filter((msg) => msg.role === "user").slice(0, 3);
           for (const msg of userMessages) {
-            if (!msg.content)
-              continue;
+            if (!msg.content) continue;
             const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
             if (handoffMatch) {
               const jsonlPath = handoffMatch[1];
@@ -13419,6 +15107,11 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
             log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
           } else if (matchedStartedConversation && actualProjectPath) {
             log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
+          } else {
+            matchedStartedConversation = matchSingleFreshStartedConversation(startedClaudeEntries);
+            if (matchedStartedConversation) {
+              log(`Matched session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via fresh-start fallback`);
+            }
           }
         }
         if (matchedStartedConversation) {
@@ -13435,8 +15128,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
           startedSessionTmux.delete(matchedStartedConversation);
           log(`Linked session ${sessionId} to existing started conversation ${conversationId}`);
         } else {
-          const cliFlags = detectCliFlags(headContent + `
-` + newContent);
+          const cliFlags = detectCliFlags(headContent + "\n" + newContent);
           conversationId = await syncService2.createConversation({
             userId,
             teamId,
@@ -13446,10 +15138,10 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
             slug,
             title,
             startedAt: firstMessageTimestamp,
-            parentMessageUuid: isPlanHandoff ? "plan-handoff" : parentConversationId ? undefined : parentMessageUuid,
+            parentMessageUuid: isPlanHandoff ? "plan-handoff" : parentConversationId ? void 0 : parentMessageUuid,
             parentConversationId,
             gitInfo,
-            cliFlags: cliFlags || undefined
+            cliFlags: cliFlags || void 0
           });
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
@@ -13460,20 +15152,18 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
           log(`Created conversation ${conversationId} for session ${sessionId}`);
           syncStats.conversationsCreated++;
           findSessionProcess(sessionId, "claude").then((proc) => {
-            if (!proc)
-              return;
+            if (!proc) return;
             findTmuxPaneForTty(proc.tty).then((tmuxPane) => {
               const tmuxSessionName = tmuxPane?.split(":")[0];
               syncService2.registerManagedSession(sessionId, proc.pid, tmuxSessionName, conversationId).catch(() => {
               });
-              if (tmuxSessionName)
-                log(`Registered managed session for ${sessionId.slice(0, 8)} (tmux: ${tmuxSessionName})`);
+              if (tmuxSessionName) log(`Registered managed session for ${sessionId.slice(0, 8)} (tmux: ${tmuxSessionName})`);
             }).catch(() => {
-              syncService2.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {
+              syncService2.registerManagedSession(sessionId, process.pid, void 0, conversationId).catch(() => {
               });
             });
           }).catch(() => {
-            syncService2.registerManagedSession(sessionId, process.pid, undefined, conversationId).catch(() => {
+            syncService2.registerManagedSession(sessionId, process.pid, void 0, conversationId).catch(() => {
             });
           });
           for (const [childSessionId, parentSessionId] of pendingSubagentParents) {
@@ -13504,7 +15194,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             setPosition(filePath, stats.size);
             return;
           }
@@ -13543,9 +15233,9 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
         const slug = extractSlug(retryHeadContent);
         const firstMsgTimestamp = messages[0]?.timestamp;
         const retryDirName = path13.basename(path13.dirname(filePath));
-        const retryDecoded = retryDirName ? decodeProjectDirName(retryDirName) : undefined;
+        const retryDecoded = retryDirName ? decodeProjectDirName(retryDirName) : void 0;
         const retryProjectPath = (retryDecoded && fs14.existsSync(retryDecoded) ? retryDecoded : null) || extractCwd(retryHeadContent) || projectPath;
-        const gitInfo = retryProjectPath ? getGitInfo(retryProjectPath) : undefined;
+        const gitInfo = retryProjectPath ? getGitInfo(retryProjectPath) : void 0;
         retryQueue.add("createConversation", {
           userId,
           teamId,
@@ -13562,7 +15252,7 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
     }
     const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -13583,12 +15273,12 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
       const slug = extractSlug(recreateHeadContent);
       const firstMessageTimestamp = messages[0]?.timestamp;
       const recreateDirName = path13.basename(path13.dirname(filePath));
-      const recreateDecoded = recreateDirName ? decodeProjectDirName(recreateDirName) : undefined;
+      const recreateDecoded = recreateDirName ? decodeProjectDirName(recreateDirName) : void 0;
       const recreateProjectPath = (recreateDecoded && fs14.existsSync(recreateDecoded) ? recreateDecoded : null) || extractCwd(recreateHeadContent) || projectPath;
-      const gitInfo = recreateProjectPath ? getGitInfo(recreateProjectPath) : undefined;
+      const gitInfo = recreateProjectPath ? getGitInfo(recreateProjectPath) : void 0;
       try {
         const firstUserMessage = messages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
         conversationId = await syncService2.createConversation({
           userId,
           teamId,
@@ -13627,7 +15317,10 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
         log(`Permission prompt detected for tool: ${permissionPrompt.tool_name}`);
         permissionJustResolved.add(sessionId);
         sendAgentStatus(syncService2, conversationId, sessionId, "permission_blocked");
-        const permArgPreview = truncateForNotification(`${permissionPrompt.tool_name}: ${permissionPrompt.arguments_preview || ""}`, 150);
+        const permArgPreview = truncateForNotification(
+          `${permissionPrompt.tool_name}: ${permissionPrompt.arguments_preview || ""}`,
+          150
+        );
         syncService2.createSessionNotification({
           conversation_id: conversationId,
           type: "permission_request",
@@ -13635,7 +15328,13 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
           message: permArgPreview
         }).catch(() => {
         });
-        handlePermissionRequest(syncService2, conversationId, sessionId, permissionPrompt, log).then((decision) => {
+        handlePermissionRequest(
+          syncService2,
+          conversationId,
+          sessionId,
+          permissionPrompt,
+          log
+        ).then((decision) => {
           if (decision) {
             const response = decision.approved ? "y" : "n";
             log(`Attempting to inject response '${response}' to session ${sessionId.slice(0, 8)}`);
@@ -13690,10 +15389,9 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
       }
       if (!permissionPrompt) {
         const existingTimer = idleTimers.get(sessionId);
-        if (existingTimer)
-          clearTimeout(existingTimer);
+        if (existingTimer) clearTimeout(existingTimer);
         const hookEntry = lastHookStatus.get(sessionId);
-        const hookIsRecent = hookEntry && Date.now() / 1000 - hookEntry.ts < 30;
+        const hookIsRecent = hookEntry && Date.now() / 1e3 - hookEntry.ts < 30;
         if (!hookIsRecent) {
           sendAgentStatus(syncService2, conversationId, sessionId, "working");
         }
@@ -13712,14 +15410,12 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
               idleTimers.delete(sessionId);
               try {
                 const currentStats = fs14.statSync(capturedFilePath);
-                if (currentStats.size !== capturedSize)
-                  return;
+                if (currentStats.size !== capturedSize) return;
               } catch {
                 return;
               }
               const hookIdle = lastHookStatus.get(sessionId);
-              if (hookIdle && Date.now() / 1000 - hookIdle.ts < 30)
-                return;
+              if (hookIdle && Date.now() / 1e3 - hookIdle.ts < 30) return;
               lastIdleNotifiedSize.set(sessionId, capturedSize);
               sendAgentStatus(syncService2, conversationId, sessionId, "idle");
               const preview = truncateForNotification(lastAssistantMessage.content);
@@ -13775,7 +15471,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
     try {
       const firstMessageTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find((msg) => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
       conversationId = await syncService2.createConversation({
         userId,
         teamId,
@@ -13795,7 +15491,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
     } catch (err) {
       if (err instanceof AuthExpiredError) {
         if (handleAuthFailure()) {
-          log("⚠️  Authentication expired - sync paused");
+          log("\u26A0\uFE0F  Authentication expired - sync paused");
           setPosition(dbPath, totalCount);
           return;
         }
@@ -13835,7 +15531,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
   }
   const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
   if (batchResult.authExpired) {
-    log("⚠️  Authentication expired - sync paused");
+    log("\u26A0\uFE0F  Authentication expired - sync paused");
     return;
   }
   if (batchResult.conversationNotFound) {
@@ -13844,7 +15540,7 @@ async function processCursorSession(dbPath, sessionId, workspacePath, syncServic
     saveConversationCache(conversationCache);
     const firstMessageTimestamp = messages[0]?.timestamp;
     const firstUserMessage = messages.find((msg) => msg.role === "user");
-    const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+    const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
     try {
       conversationId = await syncService2.createConversation({
         userId,
@@ -13909,14 +15605,14 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
     if (!conversationId) {
       let projectPath;
       try {
-        projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
+        projectPath = findWorkspacePathForCursorConversation(sessionId) || void 0;
       } catch {
-        projectPath = undefined;
+        projectPath = void 0;
       }
       const firstMessageTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find((msg) => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-      const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
+      const gitInfo = projectPath ? getGitInfo(projectPath) : void 0;
       try {
         conversationId = await syncService2.createConversation({
           userId,
@@ -13924,10 +15620,10 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
           sessionId,
           agentType: "cursor",
           projectPath,
-          slug: undefined,
+          slug: void 0,
           title,
           startedAt: firstMessageTimestamp,
-          parentMessageUuid: undefined,
+          parentMessageUuid: void 0,
           gitInfo
         });
         conversationCache[sessionId] = conversationId;
@@ -13941,7 +15637,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             setPosition(filePath, stats.size);
             return;
           }
@@ -13982,7 +15678,7 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
     }
     const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -13990,21 +15686,21 @@ async function processCursorTranscriptFile(filePath, sessionId, syncService2, us
       delete conversationCache[sessionId];
       saveConversationCache(conversationCache);
       try {
-        const projectPath = findWorkspacePathForCursorConversation(sessionId) || undefined;
+        const projectPath = findWorkspacePathForCursorConversation(sessionId) || void 0;
         const firstMessageTimestamp = messages[0]?.timestamp;
         const firstUserMessage = messages.find((m) => m.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-        const gitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
+        const gitInfo = projectPath ? getGitInfo(projectPath) : void 0;
         conversationId = await syncService2.createConversation({
           userId,
           teamId,
           sessionId,
           agentType: "cursor",
           projectPath,
-          slug: undefined,
+          slug: void 0,
           title,
           startedAt: firstMessageTimestamp,
-          parentMessageUuid: undefined,
+          parentMessageUuid: void 0,
           gitInfo
         });
         conversationCache[sessionId] = conversationId;
@@ -14062,8 +15758,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
     if (conversationId) {
       let titleContent;
       try {
-        titleContent = newContent + `
-` + readFileTail(filePath, 4096);
+        titleContent = newContent + "\n" + readFileTail(filePath, 4096);
       } catch (err) {
         if (err.code === "EACCES" || err.code === "EPERM") {
           log(`Warning: Permission denied reading ${filePath} for title update. Skipping.`);
@@ -14149,18 +15844,18 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
           log(`Linked Codex session ${sessionId} to existing started conversation ${conversationId}`);
         } else {
           const firstUserMessage = messages.find((msg) => msg.role === "user");
-          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
           conversationId = await syncService2.createConversation({
             userId,
             teamId,
             sessionId,
             agentType: "codex",
             projectPath,
-            slug: undefined,
+            slug: void 0,
             title,
             startedAt: firstMessageTimestamp,
-            parentMessageUuid: undefined,
-            gitInfo: undefined
+            parentMessageUuid: void 0,
+            gitInfo: void 0
           });
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
@@ -14180,7 +15875,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             setPosition(filePath, stats.size);
             return;
           }
@@ -14207,7 +15902,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
         }
         const firstMsgTimestamp = messages[0]?.timestamp;
         const firstUserMessage = messages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
         retryQueue.add("createConversation", {
           userId,
           teamId,
@@ -14222,7 +15917,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
     }
     const batchResult = await syncMessagesBatch(messages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -14231,7 +15926,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
       saveConversationCache(conversationCache);
       const firstMsgTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find((msg) => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
       try {
         conversationId = await syncService2.createConversation({
           userId,
@@ -14268,7 +15963,7 @@ async function processCodexSession(filePath, sessionId, syncService2, userId, te
     log(`Error processing Codex session file ${filePath}: ${errMsg}`);
   }
 }
-var geminiSyncedCounts = new Map;
+var geminiSyncedCounts = /* @__PURE__ */ new Map();
 async function processGeminiSession(filePath, sessionId, projectHash, syncService2, userId, teamId, conversationCache, retryQueue, pendingMessages, titleCache, updateStateCallback) {
   try {
     let content;
@@ -14291,19 +15986,19 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
     if (!conversationId) {
       try {
         const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
         const startTime = allMessages[0]?.timestamp;
         conversationId = await syncService2.createConversation({
           userId,
           teamId,
           sessionId,
           agentType: "gemini",
-          projectPath: undefined,
-          slug: undefined,
+          projectPath: void 0,
+          slug: void 0,
           title,
           startedAt: startTime,
-          parentMessageUuid: undefined,
-          gitInfo: undefined
+          parentMessageUuid: void 0,
+          gitInfo: void 0
         });
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
@@ -14322,7 +16017,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
       } catch (err) {
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
-            log("⚠️  Authentication expired - sync paused");
+            log("\u26A0\uFE0F  Authentication expired - sync paused");
             geminiSyncedCounts.set(filePath, allMessages.length);
             return;
           }
@@ -14348,7 +16043,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
           });
         }
         const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
         retryQueue.add("createConversation", {
           userId,
           teamId,
@@ -14363,7 +16058,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
     }
     const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService2, retryQueue);
     if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
+      log("\u26A0\uFE0F  Authentication expired - sync paused");
       return;
     }
     if (batchResult.conversationNotFound) {
@@ -14371,7 +16066,7 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
       delete conversationCache[sessionId];
       saveConversationCache(conversationCache);
       const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : void 0;
       try {
         conversationId = await syncService2.createConversation({
           userId,
@@ -14405,8 +16100,8 @@ async function processGeminiSession(filePath, sessionId, projectHash, syncServic
   }
 }
 var reconnectAttempt = 0;
-var BASE_DELAY_MS = 1000;
-var MAX_DELAY_MS = 30000;
+var BASE_DELAY_MS = 1e3;
+var MAX_DELAY_MS = 3e4;
 function getReconnectDelay() {
   const delay2 = Math.min(BASE_DELAY_MS * Math.pow(2, reconnectAttempt), MAX_DELAY_MS);
   reconnectAttempt++;
@@ -14416,12 +16111,9 @@ function resetReconnectDelay() {
   reconnectAttempt = 0;
 }
 function normalizeTty(tty) {
-  if (tty.startsWith("/dev/"))
-    return tty;
-  if (tty.startsWith("ttys"))
-    return `/dev/${tty}`;
-  if (tty.match(/^s\d+$/))
-    return `/dev/tty${tty}`;
+  if (tty.startsWith("/dev/")) return tty;
+  if (tty.startsWith("ttys")) return `/dev/${tty}`;
+  if (tty.match(/^s\d+$/)) return `/dev/tty${tty}`;
   return `/dev/${tty}`;
 }
 function buildReverseConversationCache(cache) {
@@ -14432,8 +16124,7 @@ function buildReverseConversationCache(cache) {
   return reverse;
 }
 function detectSessionAgentType(sessionId) {
-  if (sessionId.startsWith("session-"))
-    return "gemini";
+  if (sessionId.startsWith("session-")) return "gemini";
   const sessionFile = findSessionFile(sessionId);
   return sessionFile?.agentType ?? "claude";
 }
@@ -14443,15 +16134,13 @@ function tryRegisterSessionProcess(sessionId, agentType) {
     const registryFile = path13.join(registryDir, `${sessionId}.json`);
     if (fs14.existsSync(registryFile)) {
       const stat4 = fs14.statSync(registryFile);
-      if (Date.now() - stat4.mtimeMs < 300000)
-        return;
+      if (Date.now() - stat4.mtimeMs < 3e5) return;
     }
     findSessionProcess(sessionId, agentType).then((result) => {
-      if (!result)
-        return;
+      if (!result) return;
       try {
         fs14.mkdirSync(registryDir, { recursive: true });
-        fs14.writeFileSync(registryFile, JSON.stringify({ pid: result.pid, tty: result.tty, ts: Math.floor(Date.now() / 1000) }));
+        fs14.writeFileSync(registryFile, JSON.stringify({ pid: result.pid, tty: result.tty, ts: Math.floor(Date.now() / 1e3) }));
         log(`Opportunistically registered session ${sessionId.slice(0, 8)}: pid=${result.pid}, tty=${result.tty}`);
       } catch {
       }
@@ -14464,14 +16153,14 @@ function tryRegisterSessionProcess(sessionId, agentType) {
             syncServiceRef.registerManagedSession(sessionId, result.pid, tmuxSessionName, conversationId).catch(() => {
             });
           }).catch(() => {
-            syncServiceRef.registerManagedSession(sessionId, result.pid, undefined, conversationId).catch(() => {
+            syncServiceRef.registerManagedSession(sessionId, result.pid, void 0, conversationId).catch(() => {
             });
           });
           if (!resumeHeartbeatIntervals.has(sessionId)) {
             const interval = setInterval(() => {
               syncServiceRef.heartbeatManagedSession(sessionId).catch(() => {
               });
-            }, 30000);
+            }, 3e4);
             resumeHeartbeatIntervals.set(sessionId, interval);
           }
         }
@@ -14495,7 +16184,7 @@ async function findSessionProcess(sessionId, agentType = "claude") {
         const reg = JSON.parse(fs14.readFileSync(registryFile, "utf-8"));
         const pid = reg.pid;
         const tty = normalizeTty(reg.tty);
-        const termProgram = reg.term || undefined;
+        const termProgram = reg.term || void 0;
         const { stdout: checkPs } = await execAsync2(`ps -o comm= -p ${pid} 2>/dev/null`);
         if (checkPs.trim()) {
           if (agentType === "codex") {
@@ -14517,23 +16206,18 @@ async function findSessionProcess(sessionId, agentType = "claude") {
     }
     try {
       const { stdout } = await execAsync2(`ps aux | grep -E '${binaryPattern}' | grep -v grep | grep -v 'codecast'`);
-      const lines = stdout.trim().split(`
-`);
+      const lines = stdout.trim().split("\n");
       const geminiCandidates = [];
       const codexResumeCandidates2 = [];
       for (const line of lines) {
-        if (!line.trim())
-          continue;
+        if (!line.trim()) continue;
         const isResume = isResumeInvocation(agentType, line);
-        if (!isResume && agentType !== "gemini")
-          continue;
+        if (!isResume && agentType !== "gemini") continue;
         const parts = line.trim().split(/\s+/);
-        if (parts.length < 7)
-          continue;
+        if (parts.length < 7) continue;
         const pid = parseInt(parts[1], 10);
         const tty = parts[6];
-        if (isNaN(pid) || tty === "?" || tty === "??")
-          continue;
+        if (isNaN(pid) || tty === "?" || tty === "??") continue;
         const normalizedTty = normalizeTty(tty);
         if (line.includes(sessionId)) {
           if (agentType === "codex") {
@@ -14585,23 +16269,18 @@ async function findSessionProcess(sessionId, agentType = "claude") {
     if (agentType === "codex") {
       try {
         const { stdout } = await execAsync2(`ps aux | grep -E 'codex' | grep -v grep | grep -v 'codecast'`);
-        const lines = stdout.trim().split(`
-`);
+        const lines = stdout.trim().split("\n");
         const candidates = [];
         for (const line of lines) {
-          if (!line.trim())
-            continue;
+          if (!line.trim()) continue;
           const parts = line.trim().split(/\s+/);
-          if (parts.length < 7)
-            continue;
+          if (parts.length < 7) continue;
           const pid = parseInt(parts[1], 10);
           const tty = parts[6];
-          if (isNaN(pid) || tty === "?" || tty === "??")
-            continue;
+          if (isNaN(pid) || tty === "?" || tty === "??") continue;
           try {
             const { stdout: lsofOut } = await execAsync2(`lsof -p ${pid} 2>/dev/null`);
-            if (!hasCodexSessionFileOpen(lsofOut, sessionId))
-              continue;
+            if (!hasCodexSessionFileOpen(lsofOut, sessionId)) continue;
             const normalizedTty = normalizeTty(tty);
             let tmuxTarget = null;
             try {
@@ -14614,10 +16293,9 @@ async function findSessionProcess(sessionId, agentType = "claude") {
         }
         if (candidates.length > 0) {
           const preferred = choosePreferredCodexCandidate(candidates);
-          if (!preferred)
-            return null;
+          if (!preferred) return null;
           const result = { pid: preferred.pid, tty: preferred.tty, sessionId };
-          cacheSessionProcess(sessionId, result, preferred.tmuxTarget || undefined);
+          cacheSessionProcess(sessionId, result, preferred.tmuxTarget || void 0);
           if (preferred.tmuxTarget) {
             log(`Found codex session ${sessionId.slice(0, 8)} via lsof session file match (tmux): pid=${preferred.pid}`);
           } else {
@@ -14638,22 +16316,18 @@ async function findSessionProcess(sessionId, agentType = "claude") {
     try {
       const { stdout: tmuxList } = await execAsync2("tmux list-sessions -F '#{session_name}' 2>/dev/null");
       const shortId = sessionId.slice(0, 8);
-      for (const tmuxName of tmuxList.trim().split(`
-`)) {
-        if (!tmuxName.includes(shortId))
-          continue;
+      for (const tmuxName of tmuxList.trim().split("\n")) {
+        if (!tmuxName.includes(shortId)) continue;
         try {
           const { stdout: paneInfo } = await execAsync2(`tmux list-panes -t '${tmuxName}' -F '#{pane_tty} #{pane_pid}' 2>/dev/null`);
-          const paneLine = paneInfo.trim().split(`
-`)[0];
+          const paneLine = paneInfo.trim().split("\n")[0];
           if (paneLine) {
             const [paneTty, panePidStr] = paneLine.split(" ");
             const panePid = parseInt(panePidStr, 10);
             if (!isNaN(panePid) && paneTty) {
               try {
                 const { stdout: childPs } = await execAsync2(`pgrep -P ${panePid} -f ${binaryPattern} 2>/dev/null`);
-                const childPid = parseInt(childPs.trim().split(`
-`)[0]?.trim(), 10);
+                const childPid = parseInt(childPs.trim().split("\n")[0]?.trim(), 10);
                 if (!isNaN(childPid)) {
                   const result = { pid: childPid, tty: normalizeTty(paneTty), sessionId };
                   cacheSessionProcess(sessionId, result, `${tmuxName}:0.0`);
@@ -14679,30 +16353,25 @@ async function findSessionProcess(sessionId, agentType = "claude") {
     const jsonlPath = findSessionJsonlPath(sessionId);
     if (jsonlPath) {
       const jsonlStat = fs14.statSync(jsonlPath);
-      const recentlyModified = Date.now() - jsonlStat.mtimeMs < 60000;
+      const recentlyModified = Date.now() - jsonlStat.mtimeMs < 6e4;
       if (recentlyModified) {
-        const jsonlContent = readFileHead(jsonlPath, 5000);
+        const jsonlContent = readFileHead(jsonlPath, 5e3);
         const projectCwd = extractCwd(jsonlContent) || (agentType === "codex" ? extractCodexCwd(jsonlContent) : null);
         if (projectCwd) {
           try {
             const psPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "/claude\\b|claude-code";
             const { stdout: psOut } = await execAsync2(`ps aux | grep -E '${psPattern}' | grep -v grep | grep -v 'codecast'`);
             const candidates = [];
-            for (const line of psOut.trim().split(`
-`)) {
-              if (!line.trim())
-                continue;
+            for (const line of psOut.trim().split("\n")) {
+              if (!line.trim()) continue;
               const parts = line.trim().split(/\s+/);
-              if (parts.length < 7)
-                continue;
+              if (parts.length < 7) continue;
               const pid = parseInt(parts[1], 10);
               const tty = parts[6];
-              if (isNaN(pid) || tty === "?" || tty === "??")
-                continue;
+              if (isNaN(pid) || tty === "?" || tty === "??") continue;
               try {
                 const { stdout: lsofOut } = await execAsync2(`lsof -d cwd -a -p ${pid} -F n 2>/dev/null`);
-                const cwdLine = lsofOut.split(`
-`).find((l) => l.startsWith("n"));
+                const cwdLine = lsofOut.split("\n").find((l) => l.startsWith("n"));
                 if (cwdLine) {
                   const processCwd = cwdLine.slice(1);
                   if (processCwd === projectCwd || processCwd.startsWith(projectCwd + "/")) {
@@ -14714,8 +16383,7 @@ async function findSessionProcess(sessionId, agentType = "claude") {
             }
             const unclaimed = candidates.filter((c) => {
               for (const [cachedSid, cachedInfo] of sessionProcessCache) {
-                if (cachedSid !== sessionId && cachedInfo.pid === c.pid)
-                  return false;
+                if (cachedSid !== sessionId && cachedInfo.pid === c.pid) return false;
               }
               return true;
             });
@@ -14740,10 +16408,10 @@ async function findSessionProcess(sessionId, agentType = "claude") {
                 } catch {
                 }
               }
-              if (bestCandidate && bestDelta < 300000) {
+              if (bestCandidate && bestDelta < 3e5) {
                 const result = { pid: bestCandidate.pid, tty: bestCandidate.tty, sessionId };
                 cacheSessionProcess(sessionId, result);
-                log(`Found session ${sessionId.slice(0, 8)} via CWD+timing match: pid=${bestCandidate.pid}, delta=${Math.round(bestDelta / 1000)}s`);
+                log(`Found session ${sessionId.slice(0, 8)} via CWD+timing match: pid=${bestCandidate.pid}, delta=${Math.round(bestDelta / 1e3)}s`);
                 return result;
               }
               log(`CWD match found ${unclaimed.length} unclaimed candidates for ${sessionId.slice(0, 8)}, could not disambiguate`);
@@ -14762,13 +16430,11 @@ async function findSessionProcess(sessionId, agentType = "claude") {
   }
 }
 async function findTmuxPaneForTty(tty) {
-  if (!hasTmux())
-    return null;
+  if (!hasTmux()) return null;
   try {
     const { stdout } = await execAsync2("tmux list-panes -a -F '#{pane_tty} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null");
     const normalizedTty = normalizeTty(tty);
-    for (const line of stdout.trim().split(`
-`)) {
+    for (const line of stdout.trim().split("\n")) {
       const [paneTty, target] = line.split(" ");
       if (paneTty === normalizedTty && target) {
         return target;
@@ -14780,35 +16446,30 @@ async function findTmuxPaneForTty(tty) {
   }
 }
 function parseInteractivePrompt(text) {
-  const lines = text.split(`
-`);
+  const lines = text.split("\n");
   const optionPattern = /^\s*[❯>)]*\s*(\d+)[.)]\s+(.+?)(?:\s{2,}(.+?))?$/;
   const options = [];
   let firstOptionIdx = -1;
   let gapCount = 0;
-  for (let i = 0;i < lines.length; i++) {
+  for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(optionPattern);
     if (m) {
-      if (firstOptionIdx < 0)
-        firstOptionIdx = i;
+      if (firstOptionIdx < 0) firstOptionIdx = i;
       const label = m[2].replace(/\s*[✓✗✔☑]\s*/g, "").trim();
-      const description = m[3]?.trim() || undefined;
-      if (label)
-        options.push({ label, description });
+      const description = m[3]?.trim() || void 0;
+      if (label) options.push({ label, description });
       gapCount = 0;
     } else if (options.length > 0) {
       const trimmed = lines[i].trim();
       if (!trimmed || /^\s{10,}/.test(lines[i])) {
         gapCount++;
-        if (gapCount > 3)
-          break;
+        if (gapCount > 3) break;
       } else if (/^\s*[❯>]\s*$/.test(lines[i]) || /confirm|exit|adjust|effort/i.test(trimmed)) {
         break;
       }
     }
   }
-  if (options.length < 2 || firstOptionIdx < 0)
-    return null;
+  if (options.length < 2 || firstOptionIdx < 0) return null;
   const headerLines = lines.slice(Math.max(0, firstOptionIdx - 5), firstOptionIdx).map((l) => l.trim()).filter((l) => l.length > 0 && !/^[❯>]/.test(l) && !/^[─━═─\-_]{5,}$/.test(l));
   const question = headerLines[0] || "Select an option";
   return { question, options };
@@ -14816,8 +16477,7 @@ function parseInteractivePrompt(text) {
 function parsePollMessage(content) {
   try {
     const parsed = JSON.parse(content);
-    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps)))
-      return parsed;
+    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps))) return parsed;
   } catch {
   }
   return null;
@@ -14828,11 +16488,11 @@ async function checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, 
     return;
   }
   const hookEntry = lastHookStatus.get(sessionId);
-  if (hookEntry && hookEntry.status === "working" && Date.now() / 1000 - hookEntry.ts < 10) {
+  if (hookEntry && hookEntry.status === "working" && Date.now() / 1e3 - hookEntry.ts < 10) {
     log(`Skipping prompt check: session ${sessionId.slice(0, 8)} is working`);
     return;
   }
-  await new Promise((resolve4) => setTimeout(resolve4, 2000));
+  await new Promise((resolve4) => setTimeout(resolve4, 2e3));
   try {
     const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxTarget}' -S -50`);
     const prompt = parseInteractivePrompt(paneContent);
@@ -14872,19 +16532,15 @@ function normalizePromptText(value) {
 }
 function tmuxPromptStillHasInput(paneContent, input) {
   const normalizedInput = normalizePromptText(input);
-  if (!normalizedInput)
-    return false;
-  const lines = paneContent.split(`
-`);
-  const recent = lines.slice(-80).join(`
-`);
-  const lastPromptIndex = Math.max(recent.lastIndexOf("❯"), recent.lastIndexOf("›"));
-  if (lastPromptIndex === -1)
-    return false;
+  if (!normalizedInput) return false;
+  const lines = paneContent.split("\n");
+  const recent = lines.slice(-80).join("\n");
+  const lastPromptIndex = Math.max(recent.lastIndexOf("\u276F"), recent.lastIndexOf("\u203A"));
+  if (lastPromptIndex === -1) return false;
   const fromPrompt = recent.slice(lastPromptIndex);
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
-var tmuxTargetLocks = new Map;
+var tmuxTargetLocks = /* @__PURE__ */ new Map();
 async function withTmuxLock(target, fn) {
   const baseTarget = target.split(":")[0];
   while (tmuxTargetLocks.has(baseTarget)) {
@@ -14935,13 +16591,11 @@ async function injectViaTmuxInner(target, content) {
   try {
     const { stdout: preCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -5`);
     const hasBlockingWarning = /Press enter to continue|Update available|⚠|recorded with model|weekly limit/i.test(preCheck);
-    const promptVisible = /[❯›]/.test(preCheck.split(`
-`).slice(-5).join(`
-`));
+    const promptVisible = /[❯›]/.test(preCheck.split("\n").slice(-5).join("\n"));
     if (hasBlockingWarning && !promptVisible) {
       log(`Clearing blocking dialog before inject to ${target}`);
       await execAsync2(`tmux send-keys -t '${target}' Enter`);
-      await new Promise((resolve4) => setTimeout(resolve4, 1000));
+      await new Promise((resolve4) => setTimeout(resolve4, 1e3));
     } else if (hasBlockingWarning && promptVisible) {
       await execAsync2(`tmux send-keys -t '${target}' Escape`);
       await new Promise((resolve4) => setTimeout(resolve4, 500));
@@ -14951,7 +16605,7 @@ async function injectViaTmuxInner(target, content) {
   const captureLines = Math.max(30, Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
   let pasteConfirmed = false;
-  for (let pasteRetry = 0;pasteRetry < 4; pasteRetry++) {
+  for (let pasteRetry = 0; pasteRetry < 4; pasteRetry++) {
     if (pasteRetry > 0) {
       log(`Paste retry ${pasteRetry} for ${target} (text not appearing in pane)`);
       await new Promise((resolve4) => setTimeout(resolve4, 500 * pasteRetry));
@@ -14971,7 +16625,7 @@ async function injectViaTmuxInner(target, content) {
       } catch {
       }
     }
-    for (let attempt = 0;attempt < 12; attempt++) {
+    for (let attempt = 0; attempt < 12; attempt++) {
       try {
         const { stdout: echoCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
         if (tmuxPromptStillHasInput(echoCheck, contentPrefix)) {
@@ -14982,16 +16636,15 @@ async function injectViaTmuxInner(target, content) {
       }
       await new Promise((resolve4) => setTimeout(resolve4, 150));
     }
-    if (pasteConfirmed)
-      break;
+    if (pasteConfirmed) break;
   }
   if (!pasteConfirmed) {
     log(`WARNING: paste text never appeared in pane ${target} after 4 retries`);
   }
-  const enterDelay = Math.max(200, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
+  const enterDelay = Math.max(200, Math.min(1e3, Math.ceil(sanitized.length / 100) * 50));
   await new Promise((resolve4) => setTimeout(resolve4, enterDelay));
   await execAsync2(`tmux send-keys -t '${target}' Enter`);
-  for (let retry = 0;retry < 5; retry++) {
+  for (let retry = 0; retry < 5; retry++) {
     await new Promise((resolve4) => setTimeout(resolve4, 600));
     try {
       const { stdout: postCheck } = await execAsync2(`tmux capture-pane -p -J -t '${target}' -S -${captureLines}`);
@@ -14999,21 +16652,17 @@ async function injectViaTmuxInner(target, content) {
         log(`Enter may not have submitted (retry ${retry + 1}), sending Enter again to ${target}`);
         await execAsync2(`tmux send-keys -t '${target}' Enter`);
       } else {
-        const lastLines = postCheck.split(`
-`).slice(-5).join(`
-`);
+        const lastLines = postCheck.split("\n").slice(-5).join("\n");
         const hasPrompt = /[❯›]/.test(lastLines);
         const hasActivity = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|●|thinking|Bash|Read|Edit|Write|Glob|Grep/.test(lastLines);
         if (hasActivity || !hasPrompt) {
           break;
         }
-        const promptLine = lastLines.split(`
-`).find((l) => /[❯›]/.test(l));
+        const promptLine = lastLines.split("\n").find((l) => /[❯›]/.test(l));
         if (promptLine) {
           const promptMatch = promptLine.match(/[❯›]/);
           const afterPrompt = promptMatch ? promptLine.slice(promptMatch.index + 1).trim() : "";
-          if (!afterPrompt)
-            break;
+          if (!afterPrompt) break;
         }
         break;
       }
@@ -15036,40 +16685,34 @@ function buildAppleScript(app, normalizedTty, content, poll) {
       stepActions = steps.map((step, i) => {
         const lines = [`            tell s to write text "${step.key}" without newline`];
         if (step.text) {
-          const escapedText = step.text.replace(/"/g, "\\\"");
+          const escapedText = step.text.replace(/"/g, '\\"');
           lines.push("            delay 0.5");
           lines.push(`            tell s to write text "${escapedText}" without newline`);
           lines.push("            delay 0.15");
           lines.push(`            tell s to write text ""`);
         }
-        if (i < steps.length - 1)
-          lines.push("            delay 0.5");
-        return lines.join(`
-`);
-      }).join(`
-`);
+        if (i < steps.length - 1) lines.push("            delay 0.5");
+        return lines.join("\n");
+      }).join("\n");
     } else {
       stepActions = steps.map((step, i) => {
         const lines = [`          do script "${step.key}" in t`];
         if (step.text) {
-          const escapedText = step.text.replace(/"/g, "\\\"");
+          const escapedText = step.text.replace(/"/g, '\\"');
           lines.push("          delay 0.5");
           lines.push(`          do script "${escapedText}" in t`);
         }
-        if (i < steps.length - 1)
-          lines.push("          delay 0.5");
-        return lines.join(`
-`);
-      }).join(`
-`);
+        if (i < steps.length - 1) lines.push("          delay 0.5");
+        return lines.join("\n");
+      }).join("\n");
     }
     const textAction = poll.text ? isIterm ? `
             delay 0.3
-            tell s to write text "${poll.text.replace(/"/g, "\\\"")}" without newline
+            tell s to write text "${poll.text.replace(/"/g, '\\"')}" without newline
             delay 0.15
             tell s to write text ""` : `
           delay 0.3
-          do script "${poll.text.replace(/"/g, "\\\"")}" in t` : "";
+          do script "${poll.text.replace(/"/g, '\\"')}" in t` : "";
     const script2 = isIterm ? `on run argv
   set targetTty to item 1 of argv
   tell application "iTerm2"
@@ -15168,8 +16811,7 @@ function findSessionFile(sessionId) {
     const projectDirs = fs14.readdirSync(claudeProjectsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     for (const dir of projectDirs) {
       const jsonlPath = path13.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
-      if (fs14.existsSync(jsonlPath))
-        return { path: jsonlPath, agentType: "claude" };
+      if (fs14.existsSync(jsonlPath)) return { path: jsonlPath, agentType: "claude" };
     }
   }
   const codexSessionsDir = path13.join(process.env.HOME || "", ".codex", "sessions");
@@ -15181,8 +16823,7 @@ function findSessionFile(sessionId) {
           const fullPath = path13.join(dir, entry.name);
           if (entry.isDirectory()) {
             const found = findCodex(fullPath);
-            if (found)
-              return found;
+            if (found) return found;
           } else if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId)) {
             return fullPath;
           }
@@ -15190,8 +16831,7 @@ function findSessionFile(sessionId) {
         return null;
       };
       const codexPath = findCodex(codexSessionsDir);
-      if (codexPath)
-        return { path: codexPath, agentType: "codex" };
+      if (codexPath) return { path: codexPath, agentType: "codex" };
     } catch {
     }
   }
@@ -15201,72 +16841,65 @@ function findSessionFile(sessionId) {
       const projectDirs = fs14.readdirSync(geminiTmpDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
       for (const dir of projectDirs) {
         const chatsDir = path13.join(geminiTmpDir, dir, "chats");
-        if (!fs14.existsSync(chatsDir))
-          continue;
+        if (!fs14.existsSync(chatsDir)) continue;
         const jsonPath = path13.join(chatsDir, `${sessionId}.json`);
-        if (fs14.existsSync(jsonPath))
-          return { path: jsonPath, agentType: "gemini" };
+        if (fs14.existsSync(jsonPath)) return { path: jsonPath, agentType: "gemini" };
       }
     } catch {
     }
   }
   return null;
 }
-var resumeSessionCache = new Map;
-var resumeHeartbeatIntervals = new Map;
-var codexPermissionPollers = new Map;
-var codexPermissionPending = new Set;
-var codexPermissionRunning = new Set;
+var resumeSessionCache = /* @__PURE__ */ new Map();
+var resumeHeartbeatIntervals = /* @__PURE__ */ new Map();
+var codexPermissionPollers = /* @__PURE__ */ new Map();
+var codexPermissionPending = /* @__PURE__ */ new Set();
+var codexPermissionRunning = /* @__PURE__ */ new Set();
 var CODEX_PERMISSION_PATTERNS = [
   /Would you like to run the following command\?/,
   /Press enter to confirm or esc to cancel/,
   /Do you want to proceed\?/
 ];
 function detectCodexPermissionFromPane(paneContent) {
-  if (!CODEX_PERMISSION_PATTERNS.some((p) => p.test(paneContent)))
-    return null;
+  if (!CODEX_PERMISSION_PATTERNS.some((p) => p.test(paneContent))) return null;
   let reason = "";
   let command = "";
-  const lines = paneContent.split(`
-`);
-  for (let i = 0;i < lines.length; i++) {
+  const lines = paneContent.split("\n");
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.includes("Reason:")) {
       reason = line.replace(/.*Reason:\s*/, "").trim();
     }
     if (line.startsWith("$ ")) {
       command = line.slice(2).trim();
-      for (let j = i + 1;j < lines.length && j < i + 5; j++) {
+      for (let j = i + 1; j < lines.length && j < i + 5; j++) {
         const next = lines[j].trim();
         if (next && !next.startsWith("1.") && !next.startsWith("2.") && !next.startsWith("3.") && !next.startsWith("Press ")) {
           command += " " + next;
-        } else
-          break;
+        } else break;
       }
     }
   }
   return { reason: reason || "Command approval requested", command: command.slice(0, 300) };
 }
 function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, syncService2) {
-  if (codexPermissionPollers.has(sessionId))
-    return;
+  if (codexPermissionPollers.has(sessionId)) return;
   const interval = setInterval(async () => {
-    if (codexPermissionPending.has(sessionId))
-      return;
-    if (codexPermissionRunning.has(sessionId))
-      return;
-    if (isInWakeGrace())
-      return;
+    if (codexPermissionPending.has(sessionId)) return;
+    if (codexPermissionRunning.has(sessionId)) return;
+    if (isInWakeGrace()) return;
     codexPermissionRunning.add(sessionId);
     try {
-      const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -30 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+      const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -30 2>/dev/null`, { timeout: 3e3, killSignal: "SIGKILL" });
       const prompt = detectCodexPermissionFromPane(paneContent);
-      if (!prompt)
-        return;
+      if (!prompt) return;
       codexPermissionPending.add(sessionId);
       log(`Codex permission prompt detected in tmux for session ${sessionId.slice(0, 8)}: ${prompt.reason.slice(0, 100)}`);
       sendAgentStatus(syncService2, conversationId, sessionId, "permission_blocked");
-      const preview = truncateForNotification(`${prompt.command || prompt.reason}`, 200);
+      const preview = truncateForNotification(
+        `${prompt.command || prompt.reason}`,
+        200
+      );
       syncService2.createSessionNotification({
         conversation_id: conversationId,
         type: "permission_request",
@@ -15298,7 +16931,7 @@ function startCodexPermissionPoller(sessionId, tmuxSession, conversationId, sync
     } finally {
       codexPermissionRunning.delete(sessionId);
     }
-  }, 3000);
+  }, 3e3);
   codexPermissionPollers.set(sessionId, interval);
   log(`Started Codex permission poller for session ${sessionId.slice(0, 8)} on tmux ${tmuxSession}`);
 }
@@ -15310,39 +16943,35 @@ function stopCodexPermissionPoller(sessionId) {
     codexPermissionPending.delete(sessionId);
   }
 }
-var startedSessionTmux = new Map;
-var STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
-var restartingSessionIds = new Map;
-var RESTART_GUARD_TTL_MS = 60000;
-var resumeInFlight = new Map;
+var startedSessionTmux = /* @__PURE__ */ new Map();
+var STARTED_SESSION_TTL_MS = 5 * 60 * 1e3;
+var restartingSessionIds = /* @__PURE__ */ new Map();
+var RESTART_GUARD_TTL_MS = 6e4;
+var resumeInFlight = /* @__PURE__ */ new Map();
 var UUID_JSONL_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
 async function discoverAndLinkSession(conversationId, tmuxSession, cwd) {
   const claudeProjectsDir = path13.join(process.env.HOME || "", ".claude", "projects");
   const projectDirName = cwd.replace(/\//g, "-");
   const projectDir = path13.join(claudeProjectsDir, projectDirName);
-  const existingFiles = new Set;
+  const existingFiles = /* @__PURE__ */ new Set();
   if (fs14.existsSync(projectDir)) {
     for (const f of fs14.readdirSync(projectDir)) {
-      if (UUID_JSONL_RE.test(f))
-        existingFiles.add(f);
+      if (UUID_JSONL_RE.test(f)) existingFiles.add(f);
     }
   }
-  for (let attempt = 0;attempt < 30; attempt++) {
-    await new Promise((resolve4) => setTimeout(resolve4, 2000));
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await new Promise((resolve4) => setTimeout(resolve4, 2e3));
     if (!startedSessionTmux.has(conversationId)) {
       log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked by watcher, stopping discovery`);
       return;
     }
-    if (!fs14.existsSync(projectDir))
-      continue;
+    if (!fs14.existsSync(projectDir)) continue;
     for (const f of fs14.readdirSync(projectDir)) {
       const m = f.match(UUID_JSONL_RE);
-      if (!m || existingFiles.has(f))
-        continue;
+      if (!m || existingFiles.has(f)) continue;
       const sessionId = m[1];
       const cache = readConversationCache();
-      if (cache[sessionId])
-        continue;
+      if (cache[sessionId]) continue;
       const reverseCache = buildReverseConversationCache(cache);
       if (reverseCache[conversationId]) {
         log(`[DISCOVER] Conversation ${conversationId.slice(0, 12)} already linked to ${reverseCache[conversationId].slice(0, 8)} by another writer`);
@@ -15364,11 +16993,11 @@ async function discoverAndLinkSession(conversationId, tmuxSession, cwd) {
   }
   log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
 }
-var planHandoffChildren = new Map;
-var planHandoffChecked = new Set;
-var pendingSubagentParents = new Map;
-var sessionProcessCache = new Map;
-var PROCESS_CACHE_TTL_MS = 30000;
+var planHandoffChildren = /* @__PURE__ */ new Map();
+var planHandoffChecked = /* @__PURE__ */ new Set();
+var pendingSubagentParents = /* @__PURE__ */ new Map();
+var sessionProcessCache = /* @__PURE__ */ new Map();
+var PROCESS_CACHE_TTL_MS = 3e4;
 function cacheSessionProcess(sessionId, info, tmuxTarget) {
   sessionProcessCache.set(sessionId, {
     pid: info.pid,
@@ -15380,8 +17009,7 @@ function cacheSessionProcess(sessionId, info, tmuxTarget) {
 }
 async function getCachedSessionProcess(sessionId) {
   const cached = sessionProcessCache.get(sessionId);
-  if (!cached)
-    return null;
+  if (!cached) return null;
   if (Date.now() - cached.lastVerified > PROCESS_CACHE_TTL_MS) {
     if (!isProcessRunning(cached.pid) || !isAgentProcess(cached.pid)) {
       sessionProcessCache.delete(sessionId);
@@ -15401,13 +17029,11 @@ function validateProcessCache() {
 var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function resolveSessionId(filePath) {
   const name = path13.basename(filePath, ".jsonl");
-  if (UUID_RE.test(name))
-    return name;
+  if (UUID_RE.test(name)) return name;
   try {
     const head = readFileHead(filePath, 4096);
     const m = head.match(/"sessionId"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i);
-    if (m)
-      return m[1];
+    if (m) return m[1];
   } catch {
   }
   return name;
@@ -15448,20 +17074,19 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     return false;
   }
   const { path: jsonlPath, agentType } = sessionFile;
-  const jsonlContent = readFileHead(jsonlPath, 5000);
+  const jsonlContent = readFileHead(jsonlPath, 5e3);
   const config = readConfig();
   let cwd;
   let resumeCmd;
   const shortId = sessionId.slice(0, 8);
   const title = titleCache[sessionId] || extractSummaryTitle(jsonlContent);
   const slug = title ? slugify(title) : "";
-  const validOverride = cwdOverride && fs14.existsSync(cwdOverride) ? cwdOverride : undefined;
+  const validOverride = cwdOverride && fs14.existsSync(cwdOverride) ? cwdOverride : void 0;
   if (agentType === "codex") {
     cwd = validOverride || extractCodexCwd(jsonlContent) || process.env.HOME || "/tmp";
     let extraFlags = config?.codex_args || "";
     const permFlags = getPermissionFlags("codex", config);
-    if (permFlags)
-      extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
+    if (permFlags) extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
     resumeCmd = `codex resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
   } else if (agentType === "gemini") {
     cwd = validOverride || process.env.HOME || "/tmp";
@@ -15470,8 +17095,7 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     cwd = validOverride || extractCwd(jsonlContent) || process.env.HOME || "/tmp";
     let extraFlags = config?.claude_args || "";
     try {
-      const firstUserLine = jsonlContent.split(`
-`).find((l) => l.includes('"type":"user"'));
+      const firstUserLine = jsonlContent.split("\n").find((l) => l.includes('"type":"user"'));
       if (firstUserLine) {
         const parsed = JSON.parse(firstUserLine);
         if (parsed.permissionMode === "bypassPermissions" && !extraFlags.includes("--dangerously-skip-permissions")) {
@@ -15508,7 +17132,7 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
         "is not an object",
         "ENOENT"
       ];
-      for (let i = 0;i < 20; i++) {
+      for (let i = 0; i < 20; i++) {
         await new Promise((resolve4) => setTimeout(resolve4, 500));
         try {
           const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
@@ -15550,12 +17174,11 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
       syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(() => {
       });
       const existing = resumeHeartbeatIntervals.get(sessionId);
-      if (existing)
-        clearInterval(existing);
+      if (existing) clearInterval(existing);
       const interval = setInterval(() => {
         syncServiceRef.heartbeatManagedSession(sessionId).catch(() => {
         });
-      }, 30000);
+      }, 3e4);
       resumeHeartbeatIntervals.set(sessionId, interval);
       if (agentType === "codex" && conversationId) {
         startCodexPermissionPoller(sessionId, tmuxSession, conversationId, syncServiceRef);
@@ -15573,7 +17196,7 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     const promptPattern = /[❯›]/;
     const startTime = Date.now();
     let ready = false;
-    for (let i = 0;i < 60; i++) {
+    for (let i = 0; i < 60; i++) {
       await new Promise((resolve4) => setTimeout(resolve4, 250));
       try {
         const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -20`);
@@ -15604,14 +17227,11 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
           logDelivery(`Clearing startup warnings for ${shortId} before injection`);
           await execAsync2(`tmux send-keys -t '${tmuxSession}' Escape`);
           await new Promise((resolve4) => setTimeout(resolve4, 300));
-          for (let w = 0;w < 20; w++) {
+          for (let w = 0; w < 20; w++) {
             await new Promise((resolve4) => setTimeout(resolve4, 250));
             try {
               const { stdout: cleared } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -5`);
-              if (promptPattern.test(cleared.split(`
-`).slice(-3).join(`
-`)))
-                break;
+              if (promptPattern.test(cleared.split("\n").slice(-3).join("\n"))) break;
             } catch {
             }
           }
@@ -15631,8 +17251,8 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     return false;
   }
 }
-var repairAttempts = new Map;
-var REPAIR_COOLDOWN_MS = 10 * 60 * 1000;
+var repairAttempts = /* @__PURE__ */ new Map();
+var REPAIR_COOLDOWN_MS = 10 * 60 * 1e3;
 async function repairAndResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride, conversationId) {
   const lastAttempt = repairAttempts.get(sessionId);
   if (lastAttempt && Date.now() - lastAttempt < REPAIR_COOLDOWN_MS) {
@@ -15672,7 +17292,7 @@ async function repairAndResumeSession(sessionId, content, titleCache, nonInterac
       tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
       ({ jsonl } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
     }
-    const projectPath = cwdOverride || exportData.conversation.project_path || undefined;
+    const projectPath = cwdOverride || exportData.conversation.project_path || void 0;
     if (sessionFile) {
       const bakPath = sessionFile.path + ".bak";
       if (!fs14.existsSync(bakPath)) {
@@ -15703,11 +17323,9 @@ async function repairAndResumeSession(sessionId, content, titleCache, nonInterac
   }
   try {
     const sessionFile = findSessionFile(sessionId);
-    if (!sessionFile)
-      return false;
+    if (!sessionFile) return false;
     log(`Attempting surgical JSONL cleanup for ${sessionId.slice(0, 8)}...`);
-    const lines = fs14.readFileSync(sessionFile.path, "utf-8").split(`
-`).filter((l) => l.trim());
+    const lines = fs14.readFileSync(sessionFile.path, "utf-8").split("\n").filter((l) => l.trim());
     const cleanLines = [];
     let removed = 0;
     for (const line of lines) {
@@ -15715,7 +17333,9 @@ async function repairAndResumeSession(sessionId, content, titleCache, nonInterac
         const parsed = JSON.parse(line);
         const content2 = parsed.message?.content;
         if (Array.isArray(content2)) {
-          const hasCorruptToolResult = content2.some((c) => c.type === "tool_result" && c.content && typeof c.content === "string" && (c.content.includes("is not an object") || c.content.includes("undefined")));
+          const hasCorruptToolResult = content2.some(
+            (c) => c.type === "tool_result" && c.content && typeof c.content === "string" && (c.content.includes("is not an object") || c.content.includes("undefined"))
+          );
           if (hasCorruptToolResult) {
             removed++;
             continue;
@@ -15731,9 +17351,7 @@ async function repairAndResumeSession(sessionId, content, titleCache, nonInterac
       if (!fs14.existsSync(bakPath)) {
         fs14.copyFileSync(sessionFile.path, bakPath);
       }
-      fs14.writeFileSync(sessionFile.path, cleanLines.join(`
-`) + `
-`);
+      fs14.writeFileSync(sessionFile.path, cleanLines.join("\n") + "\n");
       log(`Surgical cleanup: removed ${removed} corrupt entries from ${sessionId.slice(0, 8)}`);
       const resumed = await autoResumeSession(sessionId, content, titleCache, nonInteractive, cwdOverride, convId);
       if (resumed) {
@@ -15747,7 +17365,7 @@ async function repairAndResumeSession(sessionId, content, titleCache, nonInterac
   return false;
 }
 async function postDeliveryHealthCheck(sessionId, conversationId, content, messageId, syncService2, titleCache, conversationCache) {
-  await new Promise((resolve4) => setTimeout(resolve4, 15000));
+  await new Promise((resolve4) => setTimeout(resolve4, 15e3));
   if (resumeInFlight.has(sessionId)) {
     log(`Health check: skipping for ${sessionId.slice(0, 8)}, resume in flight`);
     return;
@@ -15758,13 +17376,12 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
     return;
   }
   const tmuxSession = resumeSessionCache.get(sessionId);
-  if (!tmuxSession)
-    return;
+  if (!tmuxSession) return;
   try {
     await execAsync2(`tmux has-session -t '${tmuxSession}' 2>/dev/null`);
   } catch {
     log(`Health check: tmux session ${tmuxSession} is dead after delivery for ${sessionId.slice(0, 8)}`);
-    const repaired = await repairAndResumeSession(sessionId, content, titleCache, false, undefined, conversationId);
+    const repaired = await repairAndResumeSession(sessionId, content, titleCache, false, void 0, conversationId);
     if (repaired) {
       log(`Health check: repaired and re-delivered message for ${sessionId.slice(0, 8)}`);
       try {
@@ -15775,7 +17392,7 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
       log(`Health check: repair failed for ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
         await syncService2.retryMessage(messageId);
-        await syncService2.setSessionError(conversationId, "Session crashed — retrying message delivery");
+        await syncService2.setSessionError(conversationId, "Session crashed \u2014 retrying message delivery");
       } catch {
       }
     }
@@ -15795,7 +17412,7 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
       clearInterval(hbInterval);
       resumeHeartbeatIntervals.delete(sessionId);
     }
-    const repaired = await repairAndResumeSession(sessionId, content, titleCache, false, undefined, conversationId);
+    const repaired = await repairAndResumeSession(sessionId, content, titleCache, false, void 0, conversationId);
     if (repaired) {
       log(`Health check: repaired crashed session ${sessionId.slice(0, 8)}`);
       try {
@@ -15806,7 +17423,7 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
       log(`Health check: repair failed for crashed session ${sessionId.slice(0, 8)}, retrying message delivery`);
       try {
         await syncService2.retryMessage(messageId);
-        await syncService2.setSessionError(conversationId, "Session crashed — retrying message delivery");
+        await syncService2.setSessionError(conversationId, "Session crashed \u2014 retrying message delivery");
       } catch {
       }
     }
@@ -15818,14 +17435,13 @@ async function postDeliveryHealthCheck(sessionId, conversationId, content, messa
     }
   }
 }
-var materializeFailures = new Map;
-var materializeInFlight = new Map;
-var materializedSessions = new Set;
-var MATERIALIZE_COOLDOWN_MS = 5 * 60 * 1000;
+var materializeFailures = /* @__PURE__ */ new Map();
+var materializeInFlight = /* @__PURE__ */ new Map();
+var materializedSessions = /* @__PURE__ */ new Set();
+var MATERIALIZE_COOLDOWN_MS = 5 * 60 * 1e3;
 async function materializeSession(conversationId, conversationCache, titleCache, syncService2) {
   const existing = materializeInFlight.get(conversationId);
-  if (existing)
-    return existing;
+  if (existing) return existing;
   const lastFail = materializeFailures.get(conversationId);
   if (lastFail && Date.now() - lastFail < MATERIALIZE_COOLDOWN_MS) {
     return null;
@@ -15847,7 +17463,7 @@ async function materializeSession(conversationId, conversationCache, titleCache,
       const TOKEN_BUDGET = 1e5;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
       const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages });
-      const projectPath = exportData.conversation.project_path || undefined;
+      const projectPath = exportData.conversation.project_path || void 0;
       writeClaudeCodeSession(jsonl, sessionId, projectPath);
       conversationCache[sessionId] = conversationId;
       saveConversationCache(conversationCache);
@@ -15875,16 +17491,13 @@ async function materializeSession(conversationId, conversationCache, titleCache,
 }
 async function downloadImage(storageId, syncService2) {
   const destPath = `/tmp/codecast/images/${storageId}.png`;
-  if (fs14.existsSync(destPath))
-    return destPath;
+  if (fs14.existsSync(destPath)) return destPath;
   const imageUrl = await syncService2.getClient().query("images:getImageUrl", { storageId });
-  if (!imageUrl)
-    return null;
+  if (!imageUrl) return null;
   const dir = path13.dirname(destPath);
   fs14.mkdirSync(dir, { recursive: true });
   const resp = await fetch(imageUrl);
-  if (!resp.ok)
-    throw new Error(`HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   fs14.writeFileSync(destPath, Buffer.from(await resp.arrayBuffer()));
   return destPath;
 }
@@ -15915,7 +17528,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         let ready = false;
         const startTime = Date.now();
         const trustPromptPatterns = /trust this folder|safety check|Is this a project/i;
-        for (let i = 0;i < 60; i++) {
+        for (let i = 0; i < 60; i++) {
           await new Promise((resolve4) => setTimeout(resolve4, 250));
           try {
             const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${entry.tmuxSession}' -S -20`);
@@ -15927,15 +17540,12 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
             if (trustPromptPatterns.test(paneContent)) {
               log(`Started session ${entry.tmuxSession} showing trust prompt, sending Enter to accept`);
               await execAsync2(`tmux send-keys -t '${entry.tmuxSession}' Enter`);
-              await new Promise((resolve4) => setTimeout(resolve4, 2000));
+              await new Promise((resolve4) => setTimeout(resolve4, 2e3));
               continue;
             }
             if (promptPattern.test(paneContent)) {
-              const lastLines = paneContent.split(`
-`).slice(-10).join(`
-`);
-              if (trustPromptPatterns.test(lastLines))
-                continue;
+              const lastLines = paneContent.split("\n").slice(-10).join("\n");
+              if (trustPromptPatterns.test(lastLines)) continue;
               log(`Started session ${entry.tmuxSession} ready (prompt visible) after ${Date.now() - startTime}ms`);
               ready = true;
               break;
@@ -15963,8 +17573,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
       }
     };
     const started = startedSessionTmux.get(conversationId);
-    if (started && await tryStartedTmux(started))
-      return true;
+    if (started && await tryStartedTmux(started)) return true;
     const freshCache = readConversationCache();
     const freshReverse = buildReverseConversationCache(freshCache);
     sessionId = freshReverse[conversationId];
@@ -15973,13 +17582,12 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
       log(`Found session ${sessionId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)} via disk cache refresh`);
     } else if (!started) {
       logDelivery(`Waiting up to 12s for start_session to populate startedSessionTmux for conv=${conversationId.slice(0, 12)}`);
-      for (let i = 0;i < 24; i++) {
+      for (let i = 0; i < 24; i++) {
         await new Promise((r) => setTimeout(r, 500));
         const justStarted = startedSessionTmux.get(conversationId);
         if (justStarted) {
           log(`Found startedSessionTmux for ${conversationId.slice(0, 12)} after ${(i + 1) * 500}ms wait`);
-          if (await tryStartedTmux(justStarted))
-            return true;
+          if (await tryStartedTmux(justStarted)) return true;
           break;
         }
         const recheckCache = readConversationCache();
@@ -16017,8 +17625,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
   let detectedType = isGeminiSession ? "gemini" : "claude";
   if (!isGeminiSession) {
     const sessionFile = findSessionFile(sessionId);
-    if (sessionFile)
-      detectedType = sessionFile.agentType;
+    if (sessionFile) detectedType = sessionFile.agentType;
   }
   logDelivery(`Delivering to session=${sessionId.slice(0, 12)} conv=${conversationId.slice(0, 12)} type=${detectedType}`);
   const cachedTmux = resumeSessionCache.get(sessionId);
@@ -16105,7 +17712,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
   if (!tmuxAvailable) {
     logDelivery(`CANNOT auto-resume: tmux is not installed. Install with: brew install tmux`);
   }
-  const resumed = await autoResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
+  const resumed = await autoResumeSession(sessionId, content, titleCache, isMaterialized, void 0, conversationId);
   if (resumed) {
     materializedSessions.delete(sessionId);
     await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
@@ -16123,7 +17730,7 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
     return true;
   }
   logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-  const repaired = await repairAndResumeSession(sessionId, content, titleCache, isMaterialized, undefined, conversationId);
+  const repaired = await repairAndResumeSession(sessionId, content, titleCache, isMaterialized, void 0, conversationId);
   if (repaired) {
     materializedSessions.delete(sessionId);
     await syncService2.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
@@ -16148,8 +17755,7 @@ function isSyncPaused() {
 }
 async function repairProjectPaths(syncService2) {
   const claudeProjectsDir = path13.join(process.env.HOME || "", ".claude", "projects");
-  if (!fs14.existsSync(claudeProjectsDir))
-    return;
+  if (!fs14.existsSync(claudeProjectsDir)) return;
   log("Checking for project paths that need repair...");
   const projectDirs = fs14.readdirSync(claudeProjectsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
   let repaired = 0;
@@ -16166,11 +17772,10 @@ async function repairProjectPaths(syncService2) {
         checked++;
         let projectPath = resolvedDir;
         if (!projectPath) {
-          const content = readFileHead(filePath, 5000);
+          const content = readFileHead(filePath, 5e3);
           projectPath = extractCwd(content) || null;
         }
-        if (!projectPath)
-          continue;
+        if (!projectPath) continue;
         const gitInfo = getGitInfo(projectPath);
         const result = await syncService2.updateProjectPath(sessionId, projectPath, gitInfo?.root);
         if (result?.updated) {
@@ -16186,7 +17791,7 @@ async function repairProjectPaths(syncService2) {
   }
 }
 async function waitForConfig() {
-  const checkInterval = 30000;
+  const checkInterval = 3e4;
   while (true) {
     const config = readConfig();
     if (config?.user_id) {
@@ -16208,24 +17813,26 @@ function isProcessRunning(pid) {
   }
 }
 async function isTmuxAgentAlive(tmuxSession) {
-  if (!hasTmux())
-    return false;
+  if (!hasTmux()) return false;
   try {
-    const { stdout } = await execAsync2(`tmux list-panes -t '${tmuxSession}' -F '#{pane_pid}' 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+    const { stdout } = await execAsync2(
+      `tmux list-panes -t '${tmuxSession}' -F '#{pane_pid}' 2>/dev/null`,
+      { timeout: 3e3, killSignal: "SIGKILL" }
+    );
     const panePid = stdout.trim();
-    if (!panePid)
-      return false;
+    if (!panePid) return false;
     try {
-      await execAsync2(`pgrep -P ${panePid}`, { timeout: 3000, killSignal: "SIGKILL" });
+      await execAsync2(`pgrep -P ${panePid}`, { timeout: 3e3, killSignal: "SIGKILL" });
       return true;
     } catch {
       try {
-        const { stdout: paneContent } = await execAsync2(`tmux capture-pane -p -J -t '${tmuxSession}' -S -5 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+        const { stdout: paneContent } = await execAsync2(
+          `tmux capture-pane -p -J -t '${tmuxSession}' -S -5 2>/dev/null`,
+          { timeout: 3e3, killSignal: "SIGKILL" }
+        );
         const trimmed = paneContent.trim();
-        if (/[$%#]\s*$/.test(trimmed))
-          return false;
-        if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed))
-          return false;
+        if (/[$%#]\s*$/.test(trimmed)) return false;
+        if (/Segmentation fault|panic:|SIGABRT|core dumped|exited with/.test(trimmed)) return false;
         if (/[❯›]|⏵|thinking|Thinking|working|Running|bypass permissions|permission/.test(trimmed)) {
           return true;
         }
@@ -16239,9 +17846,8 @@ async function isTmuxAgentAlive(tmuxSession) {
 }
 function isAgentProcess(pid) {
   try {
-    const comm = execSync2(`ps -o comm= -p ${pid} 2>/dev/null`, { encoding: "utf-8" }).trim();
-    if (!comm)
-      return false;
+    const comm = (0, import_child_process3.execSync)(`ps -o comm= -p ${pid} 2>/dev/null`, { encoding: "utf-8" }).trim();
+    if (!comm) return false;
     const agentPatterns = ["claude", "codex", "gemini", "node", "bun", "deno"];
     const lower = comm.toLowerCase();
     return agentPatterns.some((p) => lower.includes(p));
@@ -16252,7 +17858,7 @@ function isAgentProcess(pid) {
 var skipRespawn = false;
 function spawnReplacement() {
   try {
-    const child = spawn(process.execPath, process.argv.slice(1), {
+    const child = (0, import_child_process3.spawn)(process.execPath, process.argv.slice(1), {
       detached: true,
       stdio: "ignore",
       env: { ...process.env, CODECAST_RESTART: "1" }
@@ -16270,7 +17876,7 @@ function recordCrash() {
     if (fs14.existsSync(CRASH_FILE)) {
       crashes = JSON.parse(fs14.readFileSync(CRASH_FILE, "utf-8"));
     }
-    const windowMs = 30 * 60 * 1000;
+    const windowMs = 30 * 60 * 1e3;
     if (Date.now() - crashes.firstCrash > windowMs) {
       crashes = { count: 0, firstCrash: Date.now() };
     }
@@ -16284,8 +17890,7 @@ function recordCrash() {
 }
 function clearCrashCount() {
   try {
-    if (fs14.existsSync(CRASH_FILE))
-      fs14.unlinkSync(CRASH_FILE);
+    if (fs14.existsSync(CRASH_FILE)) fs14.unlinkSync(CRASH_FILE);
   } catch {
   }
 }
@@ -16303,9 +17908,8 @@ function acquireLock() {
     }
   }
   try {
-    const pgrepOut = execSync2(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
-    const pids = pgrepOut.trim().split(`
-`).map(Number).filter((p) => p && p !== process.pid && isProcessRunning(p));
+    const pgrepOut = (0, import_child_process3.execSync)(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3e3 });
+    const pids = pgrepOut.trim().split("\n").map(Number).filter((p) => p && p !== process.pid && isProcessRunning(p));
     for (const zombiePid of pids) {
       log(`Killing zombie daemon process ${zombiePid}`);
       try {
@@ -16318,14 +17922,13 @@ function acquireLock() {
   fs14.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
   try {
     const writtenPid = parseInt(fs14.readFileSync(PID_FILE, "utf-8").trim(), 10);
-    if (writtenPid !== process.pid)
-      return false;
+    if (writtenPid !== process.pid) return false;
   } catch {
     return false;
   }
   return true;
 }
-function findStaleSessionFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+function findStaleSessionFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1e3) {
   const claudeProjectsDir = path13.join(process.env.HOME || "", ".claude", "projects");
   const staleFiles = [];
   const now = Date.now();
@@ -16337,18 +17940,15 @@ function findStaleSessionFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
     for (const projectDir of projectDirs) {
       const projectPath = path13.join(claudeProjectsDir, projectDir);
       const stat4 = fs14.statSync(projectPath);
-      if (!stat4.isDirectory())
-        continue;
+      if (!stat4.isDirectory()) continue;
       const files = fs14.readdirSync(projectPath);
       for (const file of files) {
-        if (!file.endsWith(".jsonl"))
-          continue;
+        if (!file.endsWith(".jsonl")) continue;
         const filePath = path13.join(projectPath, file);
         try {
           const fileStat = fs14.statSync(filePath);
           const fileAge = now - fileStat.mtimeMs;
-          if (fileAge > maxAgeMs)
-            continue;
+          if (fileAge > maxAgeMs) continue;
           const syncRecord = getSyncRecord(filePath);
           if (shouldTreatClaudeFileAsStale(fileStat, syncRecord)) {
             staleFiles.push(filePath);
@@ -16371,7 +17971,7 @@ function shouldTreatClaudeFileAsStale(fileStat, syncRecord) {
   }
   return fileStat.size > syncRecord.lastSyncedPosition;
 }
-function findStaleCodexSessionFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+function findStaleCodexSessionFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1e3) {
   const codexSessionsDir = path13.join(process.env.HOME || "", ".codex", "sessions");
   const staleFiles = [];
   const now = Date.now();
@@ -16393,8 +17993,7 @@ function findStaleCodexSessionFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
         try {
           const fileStat = fs14.statSync(fullPath);
           const fileAge = now - fileStat.mtimeMs;
-          if (fileAge > maxAgeMs)
-            continue;
+          if (fileAge > maxAgeMs) continue;
           const lastPosition = getPosition(fullPath);
           if (fileStat.size !== lastPosition) {
             staleFiles.push(fullPath);
@@ -16455,12 +18054,16 @@ function getCursorWorkspaceFolderPath(workspaceStorageDir) {
 function getCursorMaxRowId(dbPath) {
   let db = null;
   try {
-    db = new Database3(dbPath, { readonly: true });
-    const tableExists = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='ItemTable'").get();
+    db = new import_bun_sqlite3.Database(dbPath, { readonly: true });
+    const tableExists = db.query(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='ItemTable'"
+    ).get();
     if (!tableExists) {
       return 0;
     }
-    const maxRowIdResult = db.query("SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata'").get();
+    const maxRowIdResult = db.query(
+      "SELECT MAX(rowid) as maxRowId FROM ItemTable WHERE key = 'workbench.panel.aichat.view.aichat.chatdata'"
+    ).get();
     return maxRowIdResult?.maxRowId ?? 0;
   } catch {
     return 0;
@@ -16473,8 +18076,10 @@ function getCursorMaxRowId(dbPath) {
 function getCursorComposerData(dbPath) {
   let db = null;
   try {
-    db = new Database3(dbPath, { readonly: true });
-    const row = db.query("SELECT value FROM ItemTable WHERE key = 'composer.composerData' LIMIT 1").get();
+    db = new import_bun_sqlite3.Database(dbPath, { readonly: true });
+    const row = db.query(
+      "SELECT value FROM ItemTable WHERE key = 'composer.composerData' LIMIT 1"
+    ).get();
     if (!row?.value) {
       return null;
     }
@@ -16513,7 +18118,7 @@ function findWorkspacePathForCursorConversation(sessionId) {
   }
   return null;
 }
-function findStaleCursorSessions(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+function findStaleCursorSessions(maxAgeMs = 7 * 24 * 60 * 60 * 1e3) {
   const workspaceStoragePath = getCursorWorkspaceStoragePath();
   const staleSessions = [];
   const now = Date.now();
@@ -16534,14 +18139,11 @@ function findStaleCursorSessions(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
     try {
       const stat4 = fs14.statSync(dbPath);
       const fileAge = now - stat4.mtimeMs;
-      if (fileAge > maxAgeMs)
-        continue;
+      if (fileAge > maxAgeMs) continue;
       const maxRowId = getCursorMaxRowId(dbPath);
-      if (maxRowId <= 0)
-        continue;
+      if (maxRowId <= 0) continue;
       const lastRowId = getPosition(dbPath);
-      if (maxRowId <= lastRowId)
-        continue;
+      if (maxRowId <= lastRowId) continue;
       const workspaceStorageDir = path13.dirname(dbPath);
       const workspacePath = getCursorWorkspaceFolderPath(workspaceStorageDir) || workspaceHash;
       staleSessions.push({
@@ -16555,7 +18157,7 @@ function findStaleCursorSessions(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
   }
   return staleSessions;
 }
-function findStaleCursorTranscriptFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+function findStaleCursorTranscriptFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1e3) {
   const cursorProjectsDir = path13.join(process.env.HOME || "", ".cursor", "projects");
   const staleFiles = [];
   const now = Date.now();
@@ -16580,8 +18182,7 @@ function findStaleCursorTranscriptFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
         try {
           const fileStat = fs14.statSync(fullPath);
           const fileAge = now - fileStat.mtimeMs;
-          if (fileAge > maxAgeMs)
-            continue;
+          if (fileAge > maxAgeMs) continue;
           const lastPosition = getPosition(fullPath);
           if (fileStat.size !== lastPosition) {
             staleFiles.push(fullPath);
@@ -16598,21 +18199,18 @@ function findStaleCursorTranscriptFiles(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
 function compareVersions(a, b) {
   const partsA = a.split(".").map(Number);
   const partsB = b.split(".").map(Number);
-  for (let i = 0;i < Math.max(partsA.length, partsB.length); i++) {
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
     const numA = partsA[i] || 0;
     const numB = partsB[i] || 0;
-    if (numA > numB)
-      return 1;
-    if (numA < numB)
-      return -1;
+    if (numA > numB) return 1;
+    if (numA < numB) return -1;
   }
   return 0;
 }
 async function checkForForcedUpdate(syncService2) {
   try {
     const minVersion = await syncService2.getMinCliVersion();
-    if (!minVersion)
-      return false;
+    if (!minVersion) return false;
     const currentVersion = getVersion();
     if (compareVersions(currentVersion, minVersion) < 0) {
       logLifecycle("forced_update_start", `current=${currentVersion} min=${minVersion}`);
@@ -16633,7 +18231,7 @@ async function checkForForcedUpdate(syncService2) {
     return false;
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    logError(`Forced update check failed`, err instanceof Error ? err : undefined);
+    logError(`Forced update check failed`, err instanceof Error ? err : void 0);
     return false;
   }
 }
@@ -16642,25 +18240,21 @@ function checkDiskVersionMismatch() {
     const updateTsPath = path13.join(__dirname, "update.ts");
     const updateJsPath = path13.join(__dirname, "update.js");
     const filePath = fs14.existsSync(updateTsPath) ? updateTsPath : updateJsPath;
-    if (!fs14.existsSync(filePath))
-      return;
+    if (!fs14.existsSync(filePath)) return;
     const content = fs14.readFileSync(filePath, "utf-8");
     const match = content.match(/const VERSION\s*=\s*["']([^"']+)["']/);
-    if (!match)
-      return;
+    if (!match) return;
     const diskVersion = match[1];
     if (diskVersion !== daemonVersion) {
       log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, restarting`);
       logLifecycle("version_mismatch_restart", `${daemonVersion} -> ${diskVersion}`);
       flushRemoteLogs().then(() => {
         const spawned = spawnReplacement();
-        if (spawned)
-          skipRespawn = true;
+        if (spawned) skipRespawn = true;
         setTimeout(() => process.exit(0), 500);
       }).catch(() => {
         const spawned = spawnReplacement();
-        if (spawned)
-          skipRespawn = true;
+        if (spawned) skipRespawn = true;
         setTimeout(() => process.exit(0), 500);
       });
     }
@@ -16675,7 +18269,7 @@ function startEventLoopMonitor() {
     lastTickTime2 = now;
     saveDaemonState({ lastHeartbeatTick: now });
     if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
-      logLifecycle("wake_detected", `System was suspended for ${Math.round(elapsed / 1000)}s, recovering`);
+      logLifecycle("wake_detected", `System was suspended for ${Math.round(elapsed / 1e3)}s, recovering`);
       lastWatcherEventTime = 0;
     }
   }, EVENT_LOOP_CHECK_INTERVAL_MS);
@@ -16692,7 +18286,9 @@ function logHealthReport(retryQueue) {
   const droppedOps = retryQueue.getDroppedOperations();
   const queueSize = retryQueue.getQueueSize();
   if (unsyncedFiles.length > 0 || droppedOps.length > 0 || queueSize > 10) {
-    logWarn(`Health: ${unsyncedFiles.length} pending files, ${droppedOps.length} dropped ops, ${queueSize} in retry queue`);
+    logWarn(
+      `Health: ${unsyncedFiles.length} pending files, ${droppedOps.length} dropped ops, ${queueSize} in retry queue`
+    );
   }
 }
 function startReconciliation(syncService2, retryQueue) {
@@ -16700,7 +18296,10 @@ function startReconciliation(syncService2, retryQueue) {
   setTimeout(async () => {
     try {
       logHealthReport(retryQueue);
-      const result = await performReconciliation(syncService2, (msg, level) => log(msg, level || "info"));
+      const result = await performReconciliation(
+        syncService2,
+        (msg, level) => log(msg, level || "info")
+      );
       if (result.discrepancies.length > 0) {
         logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
         const repaired = await repairDiscrepancies(result.discrepancies, log);
@@ -16709,7 +18308,7 @@ function startReconciliation(syncService2, retryQueue) {
     } catch (err) {
       logError("Initial reconciliation failed", err instanceof Error ? err : new Error(String(err)));
     }
-  }, 5 * 60 * 1000);
+  }, 5 * 60 * 1e3);
   return setInterval(async () => {
     const state = readDaemonState();
     if (state?.authExpired) {
@@ -16717,7 +18316,10 @@ function startReconciliation(syncService2, retryQueue) {
     }
     try {
       logHealthReport(retryQueue);
-      const result = await performReconciliation(syncService2, (msg, level) => log(msg, level || "info"));
+      const result = await performReconciliation(
+        syncService2,
+        (msg, level) => log(msg, level || "info")
+      );
       if (result.discrepancies.length > 0) {
         logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
         const repaired = await repairDiscrepancies(result.discrepancies, log);
@@ -16732,8 +18334,7 @@ function startWatchdog(deps) {
   log("Watchdog started");
   let watchdogRunning = false;
   return setInterval(async () => {
-    if (watchdogRunning || isInWakeGrace())
-      return;
+    if (watchdogRunning || isInWakeGrace()) return;
     watchdogRunning = true;
     try {
       const state = readDaemonState();
@@ -16749,7 +18350,7 @@ function startWatchdog(deps) {
       for (const [convId, entry] of startedSessionTmux.entries()) {
         if (now - entry.startedAt > STARTED_SESSION_TTL_MS) {
           try {
-            await execAsync2(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 3000, killSignal: "SIGKILL" });
+            await execAsync2(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`, { timeout: 3e3, killSignal: "SIGKILL" });
             if (!await isTmuxAgentAlive(entry.tmuxSession)) {
               log(`Pruning started session ${entry.tmuxSession}: agent dead (zombie shell)`);
               try {
@@ -16765,13 +18366,10 @@ function startWatchdog(deps) {
       }
       const activeStartedTmux = new Set([...startedSessionTmux.values()].map((e) => e.tmuxSession));
       try {
-        const { stdout: tmuxList } = await execAsync2("tmux list-sessions -F '#{session_name}' 2>/dev/null", { timeout: 3000, killSignal: "SIGKILL" });
-        for (const tmuxName of tmuxList.trim().split(`
-`)) {
-          if (!tmuxName || !/^cc-resume-/.test(tmuxName) && !/^cc-claude-/.test(tmuxName))
-            continue;
-          if (activeStartedTmux.has(tmuxName))
-            continue;
+        const { stdout: tmuxList } = await execAsync2("tmux list-sessions -F '#{session_name}' 2>/dev/null", { timeout: 3e3, killSignal: "SIGKILL" });
+        for (const tmuxName of tmuxList.trim().split("\n")) {
+          if (!tmuxName || !/^cc-resume-/.test(tmuxName) && !/^cc-claude-/.test(tmuxName)) continue;
+          if (activeStartedTmux.has(tmuxName)) continue;
           if (!await isTmuxAgentAlive(tmuxName)) {
             log(`Reaping zombie tmux session ${tmuxName}`);
             try {
@@ -16785,22 +18383,19 @@ function startWatchdog(deps) {
       try {
         const statusDir = AGENT_STATUS_DIR;
         if (fs14.existsSync(statusDir)) {
-          const IDLE_STALE_MS = 10 * 60 * 1000;
-          const ACTIVE_STALE_MS = 30 * 60 * 1000;
+          const IDLE_STALE_MS = 10 * 60 * 1e3;
+          const ACTIVE_STALE_MS = 30 * 60 * 1e3;
           for (const file of fs14.readdirSync(statusDir)) {
-            if (!file.endsWith(".json"))
-              continue;
+            if (!file.endsWith(".json")) continue;
             const sessionId = file.replace(".json", "");
             const filePath = path13.join(statusDir, file);
             try {
               const raw = fs14.readFileSync(filePath, "utf-8");
               const data = JSON.parse(raw);
-              if (!data.ts)
-                continue;
-              const ageMs = now - data.ts * 1000;
+              if (!data.ts) continue;
+              const ageMs = now - data.ts * 1e3;
               const threshold = data.status === "idle" || data.status === "stopped" ? IDLE_STALE_MS : ACTIVE_STALE_MS;
-              if (ageMs < threshold)
-                continue;
+              if (ageMs < threshold) continue;
               const convId = deps.conversationCache[sessionId];
               if (!convId) {
                 try {
@@ -16809,7 +18404,7 @@ function startWatchdog(deps) {
                 }
                 continue;
               }
-              log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min), marking completed`);
+              log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 6e4)}min), marking completed`);
               deps.syncService.markSessionCompleted(convId).catch(() => {
               });
               sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
@@ -16823,7 +18418,7 @@ function startWatchdog(deps) {
         }
       } catch {
       }
-      const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 60000);
+      const watcherIdleMinutes = Math.floor((now - lastWatcherEventTime) / 6e4);
       if (watcherIdleMinutes >= 60) {
         log(`Watcher idle for ${watcherIdleMinutes}min, restarting`);
         try {
@@ -16858,14 +18453,39 @@ function startWatchdog(deps) {
           continue;
         }
         log(`Watchdog: Syncing stale session ${sessionId}`);
-        await processSessionFile(filePath, sessionId, projectPath, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.titleCache, deps.updateState);
+        await processSessionFile(
+          filePath,
+          sessionId,
+          projectPath,
+          deps.syncService,
+          deps.config.user_id,
+          deps.config.team_id,
+          deps.conversationCache,
+          deps.retryQueue,
+          deps.pendingMessages,
+          deps.titleCache,
+          deps.updateState
+        );
       }
       for (const filePath of staleCodexFiles) {
         const filename = path13.basename(filePath, ".jsonl");
-        const match = filename.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+        const match = filename.match(
+          /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+        );
         const sessionId = match ? match[1] : filename;
         log(`Watchdog: Syncing stale Codex session ${sessionId}`);
-        await processCodexSession(filePath, sessionId, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.titleCache, deps.updateState);
+        await processCodexSession(
+          filePath,
+          sessionId,
+          deps.syncService,
+          deps.config.user_id,
+          deps.config.team_id,
+          deps.conversationCache,
+          deps.retryQueue,
+          deps.pendingMessages,
+          deps.titleCache,
+          deps.updateState
+        );
       }
       for (const cursorSession of staleCursorSessions) {
         if (deps.config.excluded_paths && isPathExcluded(cursorSession.workspacePath, deps.config.excluded_paths)) {
@@ -16875,7 +18495,18 @@ function startWatchdog(deps) {
           continue;
         }
         log(`Watchdog: Syncing stale Cursor session ${cursorSession.sessionId}`);
-        await processCursorSession(cursorSession.dbPath, cursorSession.sessionId, cursorSession.workspacePath, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.updateState);
+        await processCursorSession(
+          cursorSession.dbPath,
+          cursorSession.sessionId,
+          cursorSession.workspacePath,
+          deps.syncService,
+          deps.config.user_id,
+          deps.config.team_id,
+          deps.conversationCache,
+          deps.retryQueue,
+          deps.pendingMessages,
+          deps.updateState
+        );
       }
       for (const filePath of staleCursorTranscriptFiles) {
         const sessionId = path13.basename(filePath, ".txt");
@@ -16891,7 +18522,17 @@ function startWatchdog(deps) {
           continue;
         }
         log(`Watchdog: Syncing stale Cursor transcript ${sessionId}`);
-        await processCursorTranscriptFile(filePath, sessionId, deps.syncService, deps.config.user_id, deps.config.team_id, deps.conversationCache, deps.retryQueue, deps.pendingMessages, deps.updateState);
+        await processCursorTranscriptFile(
+          filePath,
+          sessionId,
+          deps.syncService,
+          deps.config.user_id,
+          deps.config.team_id,
+          deps.conversationCache,
+          deps.retryQueue,
+          deps.pendingMessages,
+          deps.updateState
+        );
       }
       log(`Watchdog: Sync completed for ${totalStale} files`);
     } finally {
@@ -16910,18 +18551,17 @@ async function main() {
   const underLaunchd = !!process.env.XPC_SERVICE_NAME;
   process.on("exit", (code2) => {
     persistLogQueue();
-    if (skipRespawn || underLaunchd)
-      return;
+    if (skipRespawn || underLaunchd) return;
     if (code2 !== 0) {
       const { count, backoffMinutes } = recordCrash();
       if (backoffMinutes > 0) {
         try {
-          fs14.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] CRASH LOOP: ${count} crashes, backing off ${backoffMinutes}min before respawn
+          fs14.appendFileSync(LOG_FILE, `[${(/* @__PURE__ */ new Date()).toISOString()}] CRASH LOOP: ${count} crashes, backing off ${backoffMinutes}min before respawn
 `);
         } catch {
         }
         try {
-          spawn("sh", ["-c", `sleep ${backoffMinutes * 60} && "${process.execPath}" ${process.argv.slice(1).map((a) => `"${a}"`).join(" ")}`], {
+          (0, import_child_process3.spawn)("sh", ["-c", `sleep ${backoffMinutes * 60} && "${process.execPath}" ${process.argv.slice(1).map((a) => `"${a}"`).join(" ")}`], {
             detached: true,
             stdio: "ignore",
             env: { ...process.env, CODECAST_RESTART: "1" }
@@ -16934,7 +18574,7 @@ async function main() {
       clearCrashCount();
     }
     try {
-      spawn(process.execPath, process.argv.slice(1), {
+      (0, import_child_process3.spawn)(process.execPath, process.argv.slice(1), {
         detached: true,
         stdio: "ignore",
         env: { ...process.env, CODECAST_RESTART: "1" }
@@ -16947,7 +18587,7 @@ async function main() {
     persistLogQueue();
     sendLogImmediate("error", `UNCAUGHT EXCEPTION: ${err.message}`, {
       error_code: err.name,
-      stack: err.stack?.slice(0, 1000)
+      stack: err.stack?.slice(0, 1e3)
     });
     await flushRemoteLogs().catch(() => {
     });
@@ -16987,7 +18627,7 @@ async function main() {
   sendLogImmediate("info", `[LIFECYCLE] daemon_start: ${startMsg}`, { error_code: "daemon_start" });
   log(`PID: ${process.pid}`);
   if (isSyncPaused()) {
-    log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
+    log("\u26A0\uFE0F  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
   }
   saveDaemonState({ connected: false, runtimeVersion: getVersion() });
   const { config, convexUrl } = await waitForConfig();
@@ -17008,8 +18648,7 @@ async function main() {
   syncServiceRef = syncService2;
   try {
     const didUpdate = await checkForForcedUpdate(syncService2);
-    if (didUpdate)
-      return;
+    if (didUpdate) return;
   } catch (err) {
     log(`Startup update check failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -17041,10 +18680,10 @@ async function main() {
   const conversationCache = readConversationCache();
   const titleCache = readTitleCache();
   const pendingMessages = {};
-  const activeSessions = new Map;
+  const activeSessions = /* @__PURE__ */ new Map();
   const retryQueue = new RetryQueue({
-    initialDelayMs: 3000,
-    maxDelayMs: 60000,
+    initialDelayMs: 3e3,
+    maxDelayMs: 6e4,
     maxAttempts: 15,
     persistPath: `${CONFIG_DIR5}/retry-queue.json`,
     droppedPath: `${CONFIG_DIR5}/dropped-operations.json`,
@@ -17079,8 +18718,8 @@ async function main() {
     return false;
   });
   retryQueue.start();
-  const watcher = new SessionWatcher;
-  const fileSyncs = new Map;
+  const watcher = new SessionWatcher();
+  const fileSyncs = /* @__PURE__ */ new Map();
   watcher.on("ready", () => {
     log("Session watcher ready (depth=2)");
   });
@@ -17106,7 +18745,19 @@ async function main() {
     let sync = fileSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processSessionFile(filePath, event.sessionId, event.projectPath, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState);
+        await processSessionFile(
+          filePath,
+          event.sessionId,
+          event.projectPath,
+          syncService2,
+          config.user_id,
+          config.team_id,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState
+        );
       });
       fileSyncs.set(filePath, sync);
     }
@@ -17126,19 +18777,15 @@ async function main() {
   function handleStatusFile(filePath) {
     try {
       const basename8 = path13.basename(filePath, ".json");
-      if (!basename8 || !filePath.endsWith(".json"))
-        return;
+      if (!basename8 || !filePath.endsWith(".json")) return;
       const sessionId = basename8;
       const raw = fs14.readFileSync(filePath, "utf-8");
       const data = JSON.parse(raw);
-      if (!data.status || !data.ts)
-        return;
+      if (!data.status || !data.ts) return;
       const convId = conversationCache[sessionId];
-      if (!convId)
-        return;
+      if (!convId) return;
       const prev = lastHookStatus.get(sessionId);
-      if (prev && prev.ts >= data.ts)
-        return;
+      if (prev && prev.ts >= data.ts) return;
       const statusChanged = !prev || prev.status !== data.status;
       const modeChanged = data.permission_mode && (!prev || prev.permission_mode !== data.permission_mode);
       lastHookStatus.set(sessionId, data);
@@ -17150,13 +18797,13 @@ async function main() {
         }
       }
       if (statusChanged || modeChanged) {
-        sendAgentStatus(syncService2, convId, sessionId, data.status, data.ts * 1000, data.permission_mode);
+        sendAgentStatus(syncService2, convId, sessionId, data.status, data.ts * 1e3, data.permission_mode);
         log(`Hook status: ${data.status}${data.permission_mode ? ` mode=${data.permission_mode}` : ""} for session ${sessionId.slice(0, 8)}`);
       }
       if (data.status === "stopped" && statusChanged) {
         const restartTs = restartingSessionIds.get(sessionId);
         if (restartTs && Date.now() - restartTs < RESTART_GUARD_TTL_MS) {
-          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress — skipping completion`);
+          log(`Session ended for ${sessionId.slice(0, 8)}, but restart in progress \u2014 skipping completion`);
           try {
             fs14.unlinkSync(filePath);
           } catch {
@@ -17178,7 +18825,7 @@ async function main() {
         const toolInfo = extractPendingToolUseFromTranscript(transcriptPath || "");
         const toolName = toolInfo?.tool_name || extractToolFromMessage(data.message || "");
         const preview = toolInfo?.arguments_preview || data.message || "";
-        const SKIP_TOOLS = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
+        const SKIP_TOOLS = /* @__PURE__ */ new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
         if (toolName && !SKIP_TOOLS.has(toolName)) {
           log(`Creating permission record: ${toolName} for session ${sessionId.slice(0, 8)}`);
           const permPrompt = { tool_name: toolName, arguments_preview: preview };
@@ -17236,8 +18883,7 @@ async function main() {
       const dirs = fs14.readdirSync(claudeProjectsDir);
       for (const dir of dirs) {
         const jsonlPath = path13.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
-        if (fs14.existsSync(jsonlPath))
-          return jsonlPath;
+        if (fs14.existsSync(jsonlPath)) return jsonlPath;
       }
     } catch {
     }
@@ -17246,7 +18892,7 @@ async function main() {
   const statusCleanupInterval = setInterval(() => {
     try {
       const files = fs14.readdirSync(AGENT_STATUS_DIR);
-      const cutoff = Date.now() - 60 * 60 * 1000;
+      const cutoff = Date.now() - 60 * 60 * 1e3;
       for (const file of files) {
         const fp = path13.join(AGENT_STATUS_DIR, file);
         const stat4 = fs14.statSync(fp);
@@ -17257,7 +18903,7 @@ async function main() {
       }
     } catch {
     }
-  }, 30 * 60 * 1000);
+  }, 30 * 60 * 1e3);
   const performStartupScan = async () => {
     const claudeProjectsDir = path13.join(process.env.HOME || "", ".claude", "projects");
     if (!fs14.existsSync(claudeProjectsDir)) {
@@ -17301,7 +18947,20 @@ async function main() {
           }
         }
         log(`Startup scan: Syncing ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId})` : ""}`);
-        await processSessionFile(filePath, sessionId, projectPath, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState, parentConversationId);
+        await processSessionFile(
+          filePath,
+          sessionId,
+          projectPath,
+          syncService2,
+          config.user_id,
+          config.team_id,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState,
+          parentConversationId
+        );
       }
       for (const [childSessionId, parentSessionId] of pendingSubagentParents) {
         const parentConvId = conversationCache[parentSessionId];
@@ -17325,8 +18984,7 @@ async function main() {
     let linked = 0;
     const alreadyLinked = new Set(planHandoffChildren.values());
     for (const [childSessionId, childConvId] of Object.entries(conversationCache)) {
-      if (alreadyLinked.has(childConvId))
-        continue;
+      if (alreadyLinked.has(childConvId)) continue;
       const possiblePaths = [
         path13.join(claudeProjectsDir, `-Users-ashot-src-codecast`, `${childSessionId}.jsonl`)
       ];
@@ -17341,15 +18999,13 @@ async function main() {
       } catch {
       }
       for (const fp of possiblePaths) {
-        if (!fs14.existsSync(fp))
-          continue;
+        if (!fs14.existsSync(fp)) continue;
         try {
           const headContent = readFileHead(fp, 16384);
           const msgs = parseSessionFile(headContent);
           const userMsgs = msgs.filter((m) => m.role === "user").slice(0, 3);
           for (const msg of userMsgs) {
-            if (!msg.content)
-              continue;
+            if (!msg.content) continue;
             const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
             if (handoffMatch) {
               const jsonlPath = handoffMatch[1];
@@ -17376,8 +19032,7 @@ async function main() {
         break;
       }
     }
-    if (linked > 0)
-      log(`Backfill: linked ${linked} plan handoff session(s)`);
+    if (linked > 0) log(`Backfill: linked ${linked} plan handoff session(s)`);
   }).catch((err) => {
     logError("Startup scan failed", err instanceof Error ? err : new Error(String(err)));
   });
@@ -17394,8 +19049,8 @@ async function main() {
   const versionCheckInterval = startVersionChecker(syncService2);
   const reconciliationInterval = startReconciliation(syncService2, retryQueue);
   const eventLoopMonitorInterval = startEventLoopMonitor();
-  const cursorWatcher = new CursorWatcher;
-  const cursorSyncs = new Map;
+  const cursorWatcher = new CursorWatcher();
+  const cursorSyncs = /* @__PURE__ */ new Map();
   cursorWatcher.on("ready", () => {
     log("Cursor watcher ready");
   });
@@ -17420,7 +19075,18 @@ async function main() {
     let sync = cursorSyncs.get(dbPath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processCursorSession(dbPath, event.sessionId, event.workspacePath, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, updateState);
+        await processCursorSession(
+          dbPath,
+          event.sessionId,
+          event.workspacePath,
+          syncService2,
+          config.user_id,
+          config.team_id,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          updateState
+        );
       });
       cursorSyncs.set(dbPath, sync);
     }
@@ -17430,8 +19096,8 @@ async function main() {
     logError("Cursor watcher error", error);
   });
   cursorWatcher.start();
-  const cursorTranscriptWatcher = new CursorTranscriptWatcher;
-  const cursorTranscriptSyncs = new Map;
+  const cursorTranscriptWatcher = new CursorTranscriptWatcher();
+  const cursorTranscriptSyncs = /* @__PURE__ */ new Map();
   cursorTranscriptWatcher.on("ready", () => {
     log("Cursor transcript watcher ready");
   });
@@ -17463,7 +19129,17 @@ async function main() {
     let sync = cursorTranscriptSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processCursorTranscriptFile(filePath, event.sessionId, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, updateState);
+        await processCursorTranscriptFile(
+          filePath,
+          event.sessionId,
+          syncService2,
+          config.user_id,
+          config.team_id,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          updateState
+        );
       });
       cursorTranscriptSyncs.set(filePath, sync);
     }
@@ -17473,8 +19149,8 @@ async function main() {
     logError("Cursor transcript watcher error", error);
   });
   cursorTranscriptWatcher.start();
-  const codexWatcher = new CodexWatcher;
-  const codexSyncs = new Map;
+  const codexWatcher = new CodexWatcher();
+  const codexSyncs = /* @__PURE__ */ new Map();
   codexWatcher.on("ready", () => {
     log("Codex watcher ready");
   });
@@ -17491,7 +19167,18 @@ async function main() {
     let sync = codexSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processCodexSession(filePath, event.sessionId, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState);
+        await processCodexSession(
+          filePath,
+          event.sessionId,
+          syncService2,
+          config.user_id,
+          config.team_id,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState
+        );
       });
       codexSyncs.set(filePath, sync);
     }
@@ -17501,8 +19188,8 @@ async function main() {
     logError("Codex watcher error", error);
   });
   codexWatcher.start();
-  const geminiWatcher = new GeminiWatcher;
-  const geminiSyncs = new Map;
+  const geminiWatcher = new GeminiWatcher();
+  const geminiSyncs = /* @__PURE__ */ new Map();
   geminiWatcher.on("ready", () => {
     log("Gemini watcher ready");
   });
@@ -17519,7 +19206,19 @@ async function main() {
     let sync = geminiSyncs.get(filePath);
     if (!sync) {
       sync = new InvalidateSync(async () => {
-        await processGeminiSession(filePath, event.sessionId, event.projectHash, syncService2, config.user_id, config.team_id, conversationCache, retryQueue, pendingMessages, titleCache, updateState);
+        await processGeminiSession(
+          filePath,
+          event.sessionId,
+          event.projectHash,
+          syncService2,
+          config.user_id,
+          config.team_id,
+          conversationCache,
+          retryQueue,
+          pendingMessages,
+          titleCache,
+          updateState
+        );
       });
       geminiSyncs.set(filePath, sync);
     }
@@ -17533,21 +19232,20 @@ async function main() {
   let unsubscribe = null;
   let permissionUnsubscribe = null;
   let commandUnsubscribe = null;
-  const processedPermissionIds = new Set;
-  const processedCommandIds = new Set;
-  const messageRetryTimers = new Set;
+  const processedPermissionIds = /* @__PURE__ */ new Set();
+  const processedCommandIds = /* @__PURE__ */ new Set();
+  const messageRetryTimers = /* @__PURE__ */ new Set();
   function scheduleMessageRetry(messageId, retryCount, conversationId, messageContent) {
-    if (messageRetryTimers.has(messageId))
-      return;
+    if (messageRetryTimers.has(messageId)) return;
     if (retryCount >= 10) {
       logDelivery(`msg=${messageId.slice(0, 8)} exceeded max retries (10), marking undeliverable`);
       syncService2.updateMessageStatus({ messageId, status: "undeliverable" }).catch(() => {
       });
       return;
     }
-    const delays = [1000, 5000, 15000, 30000, 60000];
+    const delays = [1e3, 5e3, 15e3, 3e4, 6e4];
     const delay2 = delays[Math.min(retryCount, delays.length - 1)];
-    logDelivery(`Scheduling retry ${retryCount + 1}/10 for msg=${messageId.slice(0, 8)} in ${delay2 / 1000}s`);
+    logDelivery(`Scheduling retry ${retryCount + 1}/10 for msg=${messageId.slice(0, 8)} in ${delay2 / 1e3}s`);
     messageRetryTimers.add(messageId);
     setTimeout(async () => {
       messageRetryTimers.delete(messageId);
@@ -17559,69 +19257,80 @@ async function main() {
       }
     }, delay2);
   }
-  const messagesInFlight = new Set;
+  const messagesInFlight = /* @__PURE__ */ new Set();
   const setupSubscription = () => {
     try {
       logDelivery("Setting up pending messages subscription");
-      unsubscribe = subscriptionClient.onUpdate("pendingMessages:getPendingMessages", { user_id: config.user_id, api_token: config.auth_token }, async (messages) => {
-        if (!messages) {
-          return;
-        }
-        if (Array.isArray(messages)) {
-          if (messages.length > 0) {
-            logDelivery(`Subscription: ${messages.length} pending message(s) received`);
+      unsubscribe = subscriptionClient.onUpdate(
+        "pendingMessages:getPendingMessages",
+        { user_id: config.user_id, api_token: config.auth_token },
+        async (messages) => {
+          if (!messages) {
+            return;
           }
-          for (const msg of messages) {
-            if (messagesInFlight.has(msg._id)) {
-              logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight`);
-              continue;
+          if (Array.isArray(messages)) {
+            if (messages.length > 0) {
+              logDelivery(`Subscription: ${messages.length} pending message(s) received`);
             }
-            messagesInFlight.add(msg._id);
-            const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
-            logDelivery(`Processing: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} content="${msg.content.slice(0, 80)}" images=${imageIds.length} retry=${msg.retry_count ?? 0}`);
-            let messageContent = msg.content;
-            if (imageIds.length > 0) {
-              const imagePaths = [];
-              for (const storageId of imageIds) {
-                try {
-                  const imagePath = await downloadImage(storageId, syncService2);
-                  if (imagePath) {
-                    imagePaths.push(imagePath);
-                    log(`Downloaded image to ${imagePath}`);
+            for (const msg of messages) {
+              if (messagesInFlight.has(msg._id)) {
+                logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight`);
+                continue;
+              }
+              messagesInFlight.add(msg._id);
+              const imageIds = msg.image_storage_ids ?? (msg.image_storage_id ? [msg.image_storage_id] : []);
+              logDelivery(`Processing: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} content="${msg.content.slice(0, 80)}" images=${imageIds.length} retry=${msg.retry_count ?? 0}`);
+              let messageContent = msg.content;
+              if (imageIds.length > 0) {
+                const imagePaths = [];
+                for (const storageId of imageIds) {
+                  try {
+                    const imagePath = await downloadImage(storageId, syncService2);
+                    if (imagePath) {
+                      imagePaths.push(imagePath);
+                      log(`Downloaded image to ${imagePath}`);
+                    }
+                  } catch (err) {
+                    log(`Failed to download image: ${err instanceof Error ? err.message : String(err)}`);
                   }
-                } catch (err) {
-                  log(`Failed to download image: ${err instanceof Error ? err.message : String(err)}`);
+                }
+                if (imagePaths.length > 0) {
+                  const realText = msg.content.replace(/^\[image\]$/i, "").trim();
+                  const imageTags = imagePaths.map((p) => `[Image ${p}]`).join(" ");
+                  messageContent = realText ? `${realText} ${imageTags}` : imageTags;
                 }
               }
-              if (imagePaths.length > 0) {
-                const realText = msg.content.replace(/^\[image\]$/i, "").trim();
-                const imageTags = imagePaths.map((p) => `[Image ${p}]`).join(" ");
-                messageContent = realText ? `${realText} ${imageTags}` : imageTags;
+              syncService2.updateSessionAgentStatus(msg.conversation_id, "connected").catch(() => {
+              });
+              try {
+                const delivered = await deliverMessage(
+                  msg.conversation_id,
+                  messageContent,
+                  conversationCache,
+                  syncService2,
+                  msg._id,
+                  titleCache
+                );
+                if (delivered) {
+                  logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} delivered`);
+                } else {
+                  logDelivery(`FAILED: msg=${msg._id.slice(0, 8)} delivery returned false, scheduling retry ${(msg.retry_count ?? 0) + 1}`);
+                  scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
+                }
+              } catch (err) {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                logDelivery(`ERROR: msg=${msg._id.slice(0, 8)} exception: ${errMsg}`);
+                scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
+              } finally {
+                messagesInFlight.delete(msg._id);
               }
             }
-            syncService2.updateSessionAgentStatus(msg.conversation_id, "connected").catch(() => {
-            });
-            try {
-              const delivered = await deliverMessage(msg.conversation_id, messageContent, conversationCache, syncService2, msg._id, titleCache);
-              if (delivered) {
-                logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} delivered`);
-              } else {
-                logDelivery(`FAILED: msg=${msg._id.slice(0, 8)} delivery returned false, scheduling retry ${(msg.retry_count ?? 0) + 1}`);
-                scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
-              }
-            } catch (err) {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              logDelivery(`ERROR: msg=${msg._id.slice(0, 8)} exception: ${errMsg}`);
-              scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
-            } finally {
-              messagesInFlight.delete(msg._id);
-            }
+          } else {
+            log(`Received non-array: ${typeof messages}`);
           }
-        } else {
-          log(`Received non-array: ${typeof messages}`);
+          resetReconnectDelay();
         }
-        resetReconnectDelay();
-      });
+      );
       logDelivery("Pending messages subscription established");
       saveDaemonState({ connected: true });
       if (reconnectAttempt > 0) {
@@ -17653,54 +19362,58 @@ async function main() {
   const setupPermissionSubscription = () => {
     try {
       log("Setting up permission responses subscription");
-      permissionUnsubscribe = subscriptionClient.onUpdate("permissions:getAllRespondedPermissions", { user_id: config.user_id, api_token: config.auth_token }, async (permissions) => {
-        log(`Permission subscription update received: ${JSON.stringify(permissions)?.slice(0, 200)}`);
-        if (!permissions || !Array.isArray(permissions)) {
-          log("No permissions in update or invalid format");
-          return;
-        }
-        for (const permission of permissions) {
-          if (processedPermissionIds.has(permission._id)) {
-            continue;
+      permissionUnsubscribe = subscriptionClient.onUpdate(
+        "permissions:getAllRespondedPermissions",
+        { user_id: config.user_id, api_token: config.auth_token },
+        async (permissions) => {
+          log(`Permission subscription update received: ${JSON.stringify(permissions)?.slice(0, 200)}`);
+          if (!permissions || !Array.isArray(permissions)) {
+            log("No permissions in update or invalid format");
+            return;
           }
-          log(`New permission response: ${permission._id} status=${permission.status} tool=${permission.tool_name}`);
-          try {
-            const response = permission.status === "approved" ? "y" : "n";
-            const sessionId = permission.session_id;
-            let injected = false;
-            if (sessionId) {
-              const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
-              if (proc) {
-                const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-                if (tmuxTarget) {
-                  try {
-                    await injectViaTmux(tmuxTarget, response);
-                    injected = true;
-                  } catch {
+          for (const permission of permissions) {
+            if (processedPermissionIds.has(permission._id)) {
+              continue;
+            }
+            log(`New permission response: ${permission._id} status=${permission.status} tool=${permission.tool_name}`);
+            try {
+              const response = permission.status === "approved" ? "y" : "n";
+              const sessionId = permission.session_id;
+              let injected = false;
+              if (sessionId) {
+                const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
+                if (proc) {
+                  const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+                  if (tmuxTarget) {
+                    try {
+                      await injectViaTmux(tmuxTarget, response);
+                      injected = true;
+                    } catch {
+                    }
                   }
-                }
-                if (!injected) {
-                  try {
-                    await injectViaTerminal(proc.tty, response, proc.termProgram);
-                    injected = true;
-                  } catch {
+                  if (!injected) {
+                    try {
+                      await injectViaTerminal(proc.tty, response, proc.termProgram);
+                      injected = true;
+                    } catch {
+                    }
                   }
                 }
               }
+              if (injected) {
+                log(`Injected permission response '${response}' for session ${sessionId?.slice(0, 8)}`);
+                processedPermissionIds.add(permission._id);
+              } else {
+                log(`Failed to inject permission response, will retry on next update`);
+              }
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              log(`Error handling permission response: ${errMsg}`);
             }
-            if (injected) {
-              log(`Injected permission response '${response}' for session ${sessionId?.slice(0, 8)}`);
-              processedPermissionIds.add(permission._id);
-            } else {
-              log(`Failed to inject permission response, will retry on next update`);
-            }
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            log(`Error handling permission response: ${errMsg}`);
           }
+          resetReconnectDelay();
         }
-        resetReconnectDelay();
-      });
+      );
       log("Permission subscription established successfully");
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -17720,21 +19433,25 @@ async function main() {
   const setupCommandSubscription = () => {
     try {
       log("Setting up daemon commands subscription");
-      commandUnsubscribe = subscriptionClient.onUpdate("users:getMyPendingCommands", { api_token: config.auth_token }, async (commands) => {
-        if (!commands || !Array.isArray(commands) || commands.length === 0) {
-          return;
-        }
-        log(`Command subscription update: ${commands.length} pending command(s)`);
-        for (const cmd of commands) {
-          if (processedCommandIds.has(cmd.id)) {
-            continue;
+      commandUnsubscribe = subscriptionClient.onUpdate(
+        "users:getMyPendingCommands",
+        { api_token: config.auth_token },
+        async (commands) => {
+          if (!commands || !Array.isArray(commands) || commands.length === 0) {
+            return;
           }
-          processedCommandIds.add(cmd.id);
-          log(`[SUBSCRIPTION] Executing command: ${cmd.command} (${cmd.id})`);
-          await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
+          log(`Command subscription update: ${commands.length} pending command(s)`);
+          for (const cmd of commands) {
+            if (processedCommandIds.has(cmd.id)) {
+              continue;
+            }
+            processedCommandIds.add(cmd.id);
+            log(`[SUBSCRIPTION] Executing command: ${cmd.command} (${cmd.id})`);
+            await executeRemoteCommand(cmd.id, cmd.command, config, cmd.args);
+          }
+          resetReconnectDelay();
         }
-        resetReconnectDelay();
-      });
+      );
       log("Command subscription established successfully");
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -17756,7 +19473,7 @@ async function main() {
     log("Shutting down gracefully");
     const hardExitTimer = setTimeout(() => {
       try {
-        fs14.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [CRITICAL] Hard exit after shutdown timeout
+        fs14.appendFileSync(LOG_FILE, `[${(/* @__PURE__ */ new Date()).toISOString()}] [CRITICAL] Hard exit after shutdown timeout
 `);
       } catch {
       }
@@ -17769,7 +19486,7 @@ async function main() {
       } catch {
       }
       process.exit(1);
-    }, 15000);
+    }, 15e3);
     hardExitTimer.unref();
     saveDaemonState({ connected: false });
     if (unsubscribe) {
@@ -17840,8 +19557,7 @@ async function main() {
 }
 var daemonStarted = false;
 async function runDaemon() {
-  if (daemonStarted)
-    return;
+  if (daemonStarted) return;
   daemonStarted = true;
   return main();
 }
@@ -17854,7 +19570,7 @@ async function runWatchdog() {
   const version2 = getVersion();
   const logLine = (msg) => {
     try {
-      fs14.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [watchdog] ${msg}
+      fs14.appendFileSync(LOG_FILE, `[${(/* @__PURE__ */ new Date()).toISOString()}] [watchdog] ${msg}
 `);
     } catch {
     }
@@ -17899,12 +19615,12 @@ async function runWatchdog() {
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
       const staleness = Date.now() - lastTick;
       if (lastTick > 0 && staleness > HEARTBEAT_STALE_THRESHOLD_MS) {
-        logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
+        logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1e3)}s, killing`);
         try {
           process.kill(daemonPid, 9);
         } catch {
         }
-        await new Promise((resolve4) => setTimeout(resolve4, 1000));
+        await new Promise((resolve4) => setTimeout(resolve4, 1e3));
         daemonAlive = false;
       }
     } catch {
@@ -17959,7 +19675,7 @@ async function runWatchdog() {
           process.kill(daemonPid, 15);
         } catch {
         }
-        await new Promise((resolve4) => setTimeout(resolve4, 2000));
+        await new Promise((resolve4) => setTimeout(resolve4, 2e3));
         daemonAlive = false;
       }
     } else {
@@ -17979,7 +19695,7 @@ async function runWatchdog() {
           process.kill(daemonPid, 15);
         } catch {
         }
-        await new Promise((resolve4) => setTimeout(resolve4, 2000));
+        await new Promise((resolve4) => setTimeout(resolve4, 2e3));
         daemonAlive = false;
       }
     } catch {
@@ -17997,8 +19713,8 @@ async function runWatchdog() {
         body: JSON.stringify({
           api_token: config.auth_token,
           command_id: updateCmd.id,
-          result: success ? "Updated by watchdog" : undefined,
-          error: success ? undefined : "Watchdog update failed"
+          result: success ? "Updated by watchdog" : void 0,
+          error: success ? void 0 : "Watchdog update failed"
         })
       }).catch(() => {
       });
@@ -18023,7 +19739,7 @@ async function runWatchdog() {
     clearCrashCount();
     const { executablePath, args } = getDaemonExecInfo();
     try {
-      const child = spawn(executablePath, args, {
+      const child = (0, import_child_process3.spawn)(executablePath, args, {
         detached: true,
         stdio: "ignore",
         env: { ...process.env, CODECAST_RESTART: "1" }
@@ -18045,16 +19761,22 @@ function getDaemonExecInfo() {
   }
   return { executablePath: execPath, args: [path13.resolve(__dirname, "daemon.js")] };
 }
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("daemon.js")) {
+if (import_meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("daemon.js")) {
   daemonStarted = true;
   main().catch((err) => {
     logError("Fatal error", err instanceof Error ? err : new Error(String(err)));
     flushRemoteLogs().finally(() => process.exit(1));
   });
 }
-export {
-  tmuxPromptStillHasInput,
-  shouldTreatClaudeFileAsStale,
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  runDaemon,
   runWatchdog,
-  runDaemon
-};
+  shouldTreatClaudeFileAsStale,
+  tmuxPromptStillHasInput
+});
+/*! Bundled license information:
+
+chokidar/esm/index.js:
+  (*! chokidar - MIT License (c) 2012 Paul Miller (paulmillr.com) *)
+*/
