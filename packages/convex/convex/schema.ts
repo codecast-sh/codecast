@@ -596,6 +596,14 @@ export default defineSchema({
     ),
     generated_at: v.number(),
     summary: v.string(),
+    headline: v.optional(v.string()),
+    key_changes: v.optional(v.array(v.string())),
+    timeline: v.optional(v.array(v.object({
+      t: v.string(),
+      event: v.string(),
+      type: v.string(),
+      session_title: v.optional(v.string()),
+    }))),
     goal: v.optional(v.string()),
     what_changed: v.optional(v.string()),
     outcome_type: v.union(
@@ -617,6 +625,25 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_team_generated_at", ["team_id", "generated_at"])
     .index("by_actor_generated_at", ["actor_user_id", "generated_at"]),
+
+  day_timelines: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    date: v.string(),
+    events: v.array(v.object({
+      time: v.number(),
+      t: v.string(),
+      event: v.string(),
+      type: v.string(),
+      session_id: v.optional(v.id("conversations")),
+      session_title: v.optional(v.string()),
+      project: v.optional(v.string()),
+    })),
+    narrative: v.optional(v.string()),
+    generated_at: v.number(),
+  })
+    .index("by_user_date", ["user_id", "date"])
+    .index("by_team_date", ["team_id", "date"]),
 
   notifications: defineTable({
     recipient_user_id: v.id("users"),

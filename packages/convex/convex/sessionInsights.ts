@@ -302,6 +302,14 @@ export const upsertSessionInsight = internalMutation({
     ),
     generated_at: v.number(),
     summary: v.string(),
+    headline: v.optional(v.string()),
+    key_changes: v.optional(v.array(v.string())),
+    timeline: v.optional(v.array(v.object({
+      t: v.string(),
+      event: v.string(),
+      type: v.string(),
+      session_title: v.optional(v.string()),
+    }))),
     goal: v.optional(v.string()),
     what_changed: v.optional(v.string()),
     outcome_type: v.union(
@@ -334,6 +342,9 @@ export const upsertSessionInsight = internalMutation({
         source: args.source,
         generated_at: args.generated_at,
         summary: args.summary,
+        headline: args.headline,
+        key_changes: args.key_changes,
+        timeline: args.timeline,
         goal: args.goal,
         what_changed: args.what_changed,
         outcome_type: args.outcome_type,
@@ -352,6 +363,8 @@ export const upsertSessionInsight = internalMutation({
         source: args.source,
         generated_at: args.generated_at,
         summary: args.summary,
+        headline: args.headline,
+        key_changes: args.key_changes,
         goal: args.goal,
         what_changed: args.what_changed,
         outcome_type: args.outcome_type,
@@ -465,27 +478,32 @@ export const generateSessionInsight = internalAction({
           .join("\n")
       : "- none";
 
-    const prompt = `You are writing a session digest for a team activity feed. Someone reading this should understand what happened without needing to open the session.
+    const prompt = `You are writing a session narrative for a developer activity timeline. This will be merged with other sessions into a single chronological feed. Write it like a story of what happened, not a summary.
 
 Return ONLY valid JSON with this exact shape:
 {
-  "summary": "string (2-4 sentences)",
+  "headline": "string (one sentence, max 80 chars, what was accomplished)",
+  "key_changes": ["string (specific change, 60 chars max each)"],
+  "summary": "string (2-3 sentences, narrative context)",
+  "timeline": [
+    { "t": "HH:MM", "event": "what happened", "type": "start|discovery|change|decision|ship|block|debug|research" }
+  ],
   "outcome_type": "shipped|progress|blocked|unknown",
-  "blockers": ["string"],
   "themes": ["string"],
   "confidence": number (0..1)
 }
 
-Rules for summary:
-- Write a concise narrative paragraph (2-4 sentences) that covers what was done and why.
-- Include specific technical details: file names, function names, config values, URLs, error messages, package names -- anything concrete that helps the reader understand without opening the session.
-- Mention what changed and the outcome naturally within the narrative, don't use labels like "Goal:" or "Changed:".
-- If there were commits or PRs, mention the key ones.
-
-Other rules:
-- outcome_type: shipped if clear completed work, progress if still ongoing, blocked if stuck.
-- blockers: only real blockers, empty array if none.
-- themes: 2-6 short tags.
+Rules:
+- timeline: THE MOST IMPORTANT FIELD. 3-8 events telling the story of this session chronologically. Each event is a specific thing that happened, written in past tense, concrete and specific. Include file names, function names, error messages when relevant. "t" is the clock time (approximate from message timestamps). "type" classifies the event.
+  Good: { "t": "14:30", "event": "Found root cause: renderMedia() spawning unlimited Chromium processes", "type": "discovery" }
+  Good: { "t": "15:15", "event": "Capped concurrency to Math.ceil(os.cpus().length * 0.5) in index.ts", "type": "change" }
+  Bad: { "t": "14:00", "event": "Worked on performance", "type": "change" }
+  Bad: { "t": "15:00", "event": "Made some improvements to the code", "type": "change" }
+- headline: Lead with the verb. Max 80 characters.
+- key_changes: 2-5 specific concrete changes with file/function names.
+- summary: Brief narrative context.
+- outcome_type: shipped = deployed/merged/complete. progress = still working. blocked = stuck.
+- themes: 2-4 short tags, lowercase.
 - No markdown, no commentary, just JSON.
 
 Session metadata:
@@ -519,7 +537,7 @@ ${sampledMessages}`;
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 600,
+          max_tokens: 1200,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -545,6 +563,18 @@ ${sampledMessages}`;
         .trim()
         .slice(0, 600);
 
+      const headline = parsed.headline ? String(parsed.headline).trim().slice(0, 120) : undefined;
+      const keyChanges = uniqCompact(Array.isArray(parsed.key_changes) ? parsed.key_changes.map((c: any) => String(c)) : [], 6, 120);
+      const timeline = Array.isArray(parsed.timeline)
+        ? parsed.timeline
+            .filter((e: any) => e && typeof e.event === "string" && typeof e.t === "string")
+            .slice(0, 12)
+            .map((e: any) => ({
+              t: String(e.t).slice(0, 10),
+              event: String(e.event).trim().slice(0, 200),
+              type: String(e.type || "change").slice(0, 20),
+            }))
+        : undefined;
       const goal = parsed.goal ? String(parsed.goal).trim().slice(0, 220) : undefined;
       const whatChanged = parsed.what_changed ? String(parsed.what_changed).trim().slice(0, 320) : undefined;
       const outcomeType = safeOutcomeType(parsed.outcome_type);
@@ -568,6 +598,9 @@ ${sampledMessages}`;
         source,
         generated_at: now,
         summary,
+        headline,
+        key_changes: keyChanges.length ? keyChanges : undefined,
+        timeline: timeline?.length ? timeline : undefined,
         goal,
         what_changed: whatChanged,
         outcome_type: outcomeType,
@@ -921,6 +954,8 @@ export const getTeamDigest = query({
         conversation_id: insight.conversation_id,
         title: conv?.title || conv?.subtitle || "Session",
         summary: insight.summary,
+        headline: insight.headline,
+        key_changes: insight.key_changes,
         goal: insight.goal,
         what_changed: insight.what_changed,
         outcome_type: insight.outcome_type,
@@ -1230,6 +1265,8 @@ export const getActivityDigest = query({
         conversation_id: insight.conversation_id,
         title: conv?.title || conv?.subtitle || "Session",
         summary: insight.summary,
+        headline: insight.headline,
+        key_changes: insight.key_changes,
         goal: insight.goal,
         what_changed: insight.what_changed,
         outcome_type: insight.outcome_type,
