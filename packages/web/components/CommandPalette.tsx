@@ -6,7 +6,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, InboxSession } from "../store/inboxStore";
 import { isElectron } from "../lib/desktop";
 
 const NAV_PAGES = [
@@ -155,13 +155,40 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         window.__CODECAST_ELECTRON__!.paletteNavigate(path);
         return;
       }
-      const inboxMatch = path.match(/^\/inbox\?s=(.+)$/);
-      if (inboxMatch && pathname === "/inbox") {
-        const sessionId = inboxMatch[1];
-        useInboxStore.getState().navigateToSession(sessionId);
-        window.history.replaceState({ inboxId: sessionId }, "", path);
+      router.push(path);
+      setOpen(false);
+    },
+    [router, standalone]
+  );
+
+  const navigateToSession = useCallback(
+    (conv: { _id: string; session_id?: string; title?: string; updated_at: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean }) => {
+      if (standalone && isElectron()) {
+        window.__CODECAST_ELECTRON__!.paletteNavigate(`/inbox?s=${conv._id}`);
+        return;
+      }
+      const store = useInboxStore.getState();
+      if (!store.sessions[conv._id]) {
+        store.injectSession({
+          _id: conv._id,
+          session_id: conv.session_id || conv._id,
+          title: conv.title,
+          updated_at: conv.updated_at,
+          project_path: conv.project_path,
+          git_root: conv.git_root,
+          agent_type: conv.agent_type || "claude_code",
+          message_count: conv.message_count || 0,
+          is_idle: conv.is_idle ?? true,
+          has_pending: false,
+        } as InboxSession);
       } else {
-        router.push(path);
+        store.navigateToSession(conv._id);
+      }
+      const inboxPath = `/inbox?s=${conv._id}`;
+      if (pathname === "/inbox") {
+        window.history.replaceState({ inboxId: conv._id }, "", inboxPath);
+      } else {
+        router.push(inboxPath);
       }
       setOpen(false);
     },
@@ -231,7 +258,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
               <CommandPrimitive.Item
                 key={`fav-${fav._id}`}
                 value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
-                onSelect={() => navigate(`/conversation/${fav._id}`)}
+                onSelect={() => navigateToSession(fav)}
                 className={itemClass}
               >
                 <span className="text-amber-400 flex-shrink-0">
@@ -287,7 +314,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
               <CommandPrimitive.Item
                 key={`recent-${conv._id}`}
                 value={`session ${cleanTitle(conv.title || "")} ${conv.project_path || ""}|||${conv._id}`}
-                onSelect={() => navigate(`/conversation/${conv._id}`)}
+                onSelect={() => navigateToSession(conv)}
                 className={`${itemClass} group`}
               >
                 <span className="text-sol-text-dim flex-shrink-0">
