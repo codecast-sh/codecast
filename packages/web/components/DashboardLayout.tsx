@@ -13,8 +13,7 @@ import { NotificationBell } from "./NotificationBell";
 import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
 import { Logo } from "./Logo";
-import { PanelRightOpen, PanelRightClose, Plus } from "lucide-react";
-import { useDiffViewerStore } from "../store/diffViewerStore";
+import { Plus } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
@@ -38,7 +37,6 @@ const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
 
 export function DashboardLayout({ children, filter, onFilterChange, directoryFilter, onDirectoryFilterChange, hideSidebar }: DashboardLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const isSidebarCollapsed = useInboxStore(s => s.clientState.ui?.sidebar_collapsed ?? false);
   const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
   const rawLayout = useInboxStore(s => s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT);
   const layout = {
@@ -47,12 +45,9 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   };
   const updateUI = useInboxStore(s => s.updateClientUI);
   const updateLayout = useInboxStore(s => s.updateClientLayout);
-  const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
-  const diffPanelOpen = useDiffViewerStore((state) => state.diffPanelOpen);
-  const toggleDiffPanel = useDiffViewerStore((state) => state.toggleDiffPanel);
   const openNewSession = useInboxStore((state) => state.openNewSession);
   const newSessionOpen = useInboxStore((state) => state.newSession.isOpen);
   const closeNewSession = useInboxStore((state) => state.closeNewSession);
@@ -92,7 +87,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage;
 
   useEffect(() => {
-    setMounted(true);
     const checkMobile = () => setIsMobile(window.innerWidth < 768);
     checkMobile();
     window.addEventListener("resize", checkMobile);
@@ -182,12 +176,15 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hideSidebar, isSidebarCollapsed, isZenMode, isOnInboxPage, currentConvContext, directoryFilter, openNewSession, handleQuickCreate, updateUI]);
+  }, [hideSidebar, isZenMode, isOnInboxPage, currentConvContext, directoryFilter, openNewSession, handleQuickCreate, updateUI]);
 
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
       {/* Header spans full width */}
-      <header ref={headerRef} className={`flex-shrink-0 border-b border-sol-border bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""}`}>
+      <header ref={headerRef} className={`flex-shrink-0 border-b border-sol-border bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
+        {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
+          <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
+        )}
         <div className="px-2 sm:px-4 py-1.5 sm:py-3 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Logo + toggle */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -221,20 +218,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-            {mounted && isOnConversationPage && (
-              <button
-                onClick={toggleDiffPanel}
-                className="hidden md:block p-1.5 text-sol-text-dim hover:text-sol-text transition-colors"
-                aria-label={diffPanelOpen ? "Hide diff panel" : "Show diff panel"}
-                title={diffPanelOpen ? "Hide diff panel (d)" : "Show diff panel (d)"}
-              >
-                {diffPanelOpen ? (
-                  <PanelRightClose className="w-5 h-5" />
-                ) : (
-                  <PanelRightOpen className="w-5 h-5" />
-                )}
-              </button>
-            )}
             <button
               onClick={() => {
                 if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
@@ -247,7 +230,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
               title="New session (Ctrl+N)"
             >
               <Plus className="w-4 h-4" />
-              New Session
+              New
             </button>
             <ThemeToggle />
             <NotificationBell />
@@ -264,7 +247,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
       {/* Content area with sidebar and main */}
       <div className="flex-1 min-h-0">
-        {hideSidebar || isSidebarCollapsed || isZenMode || isMobile ? (
+        {hideSidebar || isZenMode || isMobile ? (
           isFullWidthPage ? (
             <div className="h-full">
               {children}
@@ -283,7 +266,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
             defaultLayout={layout}
             onLayoutChange={handleLayoutChange}
           >
-            <Panel id="sidebar" minSize="10%" maxSize="50%">
+            <Panel id="sidebar" minSize="0%" maxSize="50%">
               <div className="h-full bg-sol-bg-alt overflow-auto">
                 <Sidebar
                   filter={filter}
