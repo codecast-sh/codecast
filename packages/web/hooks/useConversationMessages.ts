@@ -63,6 +63,7 @@ export function useConversationMessages(
 
   useEffect(() => {
     if (hasTarget && !targetMode) setTargetMode(true);
+    if (!hasTarget && targetMode) setTargetMode(false);
   }, [hasTarget, targetMode]);
 
   // =============================================
@@ -199,7 +200,7 @@ export function useConversationMessages(
   // Unified message list: store for normal mode, local state for target mode
   // =============================================
   const rawMessages: Message[] = targetMode
-    ? (targetAroundData?.messages ?? [])
+    ? (targetAroundData?.messages ?? storeMessages)
     : storeMessages;
 
   // =============================================
@@ -294,6 +295,7 @@ export function useConversationMessages(
   // =============================================
   const conversation: Record<string, any> | null = useMemo(() => {
     if (!storeMeta) return null;
+    if (targetMode && !targetAroundData && rawMessages.length === 0) return null;
     return {
       ...storeMeta,
       messages: rawMessages,
@@ -301,7 +303,7 @@ export function useConversationMessages(
       compaction_count: compactionCount,
       child_conversation_map: childConversationMap,
     };
-  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap]);
+  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData]);
 
   // =============================================
   // Target search (auto-load older to find target)

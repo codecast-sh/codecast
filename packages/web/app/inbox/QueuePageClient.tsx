@@ -17,7 +17,7 @@ import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { SharePopover } from "../../components/SharePopover";
-import { ConversationList } from "../../components/ConversationList";
+import { ActivityFeed } from "../../components/ActivityFeed";
 import { toast } from "sonner";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
@@ -60,7 +60,7 @@ function getProjectName(gitRoot?: string, projectPath?: string): string {
   return path.split("/").filter(Boolean).pop() || "unknown";
 }
 
-const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void }) {
+const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, lastUserMessage, sessionError, onBack, targetMessageId }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string }) {
   const {
     conversation,
     hasMoreAbove,
@@ -71,7 +71,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
     loadNewer,
     jumpToStart,
     jumpToEnd,
-  } = useConversationMessages(sessionId);
+  } = useConversationMessages(sessionId, targetMessageId);
 
   const resumeSession = useMutation(api.users.resumeSession);
   const restartSessionMutation = useMutation(api.conversations.restartSession);
@@ -202,6 +202,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
         backHref="/inbox"
         onBack={onBack}
         fallbackStickyContent={cleanUserMessage(lastUserMessage)}
+        targetMessageId={targetMessageId}
       />
     </div>
   );
@@ -371,7 +372,7 @@ function SessionCard({
         </div>
       )}
       {(onDismiss || onDefer || onPin) && (
-        <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 bg-gradient-to-r from-transparent ${isActive ? 'via-sol-cyan/[0.08] to-sol-cyan/15' : 'via-sol-bg-alt/60 to-sol-bg-alt'}`}>
+        <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
           {onPin && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
@@ -705,6 +706,7 @@ export function QueuePageClient() {
 
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
+  const [scrollToMessageId, setScrollToMessageId] = useState<string | null>(null);
 
   const shouldQueryDirect = pendingInjectId && isConvexId(pendingInjectId);
 
@@ -769,22 +771,33 @@ export function QueuePageClient() {
     paramProcessedRef.current = true;
   }, [pendingInjectId, directConv, sessions, setCurrentSession, injectSession]);
 
-  // Handle store-based navigation (from CommandPalette when already on /inbox)
+  // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
+  const pendingScrollToMessageId = useInboxStore((s) => s.pendingScrollToMessageId);
   useEffect(() => {
     if (!pendingNavigateId) return;
-    useInboxStore.setState({ pendingNavigateId: null, showMySessions: false });
+    const scrollTarget = pendingScrollToMessageId;
+    useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, showMySessions: false });
+    if (scrollTarget) setScrollToMessageId(scrollTarget);
     if (sessions[pendingNavigateId]) {
       setPendingInjectId(null);
       setCurrentSession(pendingNavigateId);
     } else {
       setPendingInjectId(pendingNavigateId);
     }
-  }, [pendingNavigateId, sessions, setCurrentSession]);
+  }, [pendingNavigateId, pendingScrollToMessageId, sessions, setCurrentSession]);
 
   const handleDismiss = useCallback((id: string) => {
     stashSession(id);
   }, [stashSession]);
+
+  const prevSessionRef = useRef(currentSessionId);
+  useEffect(() => {
+    if (prevSessionRef.current && prevSessionRef.current !== currentSessionId) {
+      setScrollToMessageId(null);
+    }
+    prevSessionRef.current = currentSessionId;
+  }, [currentSessionId]);
 
   const handleDismissCurrent = useCallback(() => {
     if (currentSessionId) handleDismiss(currentSessionId);
@@ -965,8 +978,8 @@ export function QueuePageClient() {
     <>
       {showMySessions ? (
         <div className="h-full overflow-y-auto" data-main-scroll>
-          <div className="max-w-4xl mx-auto px-4">
-            <ConversationList filter="my" onNavigate={handleNavigateToConversation} />
+          <div className="max-w-4xl mx-auto px-4 py-4">
+            <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
           </div>
         </div>
       ) : viewingDismissedSession ? (
@@ -988,6 +1001,7 @@ export function QueuePageClient() {
           lastUserMessage={currentSession.last_user_message}
           sessionError={currentSession.session_error}
           onBack={handleBack}
+          targetMessageId={scrollToMessageId && currentSession._id === currentSessionId ? scrollToMessageId : undefined}
         />
       ) : pendingInjectId ? (
         <div className="h-full flex items-center justify-center text-sol-text-dim">
@@ -1001,8 +1015,8 @@ export function QueuePageClient() {
         </div>
       ) : (
         <div className="h-full overflow-y-auto" data-main-scroll>
-          <div className="max-w-4xl mx-auto px-4">
-            <ConversationList filter="my" onNavigate={handleNavigateToConversation} />
+          <div className="max-w-4xl mx-auto px-4 py-4">
+            <ActivityFeed mode="personal" compact onNavigate={handleNavigateToConversation} />
           </div>
         </div>
       )}

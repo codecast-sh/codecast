@@ -252,6 +252,7 @@ interface InboxStoreState {
   showDismissed: boolean;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
+  pendingScrollToMessageId: string | null;
   showMySessions: boolean;
   setShowMySessions: (show: boolean) => void;
   mruStack: string[];
@@ -408,6 +409,7 @@ export const useInboxStore = create<InboxStoreState>(
   showDismissed: false,
   viewingDismissedId: null,
   pendingNavigateId: null,
+  pendingScrollToMessageId: null,
   showMySessions: false,
   setShowMySessions: (show: boolean) => set({ showMySessions: show }),
   mruStack: [],

@@ -6914,23 +6914,31 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [timeline, virtualizer]);
 
-  useEffect(() => {
-    if (timeline.length && window.location.hash && !targetMessageId) {
-      const targetId = window.location.hash.slice(1);
-      const itemIndex = timeline.findIndex(item => {
-        if (item.type === 'message') {
-          return `msg-${item.data._id}` === targetId;
-        } else if (item.type === 'commit') {
-          return `commit-${item.data.sha}` === targetId;
-        }
-        return false;
-      });
-      if (itemIndex >= 0) {
-        setUserScrolled(true);
-        setTimeout(() => virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" }), 100);
+  const scrollToHash = useCallback(() => {
+    if (!timeline.length || targetMessageId || !window.location.hash) return;
+    const targetId = window.location.hash.slice(1);
+    const itemIndex = timeline.findIndex(item => {
+      if (item.type === 'message') {
+        return `msg-${item.data._id}` === targetId;
+      } else if (item.type === 'commit') {
+        return `commit-${item.data.sha}` === targetId;
       }
+      return false;
+    });
+    if (itemIndex >= 0) {
+      setUserScrolled(true);
+      setTimeout(() => virtualizer.scrollToIndex(itemIndex, { align: "center", behavior: "smooth" }), 100);
     }
+  }, [timeline, virtualizer, targetMessageId]);
+
+  useEffect(() => {
+    scrollToHash();
   }, [timeline.length, virtualizer, targetMessageId]);
+
+  useEffect(() => {
+    window.addEventListener("hashchange", scrollToHash);
+    return () => window.removeEventListener("hashchange", scrollToHash);
+  }, [scrollToHash]);
 
   // Scroll to highlighted message from search
   useEffect(() => {
@@ -7354,6 +7362,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     <ImageGalleryProvider>
     <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
       <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass} ${isImageLightboxActive ? "invisible" : ""}`}>
+        {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
+          <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
+        )}
         <div className="max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
             <Link

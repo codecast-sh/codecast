@@ -162,6 +162,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
 
   const favorites = useQuery(api.conversations.listFavorites);
   const bookmarks = useQuery(api.bookmarks.listBookmarks);
+  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
   const { conversations } =
     useQuery(api.conversations.listConversations, {
       filter: "my",
@@ -406,17 +407,35 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             </div>
             <div className="space-y-0.5">
               {bookmarks.slice(0, 8).map((bookmark) => (
-                <Link
+                <div
                   key={bookmark._id}
-                  href={`/conversation/${bookmark.conversation_id}#msg-${bookmark.message_id}`}
-                  onClick={onMobileClose}
-                  className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors group"
+                  className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors group cursor-pointer"
+                  onClick={() => {
+                    useInboxStore.setState({
+                      pendingNavigateId: bookmark.conversation_id,
+                      pendingScrollToMessageId: bookmark.message_id,
+                    });
+                    router.push("/inbox");
+                    onMobileClose?.();
+                  }}
                 >
                   <svg className={`w-3 h-3 flex-shrink-0 ${bookmark.message_role === "user" ? "text-sol-blue" : "text-sol-violet"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
                   </svg>
                   <span className="truncate text-sm flex-1">{bookmark.message_preview || bookmark.conversation_title}</span>
-                </Link>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleBookmark({ conversation_id: bookmark.conversation_id, message_id: bookmark.message_id });
+                    }}
+                    className="opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-all flex-shrink-0"
+                    title="Remove bookmark"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
               ))}
             </div>
           </div>

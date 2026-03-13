@@ -397,7 +397,14 @@ export default function ConversationPage() {
   const searchParams = useSearchParams();
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
-  const [targetMessageId, setTargetMessageId] = useState<string | undefined>(undefined);
+  const [targetMessageId, setTargetMessageId] = useState<string | undefined>(() => {
+    if (typeof window === "undefined") return undefined;
+    const hash = window.location.hash;
+    if (hash && hash.startsWith("#msg-")) {
+      return hash.slice(5);
+    }
+    return undefined;
+  });
 
   const resetForkNav = useForkNavigationStore((s) => s.reset);
   const resetForkData = useInboxStore((s) => s.resetForkNav);
