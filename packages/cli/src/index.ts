@@ -1953,7 +1953,7 @@ async function promptStableEnablement(): Promise<void> {
   console.log("--- Stable Context ---");
   console.log("Injects recent session summaries into every new conversation,");
   console.log("so your agent starts each session aware of recent work.");
-  console.log(`${fmt.muted("Adds a hook that runs on session start. Can increase prompt size.")}\n`);
+  console.log(`${fmt.muted("Adds a lightweight hook on session start. Minimal prompt overhead.")}\n`);
 
   const enableStable = await confirm({
     message: "Enable stable context?",
@@ -8294,37 +8294,84 @@ plan
 
 // --- Stable Mode ---
 
+const STABLE_FEED_HOOK = `#!/bin/bash
+# CodeCast Stable Mode - injects recent session history on SessionStart
+set -uo pipefail
+
+CONFIG_FILE="$HOME/.codecast/config.json"
+[ -f "$CONFIG_FILE" ] || exit 0
+
+# Ensure codecast is on PATH (hooks run non-interactively)
+export PATH="$HOME/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+STABLE_MODE=$(python3 -c "import sys,json; print(json.load(open('$CONFIG_FILE')).get('stable_mode',''))" 2>/dev/null)
+[ -z "$STABLE_MODE" ] || [ "$STABLE_MODE" = "null" ] && exit 0
+
+STABLE_GLOBAL=$(python3 -c "import sys,json; print(json.load(open('$CONFIG_FILE')).get('stable_global',False))" 2>/dev/null)
+
+GLOBAL_FLAG=""
+if [ "$STABLE_GLOBAL" = "True" ]; then
+  GLOBAL_FLAG="-g"
+fi
+
+if [ "$STABLE_MODE" = "team" ]; then
+  FEED=$(codecast feed $GLOBAL_FLAG -n 15 -s 14d 2>/dev/null | sed 's/\\x1b\\[[0-9;]*m//g')
+else
+  FEED=$(codecast feed $GLOBAL_FLAG -n 10 -s 7d 2>/dev/null | sed 's/\\x1b\\[[0-9;]*m//g')
+fi
+
+[ -z "$FEED" ] && exit 0
+
+if [ "$STABLE_MODE" = "team" ]; then
+  INSTRUCTION="Review this feed of recent team activity. Start your session with a brief, natural message acknowledging what the team has been working on recently (2-3 sentences max, referencing specific projects or themes you see). Then ask: where do you want to go next?"
+else
+  INSTRUCTION="Review this feed of your recent activity. Start your session with a brief, natural message acknowledging what you've been working on recently (2-3 sentences max, referencing specific projects or themes you see). Then ask: where do you want to go next?"
+fi
+
+cat <<EOF
+<stable-context mode="$STABLE_MODE">
+$INSTRUCTION
+
+$FEED
+</stable-context>
+EOF
+`;
+
 function installStableHook(): void {
   const home = process.env.HOME || "";
-  const hookFile = path.join(home, ".claude", "hooks", "stable-feed.sh");
+  const hooksDir = path.join(home, ".claude", "hooks");
+  const hookFile = path.join(hooksDir, "stable-feed.sh");
   const settingsFile = path.join(home, ".claude", "settings.json");
 
-  if (!fs.existsSync(hookFile)) {
-    console.error(`Hook script not found: ${hookFile}`);
-    process.exit(1);
-  }
+  try {
+    fs.mkdirSync(hooksDir, { recursive: true });
+    fs.writeFileSync(hookFile, STABLE_FEED_HOOK, { mode: 0o755 });
 
-  let settings: any = {};
-  if (fs.existsSync(settingsFile)) {
-    settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-  }
-  if (!settings.hooks) settings.hooks = {};
-  if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
-
-  const hookArray = settings.hooks.SessionStart as any[];
-  const alreadyPresent = hookArray.some((matcher: any) =>
-    (matcher.hooks || []).some((h: any) => h.command?.includes("stable-feed.sh"))
-  );
-
-  if (!alreadyPresent) {
-    const hookEntry = { type: "command", command: hookFile, timeout: 30 };
-    if (hookArray.length > 0 && hookArray[0].matcher === "") {
-      hookArray[0].hooks = hookArray[0].hooks || [];
-      hookArray[0].hooks.push(hookEntry);
-    } else {
-      hookArray.unshift({ matcher: "", hooks: [hookEntry] });
+    let settings: any = {};
+    if (fs.existsSync(settingsFile)) {
+      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
     }
+    if (!settings.hooks) settings.hooks = {};
+    if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+
+    const hookArray = settings.hooks.SessionStart as any[];
+    const alreadyPresent = hookArray.some((matcher: any) =>
+      (matcher.hooks || []).some((h: any) => h.command?.includes("stable-feed.sh"))
+    );
+
+    if (!alreadyPresent) {
+      const hookEntry = { type: "command", command: hookFile, timeout: 30 };
+      if (hookArray.length > 0 && hookArray[0].matcher === "") {
+        hookArray[0].hooks = hookArray[0].hooks || [];
+        hookArray[0].hooks.push(hookEntry);
+      } else {
+        hookArray.unshift({ matcher: "", hooks: [hookEntry] });
+      }
+    }
+
     fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+  } catch {
+    // Ignore errors - hook is optional enhancement
   }
 }
 
