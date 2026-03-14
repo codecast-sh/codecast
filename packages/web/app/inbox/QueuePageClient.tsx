@@ -244,9 +244,62 @@ function SessionCard({
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
 
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounter = useRef(0);
+  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
+  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+
+  const handleFileDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.types.includes("Files")) setIsDragOver(true);
+  }, []);
+
+  const handleFileDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleFileDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) setIsDragOver(false);
+  }, []);
+
+  const handleFileDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setIsDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
+    if (files.length === 0) {
+      if (e.dataTransfer.files.length > 0) toast.error("Only image files are supported");
+      return;
+    }
+    try {
+      const storageIds: Id<"_storage">[] = [];
+      for (const file of files) {
+        const uploadUrl = await generateUploadUrl({});
+        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+        const { storageId } = await result.json();
+        storageIds.push(storageId);
+      }
+      await sendMessage({ conversation_id: session._id as Id<"conversations">, content: "[image]", image_storage_ids: storageIds });
+      toast.success(`Attached ${files.length} image${files.length > 1 ? "s" : ""} to "${displayTitle}"`);
+    } catch {
+      toast.error("Failed to attach files");
+    }
+  }, [session._id, displayTitle, generateUploadUrl, sendMessage]);
+
   return (
     <div
-      className={`relative group border-b border-sol-border/30 transition-colors overflow-hidden ${
+      onDragEnter={handleFileDragEnter}
+      onDragOver={handleFileDragOver}
+      onDragLeave={handleFileDragLeave}
+      onDrop={handleFileDrop}
+      className={`relative group border-b border-sol-border/30 transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         isActive
           ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
           : isWorking
@@ -507,7 +560,7 @@ function InboxSessionPanel({
 
   return (
     <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
-      <div className="px-3 py-3 border-b border-sol-border/50 flex-shrink-0">
+      <div className="px-3 py-2 border-b border-sol-border/50 flex-shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
             {sortedSessions.length} Session{sortedSessions.length !== 1 ? "s" : ""}
@@ -1067,7 +1120,7 @@ export function QueuePageClient() {
           <Panel id="inbox-main" defaultSize="76%" minSize="30%">
             {inboxContent}
           </Panel>
-          <Separator className="relative w-px bg-transparent cursor-col-resize before:absolute before:inset-y-0 before:-left-[3px] before:-right-[3px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
+          <Separator className="relative z-10 w-px bg-sol-border cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
           <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
             <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={Object.values(dismissedSessions)} />
           </Panel>

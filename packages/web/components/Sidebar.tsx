@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { toast } from "sonner";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -41,6 +42,86 @@ function getShortPath(projectPath: string): string {
   const parts = projectPath.split("/").filter(Boolean);
   if (parts.length === 0) return projectPath;
   return parts[parts.length - 1];
+}
+
+function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose?: () => void }) {
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounter = useRef(0);
+  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
+  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.types.includes("Files")) setIsDragOver(true);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setIsDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
+    if (files.length === 0) {
+      if (e.dataTransfer.files.length > 0) toast.error("Only image files are supported");
+      return;
+    }
+    try {
+      const storageIds: Id<"_storage">[] = [];
+      for (const file of files) {
+        const uploadUrl = await generateUploadUrl({});
+        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+        const { storageId } = await result.json();
+        storageIds.push(storageId);
+      }
+      await sendMessage({ conversation_id: conv._id, content: "[image]", image_storage_ids: storageIds });
+      toast.success(`Attached ${files.length} image${files.length > 1 ? "s" : ""} to "${cleanTitle(conv.title || "Untitled")}"`);
+    } catch {
+      toast.error("Failed to attach files");
+    }
+  }, [conv._id, conv.title, generateUploadUrl, sendMessage]);
+
+  return (
+    <Link
+      href={`/conversation/${conv._id}`}
+      onClick={onMobileClose}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 ${isDragOver ? "ring-1 ring-sol-cyan bg-sol-cyan/10" : ""}`}
+    >
+      {conv.is_active ? (
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+      ) : conv.is_favorite ? (
+        <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+        </svg>
+      ) : (
+        <span className="w-3 h-3 flex-shrink-0" />
+      )}
+      <span className="truncate flex-1 leading-tight">{cleanTitle(conv.title || "Untitled")}</span>
+      {conv.worktree_name && (
+        <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px] flex-shrink-0" title={conv.worktree_branch || conv.worktree_name}>
+          {conv.worktree_name}
+        </span>
+      )}
+      <span className="text-[10px] text-sol-text-dim flex-shrink-0 tabular-nums">{conv.message_count}</span>
+    </Link>
+  );
 }
 
 const INITIAL_SESSION_LIMIT = 30;
@@ -92,24 +173,7 @@ function RecentSessions({
               <div className="text-[10px] font-medium text-sol-text-dim px-3 py-0.5">{group}</div>
               <div className="space-y-0.5">
                 {visible.map((conv: any) => (
-                  <Link
-                    key={conv._id}
-                    href={`/conversation/${conv._id}`}
-                    onClick={onMobileClose}
-                    className="flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
-                  >
-                    {conv.is_active ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
-                    ) : conv.is_favorite ? (
-                      <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                      </svg>
-                    ) : (
-                      <span className="w-3 h-3 flex-shrink-0" />
-                    )}
-                    <span className="truncate flex-1 leading-tight">{cleanTitle(conv.title || "Untitled")}</span>
-                    <span className="text-[10px] text-sol-text-dim flex-shrink-0 tabular-nums">{conv.message_count}</span>
-                  </Link>
+                  <DroppableSessionRow key={conv._id} conv={conv} onMobileClose={onMobileClose} />
                 ))}
               </div>
             </div>

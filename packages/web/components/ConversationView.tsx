@@ -3366,7 +3366,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
           ) : displayContent;
         })()}
         {!effectivelyCollapsed && !contentExpanded && isOverflowing && (
-          <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
+          <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[color-mix(in_srgb,var(--sol-blue)_10%,var(--sol-bg))]" />
         )}
       </div> : null}
       {!effectivelyCollapsed && images && images.length > 0 && (
@@ -4704,7 +4704,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null> }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -5028,6 +5028,15 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       setPastedImages(prev => prev.filter(img => img.previewUrl !== previewUrl));
     }
   }, [generateUploadUrl, updateDraft, message]);
+
+  useEffect(() => {
+    if (onDropFiles) {
+      onDropFiles.current = (files: File[]) => {
+        files.forEach(f => { if (f.type.startsWith("image/")) uploadImage(f); });
+      };
+      return () => { if (onDropFiles) onDropFiles.current = null; };
+    }
+  }, [onDropFiles, uploadImage]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
@@ -5901,6 +5910,41 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const populateInputRef = useRef<((text: string) => void) | null>(null);
+  const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.types.includes("Files")) setIsDragging(true);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
+    if (files.length > 0 && dropFilesRef.current) {
+      dropFilesRef.current(files);
+    } else if (files.length === 0 && e.dataTransfer.files.length > 0) {
+      toast.error("Only image files are supported");
+    }
+  }, []);
 
   const navigatorUserMessages = useQuery(
     api.conversations.getUserMessages,
@@ -7396,12 +7440,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   return (
     <ImageGalleryProvider>
-    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`}>
+    <main className={`relative flex flex-col bg-sol-bg ${embedded ? "h-full" : "h-screen"}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      {isDragging && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
+          <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
+            <svg className="w-10 h-10 mx-auto mb-3 text-sol-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+            <p className="text-sol-cyan text-sm font-medium">Drop images to attach</p>
+          </div>
+        </div>
+      )}
       <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass} ${isImageLightboxActive ? "invisible" : ""}`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && useInboxStore.getState().clientState.ui?.zen_mode && (
           <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
-        <div className="max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 py-0.5 sm:py-1">
+        <div className="max-w-4xl mx-auto px-4 sm:px-5 md:px-6 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
             <Link
               href={backHref}
@@ -7940,7 +7992,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`max-w-4xl mx-auto px-1.5 sm:px-3 md:px-4 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`max-w-4xl mx-auto px-4 sm:px-5 md:px-6 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {content}
                       {virtualItem.index === timeline.length - 1 && !hasMoreBelow && (now - lastActivityAt) > 5 * 60 * 1000 && (
                         <div className="flex items-center gap-3 mt-5 mb-1">
@@ -8032,7 +8084,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <AgentSwitcher conversation={conversation} />
             </div>
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}
