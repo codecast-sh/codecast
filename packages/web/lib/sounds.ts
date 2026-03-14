@@ -1,4 +1,10 @@
+import { useInboxStore } from "../store/inboxStore";
+
 let ctx: AudioContext | null = null;
+
+function isEnabled(): boolean {
+  return useInboxStore.getState().clientState?.ui?.sounds_enabled !== false;
+}
 
 function getCtx(): AudioContext {
   if (!ctx) ctx = new AudioContext();
@@ -33,6 +39,7 @@ function play(
 }
 
 export function soundNewSession() {
+  if (!isEnabled()) return;
   play([
     { freq: 392, start: 0, dur: 0.2, gain: 0.5, type: "sine" },
     { freq: 523.25, start: 0.12, dur: 0.25, gain: 0.35, type: "sine" },
@@ -40,15 +47,50 @@ export function soundNewSession() {
 }
 
 export function soundIdle() {
+  if (!isEnabled()) return;
   play([
-    { freq: 440, start: 0, dur: 0.3, gain: 0.6, type: "sine" },
-    { freq: 349.23, start: 0.15, dur: 0.35, gain: 0.4, type: "sine" },
-  ], 0.07);
+    { freq: 392, start: 0, dur: 0.25, gain: 0.4, type: "sine" },
+    { freq: 494, start: 0.15, dur: 0.3, gain: 0.3, type: "sine" },
+  ], 0.05);
 }
 
 export function soundDismiss() {
+  if (!isEnabled()) return;
+  try {
+    const ac = getCtx();
+    const master = ac.createGain();
+    master.gain.value = 0.08;
+    master.connect(ac.destination);
+
+    const bufferSize = ac.sampleRate * 0.3;
+    const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ac.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ac.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.Q.value = 2;
+    filter.frequency.setValueAtTime(3000, ac.currentTime);
+    filter.frequency.exponentialRampToValueAtTime(300, ac.currentTime + 0.2);
+
+    const env = ac.createGain();
+    env.gain.setValueAtTime(0, ac.currentTime);
+    env.gain.linearRampToValueAtTime(0.6, ac.currentTime + 0.03);
+    env.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.22);
+
+    noise.connect(filter);
+    filter.connect(env);
+    env.connect(master);
+    noise.start(ac.currentTime);
+    noise.stop(ac.currentTime + 0.25);
+  } catch {}
+}
+
+export function soundSend() {
+  if (!isEnabled()) return;
   play([
-    { freq: 600, start: 0, dur: 0.12, gain: 0.7, type: "sine" },
-    { freq: 440, start: 0.06, dur: 0.18, gain: 0.5, type: "sine" },
-  ], 0.06);
+    { freq: 880, start: 0, dur: 0.06, gain: 0.25, type: "sine" },
+  ], 0.03);
 }

@@ -8,6 +8,8 @@ import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
 import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
+import { Switch } from "../../../components/ui/switch";
+import { useInboxStore } from "../../../store/inboxStore";
 
 export default function ProfilePage() {
   const user = useQuery(api.users.getCurrentUser);
@@ -168,6 +170,19 @@ export default function ProfilePage() {
       </Card>
 
       <Card className="p-6 bg-sol-bg border-sol-border">
+        <h2 className="text-lg font-semibold text-sol-text mb-4">Preferences</h2>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-sol-base1">Sound effects</span>
+              <p className="text-xs text-sol-base01 mt-0.5">Play subtle sounds for session events</p>
+            </div>
+            <SoundsToggle />
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-6 bg-sol-bg border-sol-border">
         <h2 className="text-lg font-semibold text-sol-text mb-4">Daemon</h2>
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -187,5 +202,16 @@ export default function ProfilePage() {
         </div>
       </Card>
     </div>
+  );
+}
+
+function SoundsToggle() {
+  const soundsEnabled = useInboxStore((s) => s.clientState?.ui?.sounds_enabled !== false);
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  return (
+    <Switch
+      checked={soundsEnabled}
+      onCheckedChange={(v) => updateUI({ sounds_enabled: v })}
+    />
   );
 }
