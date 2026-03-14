@@ -353,6 +353,14 @@ export const createConversation = mutation({
     git_diff_staged: v.optional(v.string()),
     git_root: v.optional(v.string()),
     cli_flags: v.optional(v.string()),
+    worktree_name: v.optional(v.string()),
+    worktree_branch: v.optional(v.string()),
+    worktree_path: v.optional(v.string()),
+    worktree_status: v.optional(v.union(
+      v.literal("active"),
+      v.literal("merged"),
+      v.literal("archived")
+    )),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -448,6 +456,10 @@ export const createConversation = mutation({
       git_diff_staged: args.git_diff_staged,
       git_root: args.git_root,
       cli_flags: args.cli_flags,
+      worktree_name: args.worktree_name,
+      worktree_branch: args.worktree_branch,
+      worktree_path: args.worktree_path,
+      worktree_status: args.worktree_status,
     });
     // Set short_id for O(1) lookup by truncated ID
     await ctx.db.patch(conversationId, {
@@ -1685,6 +1697,8 @@ export const listConversations = query({
             project_path: c.project_path || null,
             git_root: c.git_root || null,
             active_plan_id: c.active_plan_id || null,
+            worktree_name: c.worktree_name || null,
+            worktree_branch: c.worktree_branch || null,
           };
         }
 
@@ -1708,6 +1722,8 @@ export const listConversations = query({
             tool_names: [],
             subagent_types: [],
             active_plan_id: c.active_plan_id || null,
+            worktree_name: c.worktree_name || null,
+            worktree_branch: c.worktree_branch || null,
           };
         }
 
@@ -1753,6 +1769,8 @@ export const listConversations = query({
             team_visibility: c.team_visibility || null,
             auto_shared: c.auto_shared || false,
             active_plan_id: c.active_plan_id || null,
+            worktree_name: c.worktree_name || null,
+            worktree_branch: c.worktree_branch || null,
           };
         }
 
@@ -1890,6 +1908,8 @@ export const listConversations = query({
           team_visibility: c.team_visibility || null,
           auto_shared: c.auto_shared || false,
           active_plan_id: c.active_plan_id || null,
+          worktree_name: c.worktree_name || null,
+          worktree_branch: c.worktree_branch || null,
         };
       })
     );
@@ -5342,6 +5362,8 @@ export const listIdleSessions = query({
         implementation_session: implementationSession,
         active_plan,
         active_task,
+        worktree_name: conv.worktree_name,
+        worktree_branch: conv.worktree_branch,
       });
     }
 
@@ -5789,6 +5811,8 @@ export const listDismissedSessions = query({
         is_idle: true,
         has_pending: false,
         implementation_session: implementationSession,
+        worktree_name: conv.worktree_name,
+        worktree_branch: conv.worktree_branch,
       });
     }
 

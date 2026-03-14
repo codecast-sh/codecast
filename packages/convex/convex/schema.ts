@@ -187,6 +187,14 @@ export default defineSchema({
     session_error: v.optional(v.string()),
     active_plan_id: v.optional(v.id("plans")),
     active_task_id: v.optional(v.id("tasks")),
+    worktree_name: v.optional(v.string()),
+    worktree_branch: v.optional(v.string()),
+    worktree_path: v.optional(v.string()),
+    worktree_status: v.optional(v.union(
+      v.literal("active"),
+      v.literal("merged"),
+      v.literal("archived")
+    )),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -838,6 +846,7 @@ export default defineSchema({
       v.literal("agent"),
       v.literal("insight"),
       v.literal("promoted"),
+      v.literal("plan_mode"),
     ),
     owner_id: v.optional(v.id("users")),
     task_ids: v.optional(v.array(v.id("tasks"))),
@@ -935,7 +944,8 @@ export default defineSchema({
       v.literal("human"),
       v.literal("agent"),
       v.literal("insight"),
-      v.literal("import")
+      v.literal("import"),
+      v.literal("plan_mode"),
     ),
     confidence: v.optional(v.number()),
     promoted: v.optional(v.boolean()),
