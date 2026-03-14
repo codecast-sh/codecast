@@ -91,11 +91,12 @@ export const create = mutation({
     });
 
     // Auto-create plan entity for plan_mode docs
+    let plan_short_id: string | undefined;
     if (args.source === "plan_mode") {
-      await syncDocToPlanEntity(ctx, id, args.content, auth.userId, team_id, args.project_id as any, conversation_id);
+      plan_short_id = await syncDocToPlanEntity(ctx, id, args.content, auth.userId, team_id, args.project_id as any, conversation_id);
     }
 
-    return { id, updated: false };
+    return { id, updated: false, plan_short_id };
   },
 });
 
@@ -107,10 +108,10 @@ async function syncDocToPlanEntity(
   teamId: any,
   projectId: any,
   conversationId: any,
-) {
+): Promise<string | undefined> {
   const now = Date.now();
   const { title, goal } = extractPlanInfo(content);
-  if (!title) return;
+  if (!title) return undefined;
 
   const doc = await ctx.db.get(docId);
   if (doc?.plan_id) {
@@ -126,7 +127,7 @@ async function syncDocToPlanEntity(
           await ctx.db.patch(conversationId, { active_plan_id: plan._id });
         }
       }
-      return;
+      return plan.short_id;
     }
   }
 
@@ -146,18 +147,19 @@ async function syncDocToPlanEntity(
         await ctx.db.patch(conversationId, { active_plan_id: existingPlan._id });
       }
     }
-    return;
+    return existingPlan.short_id;
   }
 
+  const short_id = generatePlanShortId();
   const planId = await ctx.db.insert("plans", {
     user_id: userId,
     team_id: teamId || undefined,
     project_id: projectId || undefined,
-    short_id: generatePlanShortId(),
+    short_id,
     title,
     goal,
     status: "active" as const,
-    source: "promoted" as const,
+    source: "plan_mode" as const,
     doc_id: docId,
     session_ids: conversationId ? [conversationId] : [],
     created_from_conversation_id: conversationId || undefined,
@@ -171,6 +173,7 @@ async function syncDocToPlanEntity(
       await ctx.db.patch(conversationId, { active_plan_id: planId });
     }
   }
+  return short_id;
 }
 
 export const list = query({
