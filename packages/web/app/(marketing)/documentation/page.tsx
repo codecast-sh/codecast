@@ -99,6 +99,26 @@ function CmdTable({ children }: { children: React.ReactNode }) {
   return <div className="my-4">{children}</div>;
 }
 
+function Screenshot({ src, alt, caption }: { src: string; alt: string; caption?: string }) {
+  return (
+    <figure className="my-8">
+      <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${SOL.base2}`, boxShadow: `0 4px 24px ${SOL.base01}18` }}>
+        <div className="flex items-center gap-1.5 px-4 py-2.5" style={{ backgroundColor: SOL.base2 }}>
+          <div className="w-3 h-3 rounded-full" style={{ backgroundColor: `${SOL.red}90` }} />
+          <div className="w-3 h-3 rounded-full" style={{ backgroundColor: `${SOL.yellow}90` }} />
+          <div className="w-3 h-3 rounded-full" style={{ backgroundColor: `${SOL.green}90` }} />
+          <span className="ml-2 text-xs font-mono" style={{ color: SOL.base01 }}>codecast.sh</span>
+        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt={alt} className="w-full block" style={{ backgroundColor: SOL.base03 }} />
+      </div>
+      {caption && (
+        <figcaption className="mt-3 text-center text-sm font-mono" style={{ color: SOL.base01 }}>{caption}</figcaption>
+      )}
+    </figure>
+  );
+}
+
 function Callout({ type, children }: { type: "info" | "tip" | "warn"; children: React.ReactNode }) {
   const colors = {
     info: { bg: `${SOL.blue}10`, border: SOL.blue, label: "Note" },
@@ -619,6 +639,12 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             plans, and team activity. Also available as a macOS desktop app and iOS app.
           </p>
 
+          <Screenshot
+            src="/docs/dashboard.png"
+            alt="Codecast dashboard showing the session feed with live agent status, sidebar navigation, team members, and project bookmarks"
+            caption="The dashboard feed -- all your sessions with live status, summaries, and team activity"
+          />
+
           <Heading id="inbox" level={3}>Inbox</Heading>
           <p className="mb-2" style={{ color: SOL.base00 }}>
             The inbox shows all your running and recent sessions with live status updates.
@@ -630,12 +656,24 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             any conversation. This is the primary interface for orchestrating multiple agents in parallel.
           </p>
 
+          <Screenshot
+            src="/docs/inbox.png"
+            alt="Codecast inbox showing live agent sessions with status indicators, pinned sessions, and working/needs-input categories"
+            caption="The inbox -- orchestrate multiple agents with live status, summaries, and direct messaging"
+          />
+
           <Heading id="conversations" level={3}>Conversations</Heading>
           <p style={{ color: SOL.base00 }}>
             The conversation view shows the full message history with syntax-highlighted code blocks,
             inline tool calls (Read, Edit, Bash, etc.), file diffs, and screenshots. You can share
             specific messages via link, bookmark important moments, and view the session timeline.
           </p>
+
+          <Screenshot
+            src="/docs/conversation.png"
+            alt="Codecast conversation view showing message history with code blocks, tool calls, and file diffs"
+            caption="Conversation view -- full session history with syntax highlighting, tool calls, and inline diffs"
+          />
 
           <Heading id="dashboard-plans" level={3}>Plans & Tasks</Heading>
           <p style={{ color: SOL.base00 }}>
@@ -644,6 +682,12 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             decision log, discoveries, and context pointers. Tasks are visible within their
             parent plan or as a standalone list with priority and status filtering.
           </p>
+
+          <Screenshot
+            src="/docs/plans.png"
+            alt="Codecast plans page showing active plans with status badges, task counts, and plan IDs"
+            caption="Plans view -- track multi-session features with goals, tasks, and decision history"
+          />
 
           {/* Teams */}
           <Heading id="teams" level={2}>Teams</Heading>
