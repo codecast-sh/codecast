@@ -65,6 +65,9 @@ export interface GitInfo {
   diff?: string;
   diffStaged?: string;
   root?: string;
+  worktreeName?: string;
+  worktreeBranch?: string;
+  worktreePath?: string;
 }
 
 export interface CreateConversationParams {
@@ -181,6 +184,10 @@ export class SyncService {
           git_diff_staged: gitInfo?.diffStaged,
           git_root: gitInfo?.root,
           cli_flags: params.cliFlags,
+          worktree_name: gitInfo?.worktreeName,
+          worktree_branch: gitInfo?.worktreeBranch,
+          worktree_path: gitInfo?.worktreePath,
+          worktree_status: gitInfo?.worktreeName ? "active" : undefined,
           api_token: this.apiToken,
         }
       );
@@ -221,6 +228,84 @@ export class SyncService {
           parent_conversation_id: parentConversationId,
           child_conversation_id: childConversationId,
           api_token: this.apiToken,
+        }
+      );
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
+  async syncPlanFromPlanMode(params: {
+    sessionId: string;
+    planContent: string;
+    projectPath?: string;
+  }): Promise<string | null> {
+    await this.throttle();
+    try {
+      const result = await this.client.mutation(
+        "docs:create" as any,
+        {
+          api_token: this.apiToken,
+          title: "",
+          content: params.planContent,
+          source: "plan_mode",
+          conversation_id: params.sessionId,
+          project_path: params.projectPath,
+        }
+      );
+      return result?.plan_short_id || null;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
+  async syncTaskFromPlanMode(params: {
+    sessionId: string;
+    title: string;
+    description?: string;
+    planShortId?: string;
+  }): Promise<string | null> {
+    await this.throttle();
+    try {
+      const result = await this.client.mutation(
+        "tasks:create" as any,
+        {
+          api_token: this.apiToken,
+          title: params.title,
+          description: params.description,
+          task_type: "task",
+          status: "open",
+          priority: "medium",
+          source: "plan_mode",
+          conversation_id: params.sessionId,
+          plan_id: params.planShortId,
+        }
+      );
+      return result?.short_id || null;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
+  async updateTaskStatus(shortId: string, status: string, sessionId?: string): Promise<void> {
+    await this.throttle();
+    try {
+      await this.client.mutation(
+        "tasks:update" as any,
+        {
+          api_token: this.apiToken,
+          short_id: shortId,
+          status,
+          conversation_id: sessionId,
         }
       );
     } catch (error) {

@@ -768,11 +768,34 @@ async function executeRemoteCommand(
           rawAgentType === "codex" || rawAgentType === "gemini" ? rawAgentType : "claude";
         const rawPath: string = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId: string | undefined = parsed.conversation_id;
+        const isolated: boolean = parsed.isolated === true;
+        const worktreeName: string | undefined = parsed.worktree_name;
 
         const shortId = Math.random().toString(36).slice(2, 8);
         const tmuxSession = `cc-${agentType}-${shortId}`;
 
-        const cwd = validatePath(rawPath) || validatePath(process.env.HOME || "/tmp") || "/tmp";
+        let cwd = validatePath(rawPath) || validatePath(process.env.HOME || "/tmp") || "/tmp";
+        let worktreeResult: WorktreeResult | null = null;
+
+        if (isolated && cwd) {
+          const gitRoot = (() => {
+            try {
+              return execSync("git rev-parse --show-toplevel", {
+                cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"],
+              }).trim();
+            } catch { return null; }
+          })();
+          if (gitRoot) {
+            const wtName = worktreeName || `session-${shortId}`;
+            worktreeResult = createWorktree(gitRoot, wtName);
+            if (worktreeResult) {
+              cwd = worktreeResult.worktreePath;
+              log(`[WORKTREE] Created isolated worktree: ${worktreeResult.worktreeName} at ${cwd}`);
+            } else {
+              log(`[WORKTREE] Failed to create worktree, falling back to repo root`);
+            }
+          }
+        }
 
         let binary: string;
         let binaryArgs: string[] = [];
@@ -811,7 +834,10 @@ async function executeRemoteCommand(
         }
 
         binaryArgs = sanitizeBinaryArgs(binaryArgs);
-        const cmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${[binary, ...binaryArgs].join(" ")}`;
+        const envPrefix = worktreeResult
+          ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}`
+          : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
+        const cmdText = `${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
 
         if (!hasTmux()) {
           error = "tmux is not installed";
@@ -822,7 +848,14 @@ async function executeRemoteCommand(
           tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
-          result = JSON.stringify({ tmux_session: tmuxSession, agent_type: agentType, project_path: cwd });
+          const resultObj: Record<string, any> = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
+          if (worktreeResult) {
+            resultObj.worktree_name = worktreeResult.worktreeName;
+            resultObj.worktree_branch = worktreeResult.worktreeBranch;
+            resultObj.worktree_path = worktreeResult.worktreePath;
+            resultObj.port_index = worktreeResult.portIndex;
+          }
+          result = JSON.stringify(resultObj);
           log(`[REMOTE] Started ${agentType} session in tmux: ${tmuxSession} (cwd: ${cwd})`);
           if (conversationId) {
             startedSessionTmux.set(conversationId, {
@@ -830,6 +863,9 @@ async function executeRemoteCommand(
               projectPath: cwd,
               startedAt: Date.now(),
               agentType,
+              worktreeName: worktreeResult?.worktreeName,
+              worktreeBranch: worktreeResult?.worktreeBranch,
+              worktreePath: worktreeResult?.worktreePath,
             });
             log(`[REMOTE] Registered started session tmux for conversation ${conversationId.slice(0, 12)}`);
             if (agentType === "claude") {
@@ -1109,6 +1145,8 @@ async function executeRemoteCommand(
           if (hbInterval) { clearInterval(hbInterval); resumeHeartbeatIntervals.delete(sessionId); }
           stopCodexPermissionPoller(sessionId);
           sessionProcessCache.delete(sessionId);
+          resumeInFlight.delete(sessionId);
+          resumeInFlightStarted.delete(sessionId);
 
           const shortId = sessionId.slice(0, 8);
           try {
@@ -1396,6 +1434,9 @@ interface GitInfo {
   diff?: string;
   diffStaged?: string;
   root?: string;
+  worktreeName?: string;
+  worktreeBranch?: string;
+  worktreePath?: string;
 }
 
 function isPathExcluded(projectPath: string, excludedPaths?: string): boolean {
@@ -1459,6 +1500,9 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
   const diffStaged = execGit("diff --cached");
   const root = execGit("rev-parse --show-toplevel");
 
+  const worktreeMatch = projectPath.match(/\.codecast\/worktrees\/([^/]+)/);
+  const worktreeName = worktreeMatch ? worktreeMatch[1] : undefined;
+
   return {
     commitHash,
     branch,
@@ -1467,7 +1511,97 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
     diff: diff ? diff.slice(0, 100000) : undefined,
     diffStaged: diffStaged ? diffStaged.slice(0, 100000) : undefined,
     root,
+    worktreeName,
+    worktreeBranch: worktreeName ? branch : undefined,
+    worktreePath: worktreeName ? projectPath : undefined,
   };
+}
+
+const CODECAST_WORKTREE_DIR = ".codecast/worktrees";
+
+interface WorktreeResult {
+  worktreePath: string;
+  worktreeName: string;
+  worktreeBranch: string;
+  portIndex: number;
+}
+
+function createWorktree(repoRoot: string, name: string): WorktreeResult | null {
+  const worktreeDir = path.join(repoRoot, CODECAST_WORKTREE_DIR);
+  const worktreePath = path.join(worktreeDir, name);
+  const branchName = `codecast/${name}`;
+
+  if (fs.existsSync(worktreePath)) {
+    const existingBranch = (() => {
+      try {
+        return execSync(`git rev-parse --abbrev-ref HEAD`, {
+          cwd: worktreePath, encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"],
+        }).trim();
+      } catch { return branchName; }
+    })();
+    return {
+      worktreePath,
+      worktreeName: name,
+      worktreeBranch: existingBranch,
+      portIndex: assignPortIndex(repoRoot),
+    };
+  }
+
+  try {
+    fs.mkdirSync(worktreeDir, { recursive: true });
+    execSync(`git worktree add -b ${branchName} ${worktreePath}`, {
+      cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (err) {
+    try {
+      execSync(`git worktree add ${worktreePath} ${branchName}`, {
+        cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch {
+      log(`[WORKTREE] Failed to create worktree: ${err}`);
+      return null;
+    }
+  }
+
+  copySetupFiles(repoRoot, worktreePath);
+
+  return {
+    worktreePath,
+    worktreeName: name,
+    worktreeBranch: branchName,
+    portIndex: assignPortIndex(repoRoot),
+  };
+}
+
+function assignPortIndex(repoRoot: string): number {
+  const worktreeDir = path.join(repoRoot, CODECAST_WORKTREE_DIR);
+  if (!fs.existsSync(worktreeDir)) return 0;
+  const existing = fs.readdirSync(worktreeDir).filter(f => {
+    try { return fs.statSync(path.join(worktreeDir, f)).isDirectory(); } catch { return false; }
+  });
+  return Math.min(existing.length - 1, 9);
+}
+
+function copySetupFiles(mainRoot: string, worktreePath: string): void {
+  const configFile = path.join(mainRoot, ".wt-setup-files");
+  const patterns = fs.existsSync(configFile)
+    ? fs.readFileSync(configFile, "utf-8").split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"))
+    : [".env", ".env.local"];
+
+  for (const pattern of patterns) {
+    const src = path.join(mainRoot, pattern);
+    const dest = path.join(worktreePath, pattern);
+    if (!fs.existsSync(src) || fs.existsSync(dest)) continue;
+    try {
+      const destDir = path.dirname(dest);
+      fs.mkdirSync(destDir, { recursive: true });
+      if (fs.statSync(src).isDirectory()) {
+        execSync(`cp -r ${JSON.stringify(src)} ${JSON.stringify(dest)}`, { stdio: "ignore" });
+      } else {
+        fs.copyFileSync(src, dest);
+      }
+    } catch {}
+  }
 }
 
 function decodeProjectDirName(dirName: string): string {
@@ -1755,6 +1889,75 @@ async function processSessionFile(
         }
       }
     }
+
+      // Detect plan mode tool calls (ExitPlanMode, TaskCreate, TaskUpdate) and sync to Convex
+      if (conversationId) {
+        const lines = newContent.split("\n");
+        for (const line of lines) {
+          if (!line.includes("ExitPlanMode") && !line.includes("TaskCreate") && !line.includes("TaskUpdate")) continue;
+          try {
+            const entry = JSON.parse(line);
+            const msg = entry.message || entry;
+            const blocks = Array.isArray(msg.content) ? msg.content : [];
+            for (const block of blocks) {
+              if (block.type !== "tool_use") continue;
+
+              if (block.name === "ExitPlanMode" && block.input?.plan && !planModeSynced.has(sessionId)) {
+                planModeSynced.add(sessionId);
+                const dirName = path.basename(path.dirname(filePath));
+                const projPath = dirName ? decodeProjectDirName(dirName) : undefined;
+                try {
+                  const planShortId = await syncService.syncPlanFromPlanMode({
+                    sessionId,
+                    planContent: block.input.plan,
+                    projectPath: projPath,
+                  });
+                  if (planShortId) {
+                    planModePlanMap.set(sessionId, planShortId);
+                  }
+                  log(`Synced plan_mode plan ${planShortId} for session ${sessionId.slice(0, 8)} (${block.input.plan.length} chars)`);
+                } catch (err) {
+                  log(`Failed to sync plan_mode: ${err instanceof Error ? err.message : String(err)}`);
+                }
+              }
+
+              if (block.name === "TaskCreate" && block.input?.subject) {
+                const taskMap = planModeTaskMap.get(sessionId) || new Map();
+                const localId = String(taskMap.size + 1);
+                try {
+                  const shortId = await syncService.syncTaskFromPlanMode({
+                    sessionId,
+                    title: block.input.subject,
+                    description: block.input.description,
+                    planShortId: planModePlanMap.get(sessionId),
+                  });
+                  if (shortId) {
+                    taskMap.set(localId, shortId);
+                    planModeTaskMap.set(sessionId, taskMap);
+                    log(`Synced task ${shortId} from TaskCreate in session ${sessionId.slice(0, 8)}: ${block.input.subject}`);
+                  }
+                } catch (err) {
+                  log(`Failed to sync TaskCreate: ${err instanceof Error ? err.message : String(err)}`);
+                }
+              }
+
+              if (block.name === "TaskUpdate" && block.input?.taskId && block.input?.status) {
+                const taskMap = planModeTaskMap.get(sessionId);
+                const shortId = taskMap?.get(String(block.input.taskId));
+                if (shortId) {
+                  const status = block.input.status === "completed" ? "done" : block.input.status === "in_progress" ? "in_progress" : block.input.status;
+                  try {
+                    await syncService.updateTaskStatus(shortId, status, sessionId);
+                    log(`Updated task ${shortId} -> ${status} in session ${sessionId.slice(0, 8)}`);
+                  } catch (err) {
+                    log(`Failed to sync TaskUpdate: ${err instanceof Error ? err.message : String(err)}`);
+                  }
+                }
+              }
+            }
+          } catch {}
+        }
+      }
 
   if (messages.length === 0) {
     setPosition(filePath, stats.size);
@@ -3976,6 +4179,9 @@ type StartedSessionInfo = {
   projectPath: string;
   startedAt: number;
   agentType: "claude" | "codex" | "gemini";
+  worktreeName?: string;
+  worktreeBranch?: string;
+  worktreePath?: string;
 };
 
 const startedSessionTmux = new Map<string, StartedSessionInfo>();
@@ -3985,6 +4191,8 @@ const RESTART_GUARD_TTL_MS = 60_000;
 
 // Prevent concurrent resume attempts on the same session
 const resumeInFlight = new Map<string, Promise<boolean>>();
+const resumeInFlightStarted = new Map<string, number>();
+const RESUME_IN_FLIGHT_TIMEOUT_MS = 120_000;
 
 const UUID_JSONL_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
 
@@ -4039,6 +4247,9 @@ async function discoverAndLinkSession(
 
 const planHandoffChildren = new Map<string, string>();
 const planHandoffChecked = new Set<string>();
+const planModeSynced = new Set<string>();
+const planModePlanMap = new Map<string, string>(); // sessionId -> plan short_id
+const planModeTaskMap = new Map<string, Map<string, string>>(); // sessionId -> (localTaskId -> shortId)
 
 // Track subagent sessions whose parent hasn't been cached yet: childSessionId -> parentSessionId
 const pendingSubagentParents = new Map<string, string>();
@@ -4111,24 +4322,46 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   // Deduplicate concurrent resume attempts on the same session
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
-    logDelivery(`Resume already in flight for ${sessionId.slice(0, 8)}, waiting...`);
-    const result = await existing;
-    // If the existing resume succeeded and we have content to inject, inject it now
-    if (result && content) {
-      const tmuxSession = resumeSessionCache.get(sessionId);
-      if (tmuxSession) {
-        await injectViaTmux(tmuxSession + ":0.0", content);
-        log(`Injected message to already-resumed session ${sessionId.slice(0, 8)}`);
+    const startedAt = resumeInFlightStarted.get(sessionId) ?? 0;
+    const age = Date.now() - startedAt;
+    if (age > RESUME_IN_FLIGHT_TIMEOUT_MS) {
+      logDelivery(`Resume in-flight for ${sessionId.slice(0, 8)} is stale (${Math.round(age / 1000)}s), clearing and retrying`);
+      resumeInFlight.delete(sessionId);
+      resumeInFlightStarted.delete(sessionId);
+    } else {
+      logDelivery(`Resume already in flight for ${sessionId.slice(0, 8)}, waiting (age=${Math.round(age / 1000)}s)...`);
+      try {
+        const result = await Promise.race([
+          existing,
+          new Promise<boolean>((_, reject) => setTimeout(() => reject(new Error("resume_timeout")), RESUME_IN_FLIGHT_TIMEOUT_MS - age)),
+        ]);
+        if (result && content) {
+          const tmuxSession = resumeSessionCache.get(sessionId);
+          if (tmuxSession) {
+            await injectViaTmux(tmuxSession + ":0.0", content);
+            log(`Injected message to already-resumed session ${sessionId.slice(0, 8)}`);
+          }
+        }
+        return result;
+      } catch (err) {
+        if (err instanceof Error && err.message === "resume_timeout") {
+          logDelivery(`Resume in-flight timed out for ${sessionId.slice(0, 8)}, clearing and retrying`);
+          resumeInFlight.delete(sessionId);
+          resumeInFlightStarted.delete(sessionId);
+        } else {
+          throw err;
+        }
       }
     }
-    return result;
   }
   const promise = autoResumeSessionInner(sessionId, content, titleCache, nonInteractive, cwdOverride, conversationId);
   resumeInFlight.set(sessionId, promise);
+  resumeInFlightStarted.set(sessionId, Date.now());
   try {
     return await promise;
   } finally {
     resumeInFlight.delete(sessionId);
+    resumeInFlightStarted.delete(sessionId);
   }
 }
 
@@ -4828,30 +5061,41 @@ async function deliverMessage(
       // Try tmux first (most reliable)
       const tmuxTarget = await findTmuxPaneForTty(proc.tty);
       logDelivery(`tmux pane for tty=${proc.tty}: ${tmuxTarget ?? "not found"}`);
+      let agentDetectedDead = false;
       if (tmuxTarget) {
         try {
           await injectViaTmux(tmuxTarget, content);
-          await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-          logDelivery(`Delivered via tmux ${tmuxTarget}`);
-          if (content.trimStart().startsWith("/")) {
-            checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService).catch(() => {});
+          const tmuxSessionName = tmuxTarget.split(":")[0];
+          const agentAlive = await isTmuxAgentAlive(tmuxSessionName);
+          if (!agentAlive) {
+            logDelivery(`Agent in ${tmuxTarget} is dead after injection, falling through to auto-resume`);
+            sessionProcessCache.delete(sessionId);
+            agentDetectedDead = true;
+          } else {
+            await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+            logDelivery(`Delivered via tmux ${tmuxTarget}`);
+            if (content.trimStart().startsWith("/")) {
+              checkForInteractivePrompt(tmuxTarget, sessionId, conversationId, syncService).catch(() => {});
+            }
+            return true;
           }
-          return true;
         } catch (err) {
           logDelivery(`tmux injection failed for ${tmuxTarget}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
-      // Try AppleScript injection (iTerm2 or Terminal.app)
-      const termLabel = proc.termProgram === "Apple_Terminal" ? "Terminal.app" : "iTerm2";
-      logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
-      try {
-        await injectViaTerminal(proc.tty, content, proc.termProgram);
-        await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-        logDelivery(`Delivered via ${termLabel} tty=${proc.tty}`);
-        return true;
-      } catch (err) {
-        logDelivery(`${termLabel} injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+      if (!agentDetectedDead) {
+        // Try AppleScript injection (iTerm2 or Terminal.app)
+        const termLabel = proc.termProgram === "Apple_Terminal" ? "Terminal.app" : "iTerm2";
+        logDelivery(`Trying ${termLabel} injection for tty=${proc.tty}`);
+        try {
+          await injectViaTerminal(proc.tty, content, proc.termProgram);
+          await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
+          logDelivery(`Delivered via ${termLabel} tty=${proc.tty}`);
+          return true;
+        } catch (err) {
+          logDelivery(`${termLabel} injection failed for ${proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
 
       logDelivery(`All injection methods failed for live process pid=${proc.pid}, falling back to auto-resume`);
