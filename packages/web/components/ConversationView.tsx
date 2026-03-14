@@ -36,7 +36,8 @@ import {
 } from "./ui/dropdown-menu";
 import { TooltipProvider } from "./ui/tooltip";
 import { useMutation, useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
+const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { CommentPanel } from "./CommentPanel";
 import { PermissionStack } from "./PermissionCard";
@@ -5608,6 +5609,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const sendInlineMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
   const restartSession = useMutation(api.conversations.restartSession);
+  const promoteToPlan = useMutation(api.plans.webPromoteSession);
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
@@ -7449,7 +7451,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} className={`border-b border-sol-border bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass} ${isImageLightboxActive ? "invisible" : ""}`}>
+      <header ref={headerRef} className={`border-b border-sol-yellow/40 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass} ${isImageLightboxActive ? "invisible" : ""}`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && useInboxStore.getState().clientState.ui?.zen_mode && (
           <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
@@ -7705,6 +7707,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
                         </svg>
                         {conversation.is_favorite ? "Remove from favorites" : "Add to favorites"}
+                      </DropdownMenuItem>
+                    )}
+                    {isOwner && !(conversation as any).active_plan_id && (
+                      <DropdownMenuItem onSelect={() => {
+                        setTimeout(async () => {
+                          try {
+                            const result = await promoteToPlan({ conversation_id: conversation._id });
+                            if (result.already_exists) {
+                              toast.info("Session already linked to a plan");
+                            } else {
+                              toast.success(`Plan ${result.short_id} created`);
+                            }
+                          } catch { toast.error("Failed to create plan"); }
+                        });
+                      }}>
+                        <svg className="w-3 h-3 mr-1.5 text-sol-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                        </svg>
+                        Promote to plan
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
