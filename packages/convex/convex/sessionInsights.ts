@@ -444,14 +444,14 @@ export const generateSessionInsight = internalAction({
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return { status: "skipped", reason: "missing_api_key" };
 
-    const context = (await ctx.runQuery(internalApi.sessionInsights.getConversationContextForInsight, {
+    const context = (await ctx.runQuery(internal.sessionInsights.getConversationContextForInsight, {
       conversation_id: args.conversation_id,
     })) as ConversationInsightContext | null;
     if (!context) return { status: "skipped", reason: "missing_context" };
 
     const now = Date.now();
     const source = args.reason || "periodic";
-    const existing = await ctx.runQuery(internalApi.sessionInsights.getExistingInsight, {
+    const existing = await ctx.runQuery(internal.sessionInsights.getExistingInsight, {
       conversation_id: args.conversation_id,
     });
 
@@ -461,8 +461,13 @@ export const generateSessionInsight = internalAction({
 
     const firstSlice = context.messages.slice(0, 8);
     const lastSlice = context.messages.length > 18 ? context.messages.slice(-10) : context.messages.slice(8);
+    const formatMsgTime = (ts: number | undefined) => {
+      if (!ts) return "";
+      const d = new Date(ts);
+      return `[${d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}]`;
+    };
     const sampledMessages = [...firstSlice, ...lastSlice]
-      .map((m) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
+      .map((m) => `${formatMsgTime(m.timestamp)} ${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
       .join("\n\n");
 
     const commitsText = context.commits.length
@@ -495,7 +500,7 @@ Return ONLY valid JSON with this exact shape:
 }
 
 Rules:
-- timeline: THE MOST IMPORTANT FIELD. 3-8 events telling the story of this session chronologically. Each event is a specific thing that happened, written in past tense, concrete and specific. Include file names, function names, error messages when relevant. "t" is the clock time (approximate from message timestamps). "type" classifies the event.
+- timeline: THE MOST IMPORTANT FIELD. 3-8 events telling the story of this session chronologically. Each event is a specific thing that happened, written in past tense, concrete and specific. Include file names, function names, error messages when relevant. "t" MUST be HH:MM format (e.g. "14:30") derived from message timestamps. Never use words like "start" or "end" as time values. "type" classifies the event.
   Good: { "t": "14:30", "event": "Found root cause: renderMedia() spawning unlimited Chromium processes", "type": "discovery" }
   Good: { "t": "15:15", "event": "Capped concurrency to Math.ceil(os.cpus().length * 0.5) in index.ts", "type": "change" }
   Bad: { "t": "14:00", "event": "Worked on performance", "type": "change" }
@@ -514,6 +519,8 @@ Session metadata:
 - project_path: ${context.conversation.project_path || ""}
 - git_branch: ${context.conversation.git_branch || ""}
 - status: ${context.conversation.status}
+- started_at: ${context.conversation.started_at ? new Date(context.conversation.started_at).toISOString() : "unknown"}
+- updated_at: ${context.conversation.updated_at ? new Date(context.conversation.updated_at).toISOString() : "unknown"}
 - source: ${source}
 
 Tool names seen:
@@ -592,7 +599,7 @@ ${sampledMessages}`;
         120
       );
 
-      const insightId = (await ctx.runMutation(internalApi.sessionInsights.upsertSessionInsight, {
+      const insightId = (await ctx.runMutation(internal.sessionInsights.upsertSessionInsight, {
         conversation_id: context.conversation._id,
         team_id: context.conversation.team_id,
         actor_user_id: context.conversation.actor_user_id,
@@ -638,7 +645,7 @@ export const regenerateSessionInsight = action({
 
     if (!conversation) throw new Error("Conversation not found");
 
-    return await ctx.runAction(internalApi.sessionInsights.generateSessionInsight, {
+    return await ctx.runAction(internal.sessionInsights.generateSessionInsight, {
       conversation_id: args.conversation_id,
       reason: "manual",
     });
@@ -665,7 +672,7 @@ export const backfillTeamInsights = action({
     const limit = Math.max(1, Math.min(args.limit ?? 25, 100));
     const since = Date.now() - windowHours * 60 * 60 * 1000;
 
-    const candidates = await ctx.runQuery(internalApi.sessionInsights.getBackfillCandidates, {
+    const candidates = await ctx.runQuery(internal.sessionInsights.getBackfillCandidates, {
       team_id: args.team_id,
       since,
       limit,
@@ -680,7 +687,7 @@ export const backfillTeamInsights = action({
 
     let success = 0;
     for (const candidate of candidates) {
-      const res = await ctx.runAction(internalApi.sessionInsights.generateSessionInsight, {
+      const res = await ctx.runAction(internal.sessionInsights.generateSessionInsight, {
         conversation_id: candidate.conversation_id,
         reason: "periodic",
       });
@@ -717,7 +724,7 @@ export const backfillTeamInsightsInternal = internalAction({
     const limit = Math.max(1, Math.min(args.limit ?? 25, 100));
     const since = Date.now() - windowHours * 60 * 60 * 1000;
 
-    const candidates = await ctx.runQuery(internalApi.sessionInsights.getBackfillCandidates, {
+    const candidates = await ctx.runQuery(internal.sessionInsights.getBackfillCandidates, {
       team_id: args.team_id,
       since,
       limit,
@@ -725,7 +732,7 @@ export const backfillTeamInsightsInternal = internalAction({
 
     let success = 0;
     for (const candidate of candidates) {
-      const res = await ctx.runAction(internalApi.sessionInsights.generateSessionInsight, {
+      const res = await ctx.runAction(internal.sessionInsights.generateSessionInsight, {
         conversation_id: candidate.conversation_id,
         reason: "periodic",
       });
@@ -733,6 +740,59 @@ export const backfillTeamInsightsInternal = internalAction({
     }
 
     return { candidates: candidates.length, generated: success };
+  },
+});
+
+export const getInsightsNeedingTimeline = internalQuery({
+  args: {
+    user_id: v.id("users"),
+    since: v.number(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const insights = await ctx.db
+      .query("session_insights")
+      .withIndex("by_actor_generated_at", (q) =>
+        q.eq("actor_user_id", args.user_id).gte("generated_at", args.since)
+      )
+      .order("desc")
+      .take(args.limit * 2);
+
+    return insights
+      .filter((i) => !i.timeline || i.timeline.length === 0)
+      .slice(0, args.limit)
+      .map((i) => i.conversation_id);
+  },
+});
+
+export const backfillTimelines = action({
+  args: {
+    window_hours: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.runQuery(api.users.getCurrentUser, {} as any);
+    if (!user) throw new Error("Not authenticated");
+
+    const windowHours = Math.max(1, Math.min(args.window_hours ?? 168, 24 * 30));
+    const limit = Math.max(1, Math.min(args.limit ?? 25, 100));
+    const since = Date.now() - windowHours * 60 * 60 * 1000;
+
+    const conversationIds = await ctx.runQuery(
+      internal.sessionInsights.getInsightsNeedingTimeline,
+      { user_id: user._id, since, limit }
+    );
+
+    let success = 0;
+    for (const cid of conversationIds) {
+      const res = await ctx.runAction(internal.sessionInsights.generateSessionInsight, {
+        conversation_id: cid,
+        reason: "manual",
+      });
+      if ((res as any)?.status === "ok") success += 1;
+    }
+
+    return { candidates: conversationIds.length, generated: success };
   },
 });
 
