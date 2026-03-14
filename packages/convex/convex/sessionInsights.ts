@@ -492,7 +492,7 @@ Return ONLY valid JSON with this exact shape:
   "key_changes": ["string (specific change, 60 chars max each)"],
   "summary": "string (2-3 sentences, narrative context)",
   "timeline": [
-    { "t": "HH:MM", "event": "what happened", "type": "start|discovery|change|decision|ship|block|debug|research" }
+    { "t": "HH:MM", "event": "what happened", "type": "start|direction|discovery|change|decision|ship|block|debug|research" }
   ],
   "outcome_type": "shipped|progress|blocked|unknown",
   "themes": ["string"],
@@ -500,7 +500,8 @@ Return ONLY valid JSON with this exact shape:
 }
 
 Rules:
-- timeline: THE MOST IMPORTANT FIELD. 3-8 events telling the story of this session chronologically. Each event is a specific thing that happened, written in past tense, concrete and specific. Include file names, function names, error messages when relevant. "t" MUST be HH:MM format (e.g. "14:30") derived from message timestamps. Never use words like "start" or "end" as time values. "type" classifies the event.
+- timeline: THE MOST IMPORTANT FIELD. 5-12 events telling the story of this session chronologically. Include user direction/requests as "direction" type events -- these are the user's prompts that drove the work, quoted or paraphrased concisely. Every session has at least one direction event. Other events are specific things that happened, written in past tense, concrete and specific. Include file names, function names, error messages when relevant. "t" MUST be HH:MM format (e.g. "14:30") derived from message timestamps. Never use words like "start" or "end" as time values.
+  Good: { "t": "14:25", "event": "Fix the OOM crash in renderMedia", "type": "direction" }
   Good: { "t": "14:30", "event": "Found root cause: renderMedia() spawning unlimited Chromium processes", "type": "discovery" }
   Good: { "t": "15:15", "event": "Capped concurrency to Math.ceil(os.cpus().length * 0.5) in index.ts", "type": "change" }
   Bad: { "t": "14:00", "event": "Worked on performance", "type": "change" }
@@ -1428,6 +1429,281 @@ export const getActivityDigest = query({
       day_summaries: daySummaries,
       feed,
       people,
+      day_narratives: await getDayNarratives(ctx, authUserId, daySummaries, tz),
     };
+  },
+});
+
+async function getDayNarratives(
+  ctx: any,
+  userId: Id<"users">,
+  daySummaries: { date: string }[],
+  tz: string
+): Promise<Record<string, { narrative: string; events: any[]; generated_at: number }>> {
+  const result: Record<string, { narrative: string; events: any[]; generated_at: number }> = {};
+  for (const day of daySummaries) {
+    const existing = await ctx.db
+      .query("day_timelines")
+      .withIndex("by_user_date", (q: any) => q.eq("user_id", userId).eq("date", day.date))
+      .first();
+    if (existing?.narrative) {
+      result[day.date] = {
+        narrative: existing.narrative,
+        events: existing.events || [],
+        generated_at: existing.generated_at,
+      };
+    }
+  }
+  return result;
+}
+
+export const getDayInsightsForNarrative = internalQuery({
+  args: {
+    user_id: v.id("users"),
+    date: v.string(),
+    team_id: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args) => {
+    const dateStart = new Date(args.date + "T00:00:00Z").getTime();
+    const dateEnd = dateStart + 24 * 60 * 60 * 1000;
+
+    const insights = await ctx.db
+      .query("session_insights")
+      .withIndex("by_actor_generated_at", (q) =>
+        q.eq("actor_user_id", args.user_id).gt("generated_at", dateStart - 12 * 60 * 60 * 1000)
+      )
+      .order("asc")
+      .take(100);
+
+    const dayInsights = insights.filter((i) => {
+      return i.generated_at >= dateStart && i.generated_at < dateEnd;
+    });
+
+    const conversations = await Promise.all(
+      dayInsights.map((i) => ctx.db.get(i.conversation_id))
+    );
+    const convMap = new Map(
+      conversations.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => [c._id.toString(), c])
+    );
+
+    return dayInsights.map((i) => {
+      const conv = convMap.get(i.conversation_id.toString());
+      return {
+        conversation_id: i.conversation_id,
+        title: conv?.title || "Session",
+        project_path: conv?.project_path,
+        timeline: i.timeline || [],
+        headline: i.headline,
+        key_changes: i.key_changes,
+        outcome_type: i.outcome_type,
+        summary: i.summary,
+        started_at: conv?.started_at,
+        updated_at: conv?.updated_at,
+      };
+    });
+  },
+});
+
+export const upsertDayTimeline = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    date: v.string(),
+    events: v.array(v.object({
+      time: v.number(),
+      t: v.string(),
+      event: v.string(),
+      type: v.string(),
+      session_id: v.optional(v.id("conversations")),
+      session_title: v.optional(v.string()),
+      project: v.optional(v.string()),
+    })),
+    narrative: v.optional(v.string()),
+    generated_at: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("day_timelines")
+      .withIndex("by_user_date", (q) => q.eq("user_id", args.user_id).eq("date", args.date))
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        events: args.events,
+        narrative: args.narrative,
+        generated_at: args.generated_at,
+      });
+      return existing._id;
+    }
+
+    return await ctx.db.insert("day_timelines", {
+      user_id: args.user_id,
+      team_id: args.team_id,
+      date: args.date,
+      events: args.events,
+      narrative: args.narrative,
+      generated_at: args.generated_at,
+    });
+  },
+});
+
+export const generateDayNarrative = internalAction({
+  args: {
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return { status: "skipped", reason: "missing_api_key" };
+
+    const dayInsights = await ctx.runQuery(
+      internal.sessionInsights.getDayInsightsForNarrative,
+      { user_id: args.user_id, date: args.date, team_id: args.team_id }
+    );
+
+    if (!dayInsights.length) return { status: "skipped", reason: "no_insights" };
+
+    const mergedEvents: Array<{
+      time: number;
+      t: string;
+      event: string;
+      type: string;
+      session_id?: Id<"conversations">;
+      session_title?: string;
+      project?: string;
+    }> = [];
+
+    for (const insight of dayInsights) {
+      const project = insight.project_path?.split("/").filter(Boolean).pop() || undefined;
+      for (const te of insight.timeline || []) {
+        const timeParts = te.t.match(/^(\d{1,2}):(\d{2})/);
+        const timeMinutes = timeParts ? Number(timeParts[1]) * 60 + Number(timeParts[2]) : 0;
+        mergedEvents.push({
+          time: timeMinutes,
+          t: te.t,
+          event: te.event,
+          type: te.type,
+          session_id: insight.conversation_id,
+          session_title: insight.title,
+          project,
+        });
+      }
+    }
+
+    mergedEvents.sort((a, b) => a.time - b.time);
+    const cappedEvents = mergedEvents.slice(0, 40);
+
+    const sessionsText = dayInsights.map((i) => {
+      const project = i.project_path?.split("/").filter(Boolean).pop() || "unknown";
+      return `[${project}] ${i.title}: ${i.headline || i.summary.slice(0, 100)} (${i.outcome_type})`;
+    }).join("\n");
+
+    const timelineText = cappedEvents.map((e) => {
+      const label = e.session_title ? `[${e.project || ""}:${e.session_title}]` : "";
+      return `${e.t} ${label} (${e.type}) ${e.event}`;
+    }).join("\n");
+
+    const prompt = `Day summary for ${args.date}. STRICT: exactly 2 sentences, under 120 words total.
+
+Sessions:
+${sessionsText}
+
+Sentence 1: What was the main focus and what got done (shipped/fixed/built). Name specific projects.
+Sentence 2: Current state -- what's in progress, what's blocked, what's next.
+
+No lists, no bullet points. Just two tight sentences. Return ONLY the text.`;
+
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 150,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      if (!response.ok) return { status: "error", reason: `provider_${response.status}` };
+
+      const data = await response.json();
+      const narrative = data.content?.[0]?.text?.trim();
+      if (!narrative) return { status: "error", reason: "empty_response" };
+
+      await ctx.runMutation(internal.sessionInsights.upsertDayTimeline, {
+        user_id: args.user_id,
+        team_id: args.team_id,
+        date: args.date,
+        events: cappedEvents.map((e) => ({
+          ...e,
+          session_id: e.session_id || undefined,
+        })),
+        narrative,
+        generated_at: Date.now(),
+      });
+
+      return { status: "ok", narrative };
+    } catch (error) {
+      console.error("Failed to generate day narrative:", error);
+      return { status: "error", reason: "fetch_failed" };
+    }
+  },
+});
+
+export const backfillDayNarratives = action({
+  args: {
+    window_hours: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.runQuery(api.users.getCurrentUser, {} as any);
+    if (!user) throw new Error("Not authenticated");
+
+    const windowHours = Math.max(1, Math.min(args.window_hours ?? 168, 24 * 30));
+    const since = Date.now() - windowHours * 60 * 60 * 1000;
+    const tz = "America/Los_Angeles";
+
+    const insights = await ctx.runQuery(internal.sessionInsights.getRecentInsightsForUser, {
+      user_id: user._id,
+      since,
+    });
+
+    const dayDates = new Set<string>();
+    for (const i of insights) {
+      const dateStr = new Date(i.generated_at).toLocaleDateString("en-CA", { timeZone: tz });
+      dayDates.add(dateStr);
+    }
+
+    let generated = 0;
+    for (const date of dayDates) {
+      const result = await ctx.runAction(internal.sessionInsights.generateDayNarrative, {
+        user_id: user._id,
+        team_id: user.active_team_id || undefined,
+        date,
+      });
+      if ((result as any)?.status === "ok") generated++;
+    }
+
+    return { days: dayDates.size, generated };
+  },
+});
+
+export const getRecentInsightsForUser = internalQuery({
+  args: {
+    user_id: v.id("users"),
+    since: v.number(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("session_insights")
+      .withIndex("by_actor_generated_at", (q) =>
+        q.eq("actor_user_id", args.user_id).gt("generated_at", args.since)
+      )
+      .order("desc")
+      .take(300);
   },
 });
