@@ -716,7 +716,7 @@ export function QueuePageClient() {
 
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
-  const [scrollToMessageId, setScrollToMessageId] = useState<string | null>(null);
+  const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string } | null>(null);
 
   const shouldQueryDirect = pendingInjectId && isConvexId(pendingInjectId);
 
@@ -788,7 +788,9 @@ export function QueuePageClient() {
     if (!pendingNavigateId) return;
     const scrollTarget = pendingScrollToMessageId;
     useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, showMySessions: false });
-    if (scrollTarget) setScrollToMessageId(scrollTarget);
+    if (scrollTarget) {
+      setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget });
+    }
     if (sessions[pendingNavigateId]) {
       setPendingInjectId(null);
       setCurrentSession(pendingNavigateId);
@@ -803,9 +805,6 @@ export function QueuePageClient() {
 
   const prevSessionRef = useRef(currentSessionId);
   useEffect(() => {
-    if (prevSessionRef.current && prevSessionRef.current !== currentSessionId) {
-      setScrollToMessageId(null);
-    }
     prevSessionRef.current = currentSessionId;
   }, [currentSessionId]);
 
@@ -1004,14 +1003,14 @@ export function QueuePageClient() {
         />
       ) : currentSession ? (
         <InboxConversation
-          key={currentSession._id}
+          key={scrollTarget?.sessionId === currentSession._id ? `${currentSession._id}-${scrollTarget.messageId}` : currentSession._id}
           sessionId={currentSession._id}
           isIdle={currentSession.is_idle}
           onSendAndAdvance={handleSendAndAdvance}
           lastUserMessage={currentSession.last_user_message}
           sessionError={currentSession.session_error}
           onBack={handleBack}
-          targetMessageId={scrollToMessageId && currentSession._id === currentSessionId ? scrollToMessageId : undefined}
+          targetMessageId={scrollTarget?.sessionId === currentSession._id ? scrollTarget.messageId : undefined}
         />
       ) : pendingInjectId ? (
         <div className="h-full flex items-center justify-center text-sol-text-dim">
@@ -1068,7 +1067,7 @@ export function QueuePageClient() {
           <Panel id="inbox-main" defaultSize="76%" minSize="30%">
             {inboxContent}
           </Panel>
-          <Separator className="relative w-px bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
+          <Separator className="relative w-px bg-transparent cursor-col-resize before:absolute before:inset-y-0 before:-left-[3px] before:-right-[3px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
           <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
             <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={Object.values(dismissedSessions)} />
           </Panel>

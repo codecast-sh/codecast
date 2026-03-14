@@ -46,7 +46,7 @@ import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, type ForkChild, type InboxSession } from "../store/inboxStore";
-import { soundNewSession } from "../lib/sounds";
+import { soundNewSession, soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
@@ -5113,6 +5113,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
       draftTimerRef.current = null;
     }
     const clientId = addOptimistic(conversationId, trimmed, optimisticImages.length > 0 ? optimisticImages : undefined);
+    soundSend();
     setMessage("");
     clearAllImages();
     updateDraft("", null);
@@ -6974,14 +6975,47 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (itemIndex >= 0) {
       hasScrolledToTarget.current = true;
       setUserScrolled(true);
-      // First jump instantly to get close (estimates may be off)
-      virtualizer.scrollToIndex(itemIndex, { align: "center" });
-      // After virtualizer measures nearby items, scroll again precisely
-      setTimeout(() => {
-        virtualizer.scrollToIndex(itemIndex, { align: "center" });
-        setHighlightedMessageId(targetMessageId);
-        setTimeout(() => setHighlightedMessageId(null), 3000);
-      }, 300);
+      const container = containerRef.current;
+      if (!container) return;
+
+      virtualizer.scrollToIndex(itemIndex, { align: "start" });
+
+      const stickyOffset = 50;
+      const scrollElToTop = (el: Element) => {
+        const elRect = el.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        container.scrollTop += elRect.top - containerRect.top - stickyOffset;
+      };
+      let findAttempts = 0;
+      const scrollToElement = () => {
+        findAttempts++;
+        const el = container.querySelector(`[data-index="${itemIndex}"]`);
+        if (el) {
+          scrollElToTop(el);
+          let settleCount = 0;
+          const settle = () => {
+            settleCount++;
+            const freshEl = container.querySelector(`[data-index="${itemIndex}"]`);
+            if (freshEl) {
+              const rect = freshEl.getBoundingClientRect();
+              const containerRect = container.getBoundingClientRect();
+              const off = rect.top - containerRect.top - stickyOffset;
+              if (Math.abs(off) > 2) scrollElToTop(freshEl);
+              if (Math.abs(off) <= 2 || settleCount >= 15) {
+                setHighlightedMessageId(targetMessageId);
+                setTimeout(() => setHighlightedMessageId(null), 3000);
+                return;
+              }
+            }
+            requestAnimationFrame(settle);
+          };
+          requestAnimationFrame(settle);
+        } else if (findAttempts < 20) {
+          virtualizer.scrollToIndex(itemIndex, { align: "start" });
+          requestAnimationFrame(() => setTimeout(scrollToElement, 100));
+        }
+      };
+      setTimeout(scrollToElement, 300);
     }
   }, [targetMessageId, timeline, virtualizer]);
 
