@@ -52,7 +52,10 @@ function formatTimestamp(ts: number): string {
 export default function PlanDetailPage() {
   const params = useParams();
   const id = params?.id as string;
-  const plan = useQuery(api.plans.webGet, id ? { id: id as any } : "skip");
+  const queryArgs = id
+    ? id.startsWith("pl-") ? { short_id: id } : { id: id as any }
+    : "skip";
+  const plan = useQuery(api.plans.webGet, queryArgs);
 
   if (!plan) {
     return (
