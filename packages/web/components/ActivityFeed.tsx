@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useQuery, useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
@@ -271,6 +271,258 @@ function SessionNode({ item, compact, showActor, onNavigate, onProjectFilter, is
   );
 }
 
+const EVENT_COLORS: Record<string, string> = {
+  start: "text-sol-text-dim/50",
+  discovery: "text-sol-yellow/70",
+  change: "text-sol-cyan/60",
+  decision: "text-sol-violet/60",
+  ship: "text-sol-green/70",
+  block: "text-sol-red/60",
+  debug: "text-sol-orange/60",
+  research: "text-sol-blue/60",
+};
+
+const EVENT_DOTS: Record<string, string> = {
+  start: "bg-sol-text-dim/30",
+  discovery: "bg-sol-yellow/50",
+  change: "bg-sol-cyan/40",
+  decision: "bg-sol-violet/40",
+  ship: "bg-sol-green/50",
+  block: "bg-sol-red/40",
+  debug: "bg-sol-orange/40",
+  research: "bg-sol-blue/40",
+};
+
+function formatEventTime(timeStr: string, dayDate: string): string {
+  const timeParts = timeStr.match(/^(\d{1,2}):(\d{2})/);
+  if (!timeParts) return timeStr;
+  const h = Number(timeParts[1]);
+  const m = Number(timeParts[2]);
+
+  const now = new Date();
+  const eventDate = new Date(dayDate + "T12:00:00");
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const todayStr = now.toLocaleDateString("en-CA", { timeZone: tz });
+
+  if (dayDate === todayStr) {
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const evMinutes = h * 60 + m;
+    const diffMin = nowMinutes - evMinutes;
+    if (diffMin >= 0 && diffMin < 240) {
+      if (diffMin < 1) return "now";
+      if (diffMin < 60) return `${diffMin}m ago`;
+      const hrs = Math.floor(diffMin / 60);
+      const rem = diffMin % 60;
+      return rem > 0 ? `${hrs}h ${rem}m ago` : `${hrs}h ago`;
+    }
+  }
+
+  const ampm = h >= 12 ? "pm" : "am";
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${h12}:${String(m).padStart(2, "0")}${ampm}`;
+}
+
+function TimelineEventDetail({ item, compact, onNavigate }: { item: any; compact?: boolean; onNavigate?: (id: string) => void }) {
+  const router = useRouter();
+  const headline = extractHeadline(item);
+  const { changes } = extractExpandedContent(item);
+  const project = extractProject(item.project_path);
+  const rawDurationMs = item.started_at && item.updated_at ? item.updated_at - item.started_at : 0;
+  const duration = rawDurationMs > 0 && rawDurationMs < 86400000 ? formatDuration(item.started_at, item.updated_at) : null;
+
+  const handleNav = () => {
+    if (onNavigate) onNavigate(item.conversation_id);
+    else router.push(`/conversation/${item.conversation_id}`);
+  };
+
+  return (
+    <div className={`ml-[42px] mt-1 mb-2 pl-3 border-l-2 border-sol-border/20 ${compact ? "text-[10px]" : "text-[11px]"}`}>
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span onClick={handleNav} className="font-semibold text-sol-text cursor-pointer hover:text-sol-yellow transition-colors">
+          {item.title}
+        </span>
+        {duration && <span className="text-sol-text-dim/30 tabular-nums">{duration}</span>}
+        {item.message_count > 10 && <span className="text-sol-text-dim/30 tabular-nums">{item.message_count} msgs</span>}
+      </div>
+      {headline && <p className="text-sol-text-muted/70 mt-0.5 leading-snug">{headline}</p>}
+      {changes.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {changes.slice(0, 4).map((c: string, i: number) => (
+            <li key={i} className="flex gap-1.5 text-sol-text-muted/60 leading-snug">
+              <span className="text-sol-text-dim/25 select-none shrink-0">-</span>
+              <span>{c}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {item.outcome_type === "blocked" && item.blockers && (
+        <div className="mt-1">
+          <span className="text-sol-red/50 font-medium">Blocked: </span>
+          <span className="text-sol-text-muted/70">{item.blockers}</span>
+        </div>
+      )}
+      {item.next_action && (item.status === "active" || item.outcome_type === "progress") && (
+        <div className="mt-0.5">
+          <span className="text-sol-cyan/50 font-medium">Next: </span>
+          <span className="text-sol-text-muted/70">{item.next_action}</span>
+        </div>
+      )}
+      {item.git_branch && item.git_branch !== "main" && item.git_branch !== "master" && (
+        <div className="font-mono text-sol-text-dim/25 mt-0.5">{item.git_branch}</div>
+      )}
+    </div>
+  );
+}
+
+function UnifiedTimeline({ items, compact, onNavigate, dayDate }: {
+  items: any[];
+  compact?: boolean;
+  onNavigate?: (id: string) => void;
+  dayDate: string;
+}) {
+  const router = useRouter();
+  const [expandedSession, setExpandedSession] = useState<string | null>(null);
+
+  const itemsByConvId = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const item of items) map.set(item.conversation_id, item);
+    return map;
+  }, [items]);
+
+  const events = useMemo(() => {
+    const all: Array<{
+      time: string;
+      sortKey: number;
+      event: string;
+      type: string;
+      sessionTitle: string;
+      sessionId: string;
+      project?: string;
+    }> = [];
+
+    for (const item of items) {
+      if (!item.timeline?.length) continue;
+      const project = extractProject(item.project_path);
+      for (const te of item.timeline) {
+        const timeStr = te.t || "00:00";
+        const timeParts = timeStr.match(/^(\d{1,2}):(\d{2})/);
+        const h = timeParts ? Number(timeParts[1]) : 0;
+        const m = timeParts ? Number(timeParts[2]) : 0;
+        const sortKey = h * 60 + m;
+        all.push({
+          time: te.t,
+          sortKey,
+          event: te.event,
+          type: te.type || "change",
+          sessionTitle: item.title || "Session",
+          sessionId: item.conversation_id,
+          project,
+        });
+      }
+    }
+
+    all.sort((a, b) => b.sortKey - a.sortKey);
+    return all;
+  }, [items]);
+
+  const [showAll, setShowAll] = useState(false);
+  const INITIAL_LIMIT = 25;
+
+  if (events.length === 0) return null;
+
+  const handleNav = (id: string) => {
+    if (onNavigate) onNavigate(id);
+    else router.push(`/conversation/${id}`);
+  };
+
+  const visibleEvents = showAll || events.length <= INITIAL_LIMIT ? events : events.slice(0, INITIAL_LIMIT);
+  const hiddenCount = events.length - INITIAL_LIMIT;
+
+  const PROJECT_COLORS: Record<string, string> = {};
+  const PROJECT_PALETTE = [
+    "bg-sol-cyan/15 text-sol-cyan/80 border-sol-cyan/20",
+    "bg-sol-yellow/15 text-sol-yellow/80 border-sol-yellow/20",
+    "bg-sol-violet/15 text-sol-violet/80 border-sol-violet/20",
+    "bg-sol-green/15 text-sol-green/80 border-sol-green/20",
+    "bg-sol-orange/15 text-sol-orange/80 border-sol-orange/20",
+    "bg-sol-blue/15 text-sol-blue/80 border-sol-blue/20",
+    "bg-sol-red/15 text-sol-red/80 border-sol-red/20",
+  ];
+  let colorIdx = 0;
+  for (const ev of events) {
+    const key = ev.project || ev.sessionTitle;
+    if (key && !PROJECT_COLORS[key]) {
+      PROJECT_COLORS[key] = PROJECT_PALETTE[colorIdx % PROJECT_PALETTE.length];
+      colorIdx++;
+    }
+  }
+
+  const seenSessionExpand = new Set<string>();
+
+  return (
+    <div className={`${compact ? "mt-1.5 ml-0.5" : "mt-2 ml-1"}`}>
+      {visibleEvents.map((ev, i) => {
+        const dotColor = EVENT_DOTS[ev.type] || EVENT_DOTS.change;
+        const textColor = EVENT_COLORS[ev.type] || EVENT_COLORS.change;
+        const isLast = i === visibleEvents.length - 1 && (showAll || events.length <= INITIAL_LIMIT);
+        const prevEvent = i > 0 ? visibleEvents[i - 1] : null;
+        const gapMinutes = prevEvent ? Math.abs(ev.sortKey - prevEvent.sortKey) : 0;
+        const hasGap = gapMinutes >= 30;
+        const projKey = ev.project || ev.sessionTitle;
+        const projColor = PROJECT_COLORS[projKey] || PROJECT_PALETTE[0];
+        const isExpanded = expandedSession === ev.sessionId;
+        const showDetail = isExpanded && !seenSessionExpand.has(ev.sessionId);
+        if (isExpanded) seenSessionExpand.add(ev.sessionId);
+
+        return (
+          <div key={i}>
+            {hasGap && (
+              <div className="relative pl-5 py-1.5">
+                <div className="absolute left-[4px] top-0 bottom-0 w-px bg-sol-border/10 border-l border-dashed border-sol-border/15" style={{ width: 0 }} />
+                <div className="h-px bg-sol-border/8 ml-1" />
+              </div>
+            )}
+            <div className={`relative pl-5 ${isLast ? "" : "pb-1.5"}`}>
+              {!isLast && (
+                <div className="absolute left-[4px] top-0 bottom-0 w-px bg-sol-border/20" />
+              )}
+              <div className={`absolute left-0 w-[9px] h-[9px] rounded-full ${dotColor}`} style={{ top: 3 }} />
+              <div
+                className="flex items-baseline gap-2 min-w-0 cursor-pointer"
+                onClick={() => setExpandedSession(isExpanded ? null : ev.sessionId)}
+              >
+                <span className={`font-mono text-sol-text-dim/40 tabular-nums shrink-0 whitespace-nowrap ${compact ? "text-[9px]" : "text-[10px]"}`}>
+                  {formatEventTime(ev.time, dayDate)}
+                </span>
+                <span className={`${textColor} leading-snug min-w-0 truncate ${compact ? "text-[11px]" : "text-[12px]"}`} title={ev.event}>
+                  {ev.event}
+                </span>
+                <span
+                  onClick={(e) => { e.stopPropagation(); handleNav(ev.sessionId); }}
+                  className={`font-mono rounded px-1 py-px border cursor-pointer shrink-0 ${compact ? "text-[8px]" : "text-[9px]"} ${projColor}`}
+                >
+                  {projKey}
+                </span>
+              </div>
+            </div>
+            {showDetail && itemsByConvId.get(ev.sessionId) && (
+              <TimelineEventDetail item={itemsByConvId.get(ev.sessionId)} compact={compact} onNavigate={onNavigate} />
+            )}
+          </div>
+        );
+      })}
+      {!showAll && hiddenCount > 0 && (
+        <button
+          onClick={() => setShowAll(true)}
+          className={`ml-5 mt-1 text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors ${compact ? "text-[10px]" : "text-[11px]"}`}
+        >
+          show {hiddenCount} more events
+        </button>
+      )}
+    </div>
+  );
+}
+
 function DaySection({ day, items, compact, showActor, onNavigate, onProjectFilter, defaultExpanded }: {
   day: { date: string; session_count: number; highlights: string[] };
   items: any[];
@@ -284,6 +536,7 @@ function DaySection({ day, items, compact, showActor, onNavigate, onProjectFilte
   const label = formatDate(day.date);
   const isRecent = label === "Today" || label === "Yesterday";
   const { projects, topHeadlines } = useMemo(() => synthesizeDaySummary(items), [items]);
+  const hasTimelineData = useMemo(() => items.some((item: any) => item.timeline?.length > 0), [items]);
 
   return (
     <div className={compact ? "py-1" : "py-1.5"}>
@@ -310,7 +563,7 @@ function DaySection({ day, items, compact, showActor, onNavigate, onProjectFilte
         </div>
       </button>
 
-      {!expanded && topHeadlines.length > 0 && (
+      {!expanded && (
         <p className={`text-sol-text-muted/50 leading-relaxed ${compact ? "text-[10px] mt-0.5 mb-0.5" : "text-[11.5px] mt-1 mb-1"}`}>
           {topHeadlines.slice(0, 2).join("  /  ")}
           {items.length > 2 && <span className="text-sol-text-dim/30"> +{items.length - 2}</span>}
@@ -320,19 +573,25 @@ function DaySection({ day, items, compact, showActor, onNavigate, onProjectFilte
       <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
         <div className="overflow-hidden">
           {items.length > 0 && (
-            <div className={`${compact ? "mt-1.5 ml-0.5" : "mt-2 ml-1"}`}>
-              {items.map((item: any, i: number) => (
-                <SessionNode
-                  key={item.conversation_id}
-                  item={item}
-                  compact={compact}
-                  showActor={showActor}
-                  onNavigate={onNavigate}
-                  onProjectFilter={onProjectFilter}
-                  isLast={i === items.length - 1}
-                />
-              ))}
-            </div>
+            <>
+              {hasTimelineData ? (
+                <UnifiedTimeline items={items} compact={compact} onNavigate={onNavigate} dayDate={day.date} />
+              ) : (
+                <div className={`${compact ? "mt-1.5 ml-0.5" : "mt-2 ml-1"}`}>
+                  {items.map((item: any, i: number) => (
+                    <SessionNode
+                      key={item.conversation_id}
+                      item={item}
+                      compact={compact}
+                      showActor={showActor}
+                      onNavigate={onNavigate}
+                      onProjectFilter={onProjectFilter}
+                      isLast={i === items.length - 1}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -506,7 +765,7 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
               showActor={mode === "team"}
               onNavigate={onNavigate}
               onProjectFilter={handleProjectFilter}
-              defaultExpanded={i === 0}
+              defaultExpanded={true}
             />
           ))}
         </div>
@@ -523,11 +782,34 @@ function FeedControls({ sessionCount, viewMode, setViewMode, windowHours, setWin
   setWindowHours: (h: WindowHours) => void;
   compact?: boolean;
 }) {
+  const backfillTimelines = useAction(api.sessionInsights.backfillTimelines);
+  const [backfilling, setBackfilling] = useState(false);
+
+  const handleBackfill = useCallback(async () => {
+    setBackfilling(true);
+    try {
+      const result = await backfillTimelines({ window_hours: windowHours, limit: 50 });
+      console.log("Backfill result:", result);
+    } catch (e) {
+      console.error("Backfill failed:", e);
+    }
+    setBackfilling(false);
+  }, [backfillTimelines, windowHours]);
+
   return (
     <div className={`flex items-center justify-between ${compact ? "px-1" : ""}`}>
-      <span className="text-[11px] text-sol-text-dim tabular-nums">
-        {sessionCount} session{sessionCount !== 1 ? "s" : ""}
-      </span>
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-sol-text-dim tabular-nums">
+          {sessionCount} session{sessionCount !== 1 ? "s" : ""}
+        </span>
+        <button
+          onClick={handleBackfill}
+          disabled={backfilling}
+          className="text-[10px] text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors disabled:opacity-30"
+        >
+          {backfilling ? "..." : "regen"}
+        </button>
+      </div>
       <div className="flex items-center gap-2">
         <ViewToggle viewMode={viewMode} setViewMode={setViewMode} />
         <WindowToggle windowHours={windowHours} setWindowHours={setWindowHours} />
