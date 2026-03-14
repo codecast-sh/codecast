@@ -192,6 +192,7 @@ export type ClientUI = {
   active_team_id?: string;
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
+  sounds_enabled?: boolean;
 };
 
 export type ClientLayouts = {
@@ -291,7 +292,7 @@ interface InboxStoreState {
   sendMessage: (convId: string, content: string, imageIds?: string[], images?: Array<{ media_type: string; storage_id?: string }>) => Promise<any>;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) => Promise<any>;
 
   // -- Generic sync --
   syncTable: (tableName: string, incoming: Array<{ _id: string; [k: string]: any }>, extra?: Record<string, any>) => void;
@@ -552,7 +553,27 @@ export const useInboxStore = create<InboxStoreState>(
 
   sendEscape: action(function (_convId: string) {}),
 
-  createSession: action(function (_opts: { agent_type: string; project_path?: string; git_root?: string }) {}),
+  createSession: action(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
+    const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+    if (!opts.session_id) opts.session_id = sessionId;
+    const now = Date.now();
+    this.sessions[sessionId] = {
+      _id: sessionId,
+      session_id: sessionId,
+      title: "New session",
+      updated_at: now,
+      started_at: now,
+      project_path: opts.project_path,
+      git_root: opts.git_root,
+      agent_type: opts.agent_type,
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      last_user_message: null,
+    } as InboxSession;
+    this.currentSessionId = sessionId;
+    this.viewingDismissedId = null;
+  }),
 
   updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
     if (!this.clientState.ui) this.clientState.ui = {};
@@ -592,8 +613,9 @@ export const useInboxStore = create<InboxStoreState>(
           table[oldId] = oldSession as any;
         }
       }
-      if (state.currentSessionId && !table[state.currentSessionId] && prev[state.currentSessionId]) {
-        table[state.currentSessionId] = prev[state.currentSessionId] as any;
+      const resolvedCurrentId = get().currentSessionId;
+      if (resolvedCurrentId && !table[resolvedCurrentId] && prev[resolvedCurrentId]) {
+        table[resolvedCurrentId] = prev[resolvedCurrentId] as any;
       }
       const newConversations = { ...state.conversations };
       for (const s of incoming) {

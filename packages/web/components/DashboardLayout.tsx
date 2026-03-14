@@ -1,7 +1,7 @@
 "use client";
 import { ReactNode, useState, useEffect, useCallback, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
@@ -53,9 +53,6 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const newSessionOpen = useInboxStore((state) => state.newSession.isOpen);
   const closeNewSession = useInboxStore((state) => state.closeNewSession);
   const currentConvContext = useInboxStore((s) => s.currentConversation);
-  const createQuickSession = useMutation(api.conversations.createQuickSession);
-  const injectSession = useInboxStore((s) => s.injectSession);
-  const creatingRef = useRef(false);
   const [desktopClass, setDesktopClass] = useState("");
   const headerRef = useRef<HTMLElement>(null);
   usePrefetch();
@@ -99,57 +96,30 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   };
 
   const handleQuickCreate = useCallback(() => {
-    if (creatingRef.current) return;
-    creatingRef.current = true;
     soundNewSession();
     const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
     const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-    const now = Date.now();
     const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const now = Date.now();
 
-    const stubMeta = {
+    const store = useInboxStore.getState();
+    store.setConversationMeta(sessionId, {
       _id: sessionId, _creationTime: now, user_id: "", agent_type: agentType,
       session_id: sessionId, project_path: path, git_root: currentConvContext.gitRoot || path,
       started_at: now, updated_at: now, message_count: 0, status: "active",
-      title: "New session", messages: [], user: null,
-      child_conversations: [], child_conversation_map: {},
-      has_more_above: false, oldest_timestamp: null, last_timestamp: null,
-      fork_count: 0, forked_from_details: null, compaction_count: 0,
-      fork_children: [], parent_conversation_id: null,
-    };
-
-    useInboxStore.getState().setConversationMeta(sessionId, stubMeta);
-
-    if (isOnInboxPage) {
-      injectSession({
-        _id: sessionId,
-        session_id: sessionId,
-        title: "New session",
-        updated_at: now,
-        project_path: path,
-        git_root: currentConvContext.gitRoot || path,
-        agent_type: agentType,
-        message_count: 0,
-        is_idle: true,
-        has_pending: false,
-        last_user_message: null,
-      });
-    } else {
-      router.push(`/conversation/${sessionId}?focus=1`);
-    }
-
-    createQuickSession({
+      title: "New session", messages: [],
+    });
+    store.createSession({
       agent_type: agentType,
-      session_id: sessionId,
       project_path: path,
       git_root: currentConvContext.gitRoot || path,
-    }).then((convexId) => {
-      useInboxStore.getState().resolveSessionId(sessionId, convexId);
-      creatingRef.current = false;
-    }).catch(() => {
-      creatingRef.current = false;
+      session_id: sessionId,
     });
-  }, [createQuickSession, currentConvContext, directoryFilter, router, isOnInboxPage, injectSession]);
+
+    if (!isOnInboxPage) {
+      router.push(`/conversation/${sessionId}?focus=1`);
+    }
+  }, [currentConvContext, directoryFilter, router, isOnInboxPage]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -280,7 +250,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                 />
               </div>
             </Panel>
-            <Separator className="relative w-1 bg-sol-border/50 hover:bg-sol-cyan data-[resize-handle-active]:bg-sol-cyan cursor-col-resize transition-colors duration-150 before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-['']" />
+            <Separator className="relative w-px bg-transparent cursor-col-resize before:absolute before:inset-y-0 before:-left-[3px] before:-right-[3px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
             <Panel id="main" minSize="30%">
               {isFullWidthPage ? (
                 <div className="h-full">
