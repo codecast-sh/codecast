@@ -766,3 +766,46 @@ export const webTeamList = query({
     return plans.slice(0, args.limit || 100);
   },
 });
+
+export const webPlanContext = query({
+  args: {
+    plan_id: v.id("plans"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const plan = await ctx.db.get(args.plan_id);
+    if (!plan) return null;
+
+    const tasks: any[] = [];
+    if (plan.task_ids) {
+      for (const tid of plan.task_ids) {
+        const t = await ctx.db.get(tid);
+        if (t) {
+          tasks.push({
+            _id: t._id,
+            short_id: t.short_id,
+            title: t.title,
+            status: t.status,
+            priority: t.priority,
+          });
+        }
+      }
+    }
+
+    const done = tasks.filter(t => t.status === "done").length;
+    const inProgress = tasks.filter(t => t.status === "in_progress").length;
+
+    return {
+      _id: plan._id,
+      short_id: plan.short_id,
+      title: plan.title,
+      goal: plan.goal,
+      status: plan.status,
+      tasks,
+      progress: { total: tasks.length, done, in_progress: inProgress },
+      recent_log: (plan.progress_log || []).slice(-3),
+    };
+  },
+});
