@@ -489,6 +489,8 @@ function createConversationAriaLabel(conv: Conversation): string {
 export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [agentType, setAgentType] = useState<"claude" | "codex" | "gemini">("claude");
   const [projectPath, setProjectPath] = useState("");
+  const [isolated, setIsolated] = useState(false);
+  const [worktreeName, setWorktreeName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [dropdownIndex, setDropdownIndex] = useState(-1);
@@ -546,6 +548,8 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
         agent_type: convexAgentType,
         project_path: projectPath || undefined,
         git_root: projectPath || undefined,
+        isolated: isolated || undefined,
+        worktree_name: (isolated && worktreeName) ? worktreeName : undefined,
       });
       router.push(`/conversation/${conversationId}?focus=1`);
       onClose();
@@ -671,6 +675,29 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
               </div>
             )}
           </div>
+        </div>
+
+        <div className="px-5 pb-3">
+          <button
+            onClick={() => setIsolated(!isolated)}
+            className={`flex items-center gap-2 text-xs transition-colors ${
+              isolated ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-muted"
+            }`}
+          >
+            <span className={`w-7 h-4 rounded-full transition-colors relative ${isolated ? "bg-sol-cyan/30" : "bg-sol-border/50"}`}>
+              <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
+            </span>
+            Isolated worktree
+          </button>
+          {isolated && (
+            <input
+              type="text"
+              value={worktreeName}
+              onChange={(e) => setWorktreeName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ""))}
+              placeholder="feature-name (optional)"
+              className="mt-2 w-full px-3 py-1.5 text-xs bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/50 font-mono"
+            />
+          )}
         </div>
 
         <div className="px-5 pb-4 flex justify-end gap-2">

@@ -360,6 +360,11 @@ function SessionCard({
           <span className={`text-[10px] truncate ${
             isWorking ? "font-medium text-sol-green/70" : "font-medium text-sol-cyan/70"
           }`}>{project}</span>
+          {session.worktree_name && (
+            <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
+              {session.worktree_name}
+            </span>
+          )}
           {session.message_count > 0 && (
             <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
               {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
@@ -1120,7 +1125,7 @@ export function QueuePageClient() {
           <Panel id="inbox-main" defaultSize="76%" minSize="30%">
             {inboxContent}
           </Panel>
-          <Separator className="relative z-10 w-px bg-sol-border cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
+          <Separator className="relative z-10 w-px bg-sol-yellow/20 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
           <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
             <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={Object.values(dismissedSessions)} />
           </Panel>

@@ -74,6 +74,8 @@ export type InboxSession = {
   parent_conversation_id?: string;
   active_plan?: PlanRef;
   active_task?: TaskRef;
+  worktree_name?: string | null;
+  worktree_branch?: string | null;
 };
 
 export type Message = {

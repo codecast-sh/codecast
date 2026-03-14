@@ -140,6 +140,17 @@ const TOC = [
     { id: "authentication", label: "Authentication" },
     { id: "daemon", label: "The Daemon" },
   ]},
+  { id: "desktop-app", label: "Desktop App", children: [
+    { id: "inbox", label: "Inbox & Orchestration" },
+    { id: "inbox-shortcuts", label: "Keyboard Shortcuts" },
+    { id: "conversations", label: "Conversations" },
+    { id: "dashboard-plans", label: "Plans & Tasks" },
+    { id: "desktop-download", label: "Download" },
+  ]},
+  { id: "mobile-app", label: "Mobile App", children: [
+    { id: "mobile-features", label: "Features" },
+    { id: "mobile-download", label: "Download" },
+  ]},
   { id: "agent-memory", label: "Agent Memory", children: [
     { id: "memory-setup", label: "Setup" },
     { id: "memory-commands", label: "Commands" },
@@ -168,11 +179,6 @@ const TOC = [
     { id: "schedule-overview", label: "Overview" },
     { id: "schedule-commands", label: "Commands" },
     { id: "schedule-events", label: "Event Triggers" },
-  ]},
-  { id: "dashboard", label: "Web Dashboard", children: [
-    { id: "inbox", label: "Inbox" },
-    { id: "conversations", label: "Conversations" },
-    { id: "dashboard-plans", label: "Plans & Tasks" },
   ]},
   { id: "teams", label: "Teams", children: [
     { id: "team-setup", label: "Setup" },
@@ -632,11 +638,12 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             <Param name="--max-runtime <dur>" desc="Override max runtime (default: 10m)" />
           </CmdTable>
 
-          {/* Web Dashboard */}
-          <Heading id="dashboard" level={2}>Web Dashboard</Heading>
+          {/* Desktop App */}
+          <Heading id="desktop-app" level={2}>Desktop App</Heading>
           <p className="mb-4" style={{ color: SOL.base00 }}>
-            The web dashboard at <InlineCode>codecast.sh</InlineCode> is your central hub for managing sessions, agents,
-            plans, and team activity. Also available as a macOS desktop app and iOS app.
+            The codecast desktop app is your command center for managing sessions, orchestrating agents,
+            and staying on top of team activity. Available as a native macOS app and at{" "}
+            <a href="https://codecast.sh" className="font-mono underline" style={{ color: SOL.blue }}>codecast.sh</a>.
           </p>
 
           <Screenshot
@@ -645,15 +652,17 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             caption="The dashboard feed -- all your sessions with live status, summaries, and team activity"
           />
 
-          <Heading id="inbox" level={3}>Inbox</Heading>
+          <Heading id="inbox" level={3}>Inbox & Orchestration</Heading>
           <p className="mb-2" style={{ color: SOL.base00 }}>
-            The inbox shows all your running and recent sessions with live status updates.
-            Each session displays its agent status -- <InlineCode>working</InlineCode>, <InlineCode>idle</InlineCode>, <InlineCode>permission_blocked</InlineCode>, <InlineCode>thinking</InlineCode>, <InlineCode>compacting</InlineCode> -- and
-            auto-generated summaries. You can filter by active, long-running, or subagent sessions.
+            The inbox is where you orchestrate your agents. It shows all running and recent sessions with
+            live status updates -- <InlineCode>working</InlineCode>, <InlineCode>idle</InlineCode>, <InlineCode>permission_blocked</InlineCode>, <InlineCode>thinking</InlineCode>, <InlineCode>compacting</InlineCode> -- organized
+            by priority: sessions needing your input float to the top, pinned sessions stay accessible,
+            and working sessions update in real-time.
           </p>
-          <p style={{ color: SOL.base00 }}>
-            From the inbox, you can send messages to agents, approve pending permissions, and jump into
-            any conversation. This is the primary interface for orchestrating multiple agents in parallel.
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            From the inbox you can send messages to agents, approve pending permissions, pin important sessions,
+            defer sessions for later, and dismiss completed work. The keyboard-driven workflow lets you
+            fly through a queue of active sessions without touching the mouse.
           </p>
 
           <Screenshot
@@ -661,6 +670,41 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             alt="Codecast inbox showing live agent sessions with status indicators, pinned sessions, and working/needs-input categories"
             caption="The inbox -- orchestrate multiple agents with live status, summaries, and direct messaging"
           />
+
+          <Heading id="inbox-shortcuts" level={3}>Keyboard Shortcuts</Heading>
+          <p className="mb-3" style={{ color: SOL.base00 }}>
+            The inbox is designed for keyboard-first orchestration. Navigate, triage, and respond to
+            agents without leaving the keyboard.
+          </p>
+          <div className="rounded-lg overflow-hidden my-4" style={{ border: `1px solid ${SOL.base2}` }}>
+            {[
+              ["Ctrl+J", "Next session", "Move down in the session queue"],
+              ["Ctrl+K", "Previous session", "Move up in the session queue"],
+              ["Ctrl+I", "Jump to needs input", "Jump to the first session waiting for your input"],
+              ["Ctrl+Backspace", "Dismiss", "Stash the current session (remove from queue)"],
+              ["Shift+Backspace", "Defer", "Defer the current session for later review"],
+              ["Ctrl+Shift+P", "Pin/unpin", "Pin or unpin the current session"],
+              ["Ctrl+P", "Jump to pinned", "Jump to first pinned session"],
+              ["?", "Toggle shortcuts", "Show or hide the keyboard shortcut overlay"],
+            ].map(([key, action, desc], i) => (
+              <div
+                key={key}
+                className="grid grid-cols-[120px_140px_1fr] gap-4 px-4 py-2.5 text-sm items-center"
+                style={{
+                  backgroundColor: i % 2 === 0 ? "transparent" : `${SOL.base2}40`,
+                  borderBottom: i < 7 ? `1px solid ${SOL.base2}` : undefined,
+                }}
+              >
+                <kbd className="font-mono text-xs px-2 py-1 rounded inline-block w-fit" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>{key}</kbd>
+                <span className="font-medium" style={{ color: SOL.base03 }}>{action}</span>
+                <span style={{ color: SOL.base00 }}>{desc}</span>
+              </div>
+            ))}
+          </div>
+          <Callout type="tip">
+            The inbox remembers your position. Dismiss a session with <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Ctrl+Backspace</kbd> and
+            it automatically advances to the next one -- perfect for triaging a queue of agent sessions.
+          </Callout>
 
           <Heading id="conversations" level={3}>Conversations</Heading>
           <p style={{ color: SOL.base00 }}>
@@ -688,6 +732,71 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             alt="Codecast plans page showing active plans with status badges, task counts, and plan IDs"
             caption="Plans view -- track multi-session features with goals, tasks, and decision history"
           />
+
+          <Heading id="desktop-download" level={3}>Download</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            The desktop app provides native macOS integration with system notifications, menu bar access,
+            and a dedicated window. Everything in the web app works identically in the desktop app.
+          </p>
+          <a
+            href="https://codecast.sh/download/mac"
+            className="inline-flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-colors"
+            style={{ backgroundColor: SOL.base03, color: SOL.base3 }}
+          >
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+            </svg>
+            Download for macOS
+          </a>
+
+          {/* Mobile App */}
+          <Heading id="mobile-app" level={2}>Mobile App</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            Your AI coding sessions, always in your pocket. The iOS app gives you full access
+            to your sessions, agents, and team activity from anywhere.
+          </p>
+
+          <Heading id="mobile-features" level={3}>Features</Heading>
+          <div className="space-y-3 mb-4">
+            {[
+              ["Live session streaming", "Watch your agents work in real-time with push notifications when they need input"],
+              ["Send messages", "Send prompts and messages to running agents directly from your phone"],
+              ["Review diffs", "Review code changes and approve permissions remotely"],
+              ["Full search", "Search your entire session history on the go"],
+            ].map(([title, desc]) => (
+              <div key={title} className="flex gap-3 items-start">
+                <svg className="w-5 h-5 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20" style={{ color: SOL.green }}>
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <div>
+                  <div className="font-medium text-sm" style={{ color: SOL.base03 }}>{title}</div>
+                  <div className="text-sm" style={{ color: SOL.base00 }}>{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <Heading id="mobile-download" level={3}>Download</Heading>
+          <div className="flex flex-wrap gap-3">
+            <a
+              href="https://apps.apple.com/app/id6757820850"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-colors"
+              style={{ backgroundColor: SOL.base03, color: SOL.base3 }}
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+              </svg>
+              App Store (iOS)
+            </a>
+            <span className="inline-flex items-center gap-2 px-5 py-3 rounded-lg font-medium" style={{ backgroundColor: `${SOL.base2}`, color: SOL.base01 }}>
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M3.609 1.814L13.792 12 3.61 22.186a.996.996 0 01-.61-.92V2.734a1 1 0 01.609-.92zm10.89 10.893l2.302 2.302-10.937 6.333 8.635-8.635zm3.199-3.198l2.807 1.626a1 1 0 010 1.73l-2.808 1.626L15.206 12l2.492-2.491zM5.864 2.658L16.802 8.99l-2.303 2.303-8.635-8.635z"/>
+              </svg>
+              Android coming soon
+            </span>
+          </div>
 
           {/* Teams */}
           <Heading id="teams" level={2}>Teams</Heading>

@@ -176,6 +176,7 @@ function SessionTimeline({ timeline, startedAt }: { timeline: any[]; startedAt?:
         const style = TIMELINE_TYPE_STYLES[te.type] || TIMELINE_TYPE_STYLES.change;
         const relTime = formatRelativeTime(te.t, firstTime);
         const isUserDirection = te.type === "direction" || te.type === "prompt";
+        const eventText = te.event.length > 120 ? te.event.slice(0, 115) + "..." : te.event;
 
         return (
           <div key={i} className={`flex items-baseline gap-2 ${isUserDirection ? "py-0.5" : ""}`}>
@@ -188,7 +189,7 @@ function SessionTimeline({ timeline, startedAt }: { timeline: any[]; startedAt?:
               </span>
             )}
             <span className={`leading-snug text-[10px] ${style.color} ${style.bold ? "font-medium" : ""}`}>
-              {highlightCode(te.event)}
+              {highlightCode(eventText)}
             </span>
           </div>
         );
@@ -723,19 +724,13 @@ function FeedControls({ sessionCount, viewMode, setViewMode, windowHours, setWin
         <span className="text-[11px] text-sol-text-dim tabular-nums">
           {sessionCount} session{sessionCount !== 1 ? "s" : ""}
         </span>
+        <span className="text-sol-text-dim/15">|</span>
         <button
-          onClick={handleBackfill}
-          disabled={backfilling}
+          onClick={async () => { await handleBackfill(); await handleGenDays(); }}
+          disabled={backfilling || genDays}
           className="text-[10px] text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors disabled:opacity-30"
         >
-          {backfilling ? "..." : "regen"}
-        </button>
-        <button
-          onClick={handleGenDays}
-          disabled={genDays}
-          className="text-[10px] text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors disabled:opacity-30"
-        >
-          {genDays ? "..." : "days"}
+          {backfilling || genDays ? "regenerating..." : "regen"}
         </button>
       </div>
       <div className="flex items-center gap-2">
