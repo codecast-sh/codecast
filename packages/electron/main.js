@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen } = require("electron");
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
@@ -278,6 +278,21 @@ ipcMain.handle("get-app-version", () => app.getVersion());
 ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 ipcMain.handle("restart-for-update", () => autoUpdater.quitAndInstall());
+ipcMain.handle("show-notification", (_e, { title, body, data }) => {
+  const notif = new Notification({ title, body });
+  notif.on("click", () => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+      if (data?.conversationId) {
+        mainWindow.webContents.executeJavaScript(
+          `window.location.href = '/conversation/${data.conversationId}'`
+        );
+      }
+    }
+  });
+  notif.show();
+});
 
 // Palette IPC
 ipcMain.on("palette-navigate", (_e, navPath) => {

@@ -7,6 +7,7 @@ declare global {
       onDeepLink: (cb: (url: string) => void) => void;
       onUpdateStatus: (cb: (status: { status: string; version?: string; percent?: number }) => void) => void;
       restartForUpdate: () => Promise<void>;
+      showNotification: (title: string, body: string, data?: { conversationId?: string }) => Promise<void>;
       getShortcuts: () => Promise<Record<string, string>>;
       setShortcut: (key: string, accelerator: string) => Promise<Record<string, string>>;
       paletteNavigate: (path: string) => void;
@@ -29,10 +30,13 @@ export function isDesktop(): boolean {
   return isTauri() || isElectron();
 }
 
-export async function notifyNative(title: string, body: string) {
+export async function notifyNative(title: string, body: string, data?: { conversationId?: string }) {
+  if (typeof document !== "undefined" && document.hasFocus()) return;
   if (isTauri()) {
     const { sendNotification } = await import("@tauri-apps/plugin-notification");
     sendNotification({ title, body });
+  } else if (isElectron()) {
+    window.__CODECAST_ELECTRON__!.showNotification(title, body, data);
   }
 }
 

@@ -33,6 +33,8 @@ export function DesktopProvider() {
 
   const notifications = useQuery(api.notifications.list);
   const seenIdsRef = useRef<Set<string> | null>(null);
+  const pendingNotifsRef = useRef<Array<{ title: string; body: string; conversationId?: string }>>([]);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!isDesktop() || !notifications) return;
@@ -46,10 +48,23 @@ export function DesktopProvider() {
       if (!seenIdsRef.current.has(n._id) && !n.read) {
         const actor = n.actor?.name || n.actor?.github_username;
         const title = actor ? `${actor}` : "Codecast";
-        notifyNative(title, n.message);
+        pendingNotifsRef.current.push({ title, body: n.message, conversationId: n.conversation_id });
       }
     }
     seenIdsRef.current = new Set(notifications.map((n) => n._id));
+
+    if (pendingNotifsRef.current.length > 0 && !debounceTimerRef.current) {
+      debounceTimerRef.current = setTimeout(() => {
+        const batch = pendingNotifsRef.current.splice(0);
+        debounceTimerRef.current = null;
+        if (batch.length === 0) return;
+        if (batch.length === 1) {
+          notifyNative(batch[0].title, batch[0].body, { conversationId: batch[0].conversationId });
+        } else {
+          notifyNative("Codecast", `${batch.length} sessions need attention`);
+        }
+      }, 10_000);
+    }
   }, [notifications]);
 
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
