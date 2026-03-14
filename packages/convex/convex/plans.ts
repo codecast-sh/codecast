@@ -670,10 +670,15 @@ export const webGet = query({
             _id: conv._id,
             session_id: conv.session_id,
             title: conv.title,
+            headline: (conv as any).headline,
             project_path: conv.project_path,
             message_count: conv.message_count || 0,
-            is_active: conv.is_active,
+            is_active: (conv as any).is_active,
+            started_at: (conv as any).started_at || conv._creationTime,
             updated_at: conv.updated_at,
+            agent_type: conv.agent_type,
+            outcome_type: (conv as any).outcome_type,
+            git_branch: (conv as any).git_branch,
           });
         }
       }

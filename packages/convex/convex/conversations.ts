@@ -538,6 +538,8 @@ export const createQuickSession = mutation({
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
     session_id: v.optional(v.string()),
+    isolated: v.optional(v.boolean()),
+    worktree_name: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -585,14 +587,19 @@ export const createQuickSession = mutation({
     });
 
     const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : "gemini";
+    const daemonArgs: Record<string, any> = {
+      agent_type: daemonAgentType,
+      project_path: args.project_path || args.git_root,
+      conversation_id: conversationId,
+    };
+    if (args.isolated) {
+      daemonArgs.isolated = true;
+      if (args.worktree_name) daemonArgs.worktree_name = args.worktree_name;
+    }
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_session",
-      args: JSON.stringify({
-        agent_type: daemonAgentType,
-        project_path: args.project_path || args.git_root,
-        conversation_id: conversationId,
-      }),
+      args: JSON.stringify(daemonArgs),
       created_at: now,
     });
 
