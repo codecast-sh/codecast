@@ -94,6 +94,7 @@ export const update = mutation({
       label: v.string(),
       path_or_url: v.string(),
     }))),
+    doc_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -115,6 +116,7 @@ export const update = mutation({
     if (args.acceptance_criteria) updates.acceptance_criteria = args.acceptance_criteria;
     if (args.status) updates.status = args.status;
     if (args.context_pointers) updates.context_pointers = args.context_pointers;
+    if (args.doc_id) updates.doc_id = args.doc_id as Id<"docs">;
 
     if (args.task_ids) {
       const taskDocIds = args.task_ids.map(id => id as Id<"tasks">);
