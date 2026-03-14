@@ -2,7 +2,7 @@
 
 import { useQuery, useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
@@ -17,94 +17,31 @@ function getRelativeTime(timestamp: number): string {
   const diffDays = Math.floor(diffMs / 86400000);
 
   if (diffMinutes < 1) return "just now";
-  if (diffMinutes < 60) return `${diffMinutes}m`;
-  if (diffHours < 24) return `${diffHours}h`;
-  if (diffDays === 1) return "yesterday";
-  if (diffDays < 7) return `${diffDays}d`;
-
-  const date = new Date(timestamp);
-  const thisYear = new Date().getFullYear();
-  if (date.getFullYear() === thisYear) {
-    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 4) {
+    const mins = diffMinutes % 60;
+    return mins > 0 ? `${diffHours}h ${mins}m ago` : `${diffHours}h ago`;
   }
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const date = new Date(timestamp);
+  const h = date.getHours();
+  const m = date.getMinutes();
+  const ampm = h >= 12 ? "pm" : "am";
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${h12}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
 function formatDate(dateStr: string): string {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const today = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const yesterday = new Date(Date.now() - 86400000).toLocaleDateString("en-CA", { timeZone: tz });
-
   if (dateStr === today) return "Today";
   if (dateStr === yesterday) return "Yesterday";
-
   const d = new Date(dateStr + "T12:00:00");
   const now = new Date();
   const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
   if (diffDays < 7) return d.toLocaleDateString("en-US", { weekday: "long" });
-  if (d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  }
+  if (d.getFullYear() === now.getFullYear()) return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-function extractHeadline(item: any): string {
-  if (item.headline) return item.headline;
-  const text = item.summary || "";
-  if (!text) return "";
-  const firstSentence = text.match(/^[^.!?\n]+[.!?]/)?.[0] || text.split("\n")[0]?.slice(0, 90);
-  if (!firstSentence) return text.slice(0, 90);
-  const title = (item.title || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const sentClean = firstSentence.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (title && sentClean.startsWith(title.slice(0, Math.min(title.length, 15)))) return "";
-  return firstSentence.length > 80 ? firstSentence.slice(0, 77) + "..." : firstSentence;
-}
-
-function extractExpandedContent(item: any): { changes: string[]; rest: string } {
-  if (item.key_changes?.length) {
-    return { changes: item.key_changes, rest: item.summary || "" };
-  }
-  const text = item.summary || "";
-  const lines = text.split("\n").filter((l: string) => l.trim().startsWith("- "));
-  if (lines.length) {
-    return { changes: lines.map((l: string) => l.trim().replace(/^-\s*/, "")), rest: "" };
-  }
-  const headline = extractHeadline(item);
-  const cleanHeadline = headline.replace(/\.{3}$/, "").replace(/[.!?]$/, "");
-  const idx = text.indexOf(". ", cleanHeadline.length > 20 ? 20 : 0);
-  const remaining = idx > 0 ? text.slice(idx + 2).trim() : "";
-  return { changes: [], rest: remaining };
-}
-
-const JUNK_PROJECTS = new Set(["unknown", "src", "home", "tmp", "var", "users", "opt", "usr", "app", "root"]);
-
-function extractProject(projectPath: string | undefined): string | undefined {
-  if (!projectPath) return undefined;
-  const parts = projectPath.split("/").filter(Boolean);
-  if (parts.length < 3) return undefined;
-  const name = parts[parts.length - 1];
-  if (!name || JUNK_PROJECTS.has(name.toLowerCase())) return undefined;
-  if (name.length < 2 || name.length > 40) return undefined;
-  if (!/[-_a-zA-Z]/.test(name[0])) return undefined;
-  return name;
-}
-
-function synthesizeDaySummary(items: any[]): { projects: { name: string; count: number }[]; topHeadlines: string[] } {
-  const projectCounts = new Map<string, number>();
-  const headlines: string[] = [];
-  for (const item of items) {
-    const proj = extractProject(item.project_path);
-    if (proj) {
-      projectCounts.set(proj, (projectCounts.get(proj) || 0) + 1);
-    }
-    const h = item.headline || item.title || extractHeadline(item);
-    const clean = h.replace(/\.{3}$/, "").replace(/\.$/, "");
-    headlines.push(clean.length > 55 ? clean.slice(0, 52) + "..." : clean);
-  }
-  const projects = [...projectCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, count]) => ({ name, count }));
-  return { projects, topHeadlines: headlines.slice(0, 4) };
 }
 
 function formatDuration(startMs: number, endMs: number): string {
@@ -122,6 +59,19 @@ function formatDuration(startMs: number, endMs: number): string {
   return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
 }
 
+const JUNK_PROJECTS = new Set(["unknown", "src", "home", "tmp", "var", "users", "opt", "usr", "app", "root"]);
+
+function extractProject(projectPath: string | undefined): string | undefined {
+  if (!projectPath) return undefined;
+  const parts = projectPath.split("/").filter(Boolean);
+  if (parts.length < 3) return undefined;
+  const name = parts[parts.length - 1];
+  if (!name || JUNK_PROJECTS.has(name.toLowerCase())) return undefined;
+  if (name.length < 2 || name.length > 40) return undefined;
+  if (!/[-_a-zA-Z]/.test(name[0])) return undefined;
+  return name;
+}
+
 function avatarColor(name: string): string {
   const colors = [
     "bg-sol-yellow/20 text-sol-yellow",
@@ -137,464 +87,443 @@ function avatarColor(name: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
-function SessionNode({ item, compact, showActor, onNavigate, onProjectFilter, isLast }: {
+function formatMsgCount(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  return String(n);
+}
+
+const OUTCOME_STYLES: Record<string, { border: string; bg: string; label: string; badge: string }> = {
+  shipped: { border: "border-l-sol-green/60", bg: "", label: "shipped", badge: "bg-sol-green/10 text-sol-green/70 ring-1 ring-sol-green/15" },
+  progress: { border: "border-l-sol-yellow/40", bg: "", label: "progress", badge: "bg-sol-yellow/8 text-sol-yellow/60 ring-1 ring-sol-yellow/12" },
+  blocked: { border: "border-l-sol-red/50", bg: "bg-sol-red/[0.03]", label: "blocked", badge: "bg-sol-red/12 text-sol-red/70 ring-1 ring-sol-red/20" },
+  unknown: { border: "border-l-sol-text-dim/15", bg: "", label: "", badge: "" },
+};
+
+const PROJECT_PALETTE = [
+  "bg-sol-cyan/12 text-sol-cyan/70",
+  "bg-sol-yellow/12 text-sol-yellow/70",
+  "bg-sol-violet/12 text-sol-violet/70",
+  "bg-sol-green/12 text-sol-green/70",
+  "bg-sol-orange/12 text-sol-orange/70",
+  "bg-sol-blue/12 text-sol-blue/70",
+  "bg-sol-red/12 text-sol-red/70",
+];
+
+function useProjectColors(items: any[]) {
+  return useMemo(() => {
+    const map: Record<string, string> = {};
+    let idx = 0;
+    for (const item of items) {
+      const proj = extractProject(item.project_path);
+      if (proj && !map[proj]) {
+        map[proj] = PROJECT_PALETTE[idx % PROJECT_PALETTE.length];
+        idx++;
+      }
+    }
+    return map;
+  }, [items]);
+}
+
+const TIMELINE_TYPE_STYLES: Record<string, { color: string; label?: string; bold?: boolean }> = {
+  start: { color: "text-sol-text-dim/40" },
+  direction: { color: "text-sol-yellow/80", label: "user", bold: true },
+  prompt: { color: "text-sol-yellow/80", label: "user", bold: true },
+  decision: { color: "text-sol-violet/70", label: "decided" },
+  discovery: { color: "text-sol-orange/60" },
+  ship: { color: "text-sol-green/70", bold: true },
+  block: { color: "text-sol-red/60" },
+  debug: { color: "text-sol-orange/50" },
+  research: { color: "text-sol-blue/50" },
+  change: { color: "text-sol-text-dim/50" },
+};
+
+function highlightCode(text: string): React.ReactNode {
+  const parts = text.split(/(`[^`]+`|(?:[\w.-]+\.(?:ts|tsx|js|jsx|py|go|rs|css|html|json|yaml|yml|md|sh|sql))\b|(?:[\w]+(?:\.[\w]+)+\(\)))/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={i} className="font-mono text-sol-cyan/60 bg-sol-cyan/5 px-0.5 rounded">{part.slice(1, -1)}</code>;
+    }
+    if (/\.(?:ts|tsx|js|jsx|py|go|rs|css|html|json|yaml|yml|md|sh|sql)$/.test(part)) {
+      return <span key={i} className="font-mono text-sol-cyan/50">{part}</span>;
+    }
+    if (/\w+(?:\.\w+)+\(\)/.test(part)) {
+      return <span key={i} className="font-mono text-sol-violet/50">{part}</span>;
+    }
+    return part;
+  });
+}
+
+function formatRelativeTime(timeStr: string, firstTimeStr: string): string {
+  const parse = (t: string) => {
+    const m = t.match(/^(\d{1,2}):(\d{2})/);
+    return m ? Number(m[1]) * 60 + Number(m[2]) : 0;
+  };
+  const mins = parse(timeStr) - parse(firstTimeStr);
+  if (mins <= 0) return "+0m";
+  if (mins < 60) return `+${mins}m`;
+  const h = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem > 0 ? `+${h}h${rem}m` : `+${h}h`;
+}
+
+function SessionTimeline({ timeline, startedAt }: { timeline: any[]; startedAt?: number }) {
+  if (!timeline?.length) return null;
+  const firstTime = timeline[0]?.t || "00:00";
+
+  return (
+    <div className="mt-0.5 pl-2 border-l border-sol-border/12 space-y-px">
+      {timeline.map((te: any, i: number) => {
+        const style = TIMELINE_TYPE_STYLES[te.type] || TIMELINE_TYPE_STYLES.change;
+        const relTime = formatRelativeTime(te.t, firstTime);
+        const isUserDirection = te.type === "direction" || te.type === "prompt";
+
+        return (
+          <div key={i} className={`flex items-baseline gap-2 ${isUserDirection ? "py-0.5" : ""}`}>
+            <span className="font-mono tabular-nums shrink-0 text-[9px] text-sol-text-dim/25 w-[32px] text-right">
+              {relTime}
+            </span>
+            {style.label && (
+              <span className={`text-[8px] font-medium uppercase tracking-wider shrink-0 ${style.color}`}>
+                {style.label}
+              </span>
+            )}
+            <span className={`leading-snug text-[10px] ${style.color} ${style.bold ? "font-medium" : ""}`}>
+              {highlightCode(te.event)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
   item: any;
   compact?: boolean;
   showActor?: boolean;
   onNavigate?: (id: string) => void;
-  onProjectFilter?: (project: string | null) => void;
-  isLast?: boolean;
+  projectColor?: string;
 }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const actorName = item.actor?.name || "Unknown";
+  const project = extractProject(item.project_path);
+  const outcome = OUTCOME_STYLES[item.outcome_type] || OUTCOME_STYLES.unknown;
+  const isActive = item.status === "active";
+  const isTrivial = (item.message_count || 0) < 3;
+
+  const rawDuration = item.started_at && item.updated_at ? item.updated_at - item.started_at : 0;
+  const cappedDuration = Math.min(rawDuration, 8 * 3600000);
+  const duration = cappedDuration > 60000 && cappedDuration < 8 * 3600000 ? formatDuration(0, cappedDuration) : null;
+  const time = getRelativeTime(item.updated_at || item.started_at || item.generated_at);
 
   const handleNav = useCallback(() => {
     if (onNavigate) onNavigate(item.conversation_id);
     else router.push(`/conversation/${item.conversation_id}`);
   }, [onNavigate, item.conversation_id, router]);
 
-  const project = extractProject(item.project_path);
-  const time = getRelativeTime(item.updated_at || item.started_at || item.generated_at);
-  const isActive = item.status === "active";
-  const headline = extractHeadline(item);
-  const { changes, rest } = extractExpandedContent(item);
+  const rawTitle = item.title || "Session";
+  const firstName = actorName.split(" ")[0];
+  const displayTitle = showActor && rawTitle.startsWith(firstName + " ")
+    ? rawTitle.slice(firstName.length + 1)
+    : rawTitle;
 
-  const rawDurationMs = item.started_at && item.updated_at ? item.updated_at - item.started_at : 0;
-  const duration = rawDurationMs > 0 && rawDurationMs < 86400000
-    ? formatDuration(item.started_at, item.updated_at)
-    : null;
+  const headline = item.headline || "";
+  const changes = item.key_changes || [];
+  const hasTimeline = item.timeline?.length > 0;
+  const hasDetail = changes.length > 0 || item.blockers || item.next_action || hasTimeline;
 
-  const hasExpandContent = changes.length > 0 || rest.length > 0 || item.blockers || item.next_action;
-  const isTrivial = (item.message_count || 0) < 3;
+  const msgCount = item.message_count || 0;
+  const metaParts = [duration, msgCount >= 50 ? `${formatMsgCount(msgCount)} msgs` : null].filter(Boolean);
 
   return (
-    <div className={`relative ${compact ? "pl-5" : "pl-6"} ${isLast ? "" : compact ? "pb-2" : "pb-3"} ${isTrivial ? "opacity-40" : ""} group/session`}>
-      {!isLast && (
-        <div className={`absolute ${compact ? "left-[5px]" : "left-[7px]"} top-0 bottom-0 w-px bg-sol-border/25`} />
-      )}
-      <div className={`absolute left-0 rounded-full ${
-        isActive
-          ? `${compact ? "w-[11px] h-[11px]" : "w-3 h-3"} bg-sol-green ring-2 ring-sol-green/20 animate-pulse`
-          : item.outcome_type === "shipped"
-            ? `${compact ? "w-[9px] h-[9px]" : "w-[11px] h-[11px]"} bg-sol-green/50 ring-1 ring-sol-green/15`
-            : item.outcome_type === "blocked"
-              ? `${compact ? "w-[9px] h-[9px]" : "w-[11px] h-[11px]"} bg-sol-red/40 ring-1 ring-sol-red/15`
-              : `${compact ? "w-[9px] h-[9px]" : "w-[11px] h-[11px]"} bg-sol-text-dim/30 ring-1 ring-sol-text-dim/10`
-      }`} style={{ top: compact ? 4 : 5 }} />
-
-      <div className="min-w-0">
-        <div className="flex items-baseline gap-2 flex-wrap">
-          {showActor && (
-            <span className={`font-medium text-sol-cyan ${compact ? "text-[10px]" : "text-[11px]"}`}>
-              {actorName.split(" ")[0]}
-            </span>
-          )}
-          <span
-            onClick={handleNav}
-            className={`font-semibold text-sol-text cursor-pointer hover:text-sol-yellow transition-colors ${compact ? "text-[12px]" : "text-[13px]"}`}
-          >
-            {item.title}
+    <div
+      onClick={() => hasDetail && setExpanded(!expanded)}
+      className={`group border-l-2 ${outcome.border} ${outcome.bg} ${compact ? "pl-2.5 py-1.5" : "pl-3 py-2"} ${isTrivial ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer" : ""} hover:bg-sol-bg-alt/30 transition-colors rounded-r`}
+    >
+      {/* Row 1: actor + title + project + time */}
+      <div className="flex items-center gap-1.5 min-w-0">
+        {showActor && (
+          <span className={`shrink-0 ${avatarColor(actorName)} rounded-full w-[18px] h-[18px] text-[9px] flex items-center justify-center font-bold`}>
+            {actorName[0].toUpperCase()}
           </span>
-          {project && (
-            <span
-              onClick={(e) => { e.stopPropagation(); onProjectFilter?.(project); }}
-              className={`font-mono text-sol-text-dim/40 ${compact ? "text-[9px]" : "text-[10px]"} ${onProjectFilter ? "cursor-pointer hover:text-sol-cyan/60" : ""}`}
-            >
-              {project}
-            </span>
-          )}
-          {item.outcome_type === "blocked" && (
-            <span className={`text-sol-red/60 font-medium ${compact ? "text-[9px]" : "text-[10px]"}`}>blocked</span>
-          )}
-          <span className={`text-sol-text-dim/30 tabular-nums shrink-0 ${compact ? "text-[9px]" : "text-[10px]"}`}>
-            {duration || time}
-            {item.message_count > 10 && !compact ? ` / ${item.message_count} msgs` : ""}
+        )}
+        {showActor && (
+          <span className={`font-medium text-sol-text shrink-0 ${compact ? "text-[11px]" : "text-[12px]"}`}>
+            {actorName.split(" ")[0]}
           </span>
-        </div>
-
-        <div
-          onClick={() => setExpanded(!expanded)}
-          className={`cursor-pointer ${compact ? "mt-0" : "mt-0.5"}`}
+        )}
+        <span
+          onClick={(e) => { e.stopPropagation(); handleNav(); }}
+          className={`font-semibold text-sol-text truncate cursor-pointer hover:text-sol-yellow transition-colors ${compact ? "text-[12px]" : "text-[13px]"}`}
         >
-          <p className={`text-sol-text-muted leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
+          {displayTitle}
+        </span>
+        {isActive && (
+          <span className="flex items-center gap-0.5 shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+            <span className="text-[8px] text-sol-green/60 font-medium uppercase tracking-wider">live</span>
+          </span>
+        )}
+        {project && (
+          <span className={`font-mono rounded px-1 py-px shrink-0 text-[9px] ${projectColor || "bg-sol-bg-alt text-sol-text-dim/50"}`}>
+            {project}
+          </span>
+        )}
+        <span className="flex-1" />
+        {outcome.label && (
+          <span className={`rounded-full px-1.5 py-px shrink-0 font-medium text-[9px] ${outcome.badge}`}>
+            {outcome.label}
+          </span>
+        )}
+        <span className={`font-mono text-sol-text-dim/35 tabular-nums shrink-0 whitespace-nowrap text-[10px]`}>
+          {time}
+        </span>
+        {hasDetail && (
+          <span className={`text-sol-text-dim/20 text-[8px] shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}>
+            &#x25B6;
+          </span>
+        )}
+      </div>
+
+      {/* Row 2: headline */}
+      {headline && (
+        <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
+          <p className={`text-sol-text-muted/60 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
             {headline}
-            {hasExpandContent && !expanded && (
-              <span className="text-sol-cyan/30 ml-1 text-[10px] hover:text-sol-cyan/60">...</span>
+            {metaParts.length > 0 && (
+              <span className="text-sol-text-dim/20 font-mono text-[9px] ml-2">{metaParts.join(" / ")}</span>
             )}
           </p>
         </div>
+      )}
 
-        {expanded && (
-          <div className={`${compact ? "mt-1 space-y-1" : "mt-1.5 space-y-1.5"}`}>
-            {item.outcome_type === "blocked" && item.blockers && (
-              <div className={`${compact ? "text-[10px]" : "text-[11.5px]"}`}>
-                <span className="text-sol-red/50 font-medium">Blocked: </span>
-                <span className="text-sol-text-muted/80">{item.blockers}</span>
-              </div>
-            )}
-            {changes.length > 0 && (
-              <ul className="space-y-0.5">
-                {changes.map((change: string, i: number) => (
-                  <li key={i} className={`flex gap-1.5 text-sol-text-muted/80 leading-snug ${compact ? "text-[10px]" : "text-[11.5px]"}`}>
-                    <span className="text-sol-text-dim/30 select-none shrink-0">-</span>
-                    <span>{change}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {rest && changes.length === 0 && (
-              <p className={`text-sol-text-muted/70 leading-relaxed ${compact ? "text-[10px]" : "text-[11.5px]"}`}>
-                {rest.length > 150 ? rest.slice(0, 147) + "..." : rest}
-              </p>
-            )}
-            {item.next_action && (isActive || item.outcome_type === "progress") && (
-              <div className={`${compact ? "text-[10px]" : "text-[11.5px]"}`}>
-                <span className="text-sol-cyan/50 font-medium">Next: </span>
-                <span className="text-sol-text-muted/70">{item.next_action}</span>
-              </div>
-            )}
-            {item.git_branch && item.git_branch !== "main" && item.git_branch !== "master" && (
-              <div className={`font-mono text-sol-text-dim/30 ${compact ? "text-[9px]" : "text-[10px]"}`}>
-                {item.git_branch}
-              </div>
-            )}
-            {item.started_at && (
-              <div className={`text-sol-text-dim/25 ${compact ? "text-[9px]" : "text-[10px]"}`}>
-                {new Date(item.started_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
-              </div>
-            )}
-          </div>
+      {/* Expanded detail */}
+      {expanded && (
+        <div className={`mt-1.5 space-y-1 ${showActor ? "ml-[26px]" : ""} text-[11px]`} onClick={(e) => e.stopPropagation()}>
+          {item.outcome_type === "blocked" && item.blockers && (
+            <div>
+              <span className="text-sol-red/60 font-medium">Blocked: </span>
+              <span className="text-sol-text-muted/70">{item.blockers}</span>
+            </div>
+          )}
+          {changes.length > 0 && !hasTimeline && (
+            <ul className="space-y-0.5">
+              {changes.map((c: string, i: number) => (
+                <li key={i} className="flex gap-1.5 text-sol-text-muted/60 leading-snug">
+                  <span className="text-sol-text-dim/30 select-none shrink-0">-</span>
+                  <span>{c}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {item.next_action && (isActive || item.outcome_type === "progress") && (
+            <div>
+              <span className="text-sol-cyan/50 font-medium">Next: </span>
+              <span className="text-sol-text-muted/60">{item.next_action}</span>
+            </div>
+          )}
+          {hasTimeline && <SessionTimeline timeline={item.timeline} startedAt={item.started_at} />}
+          {item.git_branch && item.git_branch !== "main" && item.git_branch !== "master" && (
+            <div className="font-mono text-sol-text-dim/20 text-[9px]">{item.git_branch}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DayNarrative({ narrative, events }: { narrative: string; events: any[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const [showFullNarrative, setShowFullNarrative] = useState(false);
+
+  const sessionCount = useMemo(() => {
+    const ids = new Set(events.map((e) => e.session_title).filter(Boolean));
+    return ids.size;
+  }, [events]);
+
+  const isLong = narrative.length > 200;
+  const displayNarrative = isLong && !showFullNarrative ? narrative.slice(0, 180) + "..." : narrative;
+
+  return (
+    <div className="mb-1.5">
+      <div
+        className="px-2.5 py-1.5 rounded bg-sol-bg-alt/15 border-l-2 border-sol-violet/15"
+      >
+        <p className="text-[11px] text-sol-text-muted/55 leading-relaxed">
+          {displayNarrative}
+          {isLong && !showFullNarrative && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowFullNarrative(true); }}
+              className="text-sol-text-dim/35 hover:text-sol-cyan/50 ml-1 transition-colors"
+            >more</button>
+          )}
+        </p>
+        {events.length > 0 && (
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="text-[9px] text-sol-text-dim/25 hover:text-sol-cyan/40 mt-0.5 block transition-colors"
+          >
+            {expanded ? "collapse" : `${events.length} events, ${sessionCount}s`}
+          </button>
         )}
       </div>
-    </div>
-  );
-}
-
-const EVENT_COLORS: Record<string, string> = {
-  start: "text-sol-text-dim/50",
-  discovery: "text-sol-yellow/70",
-  change: "text-sol-cyan/60",
-  decision: "text-sol-violet/60",
-  ship: "text-sol-green/70",
-  block: "text-sol-red/60",
-  debug: "text-sol-orange/60",
-  research: "text-sol-blue/60",
-};
-
-const EVENT_DOTS: Record<string, string> = {
-  start: "bg-sol-text-dim/30",
-  discovery: "bg-sol-yellow/50",
-  change: "bg-sol-cyan/40",
-  decision: "bg-sol-violet/40",
-  ship: "bg-sol-green/50",
-  block: "bg-sol-red/40",
-  debug: "bg-sol-orange/40",
-  research: "bg-sol-blue/40",
-};
-
-function formatEventTime(timeStr: string, dayDate: string): string {
-  const timeParts = timeStr.match(/^(\d{1,2}):(\d{2})/);
-  if (!timeParts) return timeStr;
-  const h = Number(timeParts[1]);
-  const m = Number(timeParts[2]);
-
-  const now = new Date();
-  const eventDate = new Date(dayDate + "T12:00:00");
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const todayStr = now.toLocaleDateString("en-CA", { timeZone: tz });
-
-  if (dayDate === todayStr) {
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const evMinutes = h * 60 + m;
-    const diffMin = nowMinutes - evMinutes;
-    if (diffMin >= 0 && diffMin < 240) {
-      if (diffMin < 1) return "now";
-      if (diffMin < 60) return `${diffMin}m ago`;
-      const hrs = Math.floor(diffMin / 60);
-      const rem = diffMin % 60;
-      return rem > 0 ? `${hrs}h ${rem}m ago` : `${hrs}h ago`;
-    }
-  }
-
-  const ampm = h >= 12 ? "pm" : "am";
-  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  return `${h12}:${String(m).padStart(2, "0")}${ampm}`;
-}
-
-function TimelineEventDetail({ item, compact, onNavigate }: { item: any; compact?: boolean; onNavigate?: (id: string) => void }) {
-  const router = useRouter();
-  const headline = extractHeadline(item);
-  const { changes } = extractExpandedContent(item);
-  const project = extractProject(item.project_path);
-  const rawDurationMs = item.started_at && item.updated_at ? item.updated_at - item.started_at : 0;
-  const duration = rawDurationMs > 0 && rawDurationMs < 86400000 ? formatDuration(item.started_at, item.updated_at) : null;
-
-  const handleNav = () => {
-    if (onNavigate) onNavigate(item.conversation_id);
-    else router.push(`/conversation/${item.conversation_id}`);
-  };
-
-  return (
-    <div className={`ml-[42px] mt-1 mb-2 pl-3 border-l-2 border-sol-border/20 ${compact ? "text-[10px]" : "text-[11px]"}`}>
-      <div className="flex items-baseline gap-2 flex-wrap">
-        <span onClick={handleNav} className="font-semibold text-sol-text cursor-pointer hover:text-sol-yellow transition-colors">
-          {item.title}
-        </span>
-        {duration && <span className="text-sol-text-dim/30 tabular-nums">{duration}</span>}
-        {item.message_count > 10 && <span className="text-sol-text-dim/30 tabular-nums">{item.message_count} msgs</span>}
-      </div>
-      {headline && <p className="text-sol-text-muted/70 mt-0.5 leading-snug">{headline}</p>}
-      {changes.length > 0 && (
-        <ul className="mt-1 space-y-0.5">
-          {changes.slice(0, 4).map((c: string, i: number) => (
-            <li key={i} className="flex gap-1.5 text-sol-text-muted/60 leading-snug">
-              <span className="text-sol-text-dim/25 select-none shrink-0">-</span>
-              <span>{c}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {item.outcome_type === "blocked" && item.blockers && (
-        <div className="mt-1">
-          <span className="text-sol-red/50 font-medium">Blocked: </span>
-          <span className="text-sol-text-muted/70">{item.blockers}</span>
+      {expanded && events.length > 0 && (
+        <div className="mt-1.5 pl-3 border-l border-sol-border/10 space-y-px" onClick={(e) => e.stopPropagation()}>
+          {events.map((e: any, i: number) => {
+            const style = TIMELINE_TYPE_STYLES[e.type] || TIMELINE_TYPE_STYLES.change;
+            const isUserDirection = e.type === "direction" || e.type === "prompt";
+            const prevSession = i > 0 ? events[i - 1].session_title : null;
+            const showSessionBreak = e.session_title && e.session_title !== prevSession;
+            return (
+              <React.Fragment key={i}>
+                {showSessionBreak && (
+                  <div className="flex items-center gap-2 pt-1 pb-0.5">
+                    <span className="text-[9px] font-medium text-sol-text-dim/30 truncate max-w-[200px]">
+                      {e.session_title}
+                    </span>
+                    {e.project && (
+                      <span className="font-mono text-[8px] text-sol-text-dim/15">{e.project}</span>
+                    )}
+                    <div className="h-px flex-1 bg-sol-border/6" />
+                  </div>
+                )}
+                <div className={`flex items-baseline gap-2 ${isUserDirection ? "py-0.5" : ""}`}>
+                  <span className="font-mono tabular-nums shrink-0 text-[9px] text-sol-text-dim/25 w-[32px] text-right">
+                    {e.t}
+                  </span>
+                  {style.label && (
+                    <span className={`text-[8px] font-medium uppercase tracking-wider shrink-0 ${style.color}`}>
+                      {style.label}
+                    </span>
+                  )}
+                  <span className={`leading-snug text-[10px] ${style.color} ${style.bold ? "font-medium" : ""}`}>
+                    {highlightCode(e.event)}
+                  </span>
+                </div>
+              </React.Fragment>
+            );
+          })}
         </div>
       )}
-      {item.next_action && (item.status === "active" || item.outcome_type === "progress") && (
-        <div className="mt-0.5">
-          <span className="text-sol-cyan/50 font-medium">Next: </span>
-          <span className="text-sol-text-muted/70">{item.next_action}</span>
-        </div>
-      )}
-      {item.git_branch && item.git_branch !== "main" && item.git_branch !== "master" && (
-        <div className="font-mono text-sol-text-dim/25 mt-0.5">{item.git_branch}</div>
-      )}
     </div>
   );
 }
 
-function UnifiedTimeline({ items, compact, onNavigate, dayDate }: {
-  items: any[];
-  compact?: boolean;
-  onNavigate?: (id: string) => void;
-  dayDate: string;
-}) {
-  const router = useRouter();
-  const [expandedSession, setExpandedSession] = useState<string | null>(null);
-
-  const itemsByConvId = useMemo(() => {
-    const map = new Map<string, any>();
-    for (const item of items) map.set(item.conversation_id, item);
-    return map;
-  }, [items]);
-
-  const events = useMemo(() => {
-    const all: Array<{
-      time: string;
-      sortKey: number;
-      event: string;
-      type: string;
-      sessionTitle: string;
-      sessionId: string;
-      project?: string;
-    }> = [];
-
-    for (const item of items) {
-      if (!item.timeline?.length) continue;
-      const project = extractProject(item.project_path);
-      for (const te of item.timeline) {
-        const timeStr = te.t || "00:00";
-        const timeParts = timeStr.match(/^(\d{1,2}):(\d{2})/);
-        const h = timeParts ? Number(timeParts[1]) : 0;
-        const m = timeParts ? Number(timeParts[2]) : 0;
-        const sortKey = h * 60 + m;
-        all.push({
-          time: te.t,
-          sortKey,
-          event: te.event,
-          type: te.type || "change",
-          sessionTitle: item.title || "Session",
-          sessionId: item.conversation_id,
-          project,
-        });
-      }
-    }
-
-    all.sort((a, b) => b.sortKey - a.sortKey);
-    return all;
-  }, [items]);
-
-  const [showAll, setShowAll] = useState(false);
-  const INITIAL_LIMIT = 25;
-
-  if (events.length === 0) return null;
-
-  const handleNav = (id: string) => {
-    if (onNavigate) onNavigate(id);
-    else router.push(`/conversation/${id}`);
-  };
-
-  const visibleEvents = showAll || events.length <= INITIAL_LIMIT ? events : events.slice(0, INITIAL_LIMIT);
-  const hiddenCount = events.length - INITIAL_LIMIT;
-
-  const PROJECT_COLORS: Record<string, string> = {};
-  const PROJECT_PALETTE = [
-    "bg-sol-cyan/15 text-sol-cyan/80 border-sol-cyan/20",
-    "bg-sol-yellow/15 text-sol-yellow/80 border-sol-yellow/20",
-    "bg-sol-violet/15 text-sol-violet/80 border-sol-violet/20",
-    "bg-sol-green/15 text-sol-green/80 border-sol-green/20",
-    "bg-sol-orange/15 text-sol-orange/80 border-sol-orange/20",
-    "bg-sol-blue/15 text-sol-blue/80 border-sol-blue/20",
-    "bg-sol-red/15 text-sol-red/80 border-sol-red/20",
-  ];
-  let colorIdx = 0;
-  for (const ev of events) {
-    const key = ev.project || ev.sessionTitle;
-    if (key && !PROJECT_COLORS[key]) {
-      PROJECT_COLORS[key] = PROJECT_PALETTE[colorIdx % PROJECT_PALETTE.length];
-      colorIdx++;
-    }
-  }
-
-  const seenSessionExpand = new Set<string>();
-
-  return (
-    <div className={`${compact ? "mt-1.5 ml-0.5" : "mt-2 ml-1"}`}>
-      {visibleEvents.map((ev, i) => {
-        const dotColor = EVENT_DOTS[ev.type] || EVENT_DOTS.change;
-        const textColor = EVENT_COLORS[ev.type] || EVENT_COLORS.change;
-        const isLast = i === visibleEvents.length - 1 && (showAll || events.length <= INITIAL_LIMIT);
-        const prevEvent = i > 0 ? visibleEvents[i - 1] : null;
-        const gapMinutes = prevEvent ? Math.abs(ev.sortKey - prevEvent.sortKey) : 0;
-        const hasGap = gapMinutes >= 30;
-        const projKey = ev.project || ev.sessionTitle;
-        const projColor = PROJECT_COLORS[projKey] || PROJECT_PALETTE[0];
-        const isExpanded = expandedSession === ev.sessionId;
-        const showDetail = isExpanded && !seenSessionExpand.has(ev.sessionId);
-        if (isExpanded) seenSessionExpand.add(ev.sessionId);
-
-        return (
-          <div key={i}>
-            {hasGap && (
-              <div className="relative pl-5 py-1.5">
-                <div className="absolute left-[4px] top-0 bottom-0 w-px bg-sol-border/10 border-l border-dashed border-sol-border/15" style={{ width: 0 }} />
-                <div className="h-px bg-sol-border/8 ml-1" />
-              </div>
-            )}
-            <div className={`relative pl-5 ${isLast ? "" : "pb-1.5"}`}>
-              {!isLast && (
-                <div className="absolute left-[4px] top-0 bottom-0 w-px bg-sol-border/20" />
-              )}
-              <div className={`absolute left-0 w-[9px] h-[9px] rounded-full ${dotColor}`} style={{ top: 3 }} />
-              <div
-                className="flex items-baseline gap-2 min-w-0 cursor-pointer"
-                onClick={() => setExpandedSession(isExpanded ? null : ev.sessionId)}
-              >
-                <span className={`font-mono text-sol-text-dim/40 tabular-nums shrink-0 whitespace-nowrap ${compact ? "text-[9px]" : "text-[10px]"}`}>
-                  {formatEventTime(ev.time, dayDate)}
-                </span>
-                <span className={`${textColor} leading-snug min-w-0 truncate ${compact ? "text-[11px]" : "text-[12px]"}`} title={ev.event}>
-                  {ev.event}
-                </span>
-                <span
-                  onClick={(e) => { e.stopPropagation(); handleNav(ev.sessionId); }}
-                  className={`font-mono rounded px-1 py-px border cursor-pointer shrink-0 ${compact ? "text-[8px]" : "text-[9px]"} ${projColor}`}
-                >
-                  {projKey}
-                </span>
-              </div>
-            </div>
-            {showDetail && itemsByConvId.get(ev.sessionId) && (
-              <TimelineEventDetail item={itemsByConvId.get(ev.sessionId)} compact={compact} onNavigate={onNavigate} />
-            )}
-          </div>
-        );
-      })}
-      {!showAll && hiddenCount > 0 && (
-        <button
-          onClick={() => setShowAll(true)}
-          className={`ml-5 mt-1 text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors ${compact ? "text-[10px]" : "text-[11px]"}`}
-        >
-          show {hiddenCount} more events
-        </button>
-      )}
-    </div>
-  );
-}
-
-function DaySection({ day, items, compact, showActor, onNavigate, onProjectFilter, defaultExpanded }: {
+function DaySection({ day, items, compact, showActor, onNavigate, projectColors, dayNarrative, onProjectFilter }: {
   day: { date: string; session_count: number; highlights: string[] };
   items: any[];
   compact?: boolean;
   showActor?: boolean;
   onNavigate?: (id: string) => void;
-  onProjectFilter?: (project: string | null) => void;
-  defaultExpanded?: boolean;
+  projectColors: Record<string, string>;
+  dayNarrative?: { narrative: string; events: any[]; generated_at: number };
+  onProjectFilter?: (project: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const [collapsed, setCollapsed] = useState(false);
   const label = formatDate(day.date);
-  const isRecent = label === "Today" || label === "Yesterday";
-  const { projects, topHeadlines } = useMemo(() => synthesizeDaySummary(items), [items]);
-  const hasTimelineData = useMemo(() => items.some((item: any) => item.timeline?.length > 0), [items]);
+  const outcomes = useMemo(() => {
+    const o = { shipped: 0, progress: 0, blocked: 0 };
+    for (const i of items) {
+      if (i.outcome_type === "shipped") o.shipped++;
+      else if (i.outcome_type === "progress") o.progress++;
+      else if (i.outcome_type === "blocked") o.blocked++;
+    }
+    return o;
+  }, [items]);
+
+  const { projects, peopleCount } = useMemo(() => {
+    const projSet = new Set<string>();
+    const actorSet = new Set<string>();
+    for (const i of items) {
+      const p = extractProject(i.project_path);
+      if (p) projSet.add(p);
+      if (i.actor?._id) actorSet.add(i.actor._id.toString());
+    }
+    return { projects: [...projSet], peopleCount: actorSet.size };
+  }, [items]);
+
+  const outcomeBar = useMemo(() => {
+    const total = outcomes.shipped + outcomes.progress + outcomes.blocked;
+    if (total === 0) return null;
+    return (
+      <div className="flex h-1.5 w-16 rounded-full overflow-hidden bg-sol-border/8 gap-px">
+        {outcomes.shipped > 0 && <div className="bg-sol-green/50 rounded-full" style={{ width: `${(outcomes.shipped / total) * 100}%` }} />}
+        {outcomes.progress > 0 && <div className="bg-sol-yellow/40 rounded-full" style={{ width: `${(outcomes.progress / total) * 100}%` }} />}
+        {outcomes.blocked > 0 && <div className="bg-sol-red/50 rounded-full" style={{ width: `${(outcomes.blocked / total) * 100}%` }} />}
+      </div>
+    );
+  }, [outcomes]);
+
+  const activeCount = useMemo(() => {
+    return items.filter((i) => i.status === "active").length;
+  }, [items]);
 
   return (
-    <div className={compact ? "py-1" : "py-1.5"}>
-      <button onClick={() => setExpanded(!expanded)} className="w-full text-left group">
-        <div className="flex items-center gap-3">
-          <div className={`font-semibold tracking-tight ${isRecent ? "text-sol-text" : "text-sol-text-secondary"} ${compact ? "text-[13px]" : "text-[15px]"}`}>
-            {label}
-          </div>
-          <div className="h-px flex-1 bg-sol-border/15" />
-          {!expanded && projects.length > 0 && (
-            <div className="flex items-center gap-1.5">
-              {projects.slice(0, 3).map((p) => (
-                <span key={p.name} className={`font-mono text-sol-text-dim/35 ${compact ? "text-[9px]" : "text-[10px]"}`}>
-                  {p.name}{p.count > 1 ? ` x${p.count}` : ""}
-                </span>
+    <div className={compact ? "py-0.5" : "py-1"}>
+      <div
+        className="flex items-center gap-3 mb-1.5 cursor-pointer select-none group/day"
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <span className={`text-sol-text-dim/30 text-[10px] transition-transform ${collapsed ? "" : "rotate-90"}`}>
+          &#x25B6;
+        </span>
+        <span className={`font-semibold tracking-tight text-sol-text ${compact ? "text-[13px]" : "text-[15px]"}`}>
+          {label}
+        </span>
+        {activeCount > 0 && (
+          <span className="flex items-center gap-1 text-[9px] text-sol-green/50 font-medium">
+            <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse" />
+            {activeCount} active
+          </span>
+        )}
+        <div className="h-px flex-1 bg-sol-border/15" />
+        <div className="flex items-center gap-2">
+          {outcomeBar}
+          {projects.length > 0 && (
+            <div className="flex items-center gap-1">
+              {projects.slice(0, 4).map((p) => (
+                <button
+                  key={p}
+                  onClick={(e) => { e.stopPropagation(); onProjectFilter?.(p); }}
+                  className={`font-mono rounded px-1 py-px text-[9px] hover:ring-1 hover:ring-sol-cyan/30 transition-all ${projectColors[p] || "bg-sol-bg-alt text-sol-text-dim/40"}`}
+                >
+                  {p}
+                </button>
               ))}
             </div>
           )}
-          <MiniOutcomeBar items={items} />
-          <span className={`text-sol-text-dim tabular-nums ${compact ? "text-[10px]" : "text-[11px]"}`}>
-            {day.session_count}
+          <span className={`text-sol-text-dim/30 tabular-nums text-[10px] flex items-center gap-1.5`}>
+            {showActor && peopleCount > 1 && <span className="text-sol-text-dim/25">{peopleCount}p</span>}
+            {items.length}s
           </span>
-          <span className={`text-[9px] text-sol-text-dim/40 transition-transform ${expanded ? "rotate-90" : ""}`}>&#9654;</span>
         </div>
-      </button>
+      </div>
 
-      {!expanded && (
-        <p className={`text-sol-text-muted/50 leading-relaxed ${compact ? "text-[10px] mt-0.5 mb-0.5" : "text-[11.5px] mt-1 mb-1"}`}>
-          {topHeadlines.slice(0, 2).join("  /  ")}
-          {items.length > 2 && <span className="text-sol-text-dim/30"> +{items.length - 2}</span>}
+      {collapsed && dayNarrative && (
+        <p className="text-[10px] text-sol-text-dim/30 truncate ml-5 -mt-1 mb-0.5">
+          {dayNarrative.narrative.slice(0, 120)}...
         </p>
       )}
 
-      <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
-        <div className="overflow-hidden">
-          {items.length > 0 && (
-            <>
-              {hasTimelineData ? (
-                <UnifiedTimeline items={items} compact={compact} onNavigate={onNavigate} dayDate={day.date} />
-              ) : (
-                <div className={`${compact ? "mt-1.5 ml-0.5" : "mt-2 ml-1"}`}>
-                  {items.map((item: any, i: number) => (
-                    <SessionNode
-                      key={item.conversation_id}
-                      item={item}
-                      compact={compact}
-                      showActor={showActor}
-                      onNavigate={onNavigate}
-                      onProjectFilter={onProjectFilter}
-                      isLast={i === items.length - 1}
-                    />
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
+      {!collapsed && (
+        <>
+          {dayNarrative && <DayNarrative narrative={dayNarrative.narrative} events={dayNarrative.events} />}
+
+          <div className="divide-y divide-sol-border/8">
+            {items.map((item: any) => (
+              <SessionCard
+                key={item.conversation_id}
+                item={item}
+                compact={compact}
+                showActor={showActor}
+                onNavigate={onNavigate}
+                projectColor={projectColors[extractProject(item.project_path) || ""]}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -628,26 +557,6 @@ function PeopleRow({ people, onSelect, selectedId }: { people: any[]; onSelect: 
   );
 }
 
-function MiniOutcomeBar({ items, width = 48 }: { items: any[]; width?: number }) {
-  const counts = { shipped: 0, progress: 0, blocked: 0, other: 0 };
-  for (const item of items) {
-    if (item.outcome_type === "shipped") counts.shipped++;
-    else if (item.outcome_type === "blocked") counts.blocked++;
-    else if (item.outcome_type === "progress") counts.progress++;
-    else counts.other++;
-  }
-  const total = items.length || 1;
-  if (total < 2) return null;
-  return (
-    <div className="flex rounded-full overflow-hidden h-[3px]" style={{ width }}>
-      {counts.shipped > 0 && <div className="bg-sol-green/50" style={{ width: `${(counts.shipped / total) * 100}%` }} />}
-      {counts.progress > 0 && <div className="bg-sol-cyan/30" style={{ width: `${(counts.progress / total) * 100}%` }} />}
-      {counts.blocked > 0 && <div className="bg-sol-red/40" style={{ width: `${(counts.blocked / total) * 100}%` }} />}
-      {counts.other > 0 && <div className="bg-sol-text-dim/15" style={{ width: `${(counts.other / total) * 100}%` }} />}
-    </div>
-  );
-}
-
 type WindowHours = 24 | 168 | 720;
 
 interface ActivityFeedProps {
@@ -672,10 +581,6 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
     timezone: tz,
   });
 
-  const handleProjectFilter = useCallback((proj: string | null) => {
-    setProjectFilter((prev) => prev === proj ? null : proj);
-  }, []);
-
   const filteredFeed = useMemo(() => {
     if (!digest?.feed) return [];
     let items = digest.feed;
@@ -684,17 +589,19 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
     return items;
   }, [digest?.feed, actorFilter, projectFilter]);
 
+  const projectColors = useProjectColors(filteredFeed);
+
   const filteredDaySummaries = useMemo(() => {
     if (!digest?.day_summaries) return [];
-    if (!actorFilter) return digest.day_summaries;
-    const actorFeedDates = new Set(
+    if (!actorFilter && !projectFilter) return digest.day_summaries;
+    const feedDates = new Set(
       filteredFeed.map((item: any) => {
         const ts = item.updated_at || item.started_at || item.generated_at;
         return new Date(ts).toLocaleDateString("en-CA", { timeZone: tz });
       })
     );
-    return digest.day_summaries.filter((d: any) => actorFeedDates.has(d.date));
-  }, [digest?.day_summaries, actorFilter, filteredFeed, tz]);
+    return digest.day_summaries.filter((d: any) => feedDates.has(d.date));
+  }, [digest?.day_summaries, actorFilter, projectFilter, filteredFeed, tz]);
 
   const feedByDay = useMemo(() => {
     const map = new Map<string, any[]>();
@@ -755,8 +662,8 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
       ) : filteredDaySummaries.length === 0 ? (
         <EmptyState title="No sessions" description={actorFilter ? "No sessions for this person in this window." : "No sessions found."} />
       ) : (
-        <div>
-          {filteredDaySummaries.map((day: any, i: number) => (
+        <div className={compact ? "space-y-1" : "space-y-2"}>
+          {filteredDaySummaries.map((day: any) => (
             <DaySection
               key={day.date}
               day={day}
@@ -764,8 +671,9 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
               compact={compact}
               showActor={mode === "team"}
               onNavigate={onNavigate}
-              onProjectFilter={handleProjectFilter}
-              defaultExpanded={true}
+              projectColors={projectColors}
+              dayNarrative={digest.day_narratives?.[day.date]}
+              onProjectFilter={setProjectFilter}
             />
           ))}
         </div>
@@ -783,7 +691,9 @@ function FeedControls({ sessionCount, viewMode, setViewMode, windowHours, setWin
   compact?: boolean;
 }) {
   const backfillTimelines = useAction(api.sessionInsights.backfillTimelines);
+  const backfillDayNarratives = useAction(api.sessionInsights.backfillDayNarratives);
   const [backfilling, setBackfilling] = useState(false);
+  const [genDays, setGenDays] = useState(false);
 
   const handleBackfill = useCallback(async () => {
     setBackfilling(true);
@@ -795,6 +705,17 @@ function FeedControls({ sessionCount, viewMode, setViewMode, windowHours, setWin
     }
     setBackfilling(false);
   }, [backfillTimelines, windowHours]);
+
+  const handleGenDays = useCallback(async () => {
+    setGenDays(true);
+    try {
+      const result = await backfillDayNarratives({ window_hours: windowHours });
+      console.log("Day narrative result:", result);
+    } catch (e) {
+      console.error("Day narrative gen failed:", e);
+    }
+    setGenDays(false);
+  }, [backfillDayNarratives, windowHours]);
 
   return (
     <div className={`flex items-center justify-between ${compact ? "px-1" : ""}`}>
@@ -809,46 +730,41 @@ function FeedControls({ sessionCount, viewMode, setViewMode, windowHours, setWin
         >
           {backfilling ? "..." : "regen"}
         </button>
+        <button
+          onClick={handleGenDays}
+          disabled={genDays}
+          className="text-[10px] text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors disabled:opacity-30"
+        >
+          {genDays ? "..." : "days"}
+        </button>
       </div>
       <div className="flex items-center gap-2">
-        <ViewToggle viewMode={viewMode} setViewMode={setViewMode} />
-        <WindowToggle windowHours={windowHours} setWindowHours={setWindowHours} />
+        <div className="flex items-center gap-0.5 bg-sol-bg-alt/60 rounded-md p-0.5">
+          <button
+            onClick={() => setViewMode("feed")}
+            className={`px-2 py-0.5 text-[11px] rounded transition-colors ${viewMode === "feed" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-muted hover:text-sol-text"}`}
+          >
+            Feed
+          </button>
+          <button
+            onClick={() => setViewMode("raw")}
+            className={`px-2 py-0.5 text-[11px] rounded transition-colors ${viewMode === "raw" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-muted hover:text-sol-text"}`}
+          >
+            Raw
+          </button>
+        </div>
+        <div className="flex items-center gap-0.5 bg-sol-bg-alt/60 rounded-md p-0.5">
+          {([24, 168, 720] as WindowHours[]).map((h) => (
+            <button
+              key={h}
+              onClick={() => setWindowHours(h)}
+              className={`px-2 py-0.5 text-[11px] rounded transition-colors ${windowHours === h ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-muted hover:text-sol-text"}`}
+            >
+              {h === 24 ? "24h" : h === 168 ? "7d" : "30d"}
+            </button>
+          ))}
+        </div>
       </div>
-    </div>
-  );
-}
-
-function ViewToggle({ viewMode, setViewMode }: { viewMode: "feed" | "raw"; setViewMode: (m: "feed" | "raw") => void }) {
-  return (
-    <div className="flex items-center gap-0.5 bg-sol-bg-alt/60 rounded-md p-0.5">
-      <button
-        onClick={() => setViewMode("feed")}
-        className={`px-2 py-0.5 text-[11px] rounded transition-colors ${viewMode === "feed" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-muted hover:text-sol-text"}`}
-      >
-        Feed
-      </button>
-      <button
-        onClick={() => setViewMode("raw")}
-        className={`px-2 py-0.5 text-[11px] rounded transition-colors ${viewMode === "raw" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-muted hover:text-sol-text"}`}
-      >
-        Raw
-      </button>
-    </div>
-  );
-}
-
-function WindowToggle({ windowHours, setWindowHours }: { windowHours: WindowHours; setWindowHours: (h: WindowHours) => void }) {
-  return (
-    <div className="flex items-center gap-0.5 bg-sol-bg-alt/60 rounded-md p-0.5">
-      {([24, 168, 720] as WindowHours[]).map((h) => (
-        <button
-          key={h}
-          onClick={() => setWindowHours(h)}
-          className={`px-2 py-0.5 text-[11px] rounded transition-colors ${windowHours === h ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-muted hover:text-sol-text"}`}
-        >
-          {h === 24 ? "24h" : h === 168 ? "7d" : "30d"}
-        </button>
-      ))}
     </div>
   );
 }
