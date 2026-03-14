@@ -1890,75 +1890,6 @@ async function processSessionFile(
       }
     }
 
-      // Detect plan mode tool calls (ExitPlanMode, TaskCreate, TaskUpdate) and sync to Convex
-      if (conversationId) {
-        const lines = newContent.split("\n");
-        for (const line of lines) {
-          if (!line.includes("ExitPlanMode") && !line.includes("TaskCreate") && !line.includes("TaskUpdate")) continue;
-          try {
-            const entry = JSON.parse(line);
-            const msg = entry.message || entry;
-            const blocks = Array.isArray(msg.content) ? msg.content : [];
-            for (const block of blocks) {
-              if (block.type !== "tool_use") continue;
-
-              if (block.name === "ExitPlanMode" && block.input?.plan && !planModeSynced.has(sessionId)) {
-                planModeSynced.add(sessionId);
-                const dirName = path.basename(path.dirname(filePath));
-                const projPath = dirName ? decodeProjectDirName(dirName) : undefined;
-                try {
-                  const planShortId = await syncService.syncPlanFromPlanMode({
-                    sessionId,
-                    planContent: block.input.plan,
-                    projectPath: projPath,
-                  });
-                  if (planShortId) {
-                    planModePlanMap.set(sessionId, planShortId);
-                  }
-                  log(`Synced plan_mode plan ${planShortId} for session ${sessionId.slice(0, 8)} (${block.input.plan.length} chars)`);
-                } catch (err) {
-                  log(`Failed to sync plan_mode: ${err instanceof Error ? err.message : String(err)}`);
-                }
-              }
-
-              if (block.name === "TaskCreate" && block.input?.subject) {
-                const taskMap = planModeTaskMap.get(sessionId) || new Map();
-                const localId = String(taskMap.size + 1);
-                try {
-                  const shortId = await syncService.syncTaskFromPlanMode({
-                    sessionId,
-                    title: block.input.subject,
-                    description: block.input.description,
-                    planShortId: planModePlanMap.get(sessionId),
-                  });
-                  if (shortId) {
-                    taskMap.set(localId, shortId);
-                    planModeTaskMap.set(sessionId, taskMap);
-                    log(`Synced task ${shortId} from TaskCreate in session ${sessionId.slice(0, 8)}: ${block.input.subject}`);
-                  }
-                } catch (err) {
-                  log(`Failed to sync TaskCreate: ${err instanceof Error ? err.message : String(err)}`);
-                }
-              }
-
-              if (block.name === "TaskUpdate" && block.input?.taskId && block.input?.status) {
-                const taskMap = planModeTaskMap.get(sessionId);
-                const shortId = taskMap?.get(String(block.input.taskId));
-                if (shortId) {
-                  const status = block.input.status === "completed" ? "done" : block.input.status === "in_progress" ? "in_progress" : block.input.status;
-                  try {
-                    await syncService.updateTaskStatus(shortId, status, sessionId);
-                    log(`Updated task ${shortId} -> ${status} in session ${sessionId.slice(0, 8)}`);
-                  } catch (err) {
-                    log(`Failed to sync TaskUpdate: ${err instanceof Error ? err.message : String(err)}`);
-                  }
-                }
-              }
-            }
-          } catch {}
-        }
-      }
-
   if (messages.length === 0) {
     setPosition(filePath, stats.size);
     return;
@@ -2200,6 +2131,77 @@ async function processSessionFile(
 
       setPosition(filePath, stats.size);
       return;
+    }
+  }
+
+  // Intercept plan mode tool calls (ExitPlanMode, TaskCreate, TaskUpdate) and sync to Convex
+  if (conversationId && (newContent.includes("ExitPlanMode") || newContent.includes("TaskCreate") || newContent.includes("TaskUpdate"))) {
+    const lines = newContent.split("\n");
+    for (const line of lines) {
+      if (!line.includes("ExitPlanMode") && !line.includes("TaskCreate") && !line.includes("TaskUpdate")) continue;
+      try {
+        const entry = JSON.parse(line);
+        const msg = entry.message || entry;
+        const blocks = Array.isArray(msg.content) ? msg.content : [];
+        for (const block of blocks) {
+          if (block.type !== "tool_use") continue;
+
+          if (block.name === "ExitPlanMode" && block.input?.plan && !planModeSynced.has(sessionId)) {
+            planModeSynced.add(sessionId);
+            const dirName = path.basename(path.dirname(filePath));
+            const projPath = dirName ? decodeProjectDirName(dirName) : undefined;
+            try {
+              const planShortId = await syncService.syncPlanFromPlanMode({
+                sessionId,
+                planContent: block.input.plan,
+                projectPath: projPath,
+              });
+              if (planShortId) {
+                planModePlanMap.set(sessionId, planShortId);
+                savePlanModeCache();
+              }
+              log(`Synced plan_mode plan ${planShortId} for session ${sessionId.slice(0, 8)} (${block.input.plan.length} chars)`);
+            } catch (err) {
+              log(`Failed to sync plan_mode: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+
+          if (block.name === "TaskCreate" && block.input?.subject) {
+            const taskMap = planModeTaskMap.get(sessionId) || new Map();
+            const localId = String(taskMap.size + 1);
+            try {
+              const shortId = await syncService.syncTaskFromPlanMode({
+                sessionId,
+                title: block.input.subject,
+                description: block.input.description,
+                planShortId: planModePlanMap.get(sessionId),
+              });
+              if (shortId) {
+                taskMap.set(localId, shortId);
+                planModeTaskMap.set(sessionId, taskMap);
+                savePlanModeCache();
+                log(`Synced task ${shortId} from TaskCreate in session ${sessionId.slice(0, 8)}: ${block.input.subject}`);
+              }
+            } catch (err) {
+              log(`Failed to sync TaskCreate: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+
+          if (block.name === "TaskUpdate" && block.input?.taskId && block.input?.status) {
+            const taskMap = planModeTaskMap.get(sessionId);
+            const shortId = taskMap?.get(String(block.input.taskId));
+            if (shortId) {
+              const status = block.input.status === "completed" ? "done" : block.input.status === "in_progress" ? "in_progress" : block.input.status;
+              try {
+                await syncService.updateTaskStatus(shortId, status, sessionId);
+                log(`Updated task ${shortId} -> ${status} in session ${sessionId.slice(0, 8)}`);
+              } catch (err) {
+                log(`Failed to sync TaskUpdate: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
+          }
+        }
+      } catch {}
     }
   }
 
@@ -4250,6 +4252,42 @@ const planHandoffChecked = new Set<string>();
 const planModeSynced = new Set<string>();
 const planModePlanMap = new Map<string, string>(); // sessionId -> plan short_id
 const planModeTaskMap = new Map<string, Map<string, string>>(); // sessionId -> (localTaskId -> shortId)
+
+const PLAN_MODE_CACHE_FILE = path.join(CONFIG_DIR, "plan-mode-cache.json");
+
+function loadPlanModeCache(): void {
+  try {
+    if (!fs.existsSync(PLAN_MODE_CACHE_FILE)) return;
+    const data = JSON.parse(fs.readFileSync(PLAN_MODE_CACHE_FILE, "utf-8"));
+    if (data.synced) for (const s of data.synced) planModeSynced.add(s);
+    if (data.plans) for (const [k, v] of Object.entries(data.plans)) planModePlanMap.set(k, v as string);
+    if (data.tasks) {
+      for (const [sessionId, taskObj] of Object.entries(data.tasks)) {
+        const map = new Map<string, string>();
+        for (const [localId, shortId] of Object.entries(taskObj as Record<string, string>)) {
+          map.set(localId, shortId);
+        }
+        planModeTaskMap.set(sessionId, map);
+      }
+    }
+  } catch {}
+}
+
+function savePlanModeCache(): void {
+  try {
+    const tasks: Record<string, Record<string, string>> = {};
+    for (const [sessionId, map] of planModeTaskMap) {
+      tasks[sessionId] = Object.fromEntries(map);
+    }
+    fs.writeFileSync(PLAN_MODE_CACHE_FILE, JSON.stringify({
+      synced: [...planModeSynced],
+      plans: Object.fromEntries(planModePlanMap),
+      tasks,
+    }), { mode: 0o600 });
+  } catch {}
+}
+
+loadPlanModeCache();
 
 // Track subagent sessions whose parent hasn't been cached yet: childSessionId -> parentSessionId
 const pendingSubagentParents = new Map<string, string>();
