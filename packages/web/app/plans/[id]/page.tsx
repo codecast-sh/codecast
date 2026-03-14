@@ -2,19 +2,19 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { Badge } from "../../../components/ui/badge";
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { toast } from "sonner";
 import {
   Circle,
   CircleDot,
   CheckCircle2,
   PauseCircle,
   XCircle,
-  ListChecks,
   MessageSquare,
   ArrowLeft,
   Clock,
@@ -24,6 +24,11 @@ import {
   FileText,
   ChevronDown,
   ChevronRight,
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  Minus,
+  AlertTriangle,
 } from "lucide-react";
 import Markdown from "react-markdown";
 
@@ -37,12 +42,21 @@ const STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color:
   abandoned: { icon: XCircle, label: "Abandoned", color: "text-sol-text-dim" },
 };
 
-const TASK_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string }> = {
-  open: { icon: Circle, color: "text-sol-blue" },
-  in_progress: { icon: CircleDot, color: "text-sol-yellow" },
-  done: { icon: CheckCircle2, color: "text-sol-green" },
-  dropped: { icon: XCircle, color: "text-sol-text-dim" },
-  draft: { icon: Circle, color: "text-sol-text-dim" },
+const TASK_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string; label: string }> = {
+  open: { icon: Circle, color: "text-sol-blue", label: "Open" },
+  in_progress: { icon: CircleDot, color: "text-sol-yellow", label: "In Progress" },
+  done: { icon: CheckCircle2, color: "text-sol-green", label: "Done" },
+  dropped: { icon: XCircle, color: "text-sol-text-dim", label: "Dropped" },
+  draft: { icon: Circle, color: "text-sol-text-dim", label: "Draft" },
+};
+
+const TASK_STATUS_CYCLE = ["open", "in_progress", "done"];
+
+const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; color: string }> = {
+  urgent: { icon: AlertTriangle, color: "text-sol-red" },
+  high: { icon: ArrowUp, color: "text-sol-orange" },
+  medium: { icon: Minus, color: "text-sol-text-dim" },
+  low: { icon: ArrowDown, color: "text-sol-text-dim" },
 };
 
 function formatTimestamp(ts: number): string {
@@ -164,6 +178,130 @@ function PlanSessionCard({ session: s }: { session: any }) {
   );
 }
 
+function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: any[] }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [showDone, setShowDone] = useState(false);
+  const webUpdate = useMutation(api.tasks.webUpdate);
+  const webCreate = useMutation(api.tasks.webCreate);
+
+  const cycleStatus = useCallback(async (shortId: string, currentStatus: string) => {
+    const idx = TASK_STATUS_CYCLE.indexOf(currentStatus);
+    const next = TASK_STATUS_CYCLE[(idx + 1) % TASK_STATUS_CYCLE.length];
+    try {
+      await webUpdate({ short_id: shortId, status: next });
+      toast.success(`${shortId} -> ${next}`);
+    } catch {
+      toast.error("Failed to update");
+    }
+  }, [webUpdate]);
+
+  const handleAdd = useCallback(async () => {
+    if (!newTitle.trim()) return;
+    try {
+      await webCreate({ title: newTitle.trim(), plan_id: planShortId });
+      setNewTitle("");
+      setShowAdd(false);
+      toast.success("Task created");
+    } catch {
+      toast.error("Failed to create task");
+    }
+  }, [newTitle, planShortId, webCreate]);
+
+  const activeTasks = tasks.filter(t => t.status !== "done" && t.status !== "dropped");
+  const doneTasks = tasks.filter(t => t.status === "done" || t.status === "dropped");
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text">
+          <CheckCircle2 className="w-4 h-4 text-sol-text-dim" />
+          Tasks ({tasks.length})
+        </h2>
+        <button
+          onClick={() => setShowAdd(!showAdd)}
+          className="flex items-center gap-1 text-xs text-sol-cyan hover:text-sol-text transition-colors"
+        >
+          <Plus className="w-3 h-3" />
+          Add
+        </button>
+      </div>
+
+      {showAdd && (
+        <div className="flex gap-2 mb-2">
+          <input
+            autoFocus
+            value={newTitle}
+            onChange={e => setNewTitle(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") handleAdd(); if (e.key === "Escape") setShowAdd(false); }}
+            placeholder="Task title..."
+            className="flex-1 text-sm px-3 py-1.5 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
+          />
+          <button onClick={handleAdd} disabled={!newTitle.trim()} className="px-3 py-1.5 text-xs rounded-lg bg-sol-cyan text-sol-bg hover:opacity-90 disabled:opacity-40 transition-opacity">
+            Create
+          </button>
+        </div>
+      )}
+
+      <div className="border border-sol-border/20 rounded-lg overflow-hidden">
+        {activeTasks.map((task: any) => {
+          const tc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
+          const TaskIcon = tc.icon;
+          const pc = task.priority ? PRIORITY_CONFIG[task.priority] : null;
+          const PriorityIcon = pc?.icon;
+          return (
+            <div key={task._id} className="flex items-center gap-2.5 px-3 py-2 border-b border-sol-border/10 last:border-b-0 group">
+              <button
+                onClick={() => cycleStatus(task.short_id, task.status)}
+                title={`${tc.label} (click to cycle)`}
+                className="flex-shrink-0 hover:scale-110 transition-transform"
+              >
+                <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
+              </button>
+              <Link href={`/tasks/${task._id}`} className="flex-1 min-w-0 flex items-center gap-2 hover:text-sol-cyan transition-colors">
+                <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
+                <span className="text-sm text-sol-text truncate">{task.title}</span>
+              </Link>
+              {PriorityIcon && pc && (
+                <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${pc.color}`} />
+              )}
+            </div>
+          );
+        })}
+        {doneTasks.length > 0 && (
+          <>
+            <button
+              onClick={() => setShowDone(!showDone)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-text-dim hover:text-sol-text border-b border-sol-border/10 last:border-b-0 transition-colors"
+            >
+              {showDone ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              {doneTasks.length} completed
+            </button>
+            {showDone && doneTasks.map((task: any) => {
+              const tc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.done;
+              const TaskIcon = tc.icon;
+              return (
+                <div key={task._id} className="flex items-center gap-2.5 px-3 py-2 border-b border-sol-border/10 last:border-b-0 opacity-50">
+                  <TaskIcon className={`w-3.5 h-3.5 ${tc.color} flex-shrink-0`} />
+                  <Link href={`/tasks/${task._id}`} className="flex-1 min-w-0 flex items-center gap-2">
+                    <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
+                    <span className="text-sm text-sol-text-muted line-through truncate">{task.title}</span>
+                  </Link>
+                </div>
+              );
+            })}
+          </>
+        )}
+        {tasks.length === 0 && (
+          <div className="px-3 py-4 text-center text-xs text-sol-text-dim">
+            No tasks yet
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function PlanDetailPage() {
   const params = useParams();
   const id = params?.id as string;
@@ -255,32 +393,7 @@ export default function PlanDetailPage() {
             )}
 
             {/* Tasks */}
-            {plan.tasks?.length > 0 && (
-              <div className="mb-6">
-                <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-                  <ListChecks className="w-4 h-4 text-sol-text-dim" />
-                  Tasks ({plan.tasks.length})
-                </h2>
-                <div className="border border-sol-border/20 rounded-lg overflow-hidden">
-                  {plan.tasks.map((task: any) => {
-                    const tc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
-                    const TaskIcon = tc.icon;
-                    return (
-                      <Link
-                        key={task._id}
-                        href={`/tasks/${task._id}`}
-                        className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-sol-bg-alt/40 transition-colors border-b border-sol-border/10 last:border-b-0"
-                      >
-                        <TaskIcon className={`w-3.5 h-3.5 ${tc.color} flex-shrink-0`} />
-                        <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
-                        <span className="text-sm text-sol-text truncate">{task.title}</span>
-                        <span className="text-[10px] text-sol-text-dim ml-auto">{task.status}</span>
-                      </Link>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} />
 
             {/* Sessions */}
             {plan.sessions?.length > 0 && (

@@ -892,6 +892,7 @@ export const webCreate = mutation({
     priority: v.optional(v.string()),
     project_id: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
+    plan_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -910,11 +911,21 @@ export const webCreate = mutation({
       if (project) project_id = project._id;
     }
 
+    let plan_id: Id<"plans"> | undefined;
+    if (args.plan_id) {
+      const plan = await ctx.db
+        .query("plans")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
+        .first();
+      if (plan) plan_id = plan._id;
+    }
+
     const now = Date.now();
     const id = await ctx.db.insert("tasks", {
       user_id: userId,
       team_id,
       project_id,
+      plan_id,
       short_id,
       title: args.title,
       description: args.description,
@@ -927,6 +938,14 @@ export const webCreate = mutation({
       created_at: now,
       updated_at: now,
     });
+
+    if (plan_id) {
+      const plan = await ctx.db.get(plan_id);
+      if (plan) {
+        const taskIds = plan.task_ids || [];
+        await ctx.db.patch(plan_id, { task_ids: [...taskIds, id], updated_at: now });
+      }
+    }
 
     await ctx.db.insert("task_history", {
       task_id: id,
