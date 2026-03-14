@@ -7990,7 +7990,7 @@ work
   .command("snippet")
   .description("Show current team task context (what agents see)")
   .action(async () => {
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = {};
     if (sessionId) body.conversation_id = sessionId;
     const result = await cliPost("/cli/work/snippet", body);
@@ -8068,7 +8068,7 @@ plan
     if (options.acceptance?.length) body.acceptance_criteria = options.acceptance;
     if (options.project) body.project_id = options.project;
 
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     if (options.fromSession) {
       body.source = "promoted";
       if (sessionId) body.session_id = sessionId;
@@ -8169,12 +8169,12 @@ plan
   .description("Bind current session to a plan")
   .argument("<plan_id>", "Plan short ID")
   .action(async (planId: string) => {
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     if (!sessionId) {
-      console.error("No session ID found (CLAUDE_CODE_SESSION_ID or CODEX_SESSION_ID)");
+      console.error("Could not detect current session. Set CLAUDE_CODE_SESSION_ID or run from within a Claude Code session.");
       process.exit(1);
     }
-    await cliPost("/cli/plans/bind", { short_id: planId, session_id: sessionId });
+    await cliPost("/cli/plans/bind", { short_id: planId, conversation_id: sessionId });
     console.log(`${c.green}ok${c.reset} Session bound to plan ${c.cyan}${planId}${c.reset}`);
   });
 
@@ -8182,9 +8182,9 @@ plan
   .command("unbind")
   .description("Unbind current session from its plan")
   .action(async () => {
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     if (!sessionId) {
-      console.error("No session ID found (CLAUDE_CODE_SESSION_ID or CODEX_SESSION_ID)");
+      console.error("Could not detect current session. Set CLAUDE_CODE_SESSION_ID or run from within a Claude Code session.");
       process.exit(1);
     }
     await cliPost("/cli/plans/unbind", { session_id: sessionId });
@@ -8199,7 +8199,7 @@ plan
   .option("--goal <text>", "Update goal")
   .option("--title <text>", "Update title")
   .action(async (planId: string, options: any) => {
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     if (options.log) {
       const body: Record<string, any> = { short_id: planId, entry: options.log };
       if (sessionId) body.session_id = sessionId;
@@ -8226,7 +8226,7 @@ plan
   .argument("<decision>", "The decision")
   .option("--rationale <why>", "Rationale for the decision")
   .action(async (planId: string, decision: string, options: any) => {
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: planId, decision };
     if (options.rationale) body.rationale = options.rationale;
     if (sessionId) body.session_id = sessionId;
@@ -8240,7 +8240,7 @@ plan
   .argument("<plan_id>", "Plan short ID")
   .argument("<finding>", "The finding")
   .action(async (planId: string, finding: string) => {
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = { short_id: planId, finding };
     if (sessionId) body.session_id = sessionId;
     await cliPost("/cli/plans/discover", body);
@@ -8298,9 +8298,9 @@ plan
   .command("promote")
   .description("Promote current session's ad-hoc plan to a persistent plan")
   .action(async () => {
-    const sessionId = process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SESSION_ID;
+    const sessionId = detectCurrentSessionId();
     if (!sessionId) {
-      console.error("No session ID found (CLAUDE_CODE_SESSION_ID or CODEX_SESSION_ID)");
+      console.error("Could not detect current session. Set CLAUDE_CODE_SESSION_ID or run from within a Claude Code session.");
       process.exit(1);
     }
     const result = await cliPost("/cli/plans/create", { title: "Promoted from session", source: "promoted", session_id: sessionId });
