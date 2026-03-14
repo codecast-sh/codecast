@@ -36,6 +36,8 @@ import {
   Bot,
   History,
   ChevronDown,
+  GitBranch,
+  Radio,
 } from "lucide-react";
 
 const STATUS_OPTIONS = [
@@ -153,6 +155,99 @@ function Dropdown({
         </div>
       )}
     </div>
+  );
+}
+
+const OUTCOME_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  shipped: { bg: "bg-emerald-500/15", text: "text-emerald-400", label: "Shipped" },
+  progress: { bg: "bg-sol-blue/15", text: "text-sol-blue", label: "Progress" },
+  exploration: { bg: "bg-sol-violet/15", text: "text-sol-violet", label: "Exploration" },
+  blocked: { bg: "bg-sol-red/15", text: "text-sol-red", label: "Blocked" },
+  abandoned: { bg: "bg-sol-text-dim/15", text: "text-sol-text-dim", label: "Abandoned" },
+};
+
+function formatDuration(start: number, end: number) {
+  const mins = Math.round((end - start) / 60000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remainMins = mins % 60;
+  return remainMins > 0 ? `${hours}h ${remainMins}m` : `${hours}h`;
+}
+
+function SessionCard({ session }: { session: any }) {
+  const isActive = session.is_active;
+  const outcome = session.outcome_type ? OUTCOME_STYLES[session.outcome_type] : null;
+  const projectName = session.project_path?.split("/").pop();
+
+  return (
+    <Link
+      href={`/conversation/${session.session_id || session._id}`}
+      className={`block px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors ${isActive ? "border-l-2 border-emerald-400" : ""}`}
+    >
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            {isActive && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                live
+              </span>
+            )}
+            <span className="text-sm font-medium text-sol-text truncate">
+              {session.title || "Untitled Session"}
+            </span>
+          </div>
+          {session.headline && (
+            <p className="text-xs text-sol-text-muted line-clamp-2 mb-1.5">{session.headline}</p>
+          )}
+          <div className="flex items-center gap-3 text-[11px] text-sol-text-dim flex-wrap">
+            {projectName && (
+              <span className="flex items-center gap-1">
+                <FolderGit2 className="w-3 h-3" />
+                {projectName}
+              </span>
+            )}
+            {session.git_branch && (
+              <span className="flex items-center gap-1 font-mono">
+                <GitBranch className="w-3 h-3" />
+                {session.git_branch}
+              </span>
+            )}
+            <span className="flex items-center gap-1">
+              <MessageSquare className="w-3 h-3" />
+              {session.message_count}
+            </span>
+            {session.started_at && session.updated_at && (
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {formatDuration(session.started_at, session.updated_at)}
+              </span>
+            )}
+            <span>{formatRelative(session.updated_at || session.started_at)}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {outcome && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${outcome.bg} ${outcome.text}`}>
+              {outcome.label}
+            </span>
+          )}
+          <ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />
+        </div>
+      </div>
+      {isActive && session.recent_messages && session.recent_messages.length > 0 && (
+        <div className="mt-2 ml-0 border-t border-sol-border/10 pt-2 space-y-1">
+          {session.recent_messages.map((msg: any) => (
+            <div key={msg._id} className="flex gap-2 text-[11px]">
+              <span className={`flex-shrink-0 font-medium ${msg.role === "user" ? "text-sol-cyan" : "text-sol-violet"}`}>
+                {msg.role === "user" ? "you" : "agent"}
+              </span>
+              <span className="text-sol-text-dim truncate">{msg.content}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Link>
   );
 }
 
@@ -510,32 +605,26 @@ export default function TaskDetailPage() {
           {/* Linked Sessions */}
           {data.linked_conversations && data.linked_conversations.length > 0 && (
             <div className="mb-6">
-              <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">
-                Linked Sessions ({data.linked_conversations.length})
+              <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                <Radio className="w-3.5 h-3.5" />
+                Sessions ({data.linked_conversations.length})
+                {data.linked_conversations.some((c: any) => c.is_active) && (
+                  <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    {data.linked_conversations.filter((c: any) => c.is_active).length} active
+                  </span>
+                )}
               </h2>
               <div className="border border-sol-border/30 rounded-lg divide-y divide-sol-border/20 overflow-hidden">
-                {data.linked_conversations.map((conv: any) => (
-                  <Link
-                    key={conv._id}
-                    href={`/conversation/${conv._id}`}
-                    className="flex items-center justify-between px-4 py-2.5 hover:bg-sol-bg-alt/50 transition-colors"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <span className="text-sm font-medium text-sol-cyan">{conv.title || "Untitled Session"}</span>
-                      {conv.project_path && (
-                        <div className="flex items-center gap-1.5 mt-1 text-xs text-sol-text-dim">
-                          <FolderGit2 className="w-3 h-3" />
-                          <span className="font-mono truncate">{conv.project_path}</span>
-                        </div>
-                      )}
-                      <div className="flex items-center gap-3 mt-1 text-xs text-sol-text-dim">
-                        <span className="flex items-center gap-1"><MessageSquare className="w-3 h-3" />{conv.message_count} messages</span>
-                        <span>{formatDate(conv.started_at)}</span>
-                      </div>
-                    </div>
-                    <ExternalLink className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
-                  </Link>
-                ))}
+                {[...data.linked_conversations]
+                  .sort((a: any, b: any) => {
+                    if (a.is_active && !b.is_active) return -1;
+                    if (!a.is_active && b.is_active) return 1;
+                    return (b.updated_at || 0) - (a.updated_at || 0);
+                  })
+                  .map((conv: any) => (
+                    <SessionCard key={conv._id} session={conv} />
+                  ))}
               </div>
             </div>
           )}

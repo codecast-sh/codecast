@@ -987,21 +987,79 @@ export const webGetTaskDetail = query({
       .collect();
 
     const linkedConversations: any[] = [];
+    const seenConvIds = new Set<string>();
     if (task.conversation_ids) {
       for (const convId of task.conversation_ids) {
         const conv = await ctx.db.get(convId);
         if (conv) {
-          linkedConversations.push({
+          seenConvIds.add(conv._id.toString());
+          const entry: any = {
             _id: conv._id,
-            title: conv.title || conv.subtitle,
-            project_path: conv.project_path,
             session_id: conv.session_id,
-            message_count: conv.message_count,
-            started_at: conv.started_at,
+            title: conv.title || conv.subtitle,
+            headline: (conv as any).headline,
+            project_path: conv.project_path,
+            message_count: conv.message_count || 0,
+            is_active: (conv as any).is_active,
+            started_at: (conv as any).started_at || conv._creationTime,
             updated_at: conv.updated_at,
-          });
+            agent_type: conv.agent_type,
+            outcome_type: (conv as any).outcome_type,
+            git_branch: (conv as any).git_branch,
+          };
+          if ((conv as any).is_active) {
+            const recentMsgs = await ctx.db
+              .query("messages")
+              .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+              .order("desc")
+              .take(5);
+            entry.recent_messages = recentMsgs.reverse().map((m: any) => ({
+              _id: m._id,
+              role: m.role,
+              content: typeof m.content === "string" ? m.content.slice(0, 300) : "",
+              timestamp: m.timestamp,
+            }));
+          }
+          linkedConversations.push(entry);
         }
       }
+    }
+    const allConvs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", task.user_id))
+      .filter((q: any) => q.eq(q.field("active_task_id"), task._id))
+      .collect();
+    for (const conv of allConvs) {
+      if (seenConvIds.has(conv._id.toString())) continue;
+      seenConvIds.add(conv._id.toString());
+      const entry: any = {
+        _id: conv._id,
+        session_id: conv.session_id,
+        title: conv.title || conv.subtitle,
+        headline: (conv as any).headline,
+        project_path: conv.project_path,
+        message_count: conv.message_count || 0,
+        is_active: (conv as any).is_active,
+        started_at: (conv as any).started_at || conv._creationTime,
+        updated_at: conv.updated_at,
+        agent_type: conv.agent_type,
+        outcome_type: (conv as any).outcome_type,
+        git_branch: (conv as any).git_branch,
+      };
+      if ((conv as any).is_active) {
+        const recentMsgs = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+          .order("desc")
+          .take(5);
+        entry.recent_messages = recentMsgs.reverse().map((m: any) => ({
+          _id: m._id,
+          role: m.role,
+          content: typeof m.content === "string" ? m.content.slice(0, 300) : "",
+          timestamp: m.timestamp,
+        }));
+      }
+      linkedConversations.push(entry);
     }
 
     let relatedDocs: any[] = [];
