@@ -250,7 +250,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                 />
               </div>
             </Panel>
-            <Separator className="relative w-px bg-transparent cursor-col-resize before:absolute before:inset-y-0 before:-left-[3px] before:-right-[3px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
+            <Separator className="relative z-10 w-px bg-sol-border cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
             <Panel id="main" minSize="30%">
               {isFullWidthPage ? (
                 <div className="h-full">

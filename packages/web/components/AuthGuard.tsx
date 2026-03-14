@@ -29,10 +29,13 @@ function AuthGuardInner({ children }: { children: React.ReactNode }) {
   );
 }
 
+let hasHydrated = false;
+
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const [mounted, setMounted] = useState(false);
+  const [mounted, setMounted] = useState(hasHydrated);
 
   useEffect(() => {
+    hasHydrated = true;
     setMounted(true);
   }, []);
 
