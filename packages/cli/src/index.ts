@@ -8737,7 +8737,6 @@ plan
   .action(async (planId: string, options: any) => {
     const maxAgents = parseInt(options.max, 10) || 3;
     const intervalMs = (parseInt(options.interval, 10) || 2) * 60_000;
-    const agentStatusScript = path.join(os.homedir(), ".claude", "scripts", "agent-status.sh");
     const agentScript = path.join(os.homedir(), ".claude", "scripts", "agent-spawn.sh");
 
     console.log(`\n  ${c.bold}Autopilot${c.reset} for plan ${c.cyan}${planId}${c.reset}`);
@@ -8753,18 +8752,25 @@ plan
       const done = allTasks.filter((t: any) => t.status === "done").length;
       const total = allTasks.length;
 
-      // Check active agents
+      // Check active agents -- detect tmux exit and handle incomplete tasks
       for (const [shortId, info] of activeAgents) {
         const sn = `impl-${shortId}`;
-        const sr = spawnSync(agentStatusScript, [sn], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+        const sessionCheck = spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
 
-        if (sr.status !== 0) {
-          // Agent session gone -- check if task was completed
+        if (sessionCheck.status !== 0) {
           const task = allTasks.find((t: any) => t.short_id === shortId);
           if (task?.status === "done") {
             console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
           } else {
-            console.log(`  ${c.dim}exit${c.reset}  ${c.cyan}${shortId}${c.reset} (task still ${task?.status || "?"})`);
+            console.log(`  ${c.yellow}dead${c.reset}  ${c.cyan}${shortId}${c.reset} agent exited without completing (task: ${task?.status || "?"})`);
+            try {
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
+              await cliPost("/cli/work/comment", {
+                short_id: shortId,
+                text: `Agent session \`${sn}\` exited without marking task done. Status was \`${task?.status || "unknown"}\`. Needs re-examination.`,
+                comment_type: "blocker",
+              });
+            } catch {}
           }
           activeAgents.delete(shortId);
         }
