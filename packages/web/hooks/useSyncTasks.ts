@@ -2,13 +2,18 @@ import { useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail } from "../store/inboxStore";
+import { useWorkspaceArgs } from "./useWorkspaceArgs";
 
 const api = _api as any;
 
 export function useSyncTasks(statusFilter?: string) {
-  const tasks = useQuery(api.tasks.webList, {
-    status: statusFilter || undefined,
-  });
+  const workspaceArgs = useWorkspaceArgs();
+  const tasks = useQuery(api.tasks.webList,
+    workspaceArgs === "skip" ? "skip" : {
+      status: statusFilter || undefined,
+      ...workspaceArgs,
+    }
+  );
   const syncTable = useInboxStore((s) => s.syncTable);
 
   useEffect(() => {

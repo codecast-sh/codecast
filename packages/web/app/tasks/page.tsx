@@ -7,6 +7,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem } from "../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
+import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
 import { TaskCommandPalette } from "../../components/TaskCommandPalette";
 
 const api = _api as any;
@@ -413,7 +414,10 @@ export default function TasksPage() {
   const [sortBy, setSortBy] = useState<"status" | "priority" | "created" | "updated">("status");
 
   useSyncTasks(statusFilter || undefined);
-  const projects = useQuery(api.projects.webList, {});
+  const workspaceArgs = useWorkspaceArgs();
+  const projects = useQuery(api.projects.webList,
+    workspaceArgs === "skip" ? "skip" : { ...workspaceArgs }
+  );
 
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 

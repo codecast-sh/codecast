@@ -2,15 +2,18 @@ import { useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
+import { useWorkspaceArgs } from "./useWorkspaceArgs";
 
 const api = _api as any;
 
 export function useSyncDocs(typeFilter?: string, searchQuery?: string, projectFilter?: string, scope?: string) {
+  const workspaceArgs = useWorkspaceArgs();
   const result = useQuery(
     searchQuery ? api.docs.webSearch : api.docs.webList,
-    searchQuery
-      ? { query: searchQuery, doc_type: typeFilter || undefined, scope: scope || undefined }
-      : { doc_type: typeFilter || undefined, project_path: projectFilter || undefined, scope: scope || undefined }
+    workspaceArgs === "skip" ? "skip"
+      : searchQuery
+        ? { query: searchQuery, doc_type: typeFilter || undefined, scope: scope || undefined, ...workspaceArgs }
+        : { doc_type: typeFilter || undefined, project_path: projectFilter || undefined, scope: scope || undefined, ...workspaceArgs }
   );
   const syncTable = useInboxStore((s) => s.syncTable);
 

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { PlanDetailPanel } from "../../components/PlanDetailPanel";
@@ -220,8 +221,14 @@ export default function PlansPage() {
   const [showDone, setShowDone] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
-  const activePlans = useQuery(api.plans.webList, {});
-  const donePlans = useQuery(api.plans.webList, showDone ? { status: "done" } : "skip");
+  const workspaceArgs = useWorkspaceArgs();
+  const activePlans = useQuery(api.plans.webList,
+    workspaceArgs === "skip" ? "skip" : { ...workspaceArgs }
+  );
+  const donePlans = useQuery(api.plans.webList,
+    workspaceArgs === "skip" ? "skip"
+      : showDone ? { status: "done", ...workspaceArgs } : "skip"
+  );
 
   const allPlans = [
     ...(activePlans || []),
