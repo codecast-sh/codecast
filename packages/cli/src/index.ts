@@ -8798,6 +8798,89 @@ plan
     await new Promise(() => {});
   });
 
+plan
+  .command("status")
+  .description("Show plan health: progress, active agents, blocked tasks, timing")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const tasks = plan.tasks || [];
+    const done = tasks.filter((t: any) => t.status === "done");
+    const inProgress = tasks.filter((t: any) => t.status === "in_progress");
+    const open = tasks.filter((t: any) => t.status === "open" || t.status === "draft");
+    const dropped = tasks.filter((t: any) => t.status === "dropped");
+
+    const doneIds = new Set(done.map((t: any) => t._id));
+    const ready = open.filter((t: any) => {
+      if (!t.blocked_by || t.blocked_by.length === 0) return true;
+      return t.blocked_by.every((d: string) => doneIds.has(d));
+    });
+    const blocked = open.filter((t: any) => t.blocked_by?.length > 0 && !t.blocked_by.every((d: string) => doneIds.has(d)));
+
+    const withConcerns = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
+    const needsContext = tasks.filter((t: any) => t.execution_status === "needs_context");
+    const execBlocked = tasks.filter((t: any) => t.execution_status === "blocked");
+
+    const totalMins = done.reduce((s: number, t: any) => s + (t.actual_minutes || 0), 0);
+    const estRemaining = [...inProgress, ...open].reduce((s: number, t: any) => s + (t.estimated_minutes || 10), 0);
+
+    const pct = tasks.length > 0 ? Math.round((done.length / tasks.length) * 100) : 0;
+    const barWidth = 30;
+    const filled = Math.round(barWidth * pct / 100);
+    const bar = `${c.green}${"█".repeat(filled)}${c.dim}${"░".repeat(barWidth - filled)}${c.reset}`;
+
+    console.log(`\n  ${c.bold}${plan.title}${c.reset} ${c.dim}(${plan.short_id})${c.reset}`);
+    console.log(`  ${bar} ${pct}%\n`);
+    console.log(`  ${c.green}${done.length}${c.reset} done  ${c.yellow}${inProgress.length}${c.reset} in-progress  ${c.blue}${ready.length}${c.reset} ready  ${c.dim}${blocked.length}${c.reset} blocked  ${c.dim}${dropped.length}${c.reset} dropped`);
+
+    if (withConcerns.length || needsContext.length || execBlocked.length) {
+      console.log(`\n  ${c.yellow}${withConcerns.length}${c.reset} with concerns  ${c.red}${execBlocked.length}${c.reset} exec-blocked  ${c.magenta || c.dim}${needsContext.length}${c.reset} needs context`);
+    }
+
+    if (totalMins > 0) {
+      const hrs = Math.floor(totalMins / 60);
+      const mins = totalMins % 60;
+      console.log(`\n  ${c.dim}Time spent:${c.reset} ${hrs > 0 ? `${hrs}h ` : ""}${mins}m`);
+    }
+    if (estRemaining > 0) {
+      const hrs = Math.floor(estRemaining / 60);
+      const mins = estRemaining % 60;
+      console.log(`  ${c.dim}Est remaining:${c.reset} ${hrs > 0 ? `${hrs}h ` : ""}${mins}m`);
+    }
+
+    // Check for active tmux agent sessions
+    const agentListScript = path.join(os.homedir(), ".claude", "scripts", "agent-list.sh");
+    try {
+      const sr = spawnSync(agentListScript, [], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      if (sr.status === 0 && sr.stdout?.trim()) {
+        const agents = sr.stdout.trim().split("\n").filter((l: string) => l.includes("impl-ct-"));
+        if (agents.length > 0) {
+          console.log(`\n  ${c.bold}Active agents:${c.reset}`);
+          for (const a of agents) {
+            const match = a.match(/impl-(ct-\w+)/);
+            if (match) {
+              const taskId = match[1];
+              const task = tasks.find((t: any) => t.short_id === taskId);
+              console.log(`  ${c.green}*${c.reset} ${c.cyan}${taskId}${c.reset} ${task ? task.title : ""}`);
+            }
+          }
+        }
+      }
+    } catch {}
+
+    if (withConcerns.length > 0) {
+      console.log(`\n  ${c.bold}Concerns:${c.reset}`);
+      for (const t of withConcerns) {
+        console.log(`  ${c.yellow}!${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
+        if (t.execution_concerns) console.log(`    ${c.dim}${t.execution_concerns.slice(0, 100)}${c.reset}`);
+      }
+    }
+
+    console.log();
+  });
+
 // --- Stable Mode ---
 
 const STABLE_FEED_HOOK = `#!/bin/bash
