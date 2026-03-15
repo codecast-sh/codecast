@@ -760,6 +760,7 @@ export const webGet = query({
             agent_type: conv.agent_type,
             outcome_type: (conv as any).outcome_type,
             git_branch: (conv as any).git_branch,
+            active_task_id: (conv as any).active_task_id?.toString() || null,
           });
         }
       }

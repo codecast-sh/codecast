@@ -245,7 +245,38 @@ function TaskExecutionDetail({ task }: { task: any }) {
   );
 }
 
-function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: any[] }) {
+function TaskSessionCards({ sessions }: { sessions: any[] }) {
+  if (!sessions.length) return null;
+  return (
+    <div className="pl-9 pr-3 pb-2 space-y-1">
+      {sessions.map((s: any) => (
+        <Link
+          key={s._id}
+          href={`/conversation/${s.session_id}`}
+          className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-sol-bg-alt/40 transition-colors group/session"
+        >
+          <MessageSquare className="w-3 h-3 text-sol-text-dim/40 flex-shrink-0" />
+          <span className="text-xs text-sol-text-muted truncate group-hover/session:text-sol-cyan transition-colors">
+            {s.title || "Untitled session"}
+          </span>
+          {s.is_active && (
+            <span className="flex items-center gap-0.5 flex-shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+              <span className="text-[8px] text-sol-green/60 font-medium uppercase">live</span>
+            </span>
+          )}
+          <span className="flex-1" />
+          {s.message_count > 0 && (
+            <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums">{s.message_count} msgs</span>
+          )}
+          <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums">{getRelativeTime(s.updated_at || s.started_at)}</span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string; tasks: any[]; sessions: any[] }) {
   const [showAdd, setShowAdd] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [showDone, setShowDone] = useState(false);
@@ -276,6 +307,18 @@ function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: a
     }
   }, [newTitle, planShortId, webCreate]);
 
+  const sessionsByTask = new Map<string, any[]>();
+  const unlinkedSessions: any[] = [];
+  for (const s of sessions) {
+    if (s.active_task_id) {
+      const existing = sessionsByTask.get(s.active_task_id) || [];
+      existing.push(s);
+      sessionsByTask.set(s.active_task_id, existing);
+    } else {
+      unlinkedSessions.push(s);
+    }
+  }
+
   const activeTasks = tasks.filter(t => t.status !== "done" && t.status !== "dropped");
   const doneTasks = tasks.filter(t => t.status === "done" || t.status === "dropped");
 
@@ -285,6 +328,11 @@ function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: a
         <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text">
           <CheckCircle2 className="w-4 h-4 text-sol-text-dim" />
           Tasks ({tasks.length})
+          {sessions.length > 0 && (
+            <span className="text-xs text-sol-text-dim font-normal ml-1">
+              / {sessions.length} session{sessions.length !== 1 ? "s" : ""}
+            </span>
+          )}
         </h2>
         <button
           onClick={() => setShowAdd(!showAdd)}
@@ -319,7 +367,8 @@ function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: a
           const PriorityIcon = pc?.icon;
           const exec = task.execution_status ? EXEC_STATUS_CONFIG[task.execution_status] : null;
           const isExpanded = expandedTask === task._id;
-          const hasDetail = task.acceptance_criteria?.length || task.steps?.length || task.execution_concerns || task.files_changed?.length;
+          const taskSessions = sessionsByTask.get(task._id.toString()) || [];
+          const hasDetail = task.acceptance_criteria?.length || task.steps?.length || task.execution_concerns || task.files_changed?.length || taskSessions.length > 0;
           return (
             <div key={task._id} className="border-b border-sol-border/10 last:border-b-0">
               <div className="flex items-center gap-2.5 px-3 py-2 group">
@@ -352,6 +401,11 @@ function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: a
                     {exec.label}
                   </span>
                 )}
+                {taskSessions.length > 0 && !task.activeSession && (
+                  <span className="text-[10px] text-sol-text-dim/40 flex-shrink-0 font-mono">
+                    {taskSessions.length} sess
+                  </span>
+                )}
                 {PriorityIcon && pc && (
                   <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${pc.color}`} />
                 )}
@@ -359,7 +413,12 @@ function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: a
                   <ChevronRight className={`w-3 h-3 text-sol-text-dim/30 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                 )}
               </div>
-              {isExpanded && <TaskExecutionDetail task={task} />}
+              {isExpanded && (
+                <>
+                  <TaskExecutionDetail task={task} />
+                  <TaskSessionCards sessions={taskSessions} />
+                </>
+              )}
             </div>
           );
         })}
@@ -375,13 +434,29 @@ function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: a
             {showDone && doneTasks.map((task: any) => {
               const tc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.done;
               const TaskIcon = tc.icon;
+              const taskSessions = sessionsByTask.get(task._id.toString()) || [];
+              const isExpanded = expandedTask === task._id;
               return (
-                <div key={task._id} className="flex items-center gap-2.5 px-3 py-2 border-b border-sol-border/10 last:border-b-0 opacity-50">
-                  <TaskIcon className={`w-3.5 h-3.5 ${tc.color} flex-shrink-0`} />
-                  <Link href={`/tasks/${task._id}`} className="flex-1 min-w-0 flex items-center gap-2">
+                <div key={task._id} className="border-b border-sol-border/10 last:border-b-0">
+                  <div
+                    className="flex items-center gap-2.5 px-3 py-2 opacity-50 cursor-pointer hover:opacity-70 transition-opacity"
+                    onClick={() => setExpandedTask(isExpanded ? null : task._id)}
+                  >
+                    <TaskIcon className={`w-3.5 h-3.5 ${tc.color} flex-shrink-0`} />
                     <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
                     <span className="text-sm text-sol-text-muted line-through truncate">{task.title}</span>
-                  </Link>
+                    {taskSessions.length > 0 && (
+                      <span className="text-[10px] text-sol-text-dim/40 flex-shrink-0 font-mono ml-auto">
+                        {taskSessions.length} sess
+                      </span>
+                    )}
+                  </div>
+                  {isExpanded && (
+                    <>
+                      <TaskExecutionDetail task={task} />
+                      <TaskSessionCards sessions={taskSessions} />
+                    </>
+                  )}
                 </div>
               );
             })}
@@ -393,6 +468,17 @@ function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: a
           </div>
         )}
       </div>
+
+      {unlinkedSessions.length > 0 && (
+        <div className="mt-3">
+          <h3 className="text-xs text-sol-text-dim mb-1.5">General sessions</h3>
+          <div className="space-y-1">
+            {unlinkedSessions.map((s: any) => (
+              <PlanSessionCard key={s._id} session={s} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -501,21 +587,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
         return null;
       })()}
 
-      <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} />
-
-      {plan.sessions?.length > 0 && (
-        <div className="mb-6">
-          <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-            <MessageSquare className="w-4 h-4 text-sol-text-dim" />
-            Sessions ({plan.sessions.length})
-          </h2>
-          <div className="space-y-1.5">
-            {plan.sessions.map((s: any) => (
-              <PlanSessionCard key={s._id} session={s} />
-            ))}
-          </div>
-        </div>
-      )}
+      <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} sessions={plan.sessions || []} />
 
       {plan.progress_log?.length > 0 && (
         <div className="mb-6">
