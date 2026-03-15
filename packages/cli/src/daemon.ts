@@ -115,6 +115,7 @@ const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const PID_FILE = path.join(CONFIG_DIR, "daemon.pid");
 const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
+const STARTED_SESSIONS_FILE = path.join(CONFIG_DIR, "started-sessions.json");
 
 interface Config {
   user_id?: string;
@@ -2409,9 +2410,6 @@ async function processSessionFile(
                 if (currentStats.size !== capturedSize) return;
               } catch { return; }
 
-              const hookIdle = lastHookStatus.get(sessionId);
-              if (hookIdle && (Date.now() / 1000 - hookIdle.ts) < 30) return;
-
               lastIdleNotifiedSize.set(sessionId, capturedSize);
               sendAgentStatus(syncService, conversationId, sessionId, "idle");
               const preview = truncateForNotification(lastAssistantMessage.content);
@@ -4206,8 +4204,55 @@ type StartedSessionInfo = {
   worktreePath?: string;
 };
 
-const startedSessionTmux = new Map<string, StartedSessionInfo>();
 const STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
+
+class PersistedStartedSessions extends Map<string, StartedSessionInfo> {
+  constructor() {
+    super();
+    this.load();
+  }
+
+  set(key: string, value: StartedSessionInfo): this {
+    super.set(key, value);
+    this.save();
+    return this;
+  }
+
+  delete(key: string): boolean {
+    const result = super.delete(key);
+    if (result) this.save();
+    return result;
+  }
+
+  private save(): void {
+    try {
+      const data: Record<string, StartedSessionInfo> = {};
+      const now = Date.now();
+      for (const [k, v] of this) {
+        if (now - v.startedAt < STARTED_SESSION_TTL_MS) data[k] = v;
+      }
+      fs.writeFileSync(STARTED_SESSIONS_FILE, JSON.stringify(data), "utf-8");
+    } catch {}
+  }
+
+  private load(): void {
+    try {
+      if (!fs.existsSync(STARTED_SESSIONS_FILE)) return;
+      const raw = JSON.parse(fs.readFileSync(STARTED_SESSIONS_FILE, "utf-8"));
+      const now = Date.now();
+      for (const [k, v] of Object.entries(raw) as [string, StartedSessionInfo][]) {
+        if (now - v.startedAt < STARTED_SESSION_TTL_MS) {
+          super.set(k, v);
+        }
+      }
+      if (this.size > 0) {
+        log(`Loaded ${this.size} started session(s) from disk`);
+      }
+    } catch {}
+  }
+}
+
+const startedSessionTmux = new PersistedStartedSessions();
 const restartingSessionIds = new Map<string, number>();
 const RESTART_GUARD_TTL_MS = 60_000;
 
@@ -6531,7 +6576,7 @@ async function main(): Promise<void> {
       const modeChanged = data.permission_mode && (!prev || prev.permission_mode !== data.permission_mode);
       lastHookStatus.set(sessionId, data);
 
-      if (data.status === "compacting" || data.status === "idle" || data.status === "thinking" || data.status === "stopped") {
+      if (data.status === "compacting" || data.status === "thinking" || data.status === "stopped") {
         const existingTimer = idleTimers.get(sessionId);
         if (existingTimer) {
           clearTimeout(existingTimer);

@@ -3429,6 +3429,7 @@ program
   .option("-p, --page <n>", "Page number (1-indexed)", "1")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday, 2024-01-15)")
   .option("-e, --end <date>", "End date/time")
+  .option("-l, --live", "Show only live sessions (currently running)")
   .action(async (options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -3473,6 +3474,7 @@ program
           query: options.query,
           project_path: projectPath,
           member_name: options.member,
+          ...(options.live ? { live_only: true } : {}),
         }),
       });
 

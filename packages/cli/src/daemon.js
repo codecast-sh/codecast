@@ -9942,6 +9942,21 @@ class SyncService {
       throw error;
     }
   }
+  async getPlanSnippet(planShortId) {
+    await this.throttle();
+    try {
+      const result = await this.client.query("plans:snippet", {
+        api_token: this.apiToken,
+        plan_short_id: planShortId
+      });
+      return result?.snippet || null;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError;
+      }
+      return null;
+    }
+  }
   async addMessage(params) {
     await this.throttle();
     const redactedContent = truncate(redactSecrets(params.content), MAX_CONTENT_SIZE);
@@ -12023,6 +12038,7 @@ var LOG_FILE = path13.join(CONFIG_DIR5, "daemon.log");
 var STATE_FILE = path13.join(CONFIG_DIR5, "daemon.state");
 var PID_FILE = path13.join(CONFIG_DIR5, "daemon.pid");
 var VERSION_FILE = path13.join(CONFIG_DIR5, "daemon.version");
+var STARTED_SESSIONS_FILE = path13.join(CONFIG_DIR5, "started-sessions.json");
 function getPermissionFlags(agentType, config) {
   const modes = config?.agent_permission_modes;
   if (agentType === "claude") {
@@ -13027,6 +13043,12 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             }
           }
           if (!reconstituted) {
+            const existingStarted = startedSessionTmux.get(conversationId);
+            if (existingStarted && Date.now() - existingStarted.startedAt < 60000) {
+              log(`[REMOTE] Fresh session ${existingStarted.tmuxSession} already started for ${conversationId.slice(0, 12)}, skipping duplicate`);
+              result = JSON.stringify({ started_fresh: true, tmux_session: existingStarted.tmuxSession, deduplicated: true });
+              break;
+            }
             log(`[REMOTE] Starting blank session in ${projectPath}`);
             const shortId = Math.random().toString(36).slice(2, 8);
             const tmuxSession = `cc-claude-${shortId}`;
@@ -13828,6 +13850,24 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
                 if (planShortId) {
                   planModePlanMap.set(sessionId, planShortId);
                   savePlanModeCache();
+                  if (projPath) {
+                    try {
+                      const snippet = await syncService2.getPlanSnippet(planShortId);
+                      if (snippet) {
+                        const contextDir = path13.join(projPath, ".claude");
+                        if (!fs14.existsSync(contextDir))
+                          fs14.mkdirSync(contextDir, { recursive: true });
+                        const contextFile = path13.join(contextDir, "plan-context.md");
+                        fs14.writeFileSync(contextFile, `# Active Plan Context
+
+${snippet}
+`, { mode: 420 });
+                        log(`Wrote plan context to ${contextFile}`);
+                      }
+                    } catch (ctxErr) {
+                      log(`Failed to write plan context: ${ctxErr instanceof Error ? ctxErr.message : String(ctxErr)}`);
+                    }
+                  }
                 }
                 log(`Synced plan_mode plan ${planShortId} for session ${sessionId.slice(0, 8)} (${block.input.plan.length} chars)`);
               } catch (err) {
@@ -14029,9 +14069,6 @@ async function processSessionFile(filePath, sessionId, projectPath, syncService2
               } catch {
                 return;
               }
-              const hookIdle = lastHookStatus.get(sessionId);
-              if (hookIdle && Date.now() / 1000 - hookIdle.ts < 30)
-                return;
               lastIdleNotifiedSize.set(sessionId, capturedSize);
               sendAgentStatus(syncService2, conversationId, sessionId, "idle");
               const preview = truncateForNotification(lastAssistantMessage.content);
@@ -15619,8 +15656,55 @@ function stopCodexPermissionPoller(sessionId) {
     codexPermissionPending.delete(sessionId);
   }
 }
-var startedSessionTmux = new Map;
 var STARTED_SESSION_TTL_MS = 5 * 60 * 1000;
+
+class PersistedStartedSessions extends Map {
+  constructor() {
+    super();
+    this.load();
+  }
+  set(key, value) {
+    super.set(key, value);
+    this.save();
+    return this;
+  }
+  delete(key) {
+    const result = super.delete(key);
+    if (result)
+      this.save();
+    return result;
+  }
+  save() {
+    try {
+      const data = {};
+      const now = Date.now();
+      for (const [k, v] of this) {
+        if (now - v.startedAt < STARTED_SESSION_TTL_MS)
+          data[k] = v;
+      }
+      fs14.writeFileSync(STARTED_SESSIONS_FILE, JSON.stringify(data), "utf-8");
+    } catch {
+    }
+  }
+  load() {
+    try {
+      if (!fs14.existsSync(STARTED_SESSIONS_FILE))
+        return;
+      const raw = JSON.parse(fs14.readFileSync(STARTED_SESSIONS_FILE, "utf-8"));
+      const now = Date.now();
+      for (const [k, v] of Object.entries(raw)) {
+        if (now - v.startedAt < STARTED_SESSION_TTL_MS) {
+          super.set(k, v);
+        }
+      }
+      if (this.size > 0) {
+        log(`Loaded ${this.size} started session(s) from disk`);
+      }
+    } catch {
+    }
+  }
+}
+var startedSessionTmux = new PersistedStartedSessions;
 var restartingSessionIds = new Map;
 var RESTART_GUARD_TTL_MS = 60000;
 var resumeInFlight = new Map;
@@ -16199,6 +16283,53 @@ var materializeFailures = new Map;
 var materializeInFlight = new Map;
 var materializedSessions = new Set;
 var MATERIALIZE_COOLDOWN_MS = 5 * 60 * 1000;
+async function startFreshSessionForDelivery(conversationId) {
+  const existing = startedSessionTmux.get(conversationId);
+  if (existing)
+    return existing;
+  if (!hasTmux()) {
+    logDelivery(`Cannot start fresh session: tmux not available`);
+    return null;
+  }
+  const config = readConfig();
+  let projectPath = process.env.HOME || "/tmp";
+  if (config?.convex_url && config?.auth_token) {
+    try {
+      const siteUrl = config.convex_url.replace(".cloud", ".site");
+      const exportData = await fetchExport(siteUrl, config.auth_token, conversationId);
+      if (exportData.conversation?.project_path && fs14.existsSync(exportData.conversation.project_path)) {
+        projectPath = exportData.conversation.project_path;
+      }
+    } catch {
+    }
+  }
+  const shortId = Math.random().toString(36).slice(2, 8);
+  const tmuxSession = `cc-claude-${shortId}`;
+  let extraFlags = config?.claude_args || "";
+  const blankArgs = extraFlags ? extraFlags.split(/\s+/).filter(Boolean) : [];
+  const safeBlankArgs = sanitizeBinaryArgs(blankArgs);
+  const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${["claude", ...safeBlankArgs].join(" ")}`;
+  try {
+    tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+    tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
+    tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+    const entry = {
+      tmuxSession,
+      projectPath,
+      startedAt: Date.now(),
+      agentType: "claude"
+    };
+    startedSessionTmux.set(conversationId, entry);
+    discoverAndLinkSession(conversationId, tmuxSession, projectPath).catch((err) => {
+      log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
+    });
+    logDelivery(`Started fresh session ${tmuxSession} for conv=${conversationId.slice(0, 12)} in ${projectPath}`);
+    return entry;
+  } catch (err) {
+    logDelivery(`Failed to start fresh session for conv=${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
 async function materializeSession(conversationId, conversationCache, titleCache, syncService2) {
   const existing = materializeInFlight.get(conversationId);
   if (existing)
@@ -16335,7 +16466,9 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         return true;
       } catch (err) {
         log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
-        startedSessionTmux.delete(conversationId);
+        if (Date.now() - entry.startedAt > 60000) {
+          startedSessionTmux.delete(conversationId);
+        }
         return false;
       }
     };
@@ -16372,7 +16505,11 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
         log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
         sessionId = await materializeSession(conversationId, conversationCache, titleCache, syncService2);
         if (!sessionId) {
-          log(`Cannot deliver: no local session and materialization failed for ${conversationId}`);
+          logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
+          const freshEntry = await startFreshSessionForDelivery(conversationId);
+          if (freshEntry && await tryStartedTmux(freshEntry))
+            return true;
+          log(`Cannot deliver: no local session, materialization failed, and fresh start failed for ${conversationId}`);
           return false;
         }
       }
@@ -16380,7 +16517,11 @@ async function deliverMessage(conversationId, content, conversationCache, syncSe
       log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
       sessionId = await materializeSession(conversationId, conversationCache, titleCache, syncService2);
       if (!sessionId) {
-        logDelivery(`Cannot deliver: no local session and materialization failed for conv=${conversationId.slice(0, 12)}`);
+        logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
+        const freshEntry = await startFreshSessionForDelivery(conversationId);
+        if (freshEntry && await tryStartedTmux(freshEntry))
+          return true;
+        logDelivery(`Cannot deliver: no local session, materialization failed, and fresh start failed for conv=${conversationId.slice(0, 12)}`);
         return false;
       }
     }
@@ -17530,7 +17671,7 @@ async function main() {
       const statusChanged = !prev || prev.status !== data.status;
       const modeChanged = data.permission_mode && (!prev || prev.permission_mode !== data.permission_mode);
       lastHookStatus.set(sessionId, data);
-      if (data.status === "compacting" || data.status === "idle" || data.status === "thinking" || data.status === "stopped") {
+      if (data.status === "compacting" || data.status === "thinking" || data.status === "stopped") {
         const existingTimer = idleTimers.get(sessionId);
         if (existingTimer) {
           clearTimeout(existingTimer);

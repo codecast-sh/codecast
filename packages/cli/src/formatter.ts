@@ -1,4 +1,4 @@
-import { c, fmt, icons } from "./colors.js";
+import { c } from "./colors.js";
 
 interface SearchMatch {
   line: number;
@@ -334,6 +334,8 @@ interface FeedConversation {
   project_path: string | null;
   updated_at: string;
   message_count: number;
+  is_live?: boolean;
+  agent_status?: string;
   user?: { name: string | null; email: string | null };
   preview: FeedPreviewMessage[];
 }
@@ -662,8 +664,10 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     lines.push(header + padding);
 
     const userDisplay = conv.user?.name || conv.user?.email;
+    const liveLabel = conv.is_live ? `${c.green}LIVE ${conv.agent_status || "active"}${c.reset}` : "";
     const meta = [
       truncateId(conv.id),
+      liveLabel,
       formatDate(conv.updated_at),
       `${conv.message_count} msgs`,
       truncatePath(conv.project_path),
