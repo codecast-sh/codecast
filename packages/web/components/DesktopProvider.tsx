@@ -109,19 +109,19 @@ export function DesktopProvider() {
   if (!updateReady || dismissed) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-4 py-3 shadow-lg">
-      <span className="text-sm text-[var(--text-secondary)]">
-        v{updateReady} available
+    <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg border border-sol-border bg-sol-bg-alt px-4 py-3 shadow-lg">
+      <span className="text-sm text-sol-text">
+        New desktop version ready
       </span>
       <button
         onClick={() => restartForUpdate()}
-        className="rounded-md bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white hover:opacity-90 transition-opacity"
+        className="rounded-md bg-sol-cyan px-3 py-1 text-xs font-medium text-sol-bg hover:opacity-90 transition-opacity"
       >
         Restart
       </button>
       <button
         onClick={() => setDismissed(true)}
-        className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors text-xs"
+        className="text-sol-text-muted hover:text-sol-text transition-colors text-xs"
       >
         Later
       </button>
