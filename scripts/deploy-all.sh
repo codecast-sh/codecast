@@ -141,7 +141,7 @@ else
 fi
 echo ""
 
-# 5. Desktop app (Electron) - only when packages/electron has changed
+# 5. Desktop app (Electron) - auto-bump, build, sign, and deploy when changed
 echo "5. Checking desktop app for changes..."
 LAST_DESKTOP_UPDATE=$(git log -1 --format=%H -- packages/electron/)
 LAST_DESKTOP_MARKER=".last-desktop-deploy"
@@ -149,44 +149,58 @@ LAST_DESKTOP_MARKER=".last-desktop-deploy"
 if [[ -f "$LAST_DESKTOP_MARKER" ]] && [[ "$(cat "$LAST_DESKTOP_MARKER")" == "$LAST_DESKTOP_UPDATE" ]]; then
   echo "   No desktop changes since last deploy - skipping"
 else
-  echo "   Desktop changes detected. Build and deploy? (y/N)"
-  read -r DEPLOY_DESKTOP
-  if [[ "$DEPLOY_DESKTOP" == "y" || "$DEPLOY_DESKTOP" == "Y" ]]; then
-    cd packages/electron
-    echo "   Building signed desktop app..."
-    PATH="/bin:/usr/bin:$PATH" NOTARIZE_KEYCHAIN_PROFILE=codecast npm run build
-    ELECTRON_VERSION=$(node -p "require('./package.json').version")
-    DMG_FILE=$(find dist -name "*.dmg" -maxdepth 1 | head -1)
-    if [ -z "$DMG_FILE" ]; then
-      echo "   ERROR: No DMG found in dist/"
-      exit 1
-    fi
-    DMG_NAME="Codecast-${ELECTRON_VERSION}-arm64.dmg"
-    echo "   Uploading DMG to R2..."
-    npx wrangler r2 object put "codecast/$DMG_NAME" --file "$DMG_FILE" --remote
-    echo "   Uploading auto-update artifacts to R2..."
-    ZIP_FILE=$(find dist -name "*.zip" -maxdepth 1 | head -1)
-    YML_FILE="dist/latest-mac.yml"
-    if [ -n "$ZIP_FILE" ] && [ -f "$YML_FILE" ]; then
-      ZIP_NAME=$(basename "$ZIP_FILE")
-      npx wrangler r2 object put "codecast/desktop/$ZIP_NAME" --file "$ZIP_FILE" --remote
-      npx wrangler r2 object put "codecast/desktop/latest-mac.yml" --file "$YML_FILE" --remote
-      echo "   ✓ Auto-update artifacts uploaded (desktop/$ZIP_NAME + latest-mac.yml)"
-    else
-      echo "   WARNING: Auto-update artifacts not found, uploading manual zip fallback"
-      ditto -c -k --keepParent dist/mac-arm64/Codecast.app /tmp/Codecast-mac-arm64.zip
-      npx wrangler r2 object put codecast/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip --remote
-    fi
+  cd packages/electron
+  CURRENT_DESKTOP_VERSION=$(node -p "require('./package.json').version")
+  echo "   Desktop changes detected (current: v$CURRENT_DESKTOP_VERSION)"
+
+  # Auto-bump patch version so electron-updater detects the new release
+  IFS='.' read -r D_MAJOR D_MINOR D_PATCH <<< "$CURRENT_DESKTOP_VERSION"
+  NEW_D_PATCH=$((D_PATCH + 1))
+  NEW_DESKTOP_VERSION="$D_MAJOR.$D_MINOR.$NEW_D_PATCH"
+  echo "   Auto-bumping version: $CURRENT_DESKTOP_VERSION -> $NEW_DESKTOP_VERSION"
+  sed -i '' "s/\"version\": \"$CURRENT_DESKTOP_VERSION\"/\"version\": \"$NEW_DESKTOP_VERSION\"/" package.json
+  git add package.json
+  git commit -m "chore(electron): bump version to $NEW_DESKTOP_VERSION"
+  git push origin main 2>/dev/null || true
+
+  echo "   Building signed desktop app..."
+  # /bin must be first in PATH -- /usr/local/bin/ln doesn't support -s on this system,
+  # which breaks DMG creation (electron-builder uses `ln -s /Applications`)
+  PATH="/bin:/usr/bin:$PATH" NOTARIZE_KEYCHAIN_PROFILE=codecast npm run build
+
+  ELECTRON_VERSION=$(node -p "require('./package.json').version")
+  DMG_FILE=$(find dist -name "*.dmg" -maxdepth 1 -newer dist/mac-arm64 | head -1)
+  if [ -z "$DMG_FILE" ]; then
+    echo "   ERROR: No DMG found in dist/"
     cd ../..
-    echo "$LAST_DESKTOP_UPDATE" > "$LAST_DESKTOP_MARKER"
-    # Update download route to point to new DMG
-    ROUTE_FILE="packages/web/app/download/mac/route.ts"
+    exit 1
+  fi
+  DMG_NAME="Codecast-${ELECTRON_VERSION}-arm64.dmg"
+
+  echo "   Uploading to R2..."
+  npx wrangler r2 object put "codecast/$DMG_NAME" --file "$DMG_FILE" --remote
+
+  ZIP_FILE=$(find dist -name "*-mac.zip" -maxdepth 1 -newer dist/mac-arm64 | head -1)
+  YML_FILE="dist/latest-mac.yml"
+  if [ -n "$ZIP_FILE" ] && [ -f "$YML_FILE" ]; then
+    ZIP_NAME=$(basename "$ZIP_FILE")
+    npx wrangler r2 object put "codecast/desktop/$ZIP_NAME" --file "$ZIP_FILE" --remote
+    npx wrangler r2 object put "codecast/desktop/latest-mac.yml" --file "$YML_FILE" --remote
+    echo "   ✓ Auto-update artifacts uploaded (desktop/$ZIP_NAME + latest-mac.yml)"
+  else
+    echo "   WARNING: Auto-update artifacts not found, uploading manual zip fallback"
+    ditto -c -k --keepParent dist/mac-arm64/Codecast.app /tmp/Codecast-mac-arm64.zip
+    npx wrangler r2 object put codecast/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip --remote
+  fi
+  cd ../..
+  echo "$LAST_DESKTOP_UPDATE" > "$LAST_DESKTOP_MARKER"
+
+  ROUTE_FILE="packages/web/app/download/mac/route.ts"
+  if [ -f "$ROUTE_FILE" ]; then
     sed -i '' "s|Codecast-.*-arm64.dmg|Codecast-${ELECTRON_VERSION}-arm64.dmg|" "$ROUTE_FILE"
     sed -i '' "s/const VERSION = \".*\"/const VERSION = \"$ELECTRON_VERSION\"/" "$ROUTE_FILE"
-    echo "   ✓ Desktop app v$ELECTRON_VERSION deployed to dl.codecast.sh/$DMG_NAME"
-  else
-    echo "   Skipped"
   fi
+  echo "   ✓ Desktop app v$ELECTRON_VERSION deployed to dl.codecast.sh/$DMG_NAME"
 fi
 echo ""
 
