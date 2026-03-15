@@ -8408,10 +8408,11 @@ ${steps ? `\n## Steps\n${steps}\n` : ""}
 ## Development Protocol
 
 1. **Understand first**: Read acceptance criteria and relevant code. If unclear, report NEEDS_CONTEXT.
-2. **Test-driven**: Write failing test -> implement minimal code -> verify -> commit.
-3. **Small commits**: One logical change per commit. Conventional commits format.
-4. **Verify everything**: Run tests, check build. Evidence before claims.
-5. **Self-review**: Before reporting done, review your changes. Check for AI slop, missing edge cases, dead code.
+2. **Worktree**: If available, work in your worktree branch. Commit on the branch -- autopilot handles merging to main.
+3. **Test-driven**: Write failing test -> implement minimal code -> verify -> commit.
+4. **Small commits**: One logical change per commit. Conventional commits format.
+5. **Verify everything**: Run tests, check build. Evidence before claims.
+6. **Self-review**: Before reporting done, review your changes. Check for AI slop, missing edge cases, dead code.
 
 ## Reporting
 
@@ -8779,7 +8780,7 @@ plan
       const done = allTasks.filter((t: any) => t.status === "done").length;
       const total = allTasks.length;
 
-      // Check active agents -- detect tmux exit and handle incomplete tasks
+      // Check active agents -- detect tmux exit, merge completed branches, handle failures
       for (const [shortId, info] of activeAgents) {
         const sn = `impl-${shortId}`;
         const sessionCheck = spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
@@ -8788,6 +8789,19 @@ plan
           const task = allTasks.find((t: any) => t.short_id === shortId);
           if (task?.status === "done") {
             console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
+            // Auto-merge the agent's branch if it exists
+            const branch = `ashot/${shortId}`;
+            const branchCheck = spawnSync("git", ["rev-parse", "--verify", branch], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
+            if (branchCheck.status === 0) {
+              const mergeResult = spawnSync("git", ["merge", branch, "--no-edit"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
+              if (mergeResult.status === 0) {
+                console.log(`  ${c.green}merge${c.reset} ${c.cyan}${branch}${c.reset}`);
+                spawnSync("git", ["push", "origin", "main"], { stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
+              } else {
+                console.log(`  ${c.yellow}merge-conflict${c.reset} ${c.cyan}${branch}${c.reset} -- needs manual resolution`);
+                spawnSync("git", ["merge", "--abort"], { stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
+              }
+            }
           } else {
             console.log(`  ${c.yellow}dead${c.reset}  ${c.cyan}${shortId}${c.reset} agent exited without completing (task: ${task?.status || "?"})`);
             try {
@@ -8803,10 +8817,13 @@ plan
         }
       }
 
-      // Check completion
-      if (done === total && total > 0) {
-        console.log(`\n  ${c.green}${c.bold}All ${total} tasks done!${c.reset}`);
+      // Check completion (dropped tasks don't block completion)
+      const dropped = allTasks.filter((t: any) => t.status === "dropped").length;
+      const actionable = total - dropped;
+      if (done >= actionable && actionable > 0 && activeAgents.size === 0) {
+        console.log(`\n  ${c.green}${c.bold}All ${actionable} tasks done!${c.reset}${dropped ? ` (${dropped} dropped)` : ""}`);
         try { await cliPost("/cli/plans/status", { short_id: planId, status: "done" }); } catch {}
+        try { await cliPost("/cli/plans/log", { short_id: planId, entry: `Autopilot completed: ${done} done, ${dropped} dropped` }); } catch {}
         return false;
       }
 
@@ -8823,7 +8840,8 @@ plan
       const toSpawn = readyTasks.slice(0, Math.max(0, slots));
 
       const ts = new Date().toLocaleTimeString();
-      console.log(`  ${c.dim}${ts}${c.reset} ${done}/${total} done, ${activeAgents.size} active, ${readyTasks.length} ready`);
+      console.log(`  ${c.dim}${ts}${c.reset} ${done}/${actionable} done, ${activeAgents.size} active, ${readyTasks.length} ready`);
+      try { await cliPost("/cli/plans/log", { short_id: planId, entry: `Cycle: ${done}/${actionable} done, ${activeAgents.size} active, ${readyTasks.length} ready` }); } catch {}
 
       for (let i = 0; i < toSpawn.length; i++) {
         const task = toSpawn[i];
