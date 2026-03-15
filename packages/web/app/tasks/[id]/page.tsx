@@ -38,6 +38,9 @@ import {
   ChevronDown,
   GitBranch,
   Radio,
+  FileCode,
+  ListChecks,
+  ShieldCheck,
 } from "lucide-react";
 
 const STATUS_OPTIONS = [
@@ -285,6 +288,112 @@ function HistoryItem({ entry }: { entry: any }) {
   );
 }
 
+const EXECUTION_STATUS_STYLES: Record<string, { bg: string; text: string; border: string; label: string }> = {
+  done: { bg: "bg-sol-green/10", text: "text-sol-green", border: "border-sol-green/30", label: "Done" },
+  done_with_concerns: { bg: "bg-sol-yellow/10", text: "text-sol-yellow", border: "border-sol-yellow/30", label: "Done (concerns)" },
+  blocked: { bg: "bg-sol-red/10", text: "text-sol-red", border: "border-sol-red/30", label: "Blocked" },
+  needs_context: { bg: "bg-sol-orange/10", text: "text-sol-orange", border: "border-sol-orange/30", label: "Needs Context" },
+};
+
+function ExecutionDetailsSection({ data }: { data: any }) {
+  const hasExecution = data.execution_status || data.steps?.length || data.acceptance_criteria?.length ||
+    data.files_changed?.length || data.execution_concerns || data.estimated_minutes != null || data.actual_minutes != null;
+  if (!hasExecution) return null;
+
+  const execStyle = data.execution_status ? EXECUTION_STATUS_STYLES[data.execution_status] : null;
+
+  return (
+    <div className="mb-6">
+      <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
+        Execution
+        {execStyle && (
+          <span className={`text-[10px] px-2 py-0.5 rounded-full border ${execStyle.bg} ${execStyle.text} ${execStyle.border} font-medium normal-case tracking-normal`}>
+            {execStyle.label}
+          </span>
+        )}
+      </h2>
+      <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/20 p-4 space-y-4">
+        {(data.estimated_minutes != null || data.actual_minutes != null) && (
+          <div className="flex items-center gap-4 text-xs">
+            <Clock className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
+            {data.estimated_minutes != null && (
+              <span className="text-sol-text-dim">Estimated: <span className="text-sol-text-muted font-medium">{data.estimated_minutes}m</span></span>
+            )}
+            {data.actual_minutes != null && (
+              <span className="text-sol-text-dim">Actual: <span className="text-sol-text-muted font-medium">{data.actual_minutes}m</span></span>
+            )}
+          </div>
+        )}
+
+        {data.execution_concerns && (
+          <div className="text-sm p-3 rounded-lg bg-sol-yellow/5 border border-sol-yellow/20 text-sol-yellow">
+            {data.execution_concerns}
+          </div>
+        )}
+
+        {data.acceptance_criteria && data.acceptance_criteria.length > 0 && (
+          <div>
+            <div className="flex items-center gap-1.5 text-xs font-medium text-sol-text-dim mb-2">
+              <ListChecks className="w-3.5 h-3.5" />
+              Acceptance Criteria
+            </div>
+            <div className="space-y-1.5">
+              {data.acceptance_criteria.map((c: string, i: number) => (
+                <div key={i} className="flex items-start gap-2.5 text-sm text-sol-text-muted">
+                  <ShieldCheck className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0 mt-0.5" />
+                  <span>{c}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {data.steps && data.steps.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-sol-text-dim mb-2">Steps</div>
+            <div className="space-y-1.5">
+              {data.steps.map((s: any, i: number) => (
+                <div key={i} className="flex items-start gap-2.5 text-sm">
+                  <span className={`flex-shrink-0 mt-0.5 ${s.done ? "text-sol-green" : "text-sol-text-dim"}`}>
+                    {s.done ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Circle className="w-3.5 h-3.5" />}
+                  </span>
+                  <div className="min-w-0">
+                    <span className={s.done ? "text-sol-text-muted line-through" : "text-sol-text-muted"}>{s.title}</span>
+                    {s.verification && (
+                      <div className="text-xs text-sol-text-dim mt-0.5">{s.verification}</div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {data.files_changed && data.files_changed.length > 0 && (
+          <div>
+            <div className="flex items-center gap-1.5 text-xs font-medium text-sol-text-dim mb-2">
+              <FileCode className="w-3.5 h-3.5" />
+              Files Changed ({data.files_changed.length})
+            </div>
+            <div className="space-y-0.5">
+              {data.files_changed.map((f: string) => (
+                <div key={f} className="text-xs font-mono text-sol-text-dim truncate">{f}</div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {data.verification_evidence && (
+          <div>
+            <div className="text-xs font-medium text-sol-text-dim mb-1.5">Verification Evidence</div>
+            <div className="text-sm text-sol-text-muted whitespace-pre-wrap">{data.verification_evidence}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function TaskDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -508,6 +617,13 @@ export default function TaskDetailPage() {
                 </>
               )}
 
+              {(data as any).started_at && (
+                <>
+                  <span className="text-sol-text-dim py-1">Started</span>
+                  <span className="text-sol-text-muted py-1">{formatDate((data as any).started_at)}</span>
+                </>
+              )}
+
               {data.confidence != null && (
                 <>
                   <span className="text-sol-text-dim py-1">Confidence</span>
@@ -562,6 +678,9 @@ export default function TaskDetailPage() {
               <MarkdownRenderer content={data.description} className="text-sm text-sol-text leading-relaxed prose-sm prose-invert max-w-none" />
             </div>
           )}
+
+          {/* Execution Details */}
+          <ExecutionDetailsSection data={data} />
 
           {/* Source Insight */}
           {data.source_insight && (

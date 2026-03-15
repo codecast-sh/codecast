@@ -30,6 +30,10 @@ import {
   Command,
   Check,
   X,
+  Clock,
+  FileCode,
+  ListChecks,
+  ShieldCheck,
 } from "lucide-react";
 
 type TaskStatus = "draft" | "open" | "in_progress" | "in_review" | "done" | "dropped";
@@ -311,6 +315,111 @@ function CreateTaskModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+const EXECUTION_STATUS_STYLES: Record<string, { bg: string; text: string; border: string; label: string }> = {
+  done: { bg: "bg-sol-green/10", text: "text-sol-green", border: "border-sol-green/30", label: "Done" },
+  done_with_concerns: { bg: "bg-sol-yellow/10", text: "text-sol-yellow", border: "border-sol-yellow/30", label: "Done (concerns)" },
+  blocked: { bg: "bg-sol-red/10", text: "text-sol-red", border: "border-sol-red/30", label: "Blocked" },
+  needs_context: { bg: "bg-sol-orange/10", text: "text-sol-orange", border: "border-sol-orange/30", label: "Needs Context" },
+};
+
+function ExecutionDetails({ data }: { data: any }) {
+  const hasExecution = data.execution_status || data.steps?.length || data.acceptance_criteria?.length ||
+    data.files_changed?.length || data.execution_concerns || data.estimated_minutes != null || data.actual_minutes != null;
+  if (!hasExecution) return null;
+
+  const execStyle = data.execution_status ? EXECUTION_STATUS_STYLES[data.execution_status] : null;
+
+  return (
+    <div className="border-t border-sol-border/20 pt-3 space-y-3">
+      {execStyle && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-sol-text-dim">Execution</span>
+          <span className={`text-[10px] px-2 py-0.5 rounded-full border ${execStyle.bg} ${execStyle.text} ${execStyle.border} font-medium`}>
+            {execStyle.label}
+          </span>
+        </div>
+      )}
+
+      {(data.estimated_minutes != null || data.actual_minutes != null) && (
+        <div className="flex items-center gap-3 text-xs">
+          <Clock className="w-3 h-3 text-sol-text-dim flex-shrink-0" />
+          {data.estimated_minutes != null && (
+            <span className="text-sol-text-dim">est. <span className="text-sol-text-muted">{data.estimated_minutes}m</span></span>
+          )}
+          {data.actual_minutes != null && (
+            <span className="text-sol-text-dim">actual <span className="text-sol-text-muted">{data.actual_minutes}m</span></span>
+          )}
+        </div>
+      )}
+
+      {data.execution_concerns && (
+        <div className="text-xs p-2 rounded bg-sol-yellow/5 border border-sol-yellow/20 text-sol-yellow">
+          {data.execution_concerns}
+        </div>
+      )}
+
+      {data.acceptance_criteria && data.acceptance_criteria.length > 0 && (
+        <div>
+          <div className="flex items-center gap-1.5 text-xs text-sol-text-dim mb-1.5">
+            <ListChecks className="w-3 h-3" />
+            Acceptance Criteria
+          </div>
+          <div className="space-y-1">
+            {data.acceptance_criteria.map((c: string, i: number) => (
+              <div key={i} className="flex items-start gap-2 text-xs text-sol-text-muted">
+                <ShieldCheck className="w-3 h-3 text-sol-text-dim flex-shrink-0 mt-0.5" />
+                <span>{c}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {data.steps && data.steps.length > 0 && (
+        <div>
+          <div className="text-xs text-sol-text-dim mb-1.5">Steps</div>
+          <div className="space-y-1">
+            {data.steps.map((s: any, i: number) => (
+              <div key={i} className="flex items-start gap-2 text-xs">
+                <span className={`flex-shrink-0 mt-0.5 ${s.done ? "text-sol-green" : "text-sol-text-dim"}`}>
+                  {s.done ? <CheckCircle2 className="w-3 h-3" /> : <Circle className="w-3 h-3" />}
+                </span>
+                <div className="min-w-0">
+                  <span className={s.done ? "text-sol-text-muted line-through" : "text-sol-text-muted"}>{s.title}</span>
+                  {s.verification && (
+                    <div className="text-[10px] text-sol-text-dim mt-0.5">{s.verification}</div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {data.files_changed && data.files_changed.length > 0 && (
+        <div>
+          <div className="flex items-center gap-1.5 text-xs text-sol-text-dim mb-1.5">
+            <FileCode className="w-3 h-3" />
+            Files ({data.files_changed.length})
+          </div>
+          <div className="space-y-0.5">
+            {data.files_changed.map((f: string) => (
+              <div key={f} className="text-[11px] font-mono text-sol-text-dim truncate">{f}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {data.verification_evidence && (
+        <div>
+          <div className="text-xs text-sol-text-dim mb-1">Verification</div>
+          <div className="text-xs text-sol-text-muted whitespace-pre-wrap">{data.verification_evidence}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TaskPreviewPanel({ taskId, onClose, onOpen }: { taskId: string; onClose: () => void; onOpen: () => void }) {
   useSyncTaskDetail(taskId);
   const detail = useInboxStore((s) => s.taskDetails[taskId]);
@@ -368,6 +477,7 @@ function TaskPreviewPanel({ taskId, onClose, onOpen }: { taskId: string; onClose
             {data.description}
           </div>
         )}
+        <ExecutionDetails data={data} />
         {(detail as any)?.comments && (detail as any).comments.length > 0 && (
           <div className="border-t border-sol-border/20 pt-3">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">
