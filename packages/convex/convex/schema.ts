@@ -943,6 +943,8 @@ export default defineSchema({
     last_session_summary: v.optional(v.string()),
     attempt_count: v.optional(v.number()),
     last_attempted_at: v.optional(v.number()),
+    retry_count: v.optional(v.number()),
+    max_retries: v.optional(v.number()),
 
     // Origin tracking
     source: v.union(

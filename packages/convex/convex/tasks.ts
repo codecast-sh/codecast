@@ -66,6 +66,7 @@ export const create = mutation({
     conversation_id: v.optional(v.string()),
     insight_id: v.optional(v.string()),
     plan_id: v.optional(v.string()),
+    max_retries: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -130,6 +131,8 @@ export const create = mutation({
       source: (args.source || "human") as any,
       confidence: args.confidence,
       attempt_count: 0,
+      retry_count: 0,
+      max_retries: args.max_retries ?? 3,
       created_at: now,
       updated_at: now,
     });
@@ -1028,6 +1031,8 @@ export const webCreate = mutation({
       labels: args.labels,
       source: "human",
       attempt_count: 0,
+      retry_count: 0,
+      max_retries: 3,
       created_at: now,
       updated_at: now,
     });
