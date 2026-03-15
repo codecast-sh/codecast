@@ -694,9 +694,14 @@ export const webGet = query({
 
     if (!plan) return null;
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (plan.user_id !== userId && plan.team_id !== team_id) return null;
+    if (plan.user_id !== userId) {
+      if (!plan.team_id) return null;
+      const membership = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", plan.team_id))
+        .first();
+      if (!membership) return null;
+    }
 
     // Find live agent sessions for tasks
     const now = Date.now();
