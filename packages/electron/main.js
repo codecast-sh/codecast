@@ -279,7 +279,11 @@ ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 ipcMain.handle("restart-for-update", () => autoUpdater.quitAndInstall());
 ipcMain.handle("show-notification", (_e, { title, body, data }) => {
-  const notif = new Notification({ title, body });
+  if (!Notification.isSupported()) {
+    console.warn("Notifications not supported on this platform");
+    return;
+  }
+  const notif = new Notification({ title, body, silent: false });
   notif.on("click", () => {
     if (mainWindow) {
       mainWindow.show();
@@ -290,6 +294,9 @@ ipcMain.handle("show-notification", (_e, { title, body, data }) => {
         );
       }
     }
+  });
+  notif.on("failed", (e, err) => {
+    console.error("Notification failed:", err);
   });
   notif.show();
 });
@@ -371,6 +378,18 @@ app.whenReady().then(() => {
   buildAppMenu();
   createPaletteWindow();
   registerShortcuts();
+
+  // Trigger a silent notification on first launch to register with macOS notification center.
+  // Without this, macOS never shows the app in System Settings > Notifications.
+  const settingsPath = getSettingsPath();
+  let settings = {};
+  try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+  if (!settings.notificationRegistered && Notification.isSupported()) {
+    const reg = new Notification({ title: "Codecast", body: "Notifications enabled", silent: true });
+    reg.show();
+    settings.notificationRegistered = true;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  }
 
   // Auto-update
   autoUpdater.autoDownload = true;
