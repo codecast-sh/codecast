@@ -1241,6 +1241,12 @@ async function executeRemoteCommand(
           }
 
           if (!reconstituted) {
+            const existingStarted = startedSessionTmux.get(conversationId);
+            if (existingStarted && (Date.now() - existingStarted.startedAt) < 60_000) {
+              log(`[REMOTE] Fresh session ${existingStarted.tmuxSession} already started for ${conversationId.slice(0, 12)}, skipping duplicate`);
+              result = JSON.stringify({ started_fresh: true, tmux_session: existingStarted.tmuxSession, deduplicated: true });
+              break;
+            }
             log(`[REMOTE] Starting blank session in ${projectPath}`);
             const shortId = Math.random().toString(36).slice(2, 8);
             const tmuxSession = `cc-claude-${shortId}`;
@@ -2159,6 +2165,20 @@ async function processSessionFile(
               if (planShortId) {
                 planModePlanMap.set(sessionId, planShortId);
                 savePlanModeCache();
+                if (projPath) {
+                  try {
+                    const snippet = await syncService.getPlanSnippet(planShortId);
+                    if (snippet) {
+                      const contextDir = path.join(projPath, ".claude");
+                      if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+                      const contextFile = path.join(contextDir, "plan-context.md");
+                      fs.writeFileSync(contextFile, `# Active Plan Context\n\n${snippet}\n`, { mode: 0o644 });
+                      log(`Wrote plan context to ${contextFile}`);
+                    }
+                  } catch (ctxErr) {
+                    log(`Failed to write plan context: ${ctxErr instanceof Error ? ctxErr.message : String(ctxErr)}`);
+                  }
+                }
               }
               log(`Synced plan_mode plan ${planShortId} for session ${sessionId.slice(0, 8)} (${block.input.plan.length} chars)`);
             } catch (err) {
@@ -4819,6 +4839,59 @@ const materializeInFlight = new Map<string, Promise<string | null>>();
 const materializedSessions = new Set<string>();
 const MATERIALIZE_COOLDOWN_MS = 5 * 60 * 1000;
 
+async function startFreshSessionForDelivery(
+  conversationId: string,
+): Promise<StartedSessionInfo | null> {
+  const existing = startedSessionTmux.get(conversationId);
+  if (existing) return existing;
+
+  if (!hasTmux()) {
+    logDelivery(`Cannot start fresh session: tmux not available`);
+    return null;
+  }
+
+  const config = readConfig();
+  let projectPath = process.env.HOME || "/tmp";
+
+  if (config?.convex_url && config?.auth_token) {
+    try {
+      const siteUrl = config.convex_url.replace(".cloud", ".site");
+      const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
+      if (exportData.conversation?.project_path && fs.existsSync(exportData.conversation.project_path)) {
+        projectPath = exportData.conversation.project_path;
+      }
+    } catch {}
+  }
+
+  const shortId = Math.random().toString(36).slice(2, 8);
+  const tmuxSession = `cc-claude-${shortId}`;
+  let extraFlags = config?.claude_args || "";
+  const blankArgs = extraFlags ? extraFlags.split(/\s+/).filter(Boolean) : [];
+  const safeBlankArgs = sanitizeBinaryArgs(blankArgs);
+  const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${["claude", ...safeBlankArgs].join(" ")}`;
+
+  try {
+    tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+    tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
+    tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+    const entry: StartedSessionInfo = {
+      tmuxSession,
+      projectPath,
+      startedAt: Date.now(),
+      agentType: "claude",
+    };
+    startedSessionTmux.set(conversationId, entry);
+    discoverAndLinkSession(conversationId, tmuxSession, projectPath).catch(err => {
+      log(`Session discovery failed for ${conversationId.slice(0, 12)}: ${err}`);
+    });
+    logDelivery(`Started fresh session ${tmuxSession} for conv=${conversationId.slice(0, 12)} in ${projectPath}`);
+    return entry;
+  } catch (err) {
+    logDelivery(`Failed to start fresh session for conv=${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
 async function materializeSession(
   conversationId: string,
   conversationCache: ConversationCache,
@@ -4982,7 +5055,10 @@ async function deliverMessage(
         return true;
       } catch (err) {
         log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${err instanceof Error ? err.message : String(err)}`);
-        startedSessionTmux.delete(conversationId);
+        // Only clear if session is old (>60s). Fresh sessions may just need more startup time.
+        if (Date.now() - entry.startedAt > 60_000) {
+          startedSessionTmux.delete(conversationId);
+        }
         return false;
       }
     };
@@ -5020,7 +5096,10 @@ async function deliverMessage(
         log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
         sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
         if (!sessionId) {
-          log(`Cannot deliver: no local session and materialization failed for ${conversationId}`);
+          logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
+          const freshEntry = await startFreshSessionForDelivery(conversationId);
+          if (freshEntry && await tryStartedTmux(freshEntry)) return true;
+          log(`Cannot deliver: no local session, materialization failed, and fresh start failed for ${conversationId}`);
           return false;
         }
       }
@@ -5028,7 +5107,10 @@ async function deliverMessage(
       log(`No session_id in local cache for conversation ${conversationId}, attempting to materialize from server...`);
       sessionId = (await materializeSession(conversationId, conversationCache, titleCache, syncService))!;
       if (!sessionId) {
-        logDelivery(`Cannot deliver: no local session and materialization failed for conv=${conversationId.slice(0, 12)}`);
+        logDelivery(`Materialization failed for conv=${conversationId.slice(0, 12)}, starting fresh session`);
+        const freshEntry = await startFreshSessionForDelivery(conversationId);
+        if (freshEntry && await tryStartedTmux(freshEntry)) return true;
+        logDelivery(`Cannot deliver: no local session, materialization failed, and fresh start failed for conv=${conversationId.slice(0, 12)}`);
         return false;
       }
     }

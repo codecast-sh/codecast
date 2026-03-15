@@ -2823,6 +2823,9 @@ cliRoute("/cli/plans/pointer", async (ctx, body) => {
 cliRoute("/cli/plans/status", async (ctx, body) => {
   return await ctx.runMutation(api.plans.updateStatus, body);
 });
+cliRoute("/cli/plans/snippet", async (ctx, body) => {
+  return await ctx.runQuery(api.plans.snippet, body);
+});
 
 // Docs
 cliRoute("/cli/docs/create", async (ctx, body) => {

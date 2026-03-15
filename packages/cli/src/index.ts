@@ -8166,7 +8166,7 @@ plan
 
 plan
   .command("bind")
-  .description("Bind current session to a plan")
+  .description("Bind current session to a plan and inject context")
   .argument("<plan_id>", "Plan short ID")
   .action(async (planId: string) => {
     const sessionId = detectCurrentSessionId();
@@ -8176,6 +8176,21 @@ plan
     }
     await cliPost("/cli/plans/bind", { short_id: planId, conversation_id: sessionId });
     console.log(`${c.green}ok${c.reset} Session bound to plan ${c.cyan}${planId}${c.reset}`);
+    // Inject plan context into project directory
+    try {
+      const snippetResult = await cliPost("/cli/plans/snippet", { short_id: planId });
+      if (snippetResult?.snippet) {
+        const fs = await import("fs");
+        const path = await import("path");
+        const contextDir = path.join(process.cwd(), ".claude");
+        if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+        const contextFile = path.join(contextDir, "plan-context.md");
+        fs.writeFileSync(contextFile, `# Active Plan Context\n\n${snippetResult.snippet}\n`, { mode: 0o644 });
+        console.log(`${c.green}ok${c.reset} Plan context written to ${c.dim}.claude/plan-context.md${c.reset}`);
+      }
+    } catch {
+      // Non-critical, continue
+    }
   });
 
 plan

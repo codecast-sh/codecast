@@ -316,6 +316,25 @@ export class SyncService {
     }
   }
 
+  async getPlanSnippet(planShortId: string): Promise<string | null> {
+    await this.throttle();
+    try {
+      const result = await this.client.query(
+        "plans:snippet" as any,
+        {
+          api_token: this.apiToken,
+          plan_short_id: planShortId,
+        }
+      );
+      return result?.snippet || null;
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      return null;
+    }
+  }
+
   async addMessage(params: {
     conversationId: string;
     messageUuid?: string;
