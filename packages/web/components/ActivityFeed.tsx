@@ -198,6 +198,34 @@ function SessionTimeline({ timeline, startedAt }: { timeline: any[]; startedAt?:
   );
 }
 
+function SessionTurns({ turns }: { turns: Array<{ ask: string; did: string[] }> }) {
+  if (!turns?.length) return null;
+  return (
+    <div className="space-y-2">
+      {turns.map((turn, i) => (
+        <div key={i}>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-[9px] text-sol-yellow/50 font-semibold uppercase tracking-wider shrink-0 select-none">ask</span>
+            <span className="text-[11px] text-sol-yellow/80 font-medium leading-snug">
+              {turn.ask}
+            </span>
+          </div>
+          {turn.did.length > 0 && (
+            <ul className="mt-0.5 ml-[30px] space-y-px">
+              {turn.did.map((d, j) => (
+                <li key={j} className="flex gap-1.5 text-[10px] text-sol-text-muted/55 leading-snug">
+                  <span className="text-sol-text-dim/25 select-none shrink-0">-</span>
+                  <span>{highlightCode(d)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
   item: any;
   compact?: boolean;
@@ -231,8 +259,9 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
 
   const headline = item.headline || "";
   const changes = item.key_changes || [];
+  const hasTurns = item.turns?.length > 0;
   const hasTimeline = item.timeline?.length > 0;
-  const hasDetail = changes.length > 0 || item.blockers || item.next_action || hasTimeline;
+  const hasDetail = hasTurns || changes.length > 0 || item.blockers || item.next_action || hasTimeline;
 
   const msgCount = item.message_count || 0;
   const metaParts = [duration, msgCount >= 50 ? `${formatMsgCount(msgCount)} msgs` : null].filter(Boolean);
@@ -301,30 +330,33 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
 
       {/* Expanded detail */}
       {expanded && (
-        <div className={`mt-1.5 space-y-1 ${showActor ? "ml-[26px]" : ""} text-[11px]`} onClick={(e) => e.stopPropagation()}>
+        <div className={`mt-1.5 space-y-1.5 ${showActor ? "ml-[26px]" : ""} text-[11px]`} onClick={(e) => e.stopPropagation()}>
           {item.outcome_type === "blocked" && item.blockers && (
             <div>
               <span className="text-sol-red/60 font-medium">Blocked: </span>
               <span className="text-sol-text-muted/70">{item.blockers}</span>
             </div>
           )}
-          {changes.length > 0 && !hasTimeline && (
+          {hasTurns ? (
+            <SessionTurns turns={item.turns} />
+          ) : changes.length > 0 ? (
             <ul className="space-y-0.5">
               {changes.map((c: string, i: number) => (
                 <li key={i} className="flex gap-1.5 text-sol-text-muted/60 leading-snug">
                   <span className="text-sol-text-dim/30 select-none shrink-0">-</span>
-                  <span>{c}</span>
+                  <span>{highlightCode(c)}</span>
                 </li>
               ))}
             </ul>
-          )}
+          ) : hasTimeline ? (
+            <SessionTimeline timeline={item.timeline} startedAt={item.started_at} />
+          ) : null}
           {item.next_action && (isActive || item.outcome_type === "progress") && (
             <div>
               <span className="text-sol-cyan/50 font-medium">Next: </span>
               <span className="text-sol-text-muted/60">{item.next_action}</span>
             </div>
           )}
-          {hasTimeline && <SessionTimeline timeline={item.timeline} startedAt={item.started_at} />}
           {item.git_branch && item.git_branch !== "main" && item.git_branch !== "master" && (
             <div className="font-mono text-sol-text-dim/20 text-[9px]">{item.git_branch}</div>
           )}
