@@ -1125,7 +1125,7 @@ export function QueuePageClient() {
           <Panel id="inbox-main" defaultSize="76%" minSize="30%">
             {inboxContent}
           </Panel>
-          <Separator className="relative z-10 w-px bg-sol-yellow/20 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
+          <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
           <Panel id="inbox-sidebar" defaultSize="24%" minSize="0%" maxSize="45%" collapsible collapsedSize="0%">
             <InboxSessionPanel showAll={showAll} onToggleShowAll={toggleShowAll} dismissedSessions={Object.values(dismissedSessions)} />
           </Panel>

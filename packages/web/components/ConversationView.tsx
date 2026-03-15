@@ -7451,7 +7451,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} className={`border-b border-sol-yellow/40 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass} ${isImageLightboxActive ? "invisible" : ""}`}>
+      <header ref={headerRef} className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass} ${isImageLightboxActive ? "invisible" : ""}`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && useInboxStore.getState().clientState.ui?.zen_mode && (
           <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}

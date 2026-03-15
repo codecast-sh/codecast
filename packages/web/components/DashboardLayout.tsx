@@ -153,7 +153,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
       {/* Header spans full width */}
-      <header ref={headerRef} className={`flex-shrink-0 border-b border-sol-yellow/20 bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
+      <header ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
           <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
@@ -250,7 +250,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
                 />
               </div>
             </Panel>
-            <Separator className="relative z-10 w-px bg-sol-yellow/20 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
+            <Separator className="relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan" />
             <Panel id="main" minSize="30%">
               {isFullWidthPage ? (
                 <div className="h-full">
