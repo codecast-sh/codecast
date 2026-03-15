@@ -132,6 +132,14 @@ export type CurrentConversationContext = {
 
 // -- Task / Doc Types --
 
+export type TaskStep = {
+  title: string;
+  done?: boolean;
+  verification?: string;
+};
+
+export type TaskExecutionStatus = "done" | "done_with_concerns" | "blocked" | "needs_context";
+
 export type TaskItem = {
   _id: string;
   short_id: string;
@@ -153,6 +161,15 @@ export type TaskItem = {
   creator?: { name: string; image?: string };
   plan?: PlanRef;
   activeSession?: { session_id: string; title?: string } | null;
+  steps?: TaskStep[];
+  acceptance_criteria?: string[];
+  execution_status?: TaskExecutionStatus;
+  execution_concerns?: string;
+  verification_evidence?: string;
+  files_changed?: string[];
+  estimated_minutes?: number;
+  actual_minutes?: number;
+  started_at?: number;
 };
 
 export type TaskDetail = TaskItem & {

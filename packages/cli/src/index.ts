@@ -8466,6 +8466,15 @@ plan
     }
 
     const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").map((t: any) => t._id));
+    if (options.dryRun) {
+      console.log(`  DEBUG: resolved IDs (${resolvedIds.size}): ${[...resolvedIds].join(", ")}`);
+      for (const t of openTasks) {
+        if (t.blocked_by?.length) {
+          const unresolved = t.blocked_by.filter((d: string) => !resolvedIds.has(d));
+          if (unresolved.length) console.log(`  DEBUG: ${t.short_id} blocked by unresolved: ${unresolved.join(", ")}`);
+        }
+      }
+    }
     const readyTasks = openTasks.filter((t: any) => {
       if (!t.blocked_by || t.blocked_by.length === 0) return true;
       return t.blocked_by.every((d: string) => resolvedIds.has(d));

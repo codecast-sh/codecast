@@ -2,7 +2,7 @@
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, useMemo, useRef, useCallback } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
@@ -383,18 +383,6 @@ function NotFoundView() {
   );
 }
 
-function useRedirectToInbox(id: string) {
-  const router = useRouter();
-  const redirectedRef = useRef(false);
-
-  return useCallback(() => {
-    if (redirectedRef.current) return;
-    redirectedRef.current = true;
-    useInboxStore.setState({ pendingNavigateId: id });
-    router.replace("/inbox");
-  }, [id, router]);
-}
-
 export default function ConversationPage() {
   const params = useParams();
   const router = useRouter();
@@ -412,7 +400,7 @@ export default function ConversationPage() {
 
   const resetForkNav = useForkNavigationStore((s) => s.reset);
   const resetForkData = useInboxStore((s) => s.resetForkNav);
-  const redirectToInbox = useRedirectToInbox(id);
+  const redirectedRef = useRef(false);
 
   useEffect(() => {
     resetForkNav();
@@ -438,7 +426,6 @@ export default function ConversationPage() {
   );
 
   const resolvedConvexId = sessionLookup?._id?.toString();
-  const redirectToInboxResolved = useRedirectToInbox(resolvedConvexId || id);
 
   const publicData = useQuery(
     api.conversations.getConversationPublic,
@@ -447,17 +434,45 @@ export default function ConversationPage() {
       : (isValidConvexId ? { conversation_id: id as Id<"conversations"> } : "skip")
   );
 
+  const redirectId = useMemo(() => {
+    if (isUUID) {
+      if (sessionLookup === undefined) {
+        const hasLocalSession = useInboxStore.getState().conversations[id];
+        if (hasLocalSession) return id;
+        return null;
+      }
+      if (sessionLookup === null) return null;
+      if (publicData === undefined) return null;
+      if (publicData.access_level === "owner" || publicData.access_level === "team") {
+        return resolvedConvexId || id;
+      }
+      return null;
+    }
+    if (publicData === undefined) return null;
+    if (publicData.access_level === "owner" || publicData.access_level === "team") {
+      return id;
+    }
+    return null;
+  }, [isUUID, sessionLookup, publicData, resolvedConvexId, id]);
+
+  useEffect(() => {
+    if (redirectId && !redirectedRef.current) {
+      redirectedRef.current = true;
+      useInboxStore.setState({ pendingNavigateId: redirectId });
+      router.replace("/inbox");
+    }
+  }, [redirectId, router]);
+
   if (!isUUID && !isValidConvexId) {
     return <NotFoundView />;
   }
 
+  if (redirectId) {
+    return <ConversationLoadingSkeleton />;
+  }
+
   if (isUUID) {
     if (sessionLookup === undefined) {
-      const hasLocalSession = useInboxStore.getState().conversations[id];
-      if (hasLocalSession) {
-        redirectToInbox();
-        return <ConversationLoadingSkeleton />;
-      }
       return <ConversationLoadingSkeleton />;
     }
     if (sessionLookup === null) {
@@ -465,10 +480,6 @@ export default function ConversationPage() {
     }
     const effectiveId = resolvedConvexId || id;
     if (publicData === undefined) {
-      return <ConversationLoadingSkeleton />;
-    }
-    if (publicData.access_level === "owner" || publicData.access_level === "team") {
-      redirectToInboxResolved();
       return <ConversationLoadingSkeleton />;
     }
     if (publicData.access_level === "shared") {
@@ -487,11 +498,6 @@ export default function ConversationPage() {
 
   if (publicData.access_level === "denied") {
     return <DeniedView />;
-  }
-
-  if (publicData.access_level === "owner" || publicData.access_level === "team") {
-    redirectToInbox();
-    return <ConversationLoadingSkeleton />;
   }
 
   if (publicData.access_level === "shared") {
