@@ -1,37 +1,13 @@
 const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification } = require("electron");
 const { autoUpdater } = require("electron-updater");
-const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
 function showNativeNotification(title, body, onClick) {
-  // Electron's Notification API silently fails on macOS when the app isn't registered
-  // in notification center. Use osascript via the app's bundle ID so the notification
-  // shows with the Codecast icon and attributes to the correct app.
-  if (process.platform === "darwin") {
-    const bundleId = "sh.codecast.desktop";
-    const script = `
-      tell application id ${JSON.stringify(bundleId)}
-        display notification ${JSON.stringify(body)} with title ${JSON.stringify(title)}
-      end tell`;
-    execFile("osascript", ["-e", script], (err) => {
-      if (err) {
-        // Fallback to plain osascript if bundle ID approach fails
-        execFile("osascript", ["-e", `display notification ${JSON.stringify(body)} with title ${JSON.stringify(title)}`]);
-      }
-    });
-    // Also fire Electron's API for click-to-navigate support (may silently fail)
-    if (Notification.isSupported()) {
-      const notif = new Notification({ title, body, silent: true });
-      if (onClick) notif.on("click", onClick);
-      notif.show();
-    }
-  } else {
-    if (!Notification.isSupported()) return;
-    const notif = new Notification({ title, body, silent: false });
-    if (onClick) notif.on("click", onClick);
-    notif.show();
-  }
+  if (!Notification.isSupported()) return;
+  const notif = new Notification({ title, body, silent: false });
+  if (onClick) notif.on("click", onClick);
+  notif.show();
 }
 
 const PROD_URL = "https://codecast.sh";
