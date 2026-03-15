@@ -377,13 +377,14 @@ function SessionCard({
               </span>
             )}
             {session.active_plan && (
-              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20">
-                {session.active_plan.short_id}
+              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px]" title={session.active_plan.title}>
+                <span className="font-mono">{session.active_plan.short_id}</span>
               </span>
             )}
             {session.active_task && (
-              <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/20">
-                {session.active_task.short_id}
+              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/20 max-w-[140px]" title={session.active_task.title}>
+                <span className="font-mono">{session.active_task.short_id}</span>
+                <span className="truncate opacity-70">{session.active_task.title}</span>
               </span>
             )}
             {session.session_error && (

@@ -7503,13 +7503,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
 
             {(conversation as any)?.active_plan && (
-              <Link href={`/plans/${(conversation as any).active_plan._id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors">
-                {(conversation as any).active_plan.short_id}
+              <Link href={`/plans/${(conversation as any).active_plan._id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]" title={(conversation as any).active_plan.title}>
+                <span className="font-mono">{(conversation as any).active_plan.short_id}</span>
+                <span className="truncate hidden sm:inline opacity-70">{(conversation as any).active_plan.title}</span>
               </Link>
             )}
             {(conversation as any)?.active_task && (
-              <Link href={`/tasks/${(conversation as any).active_task._id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/20 hover:bg-sol-yellow/20 transition-colors">
-                {(conversation as any).active_task.short_id}
+              <Link href={`/tasks/${(conversation as any).active_task._id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/20 hover:bg-sol-yellow/20 transition-colors max-w-[200px]" title={(conversation as any).active_task.title}>
+                <span className="font-mono">{(conversation as any).active_task.short_id}</span>
+                <span className="truncate hidden sm:inline opacity-70">{(conversation as any).active_task.title}</span>
               </Link>
             )}
 
