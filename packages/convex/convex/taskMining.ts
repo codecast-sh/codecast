@@ -4,14 +4,36 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 
-function generateShortId(): string {
+function generateShortId(prefix = "ct-"): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
-  let id = "ct-";
+  let id = prefix;
   for (let i = 0; i < 4; i++) {
     id += chars[Math.floor(Math.random() * chars.length)];
   }
   return id;
 }
+
+function normalizeTitle(title: string): string[] {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
+}
+
+function titleSimilarity(a: string, b: string): number {
+  const wordsA = new Set(normalizeTitle(a));
+  const wordsB = new Set(normalizeTitle(b));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+const DEDUP_SIMILARITY_THRESHOLD = 0.5;
 
 // Every insight should produce at least one task. We extract:
 // 1. The goal itself (shipped = done feature, progress = in_progress task, blocked = blocked bug)
@@ -42,6 +64,57 @@ export const mineTasksFromInsights = internalMutation({
   },
   handler: async (ctx, args) => {
     let tasksCreated = 0;
+    let tasksDeduped = 0;
+    let plansCreated = 0;
+
+    const existingTasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+      .filter((q) =>
+        q.or(
+          q.eq(q.field("status"), "open"),
+          q.eq(q.field("status"), "in_progress"),
+          q.eq(q.field("status"), "done"),
+        )
+      )
+      .collect();
+
+    const existingPlans = args.team_id
+      ? await ctx.db
+          .query("plans")
+          .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
+          .filter((q) =>
+            q.or(
+              q.eq(q.field("status"), "draft"),
+              q.eq(q.field("status"), "active"),
+            )
+          )
+          .collect()
+      : [];
+
+    function findSimilarTask(title: string) {
+      let bestMatch: (typeof existingTasks)[0] | null = null;
+      let bestScore = 0;
+      for (const task of existingTasks) {
+        const score = titleSimilarity(title, task.title);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = task;
+        }
+      }
+      return bestScore >= DEDUP_SIMILARITY_THRESHOLD ? bestMatch : null;
+    }
+
+    function findSimilarPlan(title: string) {
+      for (const plan of existingPlans) {
+        if (titleSimilarity(title, plan.title) >= DEDUP_SIMILARITY_THRESHOLD) return plan;
+        if (plan.goal && titleSimilarity(title, plan.goal) >= DEDUP_SIMILARITY_THRESHOLD) return plan;
+      }
+      return null;
+    }
+
+    const newTaskIds: Id<"tasks">[] = [];
+    const newTaskThemes: string[][] = [];
 
     for (const insight of args.insights) {
       const ts = insight.generated_at || Date.now();
@@ -59,17 +132,38 @@ export const mineTasksFromInsights = internalMutation({
         team_visibility: insight.team_visibility,
       };
 
-      // Check if we already mined this insight
-      const existing = await ctx.db
+      const alreadyMined = await ctx.db
         .query("tasks")
         .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
         .filter((q) => q.eq(q.field("created_from_insight"), insight._id))
         .first();
-      if (existing) continue;
+      if (alreadyMined) continue;
 
       // 1. Primary task from the goal/summary
       if (insight.goal || insight.summary) {
         const title = insight.goal || insight.summary.slice(0, 200);
+
+        const similarTask = findSimilarTask(title);
+        const similarPlan = findSimilarPlan(title);
+
+        if (similarTask) {
+          await ctx.db.insert("task_comments", {
+            task_id: similarTask._id,
+            author: "mining",
+            text: `Related session insight: ${insight.summary.slice(0, 300)}`,
+            conversation_id: insight.conversation_id,
+            comment_type: "note" as any,
+            created_at: ts,
+          });
+          tasksDeduped++;
+          continue;
+        }
+
+        if (similarPlan) {
+          tasksDeduped++;
+          continue;
+        }
+
         let status: "done" | "in_progress" | "open" = "open";
         let taskType: "feature" | "bug" | "task" = "task";
         let priority: "high" | "medium" | "low" = "medium";
@@ -86,7 +180,7 @@ export const mineTasksFromInsights = internalMutation({
           priority = "high";
         }
 
-        await ctx.db.insert("tasks", {
+        const taskId = await ctx.db.insert("tasks", {
           ...base,
           short_id: generateShortId(),
           title,
@@ -100,13 +194,20 @@ export const mineTasksFromInsights = internalMutation({
           created_at: ts,
           updated_at: ts,
         });
+        existingTasks.push({ ...base, _id: taskId, title, status, task_type: taskType, priority, short_id: "", description: "", attempt_count: 0, created_at: ts, updated_at: ts } as any);
+        newTaskIds.push(taskId);
+        newTaskThemes.push(insight.themes);
         tasksCreated++;
       }
 
-      // 2. Each blocker as a separate high-priority bug
+      // 2. Each blocker as a separate high-priority bug (dedup against existing)
       if (insight.blockers?.length) {
         for (const blocker of insight.blockers) {
-          await ctx.db.insert("tasks", {
+          if (findSimilarTask(blocker)) {
+            tasksDeduped++;
+            continue;
+          }
+          const taskId = await ctx.db.insert("tasks", {
             ...base,
             short_id: generateShortId(),
             title: blocker,
@@ -118,29 +219,84 @@ export const mineTasksFromInsights = internalMutation({
             created_at: ts,
             updated_at: ts,
           });
+          existingTasks.push({ ...base, _id: taskId, title: blocker, status: "open", task_type: "bug", priority: "high", short_id: "", description: "", attempt_count: 0, created_at: ts, updated_at: ts } as any);
           tasksCreated++;
         }
       }
 
-      // 3. next_action as a follow-up task (if different from goal)
+      // 3. next_action as a follow-up task (dedup against existing)
       if (insight.next_action && insight.next_action !== insight.goal) {
-        await ctx.db.insert("tasks", {
-          ...base,
-          short_id: generateShortId(),
-          title: insight.next_action,
-          description: insight.goal ? `Follow-up from: ${insight.goal}` : undefined,
-          task_type: "task",
-          status: "open",
-          priority: "medium",
-          attempt_count: 0,
-          created_at: ts,
-          updated_at: ts,
-        });
-        tasksCreated++;
+        if (!findSimilarTask(insight.next_action)) {
+          const taskId = await ctx.db.insert("tasks", {
+            ...base,
+            short_id: generateShortId(),
+            title: insight.next_action,
+            description: insight.goal ? `Follow-up from: ${insight.goal}` : undefined,
+            task_type: "task",
+            status: "open",
+            priority: "medium",
+            attempt_count: 0,
+            created_at: ts,
+            updated_at: ts,
+          });
+          existingTasks.push({ ...base, _id: taskId, title: insight.next_action, status: "open", task_type: "task", priority: "medium", short_id: "", description: "", attempt_count: 0, created_at: ts, updated_at: ts } as any);
+          tasksCreated++;
+        } else {
+          tasksDeduped++;
+        }
       }
     }
 
-    return { tasks_created: tasksCreated };
+    // Group related new tasks into a draft plan if 3+ share overlapping themes
+    if (newTaskIds.length >= 3 && args.team_id) {
+      const themeCounts = new Map<string, number[]>();
+      for (let i = 0; i < newTaskThemes.length; i++) {
+        for (const theme of newTaskThemes[i]) {
+          if (!themeCounts.has(theme)) themeCounts.set(theme, []);
+          themeCounts.get(theme)!.push(i);
+        }
+      }
+
+      const grouped = new Set<number>();
+      let dominantTheme: string | null = null;
+      for (const [theme, indices] of themeCounts) {
+        if (indices.length >= 3 && indices.length > grouped.size) {
+          dominantTheme = theme;
+          grouped.clear();
+          for (const idx of indices) grouped.add(idx);
+        }
+      }
+
+      if (dominantTheme && grouped.size >= 3) {
+        const groupedTaskIds = [...grouped].map((i) => newTaskIds[i]);
+        const now = Date.now();
+        const planId = await ctx.db.insert("plans", {
+          user_id: args.user_id,
+          team_id: args.team_id,
+          short_id: generateShortId("pl-"),
+          title: `${dominantTheme.charAt(0).toUpperCase() + dominantTheme.slice(1)} tasks`,
+          goal: `Auto-grouped ${groupedTaskIds.length} related tasks around "${dominantTheme}"`,
+          status: "draft",
+          source: "insight",
+          owner_id: args.user_id,
+          task_ids: groupedTaskIds,
+          progress: { total: groupedTaskIds.length, done: 0, in_progress: 0, open: groupedTaskIds.length },
+          progress_log: [],
+          decision_log: [],
+          discoveries: [],
+          context_pointers: [],
+          session_ids: [],
+          created_at: now,
+          updated_at: now,
+        });
+        for (const taskId of groupedTaskIds) {
+          await ctx.db.patch(taskId, { plan_id: planId });
+        }
+        plansCreated++;
+      }
+    }
+
+    return { tasks_created: tasksCreated, tasks_deduped: tasksDeduped, plans_created: plansCreated };
   },
 });
 
