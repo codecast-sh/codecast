@@ -13,6 +13,8 @@ import {
   onUpdateStatus,
   restartForUpdate,
   notifyNative,
+  requestNotificationPermission,
+  hasBrowserNotificationPermission,
 } from "../lib/desktop";
 import { useInboxStore } from "../store/inboxStore";
 
@@ -36,11 +38,18 @@ export function DesktopProvider() {
   const pendingNotifsRef = useRef<Array<{ title: string; body: string; conversationId?: string }>>([]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const permissionRequestedRef = useRef(false);
+
   useEffect(() => {
-    if (!isDesktop() || !notifications) return;
+    if (!notifications) return;
+    const canNotify = isDesktop() || hasBrowserNotificationPermission();
 
     if (seenIdsRef.current === null) {
       seenIdsRef.current = new Set(notifications.map((n) => n._id));
+      if (!canNotify && !isDesktop() && !permissionRequestedRef.current) {
+        permissionRequestedRef.current = true;
+        requestNotificationPermission();
+      }
       return;
     }
 

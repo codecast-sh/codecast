@@ -30,13 +30,35 @@ export function isDesktop(): boolean {
   return isTauri() || isElectron();
 }
 
+export function hasBrowserNotificationPermission(): boolean {
+  return typeof Notification !== "undefined" && Notification.permission === "granted";
+}
+
+export async function requestNotificationPermission(): Promise<boolean> {
+  if (isDesktop()) return true;
+  if (typeof Notification === "undefined") return false;
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") return false;
+  const result = await Notification.requestPermission();
+  return result === "granted";
+}
+
 export async function notifyNative(title: string, body: string, data?: { conversationId?: string }) {
-  if (typeof document !== "undefined" && document.hasFocus()) return;
   if (isTauri()) {
+    if (document.hasFocus()) return;
     const { sendNotification } = await import("@tauri-apps/plugin-notification");
     sendNotification({ title, body });
   } else if (isElectron()) {
     window.__CODECAST_ELECTRON__!.showNotification(title, body, data);
+  } else if (hasBrowserNotificationPermission()) {
+    if (document.hasFocus()) return;
+    const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId });
+    if (data?.conversationId) {
+      n.onclick = () => {
+        window.focus();
+        window.location.href = `/conversation/${data.conversationId}`;
+      };
+    }
   }
 }
 
