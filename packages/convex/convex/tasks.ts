@@ -13,6 +13,16 @@ function generateShortId(): string {
   return id;
 }
 
+async function canAccessTask(ctx: any, userId: Id<"users">, task: any): Promise<boolean> {
+  if (task.user_id === userId) return true;
+  if (!task.team_id) return false;
+  const membership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
+    .first();
+  return !!membership;
+}
+
 export const create = mutation({
   args: {
     api_token: v.string(),
@@ -836,7 +846,7 @@ export const webGet = query({
       task = await ctx.db.get(args.id as Id<"tasks">);
     }
 
-    if (!task || task.user_id !== userId) return null;
+    if (!task || !(await canAccessTask(ctx, userId, task))) return null;
 
     const comments = await ctx.db
       .query("task_comments")
@@ -872,7 +882,7 @@ export const webUpdate = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task || task.user_id !== userId) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error("Task not found");
 
     const now = Date.now();
     const updates: any = { updated_at: now };
@@ -933,7 +943,7 @@ export const webAddComment = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task || task.user_id !== userId) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error("Task not found");
 
     const user = await ctx.db.get(userId);
 
