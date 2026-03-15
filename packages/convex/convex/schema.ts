@@ -612,6 +612,10 @@ export default defineSchema({
       type: v.string(),
       session_title: v.optional(v.string()),
     }))),
+    turns: v.optional(v.array(v.object({
+      ask: v.string(),
+      did: v.array(v.string()),
+    }))),
     goal: v.optional(v.string()),
     what_changed: v.optional(v.string()),
     outcome_type: v.union(

@@ -610,7 +610,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name } = body;
+      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name, live_only } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -637,6 +637,7 @@ http.route({
         project_path,
         team_id,
         member_name,
+        live_only,
       });
 
       if (result.error) {

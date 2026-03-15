@@ -310,6 +310,10 @@ export const upsertSessionInsight = internalMutation({
       type: v.string(),
       session_title: v.optional(v.string()),
     }))),
+    turns: v.optional(v.array(v.object({
+      ask: v.string(),
+      did: v.array(v.string()),
+    }))),
     goal: v.optional(v.string()),
     what_changed: v.optional(v.string()),
     outcome_type: v.union(
@@ -345,6 +349,7 @@ export const upsertSessionInsight = internalMutation({
         headline: args.headline,
         key_changes: args.key_changes,
         timeline: args.timeline,
+        turns: args.turns,
         goal: args.goal,
         what_changed: args.what_changed,
         outcome_type: args.outcome_type,
@@ -366,6 +371,7 @@ export const upsertSessionInsight = internalMutation({
         headline: args.headline,
         key_changes: args.key_changes,
         timeline: args.timeline,
+        turns: args.turns,
         goal: args.goal,
         what_changed: args.what_changed,
         outcome_type: args.outcome_type,
@@ -484,31 +490,27 @@ export const generateSessionInsight = internalAction({
           .join("\n")
       : "- none";
 
-    const prompt = `You are writing a session narrative for a developer activity timeline. This will be merged with other sessions into a single chronological feed. Write it like a story of what happened, not a summary.
+    const prompt = `You are writing a session narrative for a developer activity feed.
 
 Return ONLY valid JSON with this exact shape:
 {
   "headline": "string (one sentence, max 80 chars, what was accomplished)",
-  "key_changes": ["string (specific change, 60 chars max each)"],
-  "summary": "string (2-3 sentences, narrative context)",
-  "timeline": [
-    { "t": "HH:MM", "event": "what happened", "type": "start|direction|discovery|change|decision|ship|block|debug|research" }
+  "turns": [
+    { "ask": "what the user asked/directed (their actual words, paraphrased concisely)", "did": ["what was done in response (2-4 bullet points, specific)"] }
   ],
+  "summary": "string (2-3 sentences, narrative context)",
   "outcome_type": "shipped|progress|blocked|unknown",
   "themes": ["string"],
   "confidence": number (0..1)
 }
 
 Rules:
-- timeline: THE MOST IMPORTANT FIELD. 5-12 events telling the story of this session chronologically. Include user direction/requests as "direction" type events -- these are the user's prompts that drove the work, quoted or paraphrased concisely. Every session has at least one direction event. Other events are specific things that happened, written in past tense, concrete and specific. Include file names, function names, error messages when relevant. "t" MUST be HH:MM format (e.g. "14:30") derived from message timestamps. Never use words like "start" or "end" as time values.
-  Good: { "t": "14:25", "event": "Fix the OOM crash in renderMedia", "type": "direction" }
-  Good: { "t": "14:30", "event": "Found root cause: renderMedia() spawning unlimited Chromium processes", "type": "discovery" }
-  Good: { "t": "15:15", "event": "Capped concurrency to Math.ceil(os.cpus().length * 0.5) in index.ts", "type": "change" }
-  Bad: { "t": "14:00", "event": "Worked on performance", "type": "change" }
-  Bad: { "t": "15:00", "event": "Made some improvements to the code", "type": "change" }
+- turns: THE MOST IMPORTANT FIELD. This captures the back-and-forth of the session. Each turn is one user request and what the agent did about it. The "ask" field should quote or closely paraphrase what the user actually said -- their intent, their words. The "did" array lists specific concrete things that were done in response (files changed, bugs found, features built). 3-8 turns per session.
+  Good: { "ask": "Fix the OOM crash in renderMedia", "did": ["Found root cause: renderMedia() spawning unlimited Chromium processes", "Capped concurrency to os.cpus().length * 0.5 in index.ts", "Deployed fix, confirmed memory stable"] }
+  Good: { "ask": "Map the React Native architecture across the monorepo", "did": ["Documented Router file-base routing in app/, layout.tsx", "Identified Tamagui config and component library structure", "Wrote comprehensive report covering all three backend layers"] }
+  Bad: { "ask": "Worked on stuff", "did": ["Made changes"] }
 - headline: Lead with the verb. Max 80 characters.
-- key_changes: 2-5 specific concrete changes with file/function names.
-- summary: Brief narrative context.
+- summary: Brief narrative context, 2-3 sentences.
 - outcome_type: shipped = deployed/merged/complete. progress = still working. blocked = stuck.
 - themes: 2-4 short tags, lowercase.
 - No markdown, no commentary, just JSON.
@@ -584,6 +586,15 @@ ${sampledMessages}`;
               type: String(e.type || "change").slice(0, 20),
             }))
         : undefined;
+      const turns = Array.isArray(parsed.turns)
+        ? parsed.turns
+            .filter((t: any) => t && typeof t.ask === "string" && Array.isArray(t.did))
+            .slice(0, 10)
+            .map((t: any) => ({
+              ask: String(t.ask).trim().slice(0, 200),
+              did: t.did.filter((d: any) => typeof d === "string").slice(0, 6).map((d: any) => String(d).trim().slice(0, 200)),
+            }))
+        : undefined;
       const goal = parsed.goal ? String(parsed.goal).trim().slice(0, 220) : undefined;
       const whatChanged = parsed.what_changed ? String(parsed.what_changed).trim().slice(0, 320) : undefined;
       const outcomeType = safeOutcomeType(parsed.outcome_type);
@@ -610,6 +621,7 @@ ${sampledMessages}`;
         headline,
         key_changes: keyChanges.length ? keyChanges : undefined,
         timeline: timeline?.length ? timeline : undefined,
+        turns: turns?.length ? turns : undefined,
         goal,
         what_changed: whatChanged,
         outcome_type: outcomeType,
@@ -760,7 +772,7 @@ export const getInsightsNeedingTimeline = internalQuery({
       .take(args.limit * 2);
 
     return insights
-      .filter((i) => !i.timeline || i.timeline.length === 0)
+      .filter((i) => !i.timeline || i.timeline.length === 0 || !i.turns || i.turns.length === 0)
       .slice(0, args.limit)
       .map((i) => i.conversation_id);
   },
@@ -1019,6 +1031,7 @@ export const getTeamDigest = query({
         headline: insight.headline,
         key_changes: insight.key_changes,
         timeline: insight.timeline,
+        turns: insight.turns,
         goal: insight.goal,
         what_changed: insight.what_changed,
         outcome_type: insight.outcome_type,
@@ -1331,6 +1344,7 @@ export const getActivityDigest = query({
         headline: insight.headline,
         key_changes: insight.key_changes,
         timeline: insight.timeline,
+        turns: insight.turns,
         goal: insight.goal,
         what_changed: insight.what_changed,
         outcome_type: insight.outcome_type,

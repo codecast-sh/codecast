@@ -4243,6 +4243,7 @@ export const feedForCLI = query({
     project_path: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
     member_name: v.optional(v.string()),
+    live_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -4443,7 +4444,7 @@ export const feedForCLI = query({
 
     const isOwnConversation = (c: typeof ownConversations[number]) => c.user_id.toString() === authUserId.toString();
 
-    const allConversations = [...ownConversations, ...teamConversations]
+    let filteredConversations = [...ownConversations, ...teamConversations]
       .filter((c): c is typeof ownConversations[number] => {
         if (filterUserId && c.user_id.toString() !== filterUserId) return false;
 
@@ -4493,8 +4494,26 @@ export const feedForCLI = query({
         }
         return true;
       })
-      .sort((a, b) => b.updated_at - a.updated_at)
-      .slice(offset, offset + Math.min(limit, 100));
+      .sort((a, b) => b.updated_at - a.updated_at);
+
+    const MANAGED_STALE_MS = 60 * 1000;
+    const now = Date.now();
+    const liveStatusMap = new Map<string, string | undefined>();
+    for (const conv of filteredConversations) {
+      const managed = await ctx.db
+        .query("managed_sessions")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+        .first();
+      if (managed && (now - managed.last_heartbeat) < MANAGED_STALE_MS) {
+        liveStatusMap.set(conv._id.toString(), managed.agent_status);
+      }
+    }
+
+    if (args.live_only) {
+      filteredConversations = filteredConversations.filter(c => liveStatusMap.has(c._id.toString()));
+    }
+
+    const allConversations = filteredConversations.slice(offset, offset + Math.min(limit, 100));
 
     const results: Array<{
       id: string;
@@ -4505,6 +4524,8 @@ export const feedForCLI = query({
       updated_at: string;
       message_count: number;
       agent_type?: string;
+      is_live?: boolean;
+      agent_status?: string;
       user?: { name: string | null; email: string | null };
       preview: Array<{
         line: number;
@@ -4581,6 +4602,7 @@ export const feedForCLI = query({
       const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
       const isOwnConv = conv.user_id.toString() === authUserId.toString();
 
+      const convIsLive = liveStatusMap.has(conv._id.toString());
       results.push({
         id: conv._id,
         session_id: conv.session_id,
@@ -4590,6 +4612,7 @@ export const feedForCLI = query({
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
         agent_type: conv.agent_type,
+        ...(convIsLive ? { is_live: true, agent_status: liveStatusMap.get(conv._id.toString()) || undefined } : {}),
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         preview: preview.slice(0, 4),
       });
@@ -5327,7 +5350,8 @@ export const listIdleSessions = query({
         if (implChild) {
           implementationSession = { _id: implChild._id.toString(), title: implChild.title };
         }
-        if (isIdle && children.some((c) => c.is_subagent && c.status === "active")) {
+        if (isIdle && children.some((c) => c.is_subagent && c.status === "active" &&
+            (liveConvIds.has(c._id.toString()) || (now - c.updated_at) < 5 * 60 * 1000))) {
           isIdle = false;
         }
       }
