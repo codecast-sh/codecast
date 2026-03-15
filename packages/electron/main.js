@@ -1,7 +1,38 @@
 const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification } = require("electron");
 const { autoUpdater } = require("electron-updater");
+const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+
+function showNativeNotification(title, body, onClick) {
+  // Electron's Notification API silently fails on macOS when the app isn't registered
+  // in notification center. Use osascript via the app's bundle ID so the notification
+  // shows with the Codecast icon and attributes to the correct app.
+  if (process.platform === "darwin") {
+    const bundleId = "sh.codecast.desktop";
+    const script = `
+      tell application id ${JSON.stringify(bundleId)}
+        display notification ${JSON.stringify(body)} with title ${JSON.stringify(title)}
+      end tell`;
+    execFile("osascript", ["-e", script], (err) => {
+      if (err) {
+        // Fallback to plain osascript if bundle ID approach fails
+        execFile("osascript", ["-e", `display notification ${JSON.stringify(body)} with title ${JSON.stringify(title)}`]);
+      }
+    });
+    // Also fire Electron's API for click-to-navigate support (may silently fail)
+    if (Notification.isSupported()) {
+      const notif = new Notification({ title, body, silent: true });
+      if (onClick) notif.on("click", onClick);
+      notif.show();
+    }
+  } else {
+    if (!Notification.isSupported()) return;
+    const notif = new Notification({ title, body, silent: false });
+    if (onClick) notif.on("click", onClick);
+    notif.show();
+  }
+}
 
 const PROD_URL = "https://codecast.sh";
 const LOCAL_URL = "http://local.codecast.sh";
@@ -279,12 +310,7 @@ ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 ipcMain.handle("restart-for-update", () => autoUpdater.quitAndInstall());
 ipcMain.handle("show-notification", (_e, { title, body, data }) => {
-  if (!Notification.isSupported()) {
-    console.warn("Notifications not supported on this platform");
-    return;
-  }
-  const notif = new Notification({ title, body, silent: false });
-  notif.on("click", () => {
+  showNativeNotification(title, body, () => {
     if (mainWindow) {
       mainWindow.show();
       mainWindow.focus();
@@ -295,10 +321,6 @@ ipcMain.handle("show-notification", (_e, { title, body, data }) => {
       }
     }
   });
-  notif.on("failed", (e, err) => {
-    console.error("Notification failed:", err);
-  });
-  notif.show();
 });
 
 // Palette IPC
@@ -379,17 +401,8 @@ app.whenReady().then(() => {
   createPaletteWindow();
   registerShortcuts();
 
-  // Trigger a silent notification on first launch to register with macOS notification center.
-  // Without this, macOS never shows the app in System Settings > Notifications.
-  const settingsPath = getSettingsPath();
-  let settings = {};
-  try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
-  if (!settings.notificationRegistered && Notification.isSupported()) {
-    const reg = new Notification({ title: "Codecast", body: "Notifications enabled", silent: true });
-    reg.show();
-    settings.notificationRegistered = true;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-  }
+  // No startup notification needed -- macOS registers the app when
+  // Notification.show() is first called from any code path (idle, error, etc.).
 
   // Auto-update
   autoUpdater.autoDownload = true;
