@@ -12,7 +12,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuLabel,
 } from "./ui/dropdown-menu";
-import { Check, ChevronDown, Plus, UserPlus } from "lucide-react";
+import { Check, ChevronDown, Plus, User, UserPlus } from "lucide-react";
 import { useEffect, useState, lazy, Suspense } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { TeamIcon } from "./TeamIcon";
@@ -25,25 +25,30 @@ export function TeamSwitcher() {
   const teams = useQuery(api.teams.getUserTeams);
   const saveActiveTeam = useMutation(api.teams.setActiveTeam);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
+  const workspaceInitialized = useInboxStore((s) => s.clientState.ui?.workspace_initialized);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   const setActiveTeam = (id: Id<"teams"> | null) => updateClientUI({ active_team_id: id ?? undefined });
   const [inviteOpen, setInviteOpen] = useState(false);
   const isAdmin = user?.role === "admin";
 
   useEffect(() => {
-    if (user && !activeTeamId && user.active_team_id) {
-      setActiveTeam(user.active_team_id);
-    } else if (user && activeTeamId) {
+    if (!user) return;
+    if (!workspaceInitialized) {
+      if (user.active_team_id) {
+        setActiveTeam(user.active_team_id);
+      } else if (teams && teams.length > 0) {
+        setActiveTeam(teams[0]?._id ?? null);
+      }
+      updateClientUI({ workspace_initialized: true });
+    } else if (activeTeamId) {
       const isValidTeam = teams?.some(t => t?._id === activeTeamId);
       if (!isValidTeam && user.active_team_id) {
         setActiveTeam(user.active_team_id);
       } else if (!isValidTeam && teams && teams.length > 0) {
         setActiveTeam(teams[0]?._id ?? null);
       }
-    } else if (user && !activeTeamId && teams && teams.length > 0) {
-      setActiveTeam(teams[0]?._id ?? null);
     }
-  }, [user, teams, activeTeamId, setActiveTeam]);
+  }, [user, teams, activeTeamId, workspaceInitialized]);
 
   if (!user) {
     return null;
@@ -51,9 +56,10 @@ export function TeamSwitcher() {
 
   const activeTeam = teams?.find(t => t?._id === activeTeamId);
 
-  const handleTeamChange = async (teamId: Id<"teams">) => {
+  const handleTeamChange = async (teamId: Id<"teams"> | null) => {
     setActiveTeam(teamId);
-    await saveActiveTeam({ team_id: teamId });
+    updateClientUI({ workspace_initialized: true });
+    await saveActiveTeam({ team_id: teamId ?? undefined });
   };
 
   if (!teams || teams.length === 0) {
@@ -72,15 +78,30 @@ export function TeamSwitcher() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-sol-base02/50 transition-colors text-sm">
-          <TeamIcon icon={activeTeam?.icon} color={activeTeam?.icon_color} className="w-4 h-4" />
+          {activeTeam ? (
+            <TeamIcon icon={activeTeam.icon} color={activeTeam.icon_color} className="w-4 h-4" />
+          ) : (
+            <User className="w-4 h-4 text-sol-base1" />
+          )}
           <span className="text-sol-text font-medium max-w-[120px] truncate">
-            {activeTeam?.name || "Select Team"}
+            {activeTeam?.name || "Personal"}
           </span>
           <ChevronDown className="w-3.5 h-3.5 text-sol-base1" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56 bg-sol-bg border-sol-border">
-        <DropdownMenuLabel className="text-sol-base1 text-xs">Switch Team</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-sol-base1 text-xs">Workspace</DropdownMenuLabel>
+        <DropdownMenuItem
+          onClick={() => handleTeamChange(null)}
+          className="flex items-center justify-between cursor-pointer text-sol-text hover:bg-sol-base02/50"
+        >
+          <div className="flex items-center gap-2">
+            <User className="w-4 h-4 text-sol-base1" />
+            <span>Personal</span>
+          </div>
+          {!activeTeamId && <Check className="w-4 h-4 text-sol-cyan" />}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator className="bg-sol-border" />
         {teams.map((team) => {
           if (!team) return null;
           return (

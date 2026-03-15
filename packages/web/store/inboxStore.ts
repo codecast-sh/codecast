@@ -196,6 +196,7 @@ export type ClientUI = {
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
   sounds_enabled?: boolean;
+  workspace_initialized?: boolean;
 };
 
 export type ClientLayouts = {
