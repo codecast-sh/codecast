@@ -662,13 +662,12 @@ export const webList = query({
     ready: v.optional(v.boolean()),
     limit: v.optional(v.number()),
     include_derived: v.optional(v.boolean()),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
 
     let tasks: any[];
     if (args.project_id) {
@@ -676,19 +675,38 @@ export const webList = query({
         .query("tasks")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
-    } else if (team_id) {
+    } else if (args.workspace === "team" && args.team_id) {
       tasks = await ctx.db
         .query("tasks")
-        .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
+        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
         .collect();
       if (args.status) {
         tasks = tasks.filter((t) => t.status === args.status);
       }
-    } else {
+    } else if (args.workspace === "personal") {
       tasks = await ctx.db
         .query("tasks")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect();
+      tasks = tasks.filter((t: any) => !t.team_id);
+      if (args.status) {
+        tasks = tasks.filter((t) => t.status === args.status);
+      }
+    } else {
+      // Backwards compat: no workspace arg = all user's items
+      const user = await ctx.db.get(userId);
+      const team_id = user?.active_team_id || user?.team_id;
+      if (team_id) {
+        tasks = await ctx.db
+          .query("tasks")
+          .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
+          .collect();
+      } else {
+        tasks = await ctx.db
+          .query("tasks")
+          .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+          .collect();
+      }
       if (args.status) {
         tasks = tasks.filter((t) => t.status === args.status);
       }

@@ -134,24 +134,46 @@ export const update = mutation({
 export const webList = query({
   args: {
     status: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
     let projects;
-    if (args.status) {
+    if (args.workspace === "team" && args.team_id) {
       projects = await ctx.db
         .query("projects")
-        .withIndex("by_user_status", (q) =>
-          q.eq("user_id", userId).eq("status", args.status as any)
-        )
+        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
         .collect();
-    } else {
+      if (args.status) {
+        projects = projects.filter(p => p.status === args.status);
+      }
+    } else if (args.workspace === "personal") {
       projects = await ctx.db
         .query("projects")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect();
+      projects = projects.filter(p => !p.team_id);
+      if (args.status) {
+        projects = projects.filter(p => p.status === args.status);
+      }
+    } else {
+      // Backwards compat: no workspace arg
+      if (args.status) {
+        projects = await ctx.db
+          .query("projects")
+          .withIndex("by_user_status", (q) =>
+            q.eq("user_id", userId).eq("status", args.status as any)
+          )
+          .collect();
+      } else {
+        projects = await ctx.db
+          .query("projects")
+          .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+          .collect();
+      }
     }
 
     const enriched = await Promise.all(

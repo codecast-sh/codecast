@@ -298,13 +298,14 @@ export const webList = query({
     project_path: v.optional(v.string()),
     scope: v.optional(v.string()),
     limit: v.optional(v.number()),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { docs: [], projectPaths: [] };
 
     const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || (user as any)?.team_id;
 
     const CONFIG_DOC_NAMES = new Set(["README", "AGENTS", "CLAUDE", "CLAUDE.md", "AGENTS.md", "README.md"]);
     const isNoiseDoc = (d: any) => {
@@ -335,19 +336,41 @@ export const webList = query({
     const queryLimit = args.limit || 100;
     const fetchLimit = queryLimit * 3;
 
-    const userDocs = await ctx.db
-      .query("docs")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .order("desc")
-      .take(fetchLimit);
+    // Workspace-scoped fetching
+    let userDocs: any[];
+    let teamDocs: any[] = [];
+    const resolvedTeamId = args.workspace === "team" && args.team_id
+      ? args.team_id
+      : !args.workspace ? (user?.active_team_id || (user as any)?.team_id) : undefined;
 
-    let teamDocs: typeof userDocs = [];
-    if (team_id) {
+    if (args.workspace === "team" && args.team_id) {
       teamDocs = await ctx.db
         .query("docs")
-        .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
+        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
         .order("desc")
         .take(fetchLimit);
+      userDocs = [];
+    } else if (args.workspace === "personal") {
+      userDocs = await ctx.db
+        .query("docs")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .order("desc")
+        .take(fetchLimit);
+      teamDocs = [];
+    } else {
+      // Backwards compat: no workspace arg = merge user + team docs
+      userDocs = await ctx.db
+        .query("docs")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .order("desc")
+        .take(fetchLimit);
+      if (resolvedTeamId) {
+        teamDocs = await ctx.db
+          .query("docs")
+          .withIndex("by_team_id", (q) => q.eq("team_id", resolvedTeamId))
+          .order("desc")
+          .take(fetchLimit);
+      }
     }
 
     const seen = new Set<string>();
@@ -369,8 +392,9 @@ export const webList = query({
     }
 
     if (args.scope === "projects" || args.project_path) {
+      const baseDocs = userDocs.length > 0 ? userDocs : allDocs;
       if (args.scope === "projects") {
-        docs = userDocs.filter((d) => {
+        docs = baseDocs.filter((d) => {
           const effectiveTeamId = resolveConvTeamId(d, convMap);
           return !effectiveTeamId;
         });
@@ -378,20 +402,27 @@ export const webList = query({
           docs = docs.filter((d) => d.project_path?.includes(args.project_path!));
         }
       } else {
-        docs = userDocs.filter((d) => d.project_path?.includes(args.project_path!));
+        docs = baseDocs.filter((d) => d.project_path?.includes(args.project_path!));
       }
-      const unscopedDocs = userDocs.filter((d) => {
+      const unscopedDocs = baseDocs.filter((d) => {
         const effectiveTeamId = resolveConvTeamId(d, convMap);
         return !effectiveTeamId && !d.archived_at && !isNoiseDoc(d);
       });
       projectPaths = [...new Set(unscopedDocs.map((d) => d.project_path).filter(Boolean))] as string[];
-    } else if (team_id) {
+    } else if (args.workspace === "team" && args.team_id) {
+      docs = allDocs;
+    } else if (args.workspace === "personal") {
       docs = allDocs.filter((d) => {
         const effectiveTeamId = resolveConvTeamId(d, convMap);
-        return String(effectiveTeamId) === String(team_id);
+        return !effectiveTeamId;
+      });
+    } else if (resolvedTeamId) {
+      docs = allDocs.filter((d) => {
+        const effectiveTeamId = resolveConvTeamId(d, convMap);
+        return String(effectiveTeamId) === String(resolvedTeamId);
       });
     } else {
-      docs = userDocs.filter((d) => {
+      docs = allDocs.filter((d) => {
         const effectiveTeamId = resolveConvTeamId(d, convMap);
         return !effectiveTeamId;
       });

@@ -758,13 +758,12 @@ export const webList = query({
     project_id: v.optional(v.string()),
     include_all: v.optional(v.boolean()),
     limit: v.optional(v.number()),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
 
     let plans;
     if (args.project_id) {
@@ -772,16 +771,32 @@ export const webList = query({
         .query("plans")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
-    } else if (team_id) {
+    } else if (args.workspace === "team" && args.team_id) {
       plans = await ctx.db
         .query("plans")
-        .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
+        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
         .collect();
-    } else {
+    } else if (args.workspace === "personal") {
       plans = await ctx.db
         .query("plans")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect();
+      plans = plans.filter(p => !p.team_id);
+    } else {
+      // Backwards compat: no workspace arg = all user's plans
+      const user = await ctx.db.get(userId);
+      const team_id = user?.active_team_id || user?.team_id;
+      if (team_id) {
+        plans = await ctx.db
+          .query("plans")
+          .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
+          .collect();
+      } else {
+        plans = await ctx.db
+          .query("plans")
+          .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+          .collect();
+      }
     }
 
     if (args.status) {
