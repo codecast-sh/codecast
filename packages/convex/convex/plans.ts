@@ -698,11 +698,37 @@ export const webGet = query({
     const team_id = user?.active_team_id || user?.team_id;
     if (plan.user_id !== userId && plan.team_id !== team_id) return null;
 
+    // Find live agent sessions for tasks
+    const now = Date.now();
+    const HEARTBEAT_ALIVE_MS = 90 * 1000;
+    const managedSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const liveSessions = managedSessions.filter(
+      (s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id
+    );
+    const activeTaskMap = new Map<string, { session_id: string; title?: string }>();
+    for (const s of liveSessions) {
+      const conv = await ctx.db.get(s.conversation_id!);
+      if (conv && (conv as any).active_task_id) {
+        activeTaskMap.set((conv as any).active_task_id.toString(), {
+          session_id: conv.session_id,
+          title: conv.title || undefined,
+        });
+      }
+    }
+
     const tasks = [];
     if (plan.task_ids) {
       for (const tid of plan.task_ids) {
         const task = await ctx.db.get(tid);
-        if (task) tasks.push(task);
+        if (task) {
+          tasks.push({
+            ...task,
+            activeSession: activeTaskMap.get(task._id.toString()) || null,
+          });
+        }
       }
     }
 

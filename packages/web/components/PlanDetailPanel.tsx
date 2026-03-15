@@ -41,9 +41,17 @@ const STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color:
 const TASK_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string; label: string }> = {
   open: { icon: Circle, color: "text-sol-blue", label: "Open" },
   in_progress: { icon: CircleDot, color: "text-sol-yellow", label: "In Progress" },
+  in_review: { icon: CircleDot, color: "text-sol-violet", label: "Review" },
   done: { icon: CheckCircle2, color: "text-sol-green", label: "Done" },
   dropped: { icon: XCircle, color: "text-sol-text-dim", label: "Dropped" },
   draft: { icon: Circle, color: "text-sol-text-dim", label: "Draft" },
+};
+
+const EXEC_STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
+  done: { color: "text-sol-green", bg: "bg-sol-green/10", label: "Done" },
+  done_with_concerns: { color: "text-sol-yellow", bg: "bg-sol-yellow/10", label: "Concerns" },
+  blocked: { color: "text-sol-red", bg: "bg-sol-red/10", label: "Blocked" },
+  needs_context: { color: "text-sol-orange", bg: "bg-sol-orange/10", label: "Needs context" },
 };
 
 const TASK_STATUS_CYCLE = ["open", "in_progress", "done"];
@@ -174,10 +182,74 @@ function PlanSessionCard({ session: s }: { session: any }) {
   );
 }
 
+function TaskExecutionDetail({ task }: { task: any }) {
+  const exec = EXEC_STATUS_CONFIG[task.execution_status];
+  const hasDetail = task.acceptance_criteria?.length || task.steps?.length || task.execution_concerns || task.files_changed?.length || task.verification_evidence;
+  if (!hasDetail && !exec) return null;
+
+  return (
+    <div className="pl-9 pr-3 pb-2 space-y-2">
+      {exec && (
+        <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${exec.bg} ${exec.color}`}>
+          {exec.label}
+        </span>
+      )}
+      {task.execution_concerns && (
+        <div className="text-xs p-2 rounded bg-sol-yellow/5 border border-sol-yellow/20 text-sol-yellow/80">
+          {task.execution_concerns}
+        </div>
+      )}
+      {task.acceptance_criteria?.length > 0 && (
+        <div className="space-y-0.5">
+          {task.acceptance_criteria.map((ac: string, i: number) => (
+            <div key={i} className="flex items-start gap-1.5 text-xs text-sol-text-muted">
+              <span className="text-sol-text-dim mt-px">-</span>
+              <span>{ac}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {task.steps?.length > 0 && (
+        <div className="space-y-0.5">
+          {task.steps.map((s: any, i: number) => (
+            <div key={i} className="flex items-start gap-1.5 text-xs">
+              <span className={`mt-px ${s.done ? "text-sol-green" : "text-sol-text-dim"}`}>
+                {s.done ? "✓" : String(i + 1)}
+              </span>
+              <span className={s.done ? "text-sol-text-dim line-through" : "text-sol-text-muted"}>{s.title}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {task.files_changed?.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {task.files_changed.map((f: string, i: number) => (
+            <span key={i} className="text-[10px] font-mono px-1 py-px rounded bg-sol-bg-alt text-sol-text-dim">
+              {f.split("/").pop()}
+            </span>
+          ))}
+        </div>
+      )}
+      {(task.estimated_minutes || task.actual_minutes) && (
+        <div className="flex items-center gap-2 text-[10px] text-sol-text-dim">
+          {task.estimated_minutes && <span>est: {task.estimated_minutes}m</span>}
+          {task.actual_minutes && <span>actual: {task.actual_minutes}m</span>}
+        </div>
+      )}
+      {task.verification_evidence && (
+        <div className="text-xs p-2 rounded bg-sol-green/5 border border-sol-green/20 text-sol-green/70 font-mono">
+          {task.verification_evidence}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: any[] }) {
   const [showAdd, setShowAdd] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [showDone, setShowDone] = useState(false);
+  const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const webUpdate = useMutation(api.tasks.webUpdate);
   const webCreate = useMutation(api.tasks.webCreate);
 
@@ -245,22 +317,49 @@ function PlanTaskSection({ planShortId, tasks }: { planShortId: string; tasks: a
           const TaskIcon = tc.icon;
           const pc = task.priority ? PRIORITY_CONFIG[task.priority] : null;
           const PriorityIcon = pc?.icon;
+          const exec = task.execution_status ? EXEC_STATUS_CONFIG[task.execution_status] : null;
+          const isExpanded = expandedTask === task._id;
+          const hasDetail = task.acceptance_criteria?.length || task.steps?.length || task.execution_concerns || task.files_changed?.length;
           return (
-            <div key={task._id} className="flex items-center gap-2.5 px-3 py-2 border-b border-sol-border/10 last:border-b-0 group">
-              <button
-                onClick={() => cycleStatus(task.short_id, task.status)}
-                title={`${tc.label} (click to cycle)`}
-                className="flex-shrink-0 hover:scale-110 transition-transform"
-              >
-                <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
-              </button>
-              <Link href={`/tasks/${task._id}`} className="flex-1 min-w-0 flex items-center gap-2 hover:text-sol-cyan transition-colors">
-                <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
-                <span className="text-sm text-sol-text truncate">{task.title}</span>
-              </Link>
-              {PriorityIcon && pc && (
-                <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${pc.color}`} />
-              )}
+            <div key={task._id} className="border-b border-sol-border/10 last:border-b-0">
+              <div className="flex items-center gap-2.5 px-3 py-2 group">
+                <button
+                  onClick={() => cycleStatus(task.short_id, task.status)}
+                  title={`${tc.label} (click to cycle)`}
+                  className="flex-shrink-0 hover:scale-110 transition-transform"
+                >
+                  <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
+                </button>
+                <button
+                  onClick={() => setExpandedTask(isExpanded ? null : task._id)}
+                  className="flex-1 min-w-0 flex items-center gap-2 text-left hover:text-sol-cyan transition-colors"
+                >
+                  <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
+                  <span className="text-sm text-sol-text truncate">{task.title}</span>
+                </button>
+                {task.activeSession && (
+                  <Link
+                    href={`/conversation/${task.activeSession.session_id}`}
+                    onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] hover:bg-emerald-500/25 transition-colors flex-shrink-0"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    live
+                  </Link>
+                )}
+                {exec && (
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${exec.bg} ${exec.color} flex-shrink-0`}>
+                    {exec.label}
+                  </span>
+                )}
+                {PriorityIcon && pc && (
+                  <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${pc.color}`} />
+                )}
+                {hasDetail && (
+                  <ChevronRight className={`w-3 h-3 text-sol-text-dim/30 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                )}
+              </div>
+              {isExpanded && <TaskExecutionDetail task={task} />}
             </div>
           );
         })}
@@ -375,6 +474,32 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
           </div>
         </div>
       )}
+
+      {(() => {
+        const tasks = plan.tasks || [];
+        const activeAgents = tasks.filter((t: any) => t.activeSession);
+        const withConcerns = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
+        const blocked = tasks.filter((t: any) => t.execution_status === "blocked" || t.execution_status === "needs_context");
+        if (activeAgents.length > 0 || withConcerns.length > 0 || blocked.length > 0) {
+          return (
+            <div className="mb-4 flex items-center gap-3 text-xs">
+              {activeAgents.length > 0 && (
+                <span className="flex items-center gap-1 text-emerald-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  {activeAgents.length} agent{activeAgents.length > 1 ? "s" : ""} active
+                </span>
+              )}
+              {withConcerns.length > 0 && (
+                <span className="text-sol-yellow">{withConcerns.length} with concerns</span>
+              )}
+              {blocked.length > 0 && (
+                <span className="text-sol-red">{blocked.length} blocked</span>
+              )}
+            </div>
+          );
+        }
+        return null;
+      })()}
 
       <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} />
 
