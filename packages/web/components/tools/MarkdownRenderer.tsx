@@ -5,6 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import { useState, useEffect } from "react";
 import { useImageGallery } from "../ImageGallery";
 import { CodeBlock } from "../CodeBlock";
+import { MermaidDiagram } from "../MermaidDiagram";
 
 function extractTextFromHast(node: any): string {
   if (!node) return '';
@@ -109,6 +110,7 @@ export function MarkdownRenderer({ content, filePath = '', className = '' }: Mar
               const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
               const code = extractTextFromHast(codeElement);
               if (code) {
+                if (language === 'mermaid') return <MermaidDiagram code={code} />;
                 return <CodeBlock code={code} language={language} />;
               }
             }
