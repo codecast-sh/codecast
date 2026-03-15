@@ -942,6 +942,7 @@ export default defineSchema({
     created_from_insight: v.optional(v.id("session_insights")),
     last_session_summary: v.optional(v.string()),
     attempt_count: v.optional(v.number()),
+    last_attempted_at: v.optional(v.number()),
 
     // Origin tracking
     source: v.union(

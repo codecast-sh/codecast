@@ -489,6 +489,7 @@ export const update = mutation({
 
     if (args.status === "in_progress") {
       updates.attempt_count = (task.attempt_count || 0) + 1;
+      updates.last_attempted_at = now;
       if (!task.started_at) updates.started_at = now;
     }
 
@@ -911,6 +912,7 @@ export const webUpdate = mutation({
     }
     if (args.status === "in_progress") {
       updates.attempt_count = (task.attempt_count || 0) + 1;
+      updates.last_attempted_at = now;
     }
 
     const resolvedAssignee = updates.assignee || args.assignee;

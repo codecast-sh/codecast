@@ -270,7 +270,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const now = Date.now();
     const updates: any = { status: newStatus, updated_at: now };
     if (newStatus === "done" || newStatus === "dropped") updates.closed_at = now;
-    if (newStatus === "in_progress") updates.attempt_count = (task.attempt_count || 0) + 1;
+    if (newStatus === "in_progress") {
+      updates.attempt_count = (task.attempt_count || 0) + 1;
+      updates.last_attempted_at = now;
+    }
 
     if (newStatus !== task.status) {
       await ctx.db.insert("task_history", {
@@ -300,7 +303,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       if (key === "status") {
         updates.status = val;
         if (val === "done" || val === "dropped") updates.closed_at = now;
-        if (val === "in_progress") updates.attempt_count = (task.attempt_count || 0) + 1;
+        if (val === "in_progress") {
+          updates.attempt_count = (task.attempt_count || 0) + 1;
+          updates.last_attempted_at = now;
+        }
         if (val !== task.status) {
           await ctx.db.insert("task_history", {
             task_id: task._id, user_id: userId, actor_type: "user" as const,

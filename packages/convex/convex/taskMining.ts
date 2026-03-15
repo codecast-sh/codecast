@@ -95,6 +95,7 @@ export const mineTasksFromInsights = internalMutation({
           status,
           priority,
           attempt_count: status === "in_progress" ? 1 : 0,
+          last_attempted_at: status === "in_progress" ? ts : undefined,
           closed_at: status === "done" ? ts : undefined,
           created_at: ts,
           updated_at: ts,
