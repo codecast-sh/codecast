@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Badge } from "./ui/badge";
+import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { toast } from "sonner";
 import {
   Circle,
@@ -49,12 +50,6 @@ const TASK_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string; l
   draft: { icon: Circle, color: "text-sol-text-dim", label: "Draft" },
 };
 
-const EXEC_STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
-  done: { color: "text-sol-green", bg: "bg-sol-green/10", label: "Done" },
-  done_with_concerns: { color: "text-sol-yellow", bg: "bg-sol-yellow/10", label: "Concerns" },
-  blocked: { color: "text-sol-red", bg: "bg-sol-red/10", label: "Blocked" },
-  needs_context: { color: "text-sol-orange", bg: "bg-sol-orange/10", label: "Needs context" },
-};
 
 const TASK_STATUS_CYCLE = ["open", "in_progress", "done"];
 
@@ -185,16 +180,14 @@ function PlanSessionCard({ session: s }: { session: any }) {
 }
 
 function TaskExecutionDetail({ task }: { task: any }) {
-  const exec = EXEC_STATUS_CONFIG[task.execution_status];
+  const hasExec = !!getExecStatusConfig(task.execution_status);
   const hasDetail = task.acceptance_criteria?.length || task.steps?.length || task.execution_concerns || task.files_changed?.length || task.verification_evidence;
-  if (!hasDetail && !exec) return null;
+  if (!hasDetail && !hasExec) return null;
 
   return (
     <div className="pl-9 pr-3 pb-2 space-y-2">
-      {exec && (
-        <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${exec.bg} ${exec.color}`}>
-          {exec.label}
-        </span>
+      {hasExec && (
+        <TaskStatusBadge status={task.execution_status} type="execution" />
       )}
       {task.execution_concerns && (
         <div className="text-xs p-2 rounded bg-sol-yellow/5 border border-sol-yellow/20 text-sol-yellow/80">
@@ -484,7 +477,7 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
           const TaskIcon = tc.icon;
           const pc = task.priority ? PRIORITY_CONFIG[task.priority] : null;
           const PriorityIcon = pc?.icon;
-          const exec = task.execution_status ? EXEC_STATUS_CONFIG[task.execution_status] : null;
+          const hasExec = task.execution_status && !!getExecStatusConfig(task.execution_status);
           const isExpanded = expandedTask === task._id;
           const taskSessions = sessionsByTask.get(task._id.toString()) || [];
           const hasDetail = task.acceptance_criteria?.length || task.steps?.length || task.execution_concerns || task.files_changed?.length || taskSessions.length > 0;
@@ -515,10 +508,8 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
                     live
                   </Link>
                 )}
-                {exec && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${exec.bg} ${exec.color} flex-shrink-0`}>
-                    {exec.label}
-                  </span>
+                {hasExec && (
+                  <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0" />
                 )}
                 {taskSessions.length > 0 && !task.activeSession && (
                   <span className="text-[10px] text-sol-text-dim/40 flex-shrink-0 font-mono">

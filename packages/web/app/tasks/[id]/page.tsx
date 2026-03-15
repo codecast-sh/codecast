@@ -14,6 +14,7 @@ import { DashboardLayout } from "../../../components/DashboardLayout";
 
 const api = _api as any;
 import { Badge } from "../../../components/ui/badge";
+import { TaskStatusBadge } from "../../../components/TaskStatusBadge";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -288,28 +289,17 @@ function HistoryItem({ entry }: { entry: any }) {
   );
 }
 
-const EXECUTION_STATUS_STYLES: Record<string, { bg: string; text: string; border: string; label: string }> = {
-  done: { bg: "bg-sol-green/10", text: "text-sol-green", border: "border-sol-green/30", label: "Done" },
-  done_with_concerns: { bg: "bg-sol-yellow/10", text: "text-sol-yellow", border: "border-sol-yellow/30", label: "Done (concerns)" },
-  blocked: { bg: "bg-sol-red/10", text: "text-sol-red", border: "border-sol-red/30", label: "Blocked" },
-  needs_context: { bg: "bg-sol-orange/10", text: "text-sol-orange", border: "border-sol-orange/30", label: "Needs Context" },
-};
-
 function ExecutionDetailsSection({ data }: { data: any }) {
   const hasExecution = data.execution_status || data.steps?.length || data.acceptance_criteria?.length ||
     data.files_changed?.length || data.execution_concerns || data.estimated_minutes != null || data.actual_minutes != null;
   if (!hasExecution) return null;
 
-  const execStyle = data.execution_status ? EXECUTION_STATUS_STYLES[data.execution_status] : null;
-
   return (
     <div className="mb-6">
       <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
         Execution
-        {execStyle && (
-          <span className={`text-[10px] px-2 py-0.5 rounded-full border ${execStyle.bg} ${execStyle.text} ${execStyle.border} font-medium normal-case tracking-normal`}>
-            {execStyle.label}
-          </span>
+        {data.execution_status && (
+          <TaskStatusBadge status={data.execution_status} type="execution" className="normal-case tracking-normal" />
         )}
       </h2>
       <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/20 p-4 space-y-4">

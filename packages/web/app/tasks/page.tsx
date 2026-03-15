@@ -14,6 +14,7 @@ const api = _api as any;
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { Badge } from "../../components/ui/badge";
+import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { toast } from "sonner";
 import {
   Plus,
@@ -315,28 +316,17 @@ function CreateTaskModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-const EXECUTION_STATUS_STYLES: Record<string, { bg: string; text: string; border: string; label: string }> = {
-  done: { bg: "bg-sol-green/10", text: "text-sol-green", border: "border-sol-green/30", label: "Done" },
-  done_with_concerns: { bg: "bg-sol-yellow/10", text: "text-sol-yellow", border: "border-sol-yellow/30", label: "Done (concerns)" },
-  blocked: { bg: "bg-sol-red/10", text: "text-sol-red", border: "border-sol-red/30", label: "Blocked" },
-  needs_context: { bg: "bg-sol-orange/10", text: "text-sol-orange", border: "border-sol-orange/30", label: "Needs Context" },
-};
-
 function ExecutionDetails({ data }: { data: any }) {
   const hasExecution = data.execution_status || data.steps?.length || data.acceptance_criteria?.length ||
     data.files_changed?.length || data.execution_concerns || data.estimated_minutes != null || data.actual_minutes != null;
   if (!hasExecution) return null;
 
-  const execStyle = data.execution_status ? EXECUTION_STATUS_STYLES[data.execution_status] : null;
-
   return (
     <div className="border-t border-sol-border/20 pt-3 space-y-3">
-      {execStyle && (
+      {data.execution_status && (
         <div className="flex items-center gap-2">
           <span className="text-xs text-sol-text-dim">Execution</span>
-          <span className={`text-[10px] px-2 py-0.5 rounded-full border ${execStyle.bg} ${execStyle.text} ${execStyle.border} font-medium`}>
-            {execStyle.label}
-          </span>
+          <TaskStatusBadge status={data.execution_status} type="execution" />
         </div>
       )}
 
