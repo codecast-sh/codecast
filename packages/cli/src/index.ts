@@ -8734,14 +8734,41 @@ plan
   .argument("<plan_id>", "Plan short ID")
   .option("--max <n>", "Max parallel agents per wave", "3")
   .option("--interval <mins>", "Minutes between status checks", "2")
+  .option("--max-runtime <duration>", "Max runtime before self-rescheduling (e.g., 30m, 2h)")
+  .option("--no-reschedule", "Disable automatic self-continuation on exit")
   .action(async (planId: string, options: any) => {
     const maxAgents = parseInt(options.max, 10) || 3;
     const intervalMs = (parseInt(options.interval, 10) || 2) * 60_000;
+    const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;
+    const reschedule = options.reschedule !== false;
     const agentStatusScript = path.join(os.homedir(), ".claude", "scripts", "agent-status.sh");
     const agentScript = path.join(os.homedir(), ".claude", "scripts", "agent-spawn.sh");
+    const startTime = Date.now();
+
+    const scheduleResume = (reason: string) => {
+      if (!reschedule) return;
+      const resumePrompt = `Run this command to continue autopilot orchestration: cast plan autopilot ${planId} --max-runtime 2h`;
+      const args = [
+        "schedule", "add",
+        resumePrompt,
+        "--in", "5m",
+        "--mode", "apply",
+        "--project", getRealCwd(),
+        "--title", `autopilot-resume:${planId}`,
+        "--max-runtime", "15m",
+      ];
+      const castBin = process.argv[1];
+      const sr = spawnSync(castBin, args, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      if (sr.status === 0) {
+        console.log(`  ${c.green}scheduled${c.reset} autopilot resume in 5m (${reason})`);
+      } else {
+        console.error(`  ${c.red}failed${c.reset} to schedule resume: ${(sr.stderr || "").trim().slice(0, 120)}`);
+      }
+    };
 
     console.log(`\n  ${c.bold}Autopilot${c.reset} for plan ${c.cyan}${planId}${c.reset}`);
-    console.log(fmt.muted(`  Max ${maxAgents} agents, checking every ${options.interval}m\n`));
+    const runtimeLabel = maxRuntimeMs ? `, max runtime ${options.maxRuntime}` : "";
+    console.log(fmt.muted(`  Max ${maxAgents} agents, checking every ${options.interval}m${runtimeLabel}\n`));
 
     const activeAgents = new Map<string, { task: any; spawnedAt: number }>();
 
@@ -8823,6 +8850,12 @@ plan
     // Loop
     const interval = setInterval(async () => {
       try {
+        if (maxRuntimeMs && (Date.now() - startTime) >= maxRuntimeMs) {
+          clearInterval(interval);
+          console.log(`\n  Max runtime reached. ${activeAgents.size} agents still running.`);
+          scheduleResume("max runtime");
+          process.exit(0);
+        }
         const cont = await runCycle();
         if (!cont) { clearInterval(interval); process.exit(0); }
       } catch (err: any) {
@@ -8833,6 +8866,7 @@ plan
     process.on("SIGINT", () => {
       clearInterval(interval);
       console.log(`\n  Stopped autopilot. ${activeAgents.size} agents still running.`);
+      scheduleResume("SIGINT");
       process.exit(0);
     });
 
