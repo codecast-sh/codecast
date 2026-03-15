@@ -8377,14 +8377,27 @@ function buildImplementerPrompt(plan: any, task: any): string {
     ? task.steps.map((s: any, i: number) => `${i + 1}. ${s.done ? "[x]" : "[ ]"} ${s.title}${s.verification ? ` (verify: ${s.verification})` : ""}`).join("\n")
     : "";
 
+  const doneTasks = (plan.tasks || []).filter((t: any) => t.status === "done");
+  const doneContext = doneTasks.length
+    ? `\nAlready completed:\n${doneTasks.map((t: any) => `- ${t.title}`).join("\n")}`
+    : "";
+
   const planContext = [
     `Plan: ${plan.title} (${plan.short_id})`,
     plan.goal ? `Goal: ${plan.goal}` : "",
     `Task: ${task.title} (${task.short_id})`,
     task.description ? `\n${task.description}` : "",
+    doneContext,
   ].filter(Boolean).join("\n");
 
   return `You are implementing a specific task from a plan. Follow structured development methodology.
+
+## First step
+
+Bind yourself to this task so your session is tracked:
+\`\`\`bash
+cast task start ${task.short_id}
+\`\`\`
 
 ## Context
 ${planContext}
@@ -8394,29 +8407,33 @@ ${acceptance}
 ${steps ? `\n## Steps\n${steps}\n` : ""}
 ## Development Protocol
 
-1. **Understand first**: Read acceptance criteria. If unclear, report NEEDS_CONTEXT with specific questions.
+1. **Understand first**: Read acceptance criteria and relevant code. If unclear, report NEEDS_CONTEXT.
 2. **Test-driven**: Write failing test -> implement minimal code -> verify -> commit.
 3. **Small commits**: One logical change per commit. Conventional commits format.
 4. **Verify everything**: Run tests, check build. Evidence before claims.
 5. **Self-review**: Before reporting done, review your changes. Check for AI slop, missing edge cases, dead code.
 
-## When done
+## Reporting
 
-Update task status:
+When done:
 \`\`\`bash
-codecast task done ${task.short_id} -m "what you implemented and how you verified it"
+cast task done ${task.short_id} -m "what you implemented and how you verified it"
 \`\`\`
 
-If blocked or concerns:
+If done with concerns:
 \`\`\`bash
-codecast task comment ${task.short_id} "description of blocker or concern" -t blocker
+cast task done ${task.short_id} --concerns "description of concerns"
 \`\`\`
 
-## Report format (in your final message)
+If blocked:
+\`\`\`bash
+cast task comment ${task.short_id} "description of blocker" -t blocker
+\`\`\`
+
+Your final message must include:
 - **Status:** DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
-- What you implemented
-- What you tested and results
-- Files changed
+- What you implemented and files changed
+- How you verified (test output, build success, manual check)
 - Any concerns or follow-up needed`;
 }
 
