@@ -7840,8 +7840,19 @@ work
   .description("Mark a task as done")
   .argument("<short_id>", "Task short ID")
   .option("-m, --message <text>", "Completion comment")
+  .option("--concerns <text>", "Mark done with concerns")
   .action(async (shortId: string, options: any) => {
-    await cliPost("/cli/work/update", { short_id: shortId, status: "done" });
+    const sessionId = detectCurrentSessionId();
+    const body: Record<string, any> = { short_id: shortId, status: "done" };
+    if (sessionId) body.conversation_id = sessionId;
+    if (options.concerns) {
+      body.execution_status = "done_with_concerns";
+      body.execution_concerns = options.concerns;
+    } else {
+      body.execution_status = "done";
+    }
+    if (options.message) body.verification_evidence = options.message;
+    await cliPost("/cli/work/update", body);
     if (options.message) {
       await cliPost("/cli/work/comment", { short_id: shortId, text: options.message, comment_type: "note" });
     }

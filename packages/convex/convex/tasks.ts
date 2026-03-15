@@ -502,7 +502,10 @@ export const update = mutation({
       }
     }
 
-    return { success: true };
+    return {
+      success: true,
+      plan_id: task.plan_id ? (await ctx.db.get(task.plan_id))?.short_id : undefined,
+    };
   },
 });
 
