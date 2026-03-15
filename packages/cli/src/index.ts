@@ -8959,6 +8959,13 @@ plan
       }
     }
 
+    const progressLog = plan.progress_log || [];
+    const lastOrch = [...progressLog].reverse().find((e: any) => /orchestrat/i.test(e.entry));
+    if (lastOrch) {
+      const ts = new Date(lastOrch.timestamp).toLocaleString();
+      console.log(`\n  ${c.dim}Last orchestrated:${c.reset} ${ts}`);
+    }
+
     console.log();
   });
 
