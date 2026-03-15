@@ -25,6 +25,8 @@ import {
   ArrowDown,
   Minus,
   AlertTriangle,
+  Zap,
+  Timer,
 } from "lucide-react";
 import Markdown from "react-markdown";
 
@@ -272,6 +274,123 @@ function TaskSessionCards({ sessions }: { sessions: any[] }) {
           <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums">{getRelativeTime(s.updated_at || s.started_at)}</span>
         </Link>
       ))}
+    </div>
+  );
+}
+
+function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
+  const activeAgents = tasks.filter((t: any) => t.activeSession);
+  const doneTasks = tasks.filter((t: any) => t.status === "done");
+  const blockedTasks = tasks.filter((t: any) => t.execution_status === "blocked" || t.execution_status === "needs_context");
+  const concernTasks = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
+
+  const totalActual = tasks.reduce((sum: number, t: any) => sum + (t.actual_minutes || 0), 0);
+  const remainingEstimated = tasks
+    .filter((t: any) => t.status !== "done" && t.status !== "dropped")
+    .reduce((sum: number, t: any) => sum + (t.estimated_minutes || 0), 0);
+
+  if (tasks.length === 0) return null;
+
+  const hasActiveWork = activeAgents.length > 0 || sessions.some((s: any) => s.is_active);
+
+  return (
+    <div className={`mb-5 rounded-lg border overflow-hidden ${hasActiveWork ? "border-emerald-500/30 bg-emerald-950/10" : "border-sol-border/20 bg-sol-bg-alt/20"}`}>
+      <div className="px-4 py-3">
+        <div className="flex items-center gap-3 mb-2.5">
+          <Zap className={`w-4 h-4 ${hasActiveWork ? "text-emerald-400" : "text-sol-text-dim"}`} />
+          <span className={`text-xs font-semibold uppercase tracking-wider ${hasActiveWork ? "text-emerald-400" : "text-sol-text-dim"}`}>
+            {hasActiveWork ? "Live Orchestration" : "Orchestration"}
+          </span>
+          {hasActiveWork && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">Agents</div>
+            <div className="flex items-center gap-1.5">
+              <span className={`text-lg font-semibold tabular-nums ${activeAgents.length > 0 ? "text-emerald-400" : "text-sol-text-dim"}`}>
+                {activeAgents.length}
+              </span>
+              <span className="text-[10px] text-sol-text-dim">
+                / {tasks.filter((t: any) => t.status === "in_progress").length} assigned
+              </span>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">Completed</div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-lg font-semibold tabular-nums text-sol-green">{doneTasks.length}</span>
+              <span className="text-[10px] text-sol-text-dim">/ {tasks.length}</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">Issues</div>
+            <div className="flex items-center gap-2">
+              {blockedTasks.length > 0 ? (
+                <span className="text-lg font-semibold tabular-nums text-sol-red">{blockedTasks.length}</span>
+              ) : concernTasks.length > 0 ? (
+                <span className="text-lg font-semibold tabular-nums text-sol-yellow">{concernTasks.length}</span>
+              ) : (
+                <span className="text-lg font-semibold tabular-nums text-sol-text-dim">0</span>
+              )}
+              {blockedTasks.length > 0 && (
+                <span className="text-[10px] text-sol-red">blocked</span>
+              )}
+              {concernTasks.length > 0 && blockedTasks.length === 0 && (
+                <span className="text-[10px] text-sol-yellow">concerns</span>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">Time</div>
+            <div className="flex items-center gap-1.5">
+              {remainingEstimated > 0 ? (
+                <>
+                  <Timer className="w-3 h-3 text-sol-text-dim" />
+                  <span className="text-sm font-semibold tabular-nums text-sol-text">
+                    {remainingEstimated < 60 ? `${remainingEstimated}m` : `${Math.floor(remainingEstimated / 60)}h ${remainingEstimated % 60}m`}
+                  </span>
+                  <span className="text-[10px] text-sol-text-dim">left</span>
+                </>
+              ) : totalActual > 0 ? (
+                <>
+                  <Timer className="w-3 h-3 text-sol-green" />
+                  <span className="text-sm font-semibold tabular-nums text-sol-green">
+                    {totalActual < 60 ? `${totalActual}m` : `${Math.floor(totalActual / 60)}h ${totalActual % 60}m`}
+                  </span>
+                  <span className="text-[10px] text-sol-text-dim">total</span>
+                </>
+              ) : (
+                <span className="text-sm text-sol-text-dim">--</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {activeAgents.length > 0 && (
+        <div className="border-t border-emerald-500/15 px-4 py-2.5 bg-emerald-950/5">
+          <div className="flex flex-wrap gap-2">
+            {activeAgents.map((t: any) => (
+              <Link
+                key={t._id}
+                href={`/conversation/${t.activeSession.session_id}`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors group/agent"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+                <span className="text-xs font-mono text-sol-text-dim">{t.short_id}</span>
+                <span className="text-xs text-emerald-300/80 truncate max-w-[200px] group-hover/agent:text-emerald-200 transition-colors">
+                  {t.title}
+                </span>
+                <ExternalLink className="w-2.5 h-2.5 text-emerald-400/40 group-hover/agent:text-emerald-400/80 transition-colors flex-shrink-0" />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -561,31 +680,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
         </div>
       )}
 
-      {(() => {
-        const tasks = plan.tasks || [];
-        const activeAgents = tasks.filter((t: any) => t.activeSession);
-        const withConcerns = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
-        const blocked = tasks.filter((t: any) => t.execution_status === "blocked" || t.execution_status === "needs_context");
-        if (activeAgents.length > 0 || withConcerns.length > 0 || blocked.length > 0) {
-          return (
-            <div className="mb-4 flex items-center gap-3 text-xs">
-              {activeAgents.length > 0 && (
-                <span className="flex items-center gap-1 text-emerald-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {activeAgents.length} agent{activeAgents.length > 1 ? "s" : ""} active
-                </span>
-              )}
-              {withConcerns.length > 0 && (
-                <span className="text-sol-yellow">{withConcerns.length} with concerns</span>
-              )}
-              {blocked.length > 0 && (
-                <span className="text-sol-red">{blocked.length} blocked</span>
-              )}
-            </div>
-          );
-        }
-        return null;
-      })()}
+      <OrchestrationHeader tasks={plan.tasks || []} sessions={plan.sessions || []} />
 
       <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} sessions={plan.sessions || []} />
 
