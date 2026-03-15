@@ -13,6 +13,16 @@ function generateShortId(): string {
   return id;
 }
 
+async function canAccessPlan(ctx: any, userId: Id<"users">, plan: any): Promise<boolean> {
+  if (plan.user_id === userId) return true;
+  if (!plan.team_id) return false;
+  const membership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", plan.team_id))
+    .first();
+  return !!membership;
+}
+
 // --- API token mutations ---
 
 export const create = mutation({
@@ -106,9 +116,7 @@ export const update = mutation({
       .first();
     if (!plan) throw new Error("Plan not found");
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (plan.user_id !== auth.userId && plan.team_id !== team_id) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
     const updates: any = { updated_at: Date.now() };
     if (args.title) updates.title = args.title;
@@ -156,9 +164,7 @@ export const updateStatus = mutation({
       .first();
     if (!plan) throw new Error("Plan not found");
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (plan.user_id !== auth.userId && plan.team_id !== team_id) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
     const validStatuses = ["draft", "active", "paused", "done", "abandoned"];
     if (!validStatuses.includes(args.status)) throw new Error(`Invalid status: ${args.status}`);
@@ -356,9 +362,7 @@ export const get = query({
       .first();
     if (!plan) return null;
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (plan.user_id !== auth.userId && plan.team_id !== team_id) return null;
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) return null;
 
     const tasks = [];
     if (plan.task_ids) {
@@ -640,9 +644,7 @@ export const webUpdate = mutation({
       .first();
     if (!plan) throw new Error("Plan not found");
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (plan.user_id !== userId && plan.team_id !== team_id) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, userId, plan))) throw new Error("Plan not found");
 
     const updates: any = { updated_at: Date.now() };
     if (args.title) updates.title = args.title;
@@ -694,14 +696,7 @@ export const webGet = query({
 
     if (!plan) return null;
 
-    if (plan.user_id !== userId) {
-      if (!plan.team_id) return null;
-      const membership = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", plan.team_id))
-        .first();
-      if (!membership) return null;
-    }
+    if (!(await canAccessPlan(ctx, userId, plan))) return null;
 
     // Find live agent sessions for tasks
     const now = Date.now();
