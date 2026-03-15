@@ -8565,32 +8565,56 @@ plan
     };
 
     const systemPrompt = `You are a task decomposition engine for software projects.
-Given a plan, break it into implementation tasks at the "${options.depth}" level: ${depthGuide[options.depth] || depthGuide.medium}.
+Given a plan and the project's file structure, break it into implementation tasks at the "${options.depth}" level: ${depthGuide[options.depth] || depthGuide.medium}.
 
 Each task must have:
-- title: Clear, actionable (starts with verb)
-- description: What specifically to implement
+- title: Clear, actionable (starts with verb), references specific files/modules
+- description: What specifically to implement, which files to modify, which functions to add/change
 - task_type: "feature", "bug", "task", or "chore"
 - priority: "high", "medium", or "low"
-- acceptance_criteria: Array of verifiable criteria
-- steps: Array of ordered steps (title + verification)
+- acceptance_criteria: Array of verifiable criteria (e.g. "X query returns Y", "Z component renders W")
+- steps: Array of ordered steps with title and verification string
 - estimated_minutes: How long this should take
 - blocked_by: Array of task titles this depends on (empty if independent)
 
 Rules:
+- Reference actual files and directories from the codebase context provided
 - Tasks should be independently implementable where possible
 - Each task should produce a testable, committable change
 - Include test-writing as part of feature tasks, not separate tasks
-- Order matters: foundational tasks first, UI polish last
+- Order: schema/data model changes first, then backend logic, then UI, then polish
 - For "deep" level: one task per function/component, one test per task
+- Descriptions should name specific files, functions, database tables, API endpoints
+- Avoid generic task names like "Create validation framework" -- be specific like "Add execution_status field to tasks schema and update mutation"
 
 Output valid JSON array of task objects. Nothing else.`;
+
+    // Gather codebase context for better task generation
+    let codebaseContext = "";
+    try {
+      const cwd = getRealCwd();
+      const treeResult = spawnSync("find", [cwd, "-maxdepth", "3", "-type", "f", "-name", "*.ts", "-o", "-name", "*.tsx", "-o", "-name", "*.py", "-o", "-name", "*.go", "-o", "-name", "*.rs"], {
+        encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], timeout: 5000,
+      });
+      if (treeResult.stdout) {
+        const files = treeResult.stdout.trim().split("\n")
+          .map((f: string) => f.replace(cwd + "/", ""))
+          .filter((f: string) => !f.includes("node_modules") && !f.includes(".next") && !f.includes("dist/"))
+          .slice(0, 200);
+        codebaseContext += `\nCodebase files (${files.length} relevant):\n${files.join("\n")}`;
+      }
+      const gitLog = spawnSync("git", ["log", "--oneline", "-20"], { encoding: "utf-8", cwd, stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+      if (gitLog.stdout) {
+        codebaseContext += `\n\nRecent commits:\n${gitLog.stdout.trim()}`;
+      }
+    } catch {}
 
     const planContext = [
       `Plan: ${plan.title}`,
       plan.goal ? `Goal: ${plan.goal}` : "",
       plan.acceptance_criteria?.length ? `Acceptance Criteria:\n${plan.acceptance_criteria.map((ac: string) => `- ${ac}`).join("\n")}` : "",
       existingTasks.length ? `\nExisting tasks (avoid duplicates):\n${existingTasks.map((t: any) => `- ${t.title} (${t.status})`).join("\n")}` : "",
+      codebaseContext,
     ].filter(Boolean).join("\n");
 
     // Check for plan doc content
