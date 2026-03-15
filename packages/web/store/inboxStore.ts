@@ -152,6 +152,7 @@ export type TaskItem = {
   closed_at?: number;
   creator?: { name: string; image?: string };
   plan?: PlanRef;
+  activeSession?: { session_id: string; title?: string } | null;
 };
 
 export type TaskDetail = TaskItem & {

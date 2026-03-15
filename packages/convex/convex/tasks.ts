@@ -742,11 +742,32 @@ export const webList = query({
       } catch {}
     }
 
+    const now = Date.now();
+    const HEARTBEAT_ALIVE_MS = 90 * 1000;
+    const managedSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const liveSessions = managedSessions.filter(
+      (s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id
+    );
+    const activeTaskMap = new Map<string, { session_id: string; title?: string }>();
+    for (const s of liveSessions) {
+      const conv = await ctx.db.get(s.conversation_id!);
+      if (conv && conv.active_task_id) {
+        activeTaskMap.set(conv.active_task_id.toString(), {
+          session_id: conv.session_id,
+          title: conv.title || undefined,
+        });
+      }
+    }
+
     return result.map(t => ({
       ...t,
       creator: userMap.get(t.user_id.toString()) || null,
       assignee_info: t.assignee ? userMap.get(t.assignee.toString()) || null : null,
       plan: t.plan_id ? planMap.get(t.plan_id.toString()) || null : null,
+      activeSession: activeTaskMap.get(t._id.toString()) || null,
     }));
   },
 });

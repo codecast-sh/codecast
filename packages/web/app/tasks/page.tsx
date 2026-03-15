@@ -169,6 +169,17 @@ function TaskRow({
       ) : (
         <span className="flex-1 text-sm text-sol-text truncate">{task.title}</span>
       )}
+      {(task as any).activeSession && (
+        <Link
+          href={`/conversation/${(task as any).activeSession.session_id}`}
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] cursor-pointer hover:bg-emerald-500/25 transition-colors flex-shrink-0"
+          title={(task as any).activeSession.title || "Active session"}
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          live
+        </Link>
+      )}
       {(task as any).plan && (
         <Link
           href={`/plans/${(task as any).plan._id}`}
