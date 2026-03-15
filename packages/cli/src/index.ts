@@ -8465,10 +8465,10 @@ plan
       return;
     }
 
-    const doneIds = new Set(allTasks.filter((t: any) => t.status === "done").map((t: any) => t._id));
+    const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").map((t: any) => t._id));
     const readyTasks = openTasks.filter((t: any) => {
       if (!t.blocked_by || t.blocked_by.length === 0) return true;
-      return t.blocked_by.every((d: string) => doneIds.has(d));
+      return t.blocked_by.every((d: string) => resolvedIds.has(d));
     });
 
     const maxAgents = parseInt(options.max, 10) || 3;
@@ -8478,7 +8478,7 @@ plan
     console.log(`  ${c.bold}Ready:${c.reset} ${readyTasks.length} tasks, spawning ${toSpawn.length}`);
     if (readyTasks.length > maxAgents) console.log(fmt.muted(`  ${readyTasks.length - maxAgents} queued for next wave`));
 
-    const blocked = openTasks.filter((t: any) => t.blocked_by?.length && !t.blocked_by.every((d: string) => doneIds.has(d)));
+    const blocked = openTasks.filter((t: any) => t.blocked_by?.length && !t.blocked_by.every((d: string) => resolvedIds.has(d)));
     if (blocked.length) console.log(fmt.muted(`  ${blocked.length} blocked on dependencies`));
     console.log();
 
@@ -8830,13 +8830,13 @@ plan
         return false;
       }
 
-      // Find ready tasks
-      const doneIds = new Set(allTasks.filter((t: any) => t.status === "done").map((t: any) => t._id));
+      // Find ready tasks (dropped dependencies count as resolved)
+      const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").map((t: any) => t._id));
       const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "draft");
       const readyTasks = openTasks.filter((t: any) => {
         if (activeAgents.has(t.short_id)) return false;
         if (!t.blocked_by || t.blocked_by.length === 0) return true;
-        return t.blocked_by.every((d: string) => doneIds.has(d));
+        return t.blocked_by.every((d: string) => resolvedIds.has(d));
       });
 
       const slots = maxAgents - activeAgents.size;
@@ -8914,12 +8914,12 @@ plan
     const open = tasks.filter((t: any) => t.status === "open" || t.status === "draft");
     const dropped = tasks.filter((t: any) => t.status === "dropped");
 
-    const doneIds = new Set(done.map((t: any) => t._id));
+    const resolvedIds = new Set([...done, ...dropped].map((t: any) => t._id));
     const ready = open.filter((t: any) => {
       if (!t.blocked_by || t.blocked_by.length === 0) return true;
-      return t.blocked_by.every((d: string) => doneIds.has(d));
+      return t.blocked_by.every((d: string) => resolvedIds.has(d));
     });
-    const blocked = open.filter((t: any) => t.blocked_by?.length > 0 && !t.blocked_by.every((d: string) => doneIds.has(d)));
+    const blocked = open.filter((t: any) => t.blocked_by?.length > 0 && !t.blocked_by.every((d: string) => resolvedIds.has(d)));
 
     const withConcerns = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
     const needsContext = tasks.filter((t: any) => t.execution_status === "needs_context");
