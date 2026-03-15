@@ -8780,41 +8780,44 @@ plan
       const done = allTasks.filter((t: any) => t.status === "done").length;
       const total = allTasks.length;
 
-      // Check active agents -- detect tmux exit, merge completed branches, handle failures
+      // Check active agents -- detect completion via task status, then cleanup tmux
       for (const [shortId, info] of activeAgents) {
         const sn = `impl-${shortId}`;
-        const sessionCheck = spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+        const task = allTasks.find((t: any) => t.short_id === shortId);
+        const tmuxAlive = spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
 
-        if (sessionCheck.status !== 0) {
-          const task = allTasks.find((t: any) => t.short_id === shortId);
-          if (task?.status === "done") {
-            console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
-            // Auto-merge the agent's branch if it exists
-            const branch = `ashot/${shortId}`;
-            const branchCheck = spawnSync("git", ["rev-parse", "--verify", branch], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
-            if (branchCheck.status === 0) {
-              const mergeResult = spawnSync("git", ["merge", branch, "--no-edit"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
-              if (mergeResult.status === 0) {
-                console.log(`  ${c.green}merge${c.reset} ${c.cyan}${branch}${c.reset}`);
-                spawnSync("git", ["push", "origin", "main"], { stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
-              } else {
-                console.log(`  ${c.yellow}merge-conflict${c.reset} ${c.cyan}${branch}${c.reset} -- needs manual resolution`);
-                spawnSync("git", ["merge", "--abort"], { stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
-              }
+        // Primary detection: task marked done in Convex (agent called `cast task done`)
+        if (task?.status === "done") {
+          console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
+          if (tmuxAlive) spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+          // Auto-merge the agent's branch if it exists
+          const branch = `ashot/${shortId}`;
+          const branchCheck = spawnSync("git", ["rev-parse", "--verify", branch], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
+          if (branchCheck.status === 0) {
+            const mergeResult = spawnSync("git", ["merge", branch, "--no-edit"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
+            if (mergeResult.status === 0) {
+              console.log(`  ${c.green}merge${c.reset} ${c.cyan}${branch}${c.reset}`);
+              spawnSync("git", ["push", "origin", "main"], { stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
+            } else {
+              console.log(`  ${c.yellow}merge-conflict${c.reset} ${c.cyan}${branch}${c.reset} -- needs manual resolution`);
+              spawnSync("git", ["merge", "--abort"], { stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
             }
-          } else {
-            console.log(`  ${c.yellow}dead${c.reset}  ${c.cyan}${shortId}${c.reset} agent exited without completing (task: ${task?.status || "?"})`);
-            try {
-              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
-              await cliPost("/cli/work/comment", {
-                short_id: shortId,
-                text: `Agent session \`${sn}\` exited without marking task done. Status was \`${task?.status || "unknown"}\`. Needs re-examination.`,
-                comment_type: "blocker",
-              });
-            } catch {}
           }
           activeAgents.delete(shortId);
+        } else if (!tmuxAlive) {
+          // Fallback: tmux died but task not marked done
+          console.log(`  ${c.yellow}dead${c.reset}  ${c.cyan}${shortId}${c.reset} agent exited without completing (task: ${task?.status || "?"})`);
+          try {
+            await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
+            await cliPost("/cli/work/comment", {
+              short_id: shortId,
+              text: `Agent session \`${sn}\` exited without marking task done. Status was \`${task?.status || "unknown"}\`. Needs re-examination.`,
+              comment_type: "blocker",
+            });
+          } catch {}
+          activeAgents.delete(shortId);
         }
+        // else: tmux alive and task not done -- agent still working, do nothing
       }
 
       // Check completion (dropped tasks don't block completion)
