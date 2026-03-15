@@ -8465,16 +8465,7 @@ plan
       return;
     }
 
-    const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").map((t: any) => t._id));
-    if (options.dryRun) {
-      console.log(`  DEBUG: resolved IDs (${resolvedIds.size}): ${[...resolvedIds].join(", ")}`);
-      for (const t of openTasks) {
-        if (t.blocked_by?.length) {
-          const unresolved = t.blocked_by.filter((d: string) => !resolvedIds.has(d));
-          if (unresolved.length) console.log(`  DEBUG: ${t.short_id} blocked by unresolved: ${unresolved.join(", ")}`);
-        }
-      }
-    }
+    const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").flatMap((t: any) => [t._id, t.short_id]));
     const readyTasks = openTasks.filter((t: any) => {
       if (!t.blocked_by || t.blocked_by.length === 0) return true;
       return t.blocked_by.every((d: string) => resolvedIds.has(d));
@@ -8840,7 +8831,7 @@ plan
       }
 
       // Find ready tasks (dropped dependencies count as resolved)
-      const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").map((t: any) => t._id));
+      const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").flatMap((t: any) => [t._id, t.short_id]));
       const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "draft");
       const readyTasks = openTasks.filter((t: any) => {
         if (activeAgents.has(t.short_id)) return false;
@@ -8923,7 +8914,7 @@ plan
     const open = tasks.filter((t: any) => t.status === "open" || t.status === "draft");
     const dropped = tasks.filter((t: any) => t.status === "dropped");
 
-    const resolvedIds = new Set([...done, ...dropped].map((t: any) => t._id));
+    const resolvedIds = new Set([...done, ...dropped].flatMap((t: any) => [t._id, t.short_id]));
     const ready = open.filter((t: any) => {
       if (!t.blocked_by || t.blocked_by.length === 0) return true;
       return t.blocked_by.every((d: string) => resolvedIds.has(d));
