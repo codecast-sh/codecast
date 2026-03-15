@@ -8355,6 +8355,438 @@ plan
     }
   });
 
+// --- Plan Orchestration ---
+
+function buildImplementerPrompt(plan: any, task: any): string {
+  const acceptance = task.acceptance_criteria?.length
+    ? task.acceptance_criteria.map((ac: string) => `- ${ac}`).join("\n")
+    : "None specified";
+
+  const steps = task.steps?.length
+    ? task.steps.map((s: any, i: number) => `${i + 1}. ${s.done ? "[x]" : "[ ]"} ${s.title}${s.verification ? ` (verify: ${s.verification})` : ""}`).join("\n")
+    : "";
+
+  const planContext = [
+    `Plan: ${plan.title} (${plan.short_id})`,
+    plan.goal ? `Goal: ${plan.goal}` : "",
+    `Task: ${task.title} (${task.short_id})`,
+    task.description ? `\n${task.description}` : "",
+  ].filter(Boolean).join("\n");
+
+  return `You are implementing a specific task from a plan. Follow structured development methodology.
+
+## Context
+${planContext}
+
+## Acceptance Criteria
+${acceptance}
+${steps ? `\n## Steps\n${steps}\n` : ""}
+## Development Protocol
+
+1. **Understand first**: Read acceptance criteria. If unclear, report NEEDS_CONTEXT with specific questions.
+2. **Test-driven**: Write failing test -> implement minimal code -> verify -> commit.
+3. **Small commits**: One logical change per commit. Conventional commits format.
+4. **Verify everything**: Run tests, check build. Evidence before claims.
+5. **Self-review**: Before reporting done, review your changes. Check for AI slop, missing edge cases, dead code.
+
+## When done
+
+Update task status:
+\`\`\`bash
+codecast task done ${task.short_id} -m "what you implemented and how you verified it"
+\`\`\`
+
+If blocked or concerns:
+\`\`\`bash
+codecast task comment ${task.short_id} "description of blocker or concern" -t blocker
+\`\`\`
+
+## Report format (in your final message)
+- **Status:** DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+- What you implemented
+- What you tested and results
+- Files changed
+- Any concerns or follow-up needed`;
+}
+
+plan
+  .command("orchestrate")
+  .alias("orch")
+  .description("Spawn parallel agents to implement plan tasks")
+  .argument("<plan_id>", "Plan short ID")
+  .option("--dry-run", "Show what would be spawned without doing it")
+  .option("--max <n>", "Max parallel agents", "3")
+  .option("--watch", "Monitor agents after spawning")
+  .action(async (planId: string, options: any) => {
+    const result = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!result) {
+      console.error("Plan not found");
+      process.exit(1);
+    }
+
+    const plan = result;
+    const allTasks = plan.tasks || [];
+    const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "draft");
+
+    if (openTasks.length === 0) {
+      console.log(fmt.muted("No open tasks to orchestrate."));
+      const done = allTasks.filter((t: any) => t.status === "done").length;
+      const inProg = allTasks.filter((t: any) => t.status === "in_progress").length;
+      if (allTasks.length) console.log(fmt.muted(`  ${done} done, ${inProg} in progress, ${allTasks.length} total`));
+      return;
+    }
+
+    const doneIds = new Set(allTasks.filter((t: any) => t.status === "done").map((t: any) => t._id));
+    const readyTasks = openTasks.filter((t: any) => {
+      if (!t.blocked_by || t.blocked_by.length === 0) return true;
+      return t.blocked_by.every((d: string) => doneIds.has(d));
+    });
+
+    const maxAgents = parseInt(options.max, 10) || 3;
+    const toSpawn = readyTasks.slice(0, maxAgents);
+
+    console.log(`\n  ${c.bold}Plan:${c.reset} ${plan.title} ${c.dim}(${planId})${c.reset}`);
+    console.log(`  ${c.bold}Ready:${c.reset} ${readyTasks.length} tasks, spawning ${toSpawn.length}`);
+    if (readyTasks.length > maxAgents) console.log(fmt.muted(`  ${readyTasks.length - maxAgents} queued for next wave`));
+
+    const blocked = openTasks.filter((t: any) => t.blocked_by?.length && !t.blocked_by.every((d: string) => doneIds.has(d)));
+    if (blocked.length) console.log(fmt.muted(`  ${blocked.length} blocked on dependencies`));
+    console.log();
+
+    for (let i = 0; i < toSpawn.length; i++) {
+      const task = toSpawn[i];
+      const sessionName = `impl-${task.short_id}`;
+      const prompt = buildImplementerPrompt(plan, task);
+
+      if (options.dryRun) {
+        console.log(`  ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
+        console.log(fmt.muted(`    session: ${sessionName}`));
+        continue;
+      }
+
+      const agentScript = path.join(os.homedir(), ".claude", "scripts", "agent-spawn.sh");
+      try {
+        const spawnResult = spawnSync(agentScript, [
+          "implementor", sessionName, getRealCwd(), prompt,
+        ], {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "pipe"],
+          env: { ...process.env, AGENT_RESOURCE_INDEX: String(i) },
+        });
+
+        if (spawnResult.status === 0) {
+          console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
+          console.log(fmt.muted(`    tmux: ${sessionName} | watch: tmux attach -t ${sessionName}`));
+          try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
+        } else {
+          console.error(`  ${c.red}failed${c.reset} ${task.short_id}: ${(spawnResult.stderr || spawnResult.stdout || "").trim()}`);
+        }
+      } catch (err: any) {
+        console.error(`  ${c.red}error${c.reset} spawning ${task.short_id}: ${err.message}`);
+      }
+    }
+
+    if (options.dryRun) {
+      console.log(fmt.muted("\n  --dry-run: no agents spawned"));
+      return;
+    }
+
+    console.log(fmt.muted(`\n  Monitor: agent-list.sh | Status: agent-status.sh impl-<task-id>`));
+
+    try {
+      const taskIds = toSpawn.map((t: any) => t.short_id).join(", ");
+      await cliPost("/cli/plans/log", { short_id: planId, entry: `Orchestrated ${toSpawn.length} agents: ${taskIds}` });
+    } catch {}
+
+    if (options.watch) {
+      console.log(fmt.muted("\n  Watching agents (Ctrl+C to stop)...\n"));
+      const agentStatusScript = path.join(os.homedir(), ".claude", "scripts", "agent-status.sh");
+      const checkAgents = () => {
+        const ts = new Date().toLocaleTimeString();
+        console.log(fmt.muted(`  --- ${ts} ---`));
+        for (const task of toSpawn) {
+          const sn = `impl-${task.short_id}`;
+          const sr = spawnSync(agentStatusScript, [sn], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+          const out = (sr.stdout || "").trim();
+          if (out.includes("DONE_WITH_CONCERNS")) {
+            console.log(`  ${c.yellow}done*${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title} (concerns)`);
+          } else if (out.includes("Status: DONE") || out.includes("task done")) {
+            console.log(`  ${c.green}done${c.reset}  ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
+          } else if (out.includes("BLOCKED") || out.includes("NEEDS_CONTEXT")) {
+            console.log(`  ${c.red}block${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
+          } else if (sr.status !== 0) {
+            console.log(`  ${c.dim}exit${c.reset}  ${c.cyan}${task.short_id}${c.reset}`);
+          } else {
+            console.log(`  ${c.yellow}work${c.reset}  ${c.cyan}${task.short_id}${c.reset}`);
+          }
+        }
+      };
+      checkAgents();
+      const interval = setInterval(checkAgents, 30_000);
+      process.on("SIGINT", () => { clearInterval(interval); console.log("\n  Stopped watching."); process.exit(0); });
+      await new Promise(() => {});
+    }
+  });
+
+plan
+  .command("decompose")
+  .description("Decompose a plan into granular implementation tasks")
+  .argument("<plan_id>", "Plan short ID")
+  .option("--depth <level>", "Decomposition depth: shallow (3-5 tasks), medium (10-20), deep (50+)", "medium")
+  .action(async (planId: string, options: any) => {
+    const result = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!result) {
+      console.error("Plan not found");
+      process.exit(1);
+    }
+
+    const plan = result;
+    const existingTasks = plan.tasks || [];
+
+    console.log(`\n  ${c.bold}Plan:${c.reset} ${plan.title}`);
+    console.log(`  ${c.bold}Goal:${c.reset} ${plan.goal || "none"}`);
+    console.log(`  ${c.bold}Existing tasks:${c.reset} ${existingTasks.length}`);
+
+    const depthGuide: Record<string, string> = {
+      shallow: "3-5 high-level tasks, each ~30-60 minutes of work",
+      medium: "10-20 tasks, each ~10-15 minutes of focused work",
+      deep: "50+ granular tasks, each ~2-5 minutes (single file, single function, single test)",
+    };
+
+    const systemPrompt = `You are a task decomposition engine for software projects.
+Given a plan, break it into implementation tasks at the "${options.depth}" level: ${depthGuide[options.depth] || depthGuide.medium}.
+
+Each task must have:
+- title: Clear, actionable (starts with verb)
+- description: What specifically to implement
+- task_type: "feature", "bug", "task", or "chore"
+- priority: "high", "medium", or "low"
+- acceptance_criteria: Array of verifiable criteria
+- steps: Array of ordered steps (title + verification)
+- estimated_minutes: How long this should take
+- blocked_by: Array of task titles this depends on (empty if independent)
+
+Rules:
+- Tasks should be independently implementable where possible
+- Each task should produce a testable, committable change
+- Include test-writing as part of feature tasks, not separate tasks
+- Order matters: foundational tasks first, UI polish last
+- For "deep" level: one task per function/component, one test per task
+
+Output valid JSON array of task objects. Nothing else.`;
+
+    const planContext = [
+      `Plan: ${plan.title}`,
+      plan.goal ? `Goal: ${plan.goal}` : "",
+      plan.acceptance_criteria?.length ? `Acceptance Criteria:\n${plan.acceptance_criteria.map((ac: string) => `- ${ac}`).join("\n")}` : "",
+      existingTasks.length ? `\nExisting tasks (avoid duplicates):\n${existingTasks.map((t: any) => `- ${t.title} (${t.status})`).join("\n")}` : "",
+    ].filter(Boolean).join("\n");
+
+    // Check for plan doc content
+    let docContent = "";
+    if (plan.doc_id) {
+      try {
+        const doc = await cliPost("/cli/docs/get", { id: plan.doc_id });
+        if (doc?.content) docContent = `\n\nPlan Document:\n${doc.content.slice(0, 8000)}`;
+      } catch {}
+    }
+
+    console.log(fmt.muted(`\n  Decomposing at ${options.depth} level...`));
+
+    try {
+      const anthropic = new Anthropic();
+      const maxToks = options.depth === "deep" ? 16000 : 8000;
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: maxToks,
+        system: systemPrompt,
+        messages: [{ role: "user", content: `${planContext}${docContent}` }],
+      });
+
+      const text = response.content[0].type === "text" ? response.content[0].text : "";
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        console.error("Failed to parse decomposition output");
+        console.error(fmt.muted(text.slice(0, 500)));
+        process.exit(1);
+      }
+      // Try to repair truncated JSON by finding the last complete object
+      let jsonStr = jsonMatch[0];
+      try { JSON.parse(jsonStr); } catch {
+        const lastBrace = jsonStr.lastIndexOf("}");
+        if (lastBrace > 0) {
+          jsonStr = jsonStr.slice(0, lastBrace + 1) + "]";
+          try { JSON.parse(jsonStr); } catch {
+            const secondLastBrace = jsonStr.lastIndexOf("}", lastBrace - 1);
+            if (secondLastBrace > 0) jsonStr = jsonStr.slice(0, secondLastBrace + 1) + "]";
+          }
+        }
+      }
+
+      const tasks = JSON.parse(jsonStr);
+      console.log(`\n  Generated ${tasks.length} tasks:\n`);
+
+      // Create dependency map: title -> short_id (for blocked_by resolution)
+      const titleToId = new Map<string, string>();
+      for (const et of existingTasks) {
+        titleToId.set(et.title, et.short_id);
+      }
+
+      let created_count = 0;
+      for (const task of tasks) {
+        try {
+          const body: Record<string, any> = {
+            title: task.title,
+            description: task.description,
+            task_type: task.task_type || "task",
+            priority: task.priority || "medium",
+            plan_id: planId,
+          };
+
+          const created = await cliPost("/cli/work/create", body);
+          titleToId.set(task.title, created.short_id);
+          created_count++;
+          console.log(`  ${c.green}+${c.reset} ${c.cyan}${created.short_id}${c.reset} ${task.title}`);
+
+          if (task.acceptance_criteria?.length) {
+            const acText = `Acceptance Criteria:\n${task.acceptance_criteria.map((ac: string) => `- [ ] ${ac}`).join("\n")}`;
+            try { await cliPost("/cli/work/comment", { short_id: created.short_id, text: acText, comment_type: "note" }); } catch {}
+          }
+
+          if (task.blocked_by?.length) {
+            for (const dep of task.blocked_by) {
+              const depId = titleToId.get(dep);
+              if (depId) {
+                try { await cliPost("/cli/work/dep", { short_id: created.short_id, blocked_by: depId }); } catch {}
+              }
+            }
+          }
+        } catch (taskErr: any) {
+          console.error(`  ${c.red}x${c.reset} ${task.title}: ${taskErr.message?.slice(0, 80)}`);
+        }
+      }
+
+      console.log(fmt.muted(`\n  ${created_count}/${tasks.length} tasks created for plan ${planId}`));
+      console.log(fmt.muted(`  Run: cast plan orchestrate ${planId} --dry-run`));
+
+      await cliPost("/cli/plans/log", { short_id: planId, entry: `Decomposed into ${created_count} tasks at ${options.depth} depth` });
+    } catch (err: any) {
+      console.error(`Decomposition failed: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+plan
+  .command("autopilot")
+  .description("Continuously orchestrate a plan: spawn agents, monitor, spawn next wave")
+  .argument("<plan_id>", "Plan short ID")
+  .option("--max <n>", "Max parallel agents per wave", "3")
+  .option("--interval <mins>", "Minutes between status checks", "2")
+  .action(async (planId: string, options: any) => {
+    const maxAgents = parseInt(options.max, 10) || 3;
+    const intervalMs = (parseInt(options.interval, 10) || 2) * 60_000;
+    const agentStatusScript = path.join(os.homedir(), ".claude", "scripts", "agent-status.sh");
+    const agentScript = path.join(os.homedir(), ".claude", "scripts", "agent-spawn.sh");
+
+    console.log(`\n  ${c.bold}Autopilot${c.reset} for plan ${c.cyan}${planId}${c.reset}`);
+    console.log(fmt.muted(`  Max ${maxAgents} agents, checking every ${options.interval}m\n`));
+
+    const activeAgents = new Map<string, { task: any; spawnedAt: number }>();
+
+    const runCycle = async () => {
+      const plan = await cliPost("/cli/plans/get", { short_id: planId });
+      if (!plan) { console.error("Plan not found"); return false; }
+
+      const allTasks = plan.tasks || [];
+      const done = allTasks.filter((t: any) => t.status === "done").length;
+      const total = allTasks.length;
+
+      // Check active agents
+      for (const [shortId, info] of activeAgents) {
+        const sn = `impl-${shortId}`;
+        const sr = spawnSync(agentStatusScript, [sn], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+
+        if (sr.status !== 0) {
+          // Agent session gone -- check if task was completed
+          const task = allTasks.find((t: any) => t.short_id === shortId);
+          if (task?.status === "done") {
+            console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
+          } else {
+            console.log(`  ${c.dim}exit${c.reset}  ${c.cyan}${shortId}${c.reset} (task still ${task?.status || "?"})`);
+          }
+          activeAgents.delete(shortId);
+        }
+      }
+
+      // Check completion
+      if (done === total && total > 0) {
+        console.log(`\n  ${c.green}${c.bold}All ${total} tasks done!${c.reset}`);
+        try { await cliPost("/cli/plans/status", { short_id: planId, status: "done" }); } catch {}
+        return false;
+      }
+
+      // Find ready tasks
+      const doneIds = new Set(allTasks.filter((t: any) => t.status === "done").map((t: any) => t._id));
+      const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "draft");
+      const readyTasks = openTasks.filter((t: any) => {
+        if (activeAgents.has(t.short_id)) return false;
+        if (!t.blocked_by || t.blocked_by.length === 0) return true;
+        return t.blocked_by.every((d: string) => doneIds.has(d));
+      });
+
+      const slots = maxAgents - activeAgents.size;
+      const toSpawn = readyTasks.slice(0, Math.max(0, slots));
+
+      const ts = new Date().toLocaleTimeString();
+      console.log(`  ${c.dim}${ts}${c.reset} ${done}/${total} done, ${activeAgents.size} active, ${readyTasks.length} ready`);
+
+      for (let i = 0; i < toSpawn.length; i++) {
+        const task = toSpawn[i];
+        const sessionName = `impl-${task.short_id}`;
+        const prompt = buildImplementerPrompt(plan, task);
+        const resourceIdx = [...activeAgents.values()].length + i;
+
+        const sr = spawnSync(agentScript, ["implementor", sessionName, getRealCwd(), prompt], {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "pipe"],
+          env: { ...process.env, AGENT_RESOURCE_INDEX: String(resourceIdx % 4) },
+        });
+
+        if (sr.status === 0) {
+          activeAgents.set(task.short_id, { task, spawnedAt: Date.now() });
+          console.log(`  ${c.green}spawn${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
+          try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
+        } else {
+          console.error(`  ${c.red}fail${c.reset}  ${task.short_id}: ${(sr.stderr || "").trim().slice(0, 100)}`);
+        }
+      }
+
+      return true;
+    };
+
+    // Initial cycle
+    const shouldContinue = await runCycle();
+    if (!shouldContinue) return;
+
+    // Loop
+    const interval = setInterval(async () => {
+      try {
+        const cont = await runCycle();
+        if (!cont) { clearInterval(interval); process.exit(0); }
+      } catch (err: any) {
+        console.error(fmt.muted(`  Error: ${err.message}`));
+      }
+    }, intervalMs);
+
+    process.on("SIGINT", () => {
+      clearInterval(interval);
+      console.log(`\n  Stopped autopilot. ${activeAgents.size} agents still running.`);
+      process.exit(0);
+    });
+
+    await new Promise(() => {});
+  });
+
 // --- Stable Mode ---
 
 const STABLE_FEED_HOOK = `#!/bin/bash

@@ -970,6 +970,26 @@ export default defineSchema({
       })),
     })),
 
+    // Structured execution (superpowers-style orchestration)
+    steps: v.optional(v.array(v.object({
+      title: v.string(),
+      done: v.optional(v.boolean()),
+      verification: v.optional(v.string()),
+    }))),
+    acceptance_criteria: v.optional(v.array(v.string())),
+    execution_status: v.optional(v.union(
+      v.literal("done"),
+      v.literal("done_with_concerns"),
+      v.literal("blocked"),
+      v.literal("needs_context"),
+    )),
+    execution_concerns: v.optional(v.string()),
+    verification_evidence: v.optional(v.string()),
+    files_changed: v.optional(v.array(v.string())),
+    estimated_minutes: v.optional(v.number()),
+    actual_minutes: v.optional(v.number()),
+    started_at: v.optional(v.number()),
+
     created_at: v.number(),
     updated_at: v.number(),
     closed_at: v.optional(v.number()),

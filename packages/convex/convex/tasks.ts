@@ -385,6 +385,18 @@ export const update = mutation({
     blocks: v.optional(v.array(v.string())),
     last_session_summary: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
+    // Structured execution fields
+    steps: v.optional(v.array(v.object({
+      title: v.string(),
+      done: v.optional(v.boolean()),
+      verification: v.optional(v.string()),
+    }))),
+    acceptance_criteria: v.optional(v.array(v.string())),
+    execution_status: v.optional(v.string()),
+    execution_concerns: v.optional(v.string()),
+    verification_evidence: v.optional(v.string()),
+    files_changed: v.optional(v.array(v.string())),
+    estimated_minutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -408,6 +420,13 @@ export const update = mutation({
     if (args.blocked_by) updates.blocked_by = args.blocked_by;
     if (args.blocks) updates.blocks = args.blocks;
     if (args.last_session_summary) updates.last_session_summary = args.last_session_summary;
+    if (args.steps) updates.steps = args.steps;
+    if (args.acceptance_criteria) updates.acceptance_criteria = args.acceptance_criteria;
+    if (args.execution_status) updates.execution_status = args.execution_status;
+    if (args.execution_concerns !== undefined) updates.execution_concerns = args.execution_concerns;
+    if (args.verification_evidence !== undefined) updates.verification_evidence = args.verification_evidence;
+    if (args.files_changed) updates.files_changed = args.files_changed;
+    if (args.estimated_minutes !== undefined) updates.estimated_minutes = args.estimated_minutes;
 
     if (args.status === "done" || args.status === "dropped") {
       updates.closed_at = now;
@@ -435,6 +454,11 @@ export const update = mutation({
 
     if (args.status === "in_progress") {
       updates.attempt_count = (task.attempt_count || 0) + 1;
+      if (!task.started_at) updates.started_at = now;
+    }
+
+    if (args.status === "done" && task.started_at) {
+      updates.actual_minutes = Math.round((now - task.started_at) / 60000);
     }
 
     // Record history for changed fields
