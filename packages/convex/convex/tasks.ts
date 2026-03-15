@@ -4,6 +4,31 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
+async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
+  const plan = await ctx.db.get(planId);
+  if (!plan || !plan.task_ids) return;
+
+  let total = 0, done = 0, in_progress = 0, open = 0;
+  for (const tid of plan.task_ids) {
+    const t = tid === updatedTaskId
+      ? { status: newStatus }
+      : await ctx.db.get(tid);
+    if (t) {
+      total++;
+      if (t.status === "done") done++;
+      else if (t.status === "in_progress" || t.status === "in_review") in_progress++;
+      else if (t.status === "open" || t.status === "draft") open++;
+    }
+  }
+
+  const now = Date.now();
+  const updates: any = { progress: { total, done, in_progress, open }, updated_at: now };
+  if (done > 0 && in_progress === 0 && open === 0 && plan.status !== "done") {
+    updates.status = "done";
+  }
+  await ctx.db.patch(plan._id, updates);
+}
+
 function generateShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
   let id = "ct-";
@@ -494,22 +519,7 @@ export const update = mutation({
     await ctx.db.patch(task._id, updates);
 
     if (args.status && args.status !== task.status && task.plan_id) {
-      const plan = await ctx.db.get(task.plan_id);
-      if (plan && plan.task_ids) {
-        let total = 0, done = 0, in_progress = 0, open = 0;
-        for (const tid of plan.task_ids) {
-          const t = tid === task._id
-            ? { ...task, status: args.status }
-            : await ctx.db.get(tid);
-          if (t) {
-            total++;
-            if (t.status === "done") done++;
-            else if (t.status === "in_progress" || t.status === "in_review") in_progress++;
-            else if (t.status === "open" || t.status === "draft") open++;
-          }
-        }
-        await ctx.db.patch(plan._id, { progress: { total, done, in_progress, open }, updated_at: now });
-      }
+      await recalcPlanProgress(ctx, task.plan_id, task._id, args.status);
     }
 
     return {
@@ -925,6 +935,11 @@ export const webUpdate = mutation({
     }
 
     await ctx.db.patch(task._id, updates);
+
+    if (args.status && args.status !== task.status && task.plan_id) {
+      await recalcPlanProgress(ctx, task.plan_id, task._id, args.status);
+    }
+
     return { success: true };
   },
 });
