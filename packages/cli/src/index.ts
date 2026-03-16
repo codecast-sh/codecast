@@ -7756,6 +7756,7 @@ work
 
     const sessionId = detectCurrentSessionId();
     if (sessionId) body.conversation_id = sessionId;
+    body.project_path = getRealCwd();
 
     const result = await cliPost("/cli/work/create", body);
     console.log(`${c.green}ok${c.reset} Created ${c.cyan}${result.short_id}${c.reset}: ${title}`);
@@ -8089,6 +8090,7 @@ plan
     } else {
       body.source = "human";
     }
+    body.project_path = getRealCwd();
 
     const result = await cliPost("/cli/plans/create", body);
     console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset}: ${title}`);
@@ -8695,6 +8697,7 @@ Output valid JSON array of task objects. Nothing else.`;
             task_type: task.task_type || "task",
             priority: task.priority || "medium",
             plan_id: planId,
+            project_path: getRealCwd(),
           };
 
           const created = await cliPost("/cli/work/create", body);

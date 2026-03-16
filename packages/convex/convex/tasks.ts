@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { resolveTeamForMutation } from "./privacy";
 
 async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
   const plan = await ctx.db.get(planId);
@@ -67,6 +68,7 @@ export const create = mutation({
     insight_id: v.optional(v.string()),
     plan_id: v.optional(v.string()),
     max_retries: v.optional(v.number()),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -75,8 +77,9 @@ export const create = mutation({
     const now = Date.now();
     const short_id = generateShortId();
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const team_id = await resolveTeamForMutation(ctx, auth.userId, {
+      project_path: args.project_path,
+    });
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -1002,13 +1005,18 @@ export const webCreate = mutation({
     project_id: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
     plan_id: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const team_id = args.workspace === "personal"
+      ? undefined
+      : args.workspace === "team" && args.team_id
+        ? args.team_id
+        : await resolveTeamForMutation(ctx, userId);
     const short_id = generateShortId();
 
     let project_id: Id<"projects"> | undefined;

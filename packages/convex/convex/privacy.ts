@@ -233,6 +233,28 @@ export function resolveTeamForPath(
   return { teamId: resolvedTeamId, isPrivate, autoShared };
 }
 
+// ── Resolve team for mutations ──
+
+export async function resolveTeamForMutation(
+  ctx: DbCtx,
+  userId: Id<"users">,
+  opts?: { project_path?: string; team_id?: Id<"teams"> }
+): Promise<Id<"teams"> | undefined> {
+  if (opts?.team_id) return opts.team_id;
+
+  if (opts?.project_path) {
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const result = resolveTeamForPath(mappings, opts.project_path, undefined, undefined);
+    return result.teamId;
+  }
+
+  const user = await ctx.db.get(userId);
+  return user?.active_team_id || user?.team_id;
+}
+
 // ── Build userHasMappings ──
 
 async function buildUserHasMappings(

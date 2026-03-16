@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { resolveTeamForMutation } from "./privacy";
 
 function generateShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -35,6 +36,7 @@ export const create = mutation({
     source: v.optional(v.string()),
     project_id: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -43,8 +45,9 @@ export const create = mutation({
     const now = Date.now();
     const short_id = generateShortId();
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const team_id = await resolveTeamForMutation(ctx, auth.userId, {
+      project_path: args.project_path,
+    });
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
