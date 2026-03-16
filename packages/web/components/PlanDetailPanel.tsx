@@ -28,6 +28,8 @@ import {
   AlertTriangle,
   Zap,
   Timer,
+  Activity,
+  Layers,
 } from "lucide-react";
 import Markdown from "react-markdown";
 
@@ -593,6 +595,139 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
   );
 }
 
+function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
+  const activeSessions = sessions.filter((s: any) => s.is_active);
+  const recentSessions = [...sessions].sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
+
+  const taskTimeline = [...tasks].sort((a: any, b: any) => (b.updated_at || b._creationTime || 0) - (a.updated_at || a._creationTime || 0));
+
+  return (
+    <div className="space-y-6">
+      <OrchestrationHeader tasks={tasks} sessions={sessions} />
+
+      {activeSessions.length > 0 && (
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-3">
+            <Activity className="w-4 h-4 text-emerald-400" />
+            Active Sessions
+            <span className="text-xs text-emerald-400/60 font-normal">({activeSessions.length})</span>
+          </h2>
+          <div className="space-y-1.5">
+            {activeSessions.map((s: any) => (
+              <Link
+                key={s._id}
+                href={`/conversation/${s.session_id}`}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-emerald-500/20 bg-emerald-950/10 hover:bg-emerald-950/20 transition-colors group/as"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm text-sol-text group-hover/as:text-emerald-300 transition-colors truncate block">
+                    {s.title || "Untitled session"}
+                  </span>
+                  <div className="flex items-center gap-2 mt-0.5 text-[10px] text-sol-text-dim/40 font-mono">
+                    {s.message_count > 0 && <span>{s.message_count} msgs</span>}
+                    {s.project_path && (
+                      <span>{s.project_path.split("/").filter(Boolean).pop()}</span>
+                    )}
+                    {s.git_branch && s.git_branch !== "main" && (
+                      <span className="text-emerald-400/30">{s.git_branch}</span>
+                    )}
+                  </div>
+                </div>
+                <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums flex-shrink-0">
+                  {getRelativeTime(s.updated_at || s.started_at)}
+                </span>
+                <ExternalLink className="w-3 h-3 text-sol-text-dim/20 group-hover/as:text-emerald-400/60 transition-colors flex-shrink-0" />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-3">
+          <Layers className="w-4 h-4 text-sol-text-dim" />
+          Task Timeline
+          <span className="text-xs text-sol-text-dim font-normal">({taskTimeline.length})</span>
+        </h2>
+        {taskTimeline.length === 0 ? (
+          <div className="px-3 py-6 text-center text-xs text-sol-text-dim border border-sol-border/15 rounded-lg">
+            No tasks yet
+          </div>
+        ) : (
+          <div className="relative">
+            <div className="absolute left-[18px] top-3 bottom-3 w-px bg-sol-border/15" />
+            <div className="space-y-0">
+              {taskTimeline.map((task: any) => {
+                const tc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
+                const TaskIcon = tc.icon;
+                const time = task.updated_at ? getRelativeTime(task.updated_at) : task._creationTime ? getRelativeTime(task._creationTime) : "";
+                const hasExec = task.execution_status && !!getExecStatusConfig(task.execution_status);
+
+                return (
+                  <div key={task._id} className="flex items-start gap-3 py-2 pl-1 pr-3 relative">
+                    <div className="relative z-10 flex-shrink-0 mt-0.5 bg-sol-bg rounded-full p-0.5">
+                      <TaskIcon className={`w-4 h-4 ${tc.color}`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
+                        <span className={`text-sm truncate ${task.status === "done" || task.status === "dropped" ? "text-sol-text-muted line-through" : "text-sol-text"}`}>
+                          {task.title}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <TaskStatusBadge status={task.status} type="task" />
+                        {hasExec && (
+                          <TaskStatusBadge status={task.execution_status} type="execution" />
+                        )}
+                        {task.activeSession && (
+                          <Link
+                            href={`/conversation/${task.activeSession.session_id}`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] hover:bg-emerald-500/25 transition-colors"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            live
+                          </Link>
+                        )}
+                        {task.actual_minutes && (
+                          <span className="text-[10px] text-sol-text-dim/40 font-mono">
+                            {task.actual_minutes}m
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums whitespace-nowrap flex-shrink-0 mt-0.5">
+                      {time}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {recentSessions.length > 0 && (
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-3">
+            <MessageSquare className="w-4 h-4 text-sol-text-dim" />
+            All Sessions
+            <span className="text-xs text-sol-text-dim font-normal">({recentSessions.length})</span>
+          </h2>
+          <div className="space-y-1">
+            {recentSessions.map((s: any) => (
+              <PlanSessionCard key={s._id} session={s} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type PlanTab = "overview" | "orchestration";
+
 export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
   const plan = useQuery(api.plans.webGet, queryArgs);
@@ -613,8 +748,12 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
     );
   }
 
+  const [activeTab, setActiveTab] = useState<PlanTab>("overview");
   const status = STATUS_CONFIG[plan.status] || STATUS_CONFIG.draft;
   const StatusIcon = status.icon;
+
+  const hasTasks = (plan.tasks || []).length > 0;
+  const hasActiveSessions = (plan.sessions || []).some((s: any) => s.is_active);
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-6">
@@ -671,77 +810,113 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
         </div>
       )}
 
-      <OrchestrationHeader tasks={plan.tasks || []} sessions={plan.sessions || []} />
-
-      <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} sessions={plan.sessions || []} />
-
-      {plan.progress_log?.length > 0 && (
-        <div className="mb-6">
-          <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-            <Clock className="w-4 h-4 text-sol-text-dim" />
-            Progress Log
-          </h2>
-          <div className="space-y-2">
-            {[...plan.progress_log].reverse().map((entry: any, i: number) => (
-              <div key={i} className="flex items-start gap-2 text-sm">
-                <span className="text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap mt-0.5">
-                  {formatTimestamp(entry.timestamp)}
-                </span>
-                <span className="text-sol-text-muted">{entry.entry}</span>
-              </div>
-            ))}
-          </div>
+      {hasTasks && (
+        <div className="flex items-center gap-1 mb-5 border-b border-sol-border/15">
+          <button
+            onClick={() => setActiveTab("overview")}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === "overview"
+                ? "text-sol-text border-sol-cyan"
+                : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
+            }`}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Overview
+          </button>
+          <button
+            onClick={() => setActiveTab("orchestration")}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === "orchestration"
+                ? "text-sol-text border-sol-cyan"
+                : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
+            }`}
+          >
+            <Zap className={`w-3.5 h-3.5 ${hasActiveSessions ? "text-emerald-400" : ""}`} />
+            Orchestration
+            {hasActiveSessions && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            )}
+          </button>
         </div>
       )}
 
-      {plan.decision_log?.length > 0 && (
-        <div className="mb-6">
-          <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-            <GitBranch className="w-4 h-4 text-sol-text-dim" />
-            Decisions
-          </h2>
-          <div className="space-y-3">
-            {plan.decision_log.map((d: any, i: number) => (
-              <div key={i} className="text-sm">
-                <span className="text-sol-text">{d.decision}</span>
-                {d.rationale && (
-                  <p className="text-xs text-sol-text-dim mt-0.5">{d.rationale}</p>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {activeTab === "overview" ? (
+        <>
+          <OrchestrationHeader tasks={plan.tasks || []} sessions={plan.sessions || []} />
 
-      {plan.discoveries?.length > 0 && (
-        <div className="mb-6">
-          <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-            <Lightbulb className="w-4 h-4 text-sol-text-dim" />
-            Discoveries
-          </h2>
-          <div className="space-y-1.5">
-            {plan.discoveries.map((d: any, i: number) => (
-              <p key={i} className="text-sm text-sol-text-muted">{d.finding}</p>
-            ))}
-          </div>
-        </div>
-      )}
+          <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} sessions={plan.sessions || []} />
 
-      {plan.context_pointers?.length > 0 && (
-        <div className="mb-6">
-          <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
-            <ExternalLink className="w-4 h-4 text-sol-text-dim" />
-            Context
-          </h2>
-          <div className="space-y-1">
-            {plan.context_pointers.map((cp: any, i: number) => (
-              <div key={i} className="flex items-center gap-2 text-sm">
-                <span className="text-sol-text-dim">{cp.label}:</span>
-                <span className="text-sol-text-muted font-mono text-xs">{cp.path_or_url}</span>
+          {plan.progress_log?.length > 0 && (
+            <div className="mb-6">
+              <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
+                <Clock className="w-4 h-4 text-sol-text-dim" />
+                Progress Log
+              </h2>
+              <div className="space-y-2">
+                {[...plan.progress_log].reverse().map((entry: any, i: number) => (
+                  <div key={i} className="flex items-start gap-2 text-sm">
+                    <span className="text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap mt-0.5">
+                      {formatTimestamp(entry.timestamp)}
+                    </span>
+                    <span className="text-sol-text-muted">{entry.entry}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
+            </div>
+          )}
+
+          {plan.decision_log?.length > 0 && (
+            <div className="mb-6">
+              <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
+                <GitBranch className="w-4 h-4 text-sol-text-dim" />
+                Decisions
+              </h2>
+              <div className="space-y-3">
+                {plan.decision_log.map((d: any, i: number) => (
+                  <div key={i} className="text-sm">
+                    <span className="text-sol-text">{d.decision}</span>
+                    {d.rationale && (
+                      <p className="text-xs text-sol-text-dim mt-0.5">{d.rationale}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {plan.discoveries?.length > 0 && (
+            <div className="mb-6">
+              <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
+                <Lightbulb className="w-4 h-4 text-sol-text-dim" />
+                Discoveries
+              </h2>
+              <div className="space-y-1.5">
+                {plan.discoveries.map((d: any, i: number) => (
+                  <p key={i} className="text-sm text-sol-text-muted">{d.finding}</p>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {plan.context_pointers?.length > 0 && (
+            <div className="mb-6">
+              <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-2">
+                <ExternalLink className="w-4 h-4 text-sol-text-dim" />
+                Context
+              </h2>
+              <div className="space-y-1">
+                {plan.context_pointers.map((cp: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 text-sm">
+                    <span className="text-sol-text-dim">{cp.label}:</span>
+                    <span className="text-sol-text-muted font-mono text-xs">{cp.path_or_url}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <OrchestrationTab tasks={plan.tasks || []} sessions={plan.sessions || []} />
       )}
     </div>
   );

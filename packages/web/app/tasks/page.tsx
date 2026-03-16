@@ -199,6 +199,9 @@ function TaskRow({
       {task.source === "insight" && (
         <span className="text-[10px] px-1.5 py-0 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0">mined</span>
       )}
+      {task.execution_status && (
+        <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0" />
+      )}
       {task.blocked_by && task.blocked_by.length > 0 && (
         <Link2 className="w-3.5 h-3.5 text-sol-red flex-shrink-0" />
       )}
