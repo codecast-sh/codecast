@@ -213,7 +213,6 @@ export type ClientUI = {
   active_filter?: "my" | "team";
   inbox_shortcuts_hidden?: boolean;
   sounds_enabled?: boolean;
-  workspace_initialized?: boolean;
 };
 
 export type ClientLayouts = {
@@ -667,14 +666,17 @@ export const useInboxStore = create<InboxStoreState>(
   syncClientState: (serverState: any) => {
     if (!serverState) return;
     const prev = get().clientState;
+    const serverUi = serverState.ui ?? {
+      sidebar_collapsed: serverState.sidebar_collapsed,
+      zen_mode: serverState.zen_mode,
+    };
     const cs: ClientState = {
       current_conversation_id: serverState.current_conversation_id,
       show_dismissed: serverState.show_dismissed,
       dismissed_ids: serverState.dismissed_ids,
-      ui: serverState.ui ?? {
-        sidebar_collapsed: serverState.sidebar_collapsed,
-        zen_mode: serverState.zen_mode,
-      },
+      ui: "active_team_id" in (prev.ui || {})
+        ? { ...serverUi, active_team_id: prev.ui!.active_team_id }
+        : serverUi,
       layouts: serverState.layouts ?? (serverState.layout ? {
         dashboard: serverState.layout,
       } : undefined),

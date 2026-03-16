@@ -13,7 +13,7 @@ import {
   DropdownMenuLabel,
 } from "./ui/dropdown-menu";
 import { Check, ChevronDown, Plus, User, UserPlus } from "lucide-react";
-import { useEffect, useState, lazy, Suspense } from "react";
+import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { TeamIcon } from "./TeamIcon";
 
@@ -25,30 +25,18 @@ export function TeamSwitcher() {
   const teams = useQuery(api.teams.getUserTeams);
   const saveActiveTeam = useMutation(api.teams.setActiveTeam);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  const workspaceInitialized = useInboxStore((s) => s.clientState.ui?.workspace_initialized);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
-  const setActiveTeam = (id: Id<"teams"> | null) => updateClientUI({ active_team_id: id ?? undefined });
   const [inviteOpen, setInviteOpen] = useState(false);
   const isAdmin = user?.role === "admin";
+  const hydrated = useRef(false);
 
   useEffect(() => {
-    if (!user) return;
-    if (!workspaceInitialized) {
-      if (user.active_team_id) {
-        setActiveTeam(user.active_team_id);
-      } else if (teams && teams.length > 0) {
-        setActiveTeam(teams[0]?._id ?? null);
-      }
-      updateClientUI({ workspace_initialized: true });
-    } else if (activeTeamId) {
-      const isValidTeam = teams?.some(t => t?._id === activeTeamId);
-      if (!isValidTeam && user.active_team_id) {
-        setActiveTeam(user.active_team_id);
-      } else if (!isValidTeam && teams && teams.length > 0) {
-        setActiveTeam(teams[0]?._id ?? null);
-      }
+    if (!user || !teams || hydrated.current) return;
+    hydrated.current = true;
+    if (!activeTeamId && user.active_team_id) {
+      updateClientUI({ active_team_id: user.active_team_id as any });
     }
-  }, [user, teams, activeTeamId, workspaceInitialized]);
+  }, [user, teams]);
 
   if (!user) {
     return null;
@@ -57,8 +45,7 @@ export function TeamSwitcher() {
   const activeTeam = teams?.find(t => t?._id === activeTeamId);
 
   const handleTeamChange = async (teamId: Id<"teams"> | null) => {
-    setActiveTeam(teamId);
-    updateClientUI({ workspace_initialized: true });
+    updateClientUI({ active_team_id: teamId ?? undefined });
     await saveActiveTeam({ team_id: teamId ?? undefined });
   };
 

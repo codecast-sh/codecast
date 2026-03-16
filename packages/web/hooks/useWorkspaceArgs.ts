@@ -10,9 +10,7 @@ export function useWorkspaceArgs(): WorkspaceArgs {
   const activeTeamId = useInboxStore(
     (s) => s.clientState.ui?.active_team_id
   ) as Id<"teams"> | undefined;
-  const initialized = useInboxStore(
-    (s) => s.clientState.ui?.workspace_initialized
-  );
+  const initialized = useInboxStore((s) => s.clientStateInitialized);
 
   if (!initialized) return "skip";
 
