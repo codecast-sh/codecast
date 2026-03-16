@@ -3,10 +3,14 @@ const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
 
+let notificationRefs = [];
+
 function showNativeNotification(title, body, onClick) {
   if (!Notification.isSupported()) return;
   const notif = new Notification({ title, body, silent: false });
   if (onClick) notif.on("click", onClick);
+  notif.on("close", () => { notificationRefs = notificationRefs.filter(n => n !== notif); });
+  notificationRefs.push(notif);
   notif.show();
 }
 
@@ -162,20 +166,24 @@ function createPaletteWindow() {
     },
   });
 
-  paletteWindow.loadURL(`${currentBaseUrl}/palette`);
+  const win = paletteWindow;
 
-  paletteWindow.webContents.on("did-finish-load", () => {
-    paletteWindow.webContents.executeJavaScript(
-      "document.documentElement.classList.add('electron-desktop')"
-    );
+  win.loadURL(`${currentBaseUrl}/palette`);
+
+  win.webContents.on("did-finish-load", () => {
+    if (!win.isDestroyed()) {
+      win.webContents.executeJavaScript(
+        "document.documentElement.classList.add('electron-desktop')"
+      );
+    }
   });
 
-  paletteWindow.on("blur", () => {
+  win.on("blur", () => {
     hidePalette();
   });
 
-  paletteWindow.on("closed", () => {
-    paletteWindow = null;
+  win.on("closed", () => {
+    if (paletteWindow === win) paletteWindow = null;
   });
 }
 
@@ -354,6 +362,7 @@ function registerShortcuts() {
       const env = currentBaseUrl === PROD_URL ? "prod" : "local";
       mainWindow.loadURL(currentBaseUrl);
       mainWindow.webContents.once("did-finish-load", () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
         mainWindow.webContents.executeJavaScript(
           "document.documentElement.classList.add('electron-desktop')"
         );
@@ -362,7 +371,7 @@ function registerShortcuts() {
         );
       });
       if (paletteWindow) {
-        paletteWindow.close();
+        paletteWindow.destroy();
         paletteWindow = null;
       }
       createPaletteWindow();
