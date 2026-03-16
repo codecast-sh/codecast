@@ -1646,6 +1646,7 @@ codecast plan decide <plan_id> "decision" --rationale "why"
 codecast plan discover <plan_id> "finding"
 codecast plan pointer <plan_id> "label" "path"
 codecast plan activate|pause|done|drop <plan_id>        # Status transitions
+codecast plan retry <plan_id>                            # Reset stuck tasks to open
 codecast task create "Title" --plan <plan_id>            # Create task in plan
 \`\`\`
 ${PLAN_SNIPPET_END}
@@ -8941,6 +8942,15 @@ plan
       console.log(`\n  ${c.yellow}${withConcerns.length}${c.reset} with concerns  ${c.red}${execBlocked.length}${c.reset} exec-blocked  ${c.magenta || c.dim}${needsContext.length}${c.reset} needs context`);
     }
 
+    const totalRetries = tasks.reduce((s: number, t: any) => s + (t.retry_count || 0), 0);
+    const exceededMax = tasks.filter((t: any) => t.retry_count > 0 && t.max_retries > 0 && t.retry_count >= t.max_retries);
+    if (totalRetries > 0 || exceededMax.length > 0) {
+      console.log(`\n  ${c.dim}Retries:${c.reset} ${totalRetries} total${exceededMax.length > 0 ? `  ${c.red}${exceededMax.length}${c.reset} exceeded max` : ""}`);
+      for (const t of exceededMax) {
+        console.log(`  ${c.red}!${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(${t.retry_count}/${t.max_retries} retries)${c.reset}`);
+      }
+    }
+
     if (totalMins > 0) {
       const hrs = Math.floor(totalMins / 60);
       const mins = totalMins % 60;
@@ -8988,6 +8998,46 @@ plan
     }
 
     console.log();
+  });
+
+plan
+  .command("retry")
+  .description("Reset stuck tasks (needs_context/blocked) back to open")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const tasks = plan.tasks || [];
+    const stuck = tasks.filter((t: any) =>
+      t.execution_status === "needs_context" || t.execution_status === "blocked"
+    );
+
+    if (stuck.length === 0) {
+      console.log(fmt.muted("No stuck tasks to retry."));
+      return;
+    }
+
+    let resetCount = 0;
+    for (const t of stuck) {
+      try {
+        await cliPost("/cli/work/update", {
+          short_id: t.short_id,
+          status: "open",
+          execution_status: "",
+          attempt_count: 0,
+        });
+        console.log(`  ${c.green}reset${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(was ${t.execution_status})${c.reset}`);
+        resetCount++;
+      } catch (e: any) {
+        console.error(`  ${c.red}fail${c.reset}  ${t.short_id}: ${e.message || e}`);
+      }
+    }
+
+    console.log(`\n${c.green}ok${c.reset} Reset ${resetCount}/${stuck.length} tasks in plan ${c.cyan}${planId}${c.reset}`);
+    try {
+      await cliPost("/cli/plans/log", { short_id: planId, entry: `Retried ${resetCount} stuck tasks` });
+    } catch {}
   });
 
 // --- Stable Mode ---
