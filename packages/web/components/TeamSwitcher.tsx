@@ -13,7 +13,7 @@ import {
   DropdownMenuLabel,
 } from "./ui/dropdown-menu";
 import { Check, ChevronDown, Plus, User, UserPlus } from "lucide-react";
-import { useEffect, useRef, useState, lazy, Suspense } from "react";
+import { useState, lazy, Suspense } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { TeamIcon } from "./TeamIcon";
 
@@ -28,15 +28,6 @@ export function TeamSwitcher() {
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   const [inviteOpen, setInviteOpen] = useState(false);
   const isAdmin = user?.role === "admin";
-  const hydrated = useRef(false);
-
-  useEffect(() => {
-    if (!user || !teams || hydrated.current) return;
-    hydrated.current = true;
-    if (!activeTeamId && user.active_team_id) {
-      updateClientUI({ active_team_id: user.active_team_id as any });
-    }
-  }, [user, teams]);
 
   if (!user) {
     return null;
