@@ -1183,9 +1183,10 @@ export const webGetTaskDetail = query({
     }
     const allConvs = await ctx.db
       .query("conversations")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", task.user_id))
-      .filter((q: any) => q.eq(q.field("active_task_id"), task._id))
-      .collect();
+      .withIndex("by_user_updated", (q: any) => q.eq("user_id", task.user_id))
+      .order("desc")
+      .take(100)
+      .then((convs: any[]) => convs.filter((c: any) => c.active_task_id === task._id));
     for (const conv of allConvs) {
       if (seenConvIds.has(conv._id.toString())) continue;
       seenConvIds.add(conv._id.toString());
@@ -1221,16 +1222,12 @@ export const webGetTaskDetail = query({
 
     let relatedDocs: any[] = [];
     if (task.created_from_conversation) {
-      const allUserDocs = await ctx.db
+      const convDocs = await ctx.db
         .query("docs")
-        .withIndex("by_user_id", (q) => q.eq("user_id", task.user_id))
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", task.created_from_conversation))
         .collect();
-      relatedDocs = allUserDocs
-        .filter(
-          (d) =>
-            d.conversation_id === task.created_from_conversation &&
-            !d.archived_at
-        )
+      relatedDocs = convDocs
+        .filter((d) => !d.archived_at)
         .map((d) => ({
           _id: d._id,
           title: d.title,
