@@ -7,7 +7,7 @@ let notificationRefs = [];
 
 function showNativeNotification(title, body, onClick) {
   if (!Notification.isSupported()) return;
-  const notif = new Notification({ title, body, silent: false });
+  const notif = new Notification({ title, body, silent: false, urgency: "critical" });
   if (onClick) notif.on("click", onClick);
   notif.on("close", () => { notificationRefs = notificationRefs.filter(n => n !== notif); });
   notificationRefs.push(notif);
