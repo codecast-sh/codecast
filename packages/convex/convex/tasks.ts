@@ -135,7 +135,7 @@ export const create = mutation({
       max_retries: args.max_retries ?? 3,
       created_at: now,
       updated_at: now,
-    });
+    } as any);
 
     if (plan_id) {
       const plan = await ctx.db.get(plan_id);
@@ -311,6 +311,7 @@ export const list = query({
     api_token: v.string(),
     project_id: v.optional(v.string()),
     status: v.optional(v.string()),
+    execution_status: v.optional(v.string()),
     ready: v.optional(v.boolean()),
     limit: v.optional(v.number()),
     team: v.optional(v.boolean()),
@@ -356,6 +357,10 @@ export const list = query({
     // By default, exclude unpromoted insight-sourced tasks (derived noise)
     if (!args.include_derived) {
       tasks = tasks.filter((t: any) => t.source !== "insight" || t.promoted === true);
+    }
+
+    if (args.execution_status) {
+      tasks = tasks.filter((t: any) => t.execution_status === args.execution_status);
     }
 
     // Ready = open + no blockers
@@ -710,6 +715,7 @@ export const webList = query({
   args: {
     project_id: v.optional(v.string()),
     status: v.optional(v.string()),
+    execution_status: v.optional(v.string()),
     ready: v.optional(v.boolean()),
     limit: v.optional(v.number()),
     include_derived: v.optional(v.boolean()),
@@ -770,6 +776,10 @@ export const webList = query({
     // By default, exclude unpromoted insight-sourced tasks
     if (!args.include_derived) {
       tasks = tasks.filter((t) => t.source !== "insight" || t.promoted === true);
+    }
+
+    if (args.execution_status) {
+      tasks = tasks.filter((t: any) => t.execution_status === args.execution_status);
     }
 
     if (args.ready) {
@@ -887,6 +897,7 @@ export const webUpdate = mutation({
     assignee: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
     project_id: v.optional(v.string()),
+    execution_status: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -909,6 +920,7 @@ export const webUpdate = mutation({
     }
     if (args.labels) updates.labels = args.labels;
     if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
+    if (args.execution_status !== undefined) updates.execution_status = args.execution_status || undefined;
 
     if (args.status === "done" || args.status === "dropped") {
       updates.closed_at = now;
@@ -925,6 +937,7 @@ export const webUpdate = mutation({
     if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
     if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
     if (args.assignee !== undefined && resolvedAssignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", resolvedAssignee || ""]);
+    if (args.execution_status !== undefined && args.execution_status !== (task.execution_status || "")) trackFields.push(["execution_status", task.execution_status || "", args.execution_status || ""]);
 
     for (const [field, oldVal, newVal] of trackFields) {
       await ctx.db.insert("task_history", {
@@ -1035,7 +1048,7 @@ export const webCreate = mutation({
       max_retries: 3,
       created_at: now,
       updated_at: now,
-    });
+    } as any);
 
     if (plan_id) {
       const plan = await ctx.db.get(plan_id);
@@ -1061,6 +1074,7 @@ export const webCreate = mutation({
 export const webTeamList = query({
   args: {
     status: v.optional(v.string()),
+    execution_status: v.optional(v.string()),
     promoted_only: v.optional(v.boolean()),
     limit: v.optional(v.number()),
   },
@@ -1081,6 +1095,10 @@ export const webTeamList = query({
       tasks = tasks.filter(t => t.status === args.status);
     } else {
       tasks = tasks.filter(t => t.status !== "done" && t.status !== "dropped");
+    }
+
+    if (args.execution_status) {
+      tasks = tasks.filter(t => (t as any).execution_status === args.execution_status);
     }
 
     if (args.promoted_only) {
@@ -1111,6 +1129,101 @@ export const webPromote = mutation({
     if (task.user_id !== userId && task.team_id !== team_id) throw new Error("Task not found");
 
     await ctx.db.patch(task._id, { promoted: true, updated_at: Date.now() });
+    return { success: true };
+  },
+});
+
+export const incrementRetryCount = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const task = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!task || task.user_id !== auth.userId) throw new Error("Task not found");
+
+    const now = Date.now();
+    const newRetryCount = ((task as any).retry_count || 0) + 1;
+    const maxRetries = (task as any).max_retries ?? 3;
+
+    const updates: any = {
+      retry_count: newRetryCount,
+      last_attempted_at: now,
+      updated_at: now,
+    };
+
+    if (newRetryCount > maxRetries) {
+      updates.execution_status = "blocked";
+
+      const user = await ctx.db.get(auth.userId);
+      await ctx.db.insert("task_comments", {
+        task_id: task._id,
+        author: user?.name || "system",
+        text: `Retry count (${newRetryCount}) exceeded max retries (${maxRetries}). Task automatically blocked.`,
+        comment_type: "blocker" as any,
+        created_at: now,
+      });
+    }
+
+    await ctx.db.patch(task._id, updates);
+
+    return { retry_count: newRetryCount, blocked: newRetryCount > maxRetries };
+  },
+});
+
+export const updateExecutionStatus = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+    execution_status: v.union(
+      v.literal("done"),
+      v.literal("done_with_concerns"),
+      v.literal("blocked"),
+      v.literal("needs_context"),
+    ),
+    execution_comment: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const task = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!task || task.user_id !== auth.userId) throw new Error("Task not found");
+
+    const now = Date.now();
+    await ctx.db.patch(task._id, { execution_status: args.execution_status, updated_at: now });
+
+    if (args.execution_comment) {
+      const user = await ctx.db.get(auth.userId);
+      await ctx.db.insert("task_comments", {
+        task_id: task._id,
+        author: user?.name || "unknown",
+        text: args.execution_comment,
+        comment_type: "progress" as any,
+        created_at: now,
+      });
+    }
+
+    await ctx.db.insert("task_history", {
+      task_id: task._id,
+      user_id: auth.userId,
+      actor_type: "user",
+      action: "updated",
+      field: "execution_status",
+      old_value: task.execution_status || "",
+      new_value: args.execution_status,
+      created_at: now,
+    });
+
     return { success: true };
   },
 });
