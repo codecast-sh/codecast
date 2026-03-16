@@ -48,17 +48,20 @@ export async function notifyNative(title: string, body: string, data?: { convers
     if (document.hasFocus()) return;
     const { sendNotification } = await import("@tauri-apps/plugin-notification");
     sendNotification({ title, body });
-  } else if (isElectron()) {
-    window.__CODECAST_ELECTRON__!.showNotification(title, body, data);
-  } else if (hasBrowserNotificationPermission()) {
-    if (document.hasFocus()) return;
-    const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId });
-    if (data?.conversationId) {
-      n.onclick = () => {
-        window.focus();
-        window.location.href = `/conversation/${data.conversationId}`;
-      };
-    }
+    return;
+  }
+
+  // For both Electron and browser: use the browser Notification API directly.
+  // This keeps all notification logic in the web layer -- no Electron rebuild needed.
+  if (typeof Notification === "undefined") return;
+  if (!isDesktop() && Notification.permission !== "granted") return;
+
+  const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId });
+  if (data?.conversationId) {
+    n.onclick = () => {
+      window.focus();
+      window.location.href = `/conversation/${data.conversationId}`;
+    };
   }
 }
 
