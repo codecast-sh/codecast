@@ -731,6 +731,7 @@ type PlanTab = "overview" | "orchestration";
 export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
   const plan = useQuery(api.plans.webGet, queryArgs);
+  const [activeTab, setActiveTab] = useState<PlanTab>("overview");
 
   if (plan === undefined) {
     return (
@@ -747,8 +748,6 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
       </div>
     );
   }
-
-  const [activeTab, setActiveTab] = useState<PlanTab>("overview");
   const status = STATUS_CONFIG[plan.status] || STATUS_CONFIG.draft;
   const StatusIcon = status.icon;
 
