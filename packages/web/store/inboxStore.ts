@@ -670,12 +670,13 @@ export const useInboxStore = create<InboxStoreState>(
       sidebar_collapsed: serverState.sidebar_collapsed,
       zen_mode: serverState.zen_mode,
     };
+    const initialized = get().clientStateInitialized;
     const cs: ClientState = {
       current_conversation_id: serverState.current_conversation_id,
       show_dismissed: serverState.show_dismissed,
       dismissed_ids: serverState.dismissed_ids,
-      ui: "active_team_id" in (prev.ui || {})
-        ? { ...serverUi, active_team_id: prev.ui!.active_team_id }
+      ui: initialized
+        ? { ...serverUi, active_team_id: prev.ui?.active_team_id }
         : serverUi,
       layouts: serverState.layouts ?? (serverState.layout ? {
         dashboard: serverState.layout,
