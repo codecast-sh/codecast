@@ -18,6 +18,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
+import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { toast } from "sonner";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
@@ -516,6 +517,168 @@ function SessionCard({
   );
 }
 
+function NeedsAttentionSection() {
+  const blockedTasks = useQuery(api.tasks.webList, { execution_status: "blocked", limit: 20 });
+  const needsContextTasks = useQuery(api.tasks.webList, { execution_status: "needs_context", limit: 20 });
+  const updateTask = useMutation(api.tasks.webUpdate);
+  const [collapsed, setCollapsed] = useState(false);
+
+  const tasks = useMemo(() => {
+    const all = [...(blockedTasks || []), ...(needsContextTasks || [])];
+    const seen = new Set<string>();
+    return all.filter(t => {
+      if (seen.has(t.short_id)) return false;
+      seen.add(t.short_id);
+      return true;
+    });
+  }, [blockedTasks, needsContextTasks]);
+
+  if (tasks.length === 0) return null;
+
+  const handleRetry = async (shortId: string) => {
+    try {
+      await updateTask({ short_id: shortId, execution_status: "", status: "open" });
+      toast.success("Task reset for retry");
+    } catch {
+      toast.error("Failed to reset task");
+    }
+  };
+
+  return (
+    <div className="border-b border-sol-red/20">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="w-full px-3 py-1.5 bg-sol-red/[0.06] border-b border-sol-red/15 flex items-center justify-between"
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-red">
+          Needs Attention ({tasks.length})
+        </span>
+        <svg
+          className={`w-3 h-3 text-sol-red/60 transition-transform ${collapsed ? "" : "rotate-180"}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {!collapsed && tasks.map((task: any) => (
+        <div
+          key={task.short_id}
+          className="group px-3 py-2 border-b border-sol-border/20 bg-sol-red/[0.03] hover:bg-sol-red/[0.06] transition-colors"
+        >
+          <div className="flex items-start gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm text-sol-text truncate leading-tight">{task.title}</div>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-[10px] text-sol-text-dim font-mono">{task.short_id}</span>
+                <TaskStatusBadge status={task.execution_status || "blocked"} type="execution" size="sm" />
+                {task.plan && (
+                  <span className="text-[10px] text-sol-cyan/70 truncate max-w-[100px]" title={task.plan.title}>
+                    {task.plan.title}
+                  </span>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => handleRetry(task.short_id)}
+              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-orange border border-sol-orange/30 bg-sol-orange/10 hover:bg-sol-orange/20 transition-colors opacity-0 group-hover:opacity-100"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DraftPlansSection() {
+  const draftPlans = useQuery(api.plans.webList, { status: "draft", limit: 20 });
+  const updatePlan = useMutation(api.plans.webUpdate);
+  const [collapsed, setCollapsed] = useState(false);
+  const router = useRouter();
+
+  if (!draftPlans || draftPlans.length === 0) return null;
+
+  const handleActivate = async (shortId: string) => {
+    try {
+      await updatePlan({ short_id: shortId, status: "active" });
+      toast.success("Plan activated");
+    } catch {
+      toast.error("Failed to activate plan");
+    }
+  };
+
+  const handleDismiss = async (shortId: string) => {
+    try {
+      await updatePlan({ short_id: shortId, status: "abandoned" });
+      toast.success("Plan dismissed");
+    } catch {
+      toast.error("Failed to dismiss plan");
+    }
+  };
+
+  return (
+    <div className="border-b border-sol-border/30">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim/70">
+          Draft Plans ({draftPlans.length})
+        </span>
+        <svg
+          className={`w-3 h-3 text-sol-text-dim/40 transition-transform ${collapsed ? "" : "rotate-180"}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {!collapsed && draftPlans.map((plan: any) => (
+        <div
+          key={plan.short_id}
+          className="group px-3 py-2 border-b border-sol-border/15 hover:bg-sol-bg-alt/60 transition-colors opacity-70 hover:opacity-100"
+        >
+          <div className="text-sm text-sol-text-muted truncate leading-tight">{plan.title}</div>
+          <div className="flex items-center gap-1.5 mt-1">
+            <span className="text-[10px] text-sol-text-dim font-mono">{plan.short_id}</span>
+            <span className="text-[10px] text-sol-text-dim/60 capitalize">{plan.source}</span>
+            {plan.progress && (
+              <span className="text-[10px] text-sol-text-dim tabular-nums">
+                {plan.progress.total} task{plan.progress.total !== 1 ? "s" : ""}
+              </span>
+            )}
+            {plan._creationTime && (
+              <span className="text-[10px] text-sol-text-dim tabular-nums">
+                {formatIdleDuration(plan._creationTime)}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={() => handleActivate(plan.short_id)}
+              className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-green border border-sol-green/30 bg-sol-green/10 hover:bg-sol-green/20 transition-colors"
+            >
+              Activate
+            </button>
+            <button
+              onClick={() => handleDismiss(plan.short_id)}
+              className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim border border-sol-border/40 hover:border-sol-red/30 hover:text-sol-red hover:bg-sol-red/10 transition-colors"
+            >
+              Dismiss
+            </button>
+            <button
+              onClick={() => router.push(`/plans/${plan._id}`)}
+              className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim border border-sol-border/40 hover:border-sol-cyan/30 hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
+            >
+              Edit
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function InboxSessionPanel({
   showAll,
   onToggleShowAll,
@@ -579,6 +742,8 @@ function InboxSessionPanel({
         </div>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-auto">
+        <NeedsAttentionSection />
+        <DraftPlansSection />
         {pinned.length > 0 && (
           <div>
             <div className="px-3 py-1.5 bg-sol-bg border-b border-sol-border/30">
