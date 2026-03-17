@@ -142,8 +142,8 @@ function SessionCard({ item }: { item: Extract<TimelineItem, { type: "session" }
                 </span>
               )}
               {item.active_plan && (
-                <Link href={`/plans/${item.active_plan._id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors" onClick={(e) => e.stopPropagation()}>
-                  {item.active_plan.short_id}
+                <Link href={`/plans/${item.active_plan._id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[140px] truncate" onClick={(e) => e.stopPropagation()} title={item.active_plan.title}>
+                  {item.active_plan.title}
                 </Link>
               )}
               {item.duration_ms > 60000 && (

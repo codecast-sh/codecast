@@ -218,7 +218,6 @@ export default function DocDetailPage() {
               >
                 <CircleDot className="w-4 h-4 text-sol-cyan flex-shrink-0" />
                 <span className="text-sm font-medium text-sol-text group-hover:text-sol-cyan transition-colors">{(doc as any).active_plan.title}</span>
-                <span className="text-[10px] font-mono text-sol-text-dim">{(doc as any).active_plan.short_id}</span>
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto">{(doc as any).active_plan.status}</Badge>
               </Link>
             </div>

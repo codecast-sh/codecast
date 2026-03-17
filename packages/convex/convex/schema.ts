@@ -1113,6 +1113,7 @@ export default defineSchema({
       active_team_id: v.optional(v.string()),
       active_filter: v.optional(v.union(v.literal("my"), v.literal("team"))),
       inbox_shortcuts_hidden: v.optional(v.boolean()),
+      workspace_initialized: v.optional(v.boolean()),
     })),
 
     layouts: v.optional(v.object({
