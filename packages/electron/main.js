@@ -231,8 +231,8 @@ function createTray() {
   const menu = Menu.buildFromTemplate([
     { label: "Show Codecast", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { type: "separator" },
-    { label: "Dashboard", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.location.href='/dashboard'"); } },
-    { label: "Inbox", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.location.href='/inbox'"); } },
+    { label: "Dashboard", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: '/dashboard' }))"); } },
+    { label: "Inbox", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: '/inbox' }))"); } },
     { type: "separator" },
     { label: "Quit", click: () => app.quit() },
   ]);
