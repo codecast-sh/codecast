@@ -5,6 +5,36 @@ import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext } from "./data";
 
+async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
+  let total = 0, done = 0, in_progress = 0, open = 0;
+  let exec_done = 0, exec_done_with_concerns = 0, exec_blocked = 0, exec_needs_context = 0;
+
+  for (const tid of taskIds) {
+    const task = await ctx.db.get(tid);
+    if (!task) continue;
+    total++;
+    if (task.status === "done") done++;
+    else if (task.status === "in_progress" || task.status === "in_review") in_progress++;
+    else if (task.status === "open" || task.status === "draft") open++;
+
+    const es = (task as any).execution_status;
+    if (es === "done") exec_done++;
+    else if (es === "done_with_concerns") exec_done_with_concerns++;
+    else if (es === "blocked") exec_blocked++;
+    else if (es === "needs_context") exec_needs_context++;
+  }
+
+  return {
+    total, done, in_progress, open,
+    execution_status: {
+      done: exec_done,
+      done_with_concerns: exec_done_with_concerns,
+      blocked: exec_blocked,
+      needs_context: exec_needs_context,
+    },
+  };
+}
+
 function generateShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
   let id = "pl-";
@@ -124,18 +154,7 @@ export const update = mutation({
     if (args.task_ids) {
       const taskDocIds = args.task_ids.map(id => id as Id<"tasks">);
       updates.task_ids = taskDocIds;
-
-      let total = 0, done = 0, in_progress = 0, open = 0;
-      for (const tid of taskDocIds) {
-        const task = await ctx.db.get(tid);
-        if (task) {
-          total++;
-          if (task.status === "done") done++;
-          else if (task.status === "in_progress" || task.status === "in_review") in_progress++;
-          else if (task.status === "open" || task.status === "draft") open++;
-        }
-      }
-      updates.progress = { total, done, in_progress, open };
+      updates.progress = await recalcProgress(ctx, taskDocIds);
     }
 
     await ctx.db.patch(plan._id, updates);
@@ -340,6 +359,73 @@ export const unbindSession = mutation({
   },
 });
 
+export const recalcPlanProgress = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
+
+    const progress = await recalcProgress(ctx, plan.task_ids || []);
+    await ctx.db.patch(plan._id, { progress, updated_at: Date.now() });
+    return progress;
+  },
+});
+
+export const addEscalation = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+    task_short_id: v.optional(v.string()),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
+
+    const escalation = {
+      timestamp: Date.now(),
+      task_short_id: args.task_short_id,
+      reason: args.reason,
+    };
+
+    const escalationLog = ((plan as any).escalation_log || []) as any[];
+    escalationLog.push(escalation);
+
+    const progressLog = plan.progress_log || [];
+    const logEntry = args.task_short_id
+      ? `[ESCALATION] ${args.task_short_id}: ${args.reason}`
+      : `[ESCALATION] ${args.reason}`;
+    progressLog.push({ timestamp: Date.now(), entry: logEntry });
+
+    await ctx.db.patch(plan._id, {
+      escalation_log: escalationLog,
+      progress_log: progressLog,
+      updated_at: Date.now(),
+    } as any);
+
+    return { success: true };
+  },
+});
+
 // --- API token queries ---
 
 export const get = query({
@@ -368,6 +454,97 @@ export const get = query({
     }
 
     return { ...plan, tasks };
+  },
+});
+
+export const getOrchestrationStatus = query({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
+
+    const taskIds = plan.task_ids || [];
+    const tasks: any[] = [];
+    for (const tid of taskIds) {
+      const task = await ctx.db.get(tid);
+      if (task) tasks.push(task);
+    }
+
+    const now = Date.now();
+    const HEARTBEAT_ALIVE_MS = 90 * 1000;
+
+    const managedSessions = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
+      .collect();
+
+    const liveSessions = managedSessions.filter(
+      (s: any) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id
+    );
+
+    const activeConvIds = new Set<string>();
+    for (const s of liveSessions) {
+      if (s.conversation_id) activeConvIds.add(s.conversation_id.toString());
+    }
+
+    let activeAgentCount = 0;
+    const taskDocIds = new Set(taskIds.map(id => id.toString()));
+    for (const convId of activeConvIds) {
+      const conv = await ctx.db.get(convId as any);
+      if (conv && (conv as any).active_task_id && taskDocIds.has((conv as any).active_task_id.toString())) {
+        activeAgentCount++;
+      }
+    }
+
+    const waveMap = new Map<number, { done: number; total: number }>();
+    let blockedCount = 0;
+    let needsContextCount = 0;
+    let currentWave = 0;
+
+    for (const task of tasks) {
+      const waveNumber = (task as any).wave_number as number | undefined;
+      if (waveNumber !== undefined && waveNumber !== null) {
+        const wave = waveMap.get(waveNumber) || { done: 0, total: 0 };
+        wave.total++;
+        if (task.status === "done") wave.done++;
+        waveMap.set(waveNumber, wave);
+      }
+
+      const es = (task as any).execution_status;
+      if (es === "blocked") blockedCount++;
+      else if (es === "needs_context") needsContextCount++;
+
+      if (task.status === "in_progress" || task.status === "in_review") {
+        const wn = (task as any).wave_number as number | undefined;
+        if (wn !== undefined && wn !== null && wn > currentWave) {
+          currentWave = wn;
+        }
+      }
+    }
+
+    const waveProgress: Record<number, { done: number; total: number }> = {};
+    for (const [wn, progress] of waveMap) {
+      waveProgress[wn] = progress;
+    }
+
+    return {
+      active_agents: activeAgentCount,
+      wave_progress: waveProgress,
+      blocked_count: blockedCount,
+      needs_context_count: needsContextCount,
+      current_wave: currentWave,
+    };
   },
 });
 
@@ -640,18 +817,7 @@ export const webUpdate = mutation({
     if (args.task_ids) {
       const taskDocIds = args.task_ids.map(id => id as Id<"tasks">);
       updates.task_ids = taskDocIds;
-
-      let total = 0, done = 0, in_progress = 0, open = 0;
-      for (const tid of taskDocIds) {
-        const task = await ctx.db.get(tid);
-        if (task) {
-          total++;
-          if (task.status === "done") done++;
-          else if (task.status === "in_progress" || task.status === "in_review") in_progress++;
-          else if (task.status === "open" || task.status === "draft") open++;
-        }
-      }
-      updates.progress = { total, done, in_progress, open };
+      updates.progress = await recalcProgress(ctx, taskDocIds);
     }
 
     await ctx.db.patch(plan._id, updates);
