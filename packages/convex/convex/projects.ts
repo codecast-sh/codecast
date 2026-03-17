@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { createDataContext } from "./data";
 
 export const create = mutation({
   args: {
@@ -16,21 +17,16 @@ export const create = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
     const now = Date.now();
 
-    const id = await ctx.db.insert("projects", {
-      user_id: auth.userId,
-      team_id,
+    const id = await db.insert("projects", {
       title: args.title,
       description: args.description,
       status: "active",
       project_path: args.project_path,
       target_date: args.target_date,
       labels: args.labels,
-      created_at: now,
-      updated_at: now,
     });
 
     return { id };

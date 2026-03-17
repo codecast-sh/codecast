@@ -3,6 +3,7 @@ import { internalMutation, internalQuery, internalAction, action, query } from "
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
+import { createDataContext } from "./data";
 
 function generateShortId(prefix = "ct-"): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -397,7 +398,7 @@ export const getUserTeamId = internalQuery({
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.user_id);
     if (!user) return null;
-    return user.active_team_id || user.team_id || null;
+    return user.active_team_id || null;
   },
 });
 
@@ -854,7 +855,7 @@ export const webGetRoadmap = query({
     if (!userId) return [];
 
     const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const team_id = user?.active_team_id;
 
     const items: Array<{
       type: "session" | "task" | "doc";
@@ -1015,9 +1016,8 @@ export const webGetDocDetail = query({
     const doc = await ctx.db.get(args.id);
     if (!doc) return null;
 
-    // Allow viewing docs from same team
     const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const team_id = user?.active_team_id;
     if (doc.user_id !== userId && doc.team_id !== team_id) return null;
 
     let conversation = null;
@@ -1133,9 +1133,8 @@ export const webGetTaskDetail = query({
     const task = await ctx.db.get(args.id);
     if (!task) return null;
 
-    // Allow viewing tasks from same team
     const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const team_id = user?.active_team_id;
     if (task.user_id !== userId && task.team_id !== team_id) return null;
 
     const comments = await ctx.db
@@ -1332,7 +1331,7 @@ export const webGetTeamStats = query({
     if (!userId) return null;
 
     const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const team_id = user?.active_team_id;
     if (!team_id) return null;
 
     const memberships = await ctx.db

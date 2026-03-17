@@ -3,6 +3,7 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { createDataContext } from "./data";
 
 function generatePlanShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -37,8 +38,7 @@ export const create = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const user = await ctx.db.get(auth.userId);
-    const userTeamId = user?.active_team_id || user?.team_id;
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
     const now = Date.now();
 
     // Check for existing doc by source_file (for upsert on plan sync)
@@ -53,7 +53,7 @@ export const create = mutation({
           content: args.content,
           updated_at: now,
         });
-        // Update linked plan entity if this is a plan doc
+        const userTeamId = db.workspace.type === "team" ? db.workspace.teamId : undefined;
         if ((args.source || existing.source) === "plan_mode") {
           await syncDocToPlanEntity(ctx, existing._id, args.content, auth.userId, userTeamId, existing.project_id, existing.conversation_id);
         }
@@ -62,7 +62,7 @@ export const create = mutation({
     }
 
     let conversation_id = undefined;
-    let team_id = userTeamId;
+    let team_id = db.workspace.type === "team" ? db.workspace.teamId : undefined;
     if (args.conversation_id) {
       const conv = await ctx.db
         .query("conversations")
@@ -341,7 +341,7 @@ export const webList = query({
     let teamDocs: any[] = [];
     const resolvedTeamId = args.workspace === "team" && args.team_id
       ? args.team_id
-      : !args.workspace ? (user?.active_team_id || (user as any)?.team_id) : undefined;
+      : !args.workspace ? user?.active_team_id : undefined;
 
     if (args.workspace === "team" && args.team_id) {
       teamDocs = await ctx.db
@@ -531,7 +531,7 @@ export const webSearch = query({
     if (!userId) return [];
 
     const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || (user as any)?.team_id;
+    const team_id = user?.active_team_id;
 
     const results = await ctx.db
       .query("docs")
