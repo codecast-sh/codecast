@@ -885,6 +885,39 @@ export default defineSchema({
     created_from_conversation_id: v.optional(v.id("conversations")),
     created_from_insight_id: v.optional(v.id("session_insights")),
     doc_id: v.optional(v.id("docs")),
+    plan_version: v.optional(v.number()),
+    drive_state: v.optional(
+      v.object({
+        current_round: v.number(),
+        total_rounds: v.number(),
+        rounds: v.array(
+          v.object({
+            round: v.number(),
+            findings: v.array(v.string()),
+            fixed: v.array(v.string()),
+            deferred: v.optional(v.array(v.string())),
+          }),
+        ),
+      }),
+    ),
+    orchestration_metadata: v.optional(
+      v.object({
+        wave_count: v.optional(v.number()),
+        last_wave_at: v.optional(v.number()),
+        agent_count: v.optional(v.number()),
+        last_orchestrated_at: v.optional(v.number()),
+      }),
+    ),
+    escalation_log: v.optional(
+      v.array(
+        v.object({
+          task_id: v.optional(v.string()),
+          reason: v.string(),
+          created_at: v.number(),
+          resolved: v.optional(v.boolean()),
+        }),
+      ),
+    ),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -992,6 +1025,9 @@ export default defineSchema({
     estimated_minutes: v.optional(v.number()),
     actual_minutes: v.optional(v.number()),
     started_at: v.optional(v.number()),
+    agent_session_id: v.optional(v.string()),
+    wave_number: v.optional(v.number()),
+    priority_weight: v.optional(v.number()),
 
     created_at: v.number(),
     updated_at: v.number(),

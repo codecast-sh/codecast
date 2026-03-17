@@ -19,6 +19,7 @@ import type * as commits from "../commits.js";
 import type * as conversations from "../conversations.js";
 import type * as crons from "../crons.js";
 import type * as daemonLogs from "../daemonLogs.js";
+import type * as data from "../data.js";
 import type * as decisions from "../decisions.js";
 import type * as dispatch from "../dispatch.js";
 import type * as docs from "../docs.js";
@@ -74,6 +75,7 @@ declare const fullApi: ApiFromModules<{
   conversations: typeof conversations;
   crons: typeof crons;
   daemonLogs: typeof daemonLogs;
+  data: typeof data;
   decisions: typeof decisions;
   dispatch: typeof dispatch;
   docs: typeof docs;

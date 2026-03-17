@@ -1142,7 +1142,7 @@ export const incrementRetryCount = mutation({
       updated_at: now,
     };
 
-    if (newRetryCount > maxRetries) {
+    if (newRetryCount >= maxRetries) {
       updates.execution_status = "blocked";
 
       const user = await ctx.db.get(auth.userId);
@@ -1157,7 +1157,7 @@ export const incrementRetryCount = mutation({
 
     await ctx.db.patch(task._id, updates);
 
-    return { retry_count: newRetryCount, blocked: newRetryCount > maxRetries };
+    return { retry_count: newRetryCount, blocked: newRetryCount >= maxRetries };
   },
 });
 
@@ -1263,5 +1263,159 @@ export const backfillTeamScope = mutation({
     }
 
     return { tasksFixed, tasksPromoted, docsFixed, totalTasks: allTasks.length, totalDocs: allDocs.length };
+  },
+});
+
+export const batchUpdateStatus = mutation({
+  args: {
+    api_token: v.string(),
+    short_ids: v.array(v.string()),
+    status: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const now = Date.now();
+    const results: { short_id: string; success: boolean }[] = [];
+    const affectedPlans = new Set<string>();
+
+    for (const short_id of args.short_ids) {
+      const task = await ctx.db
+        .query("tasks")
+        .withIndex("by_short_id", (q) => q.eq("short_id", short_id))
+        .first();
+      if (!task || task.user_id !== auth.userId) {
+        results.push({ short_id, success: false });
+        continue;
+      }
+
+      const updates: any = { status: args.status, updated_at: now };
+      if (args.status === "done" || args.status === "dropped") {
+        updates.closed_at = now;
+      }
+      if (args.status === "in_progress") {
+        updates.attempt_count = (task.attempt_count || 0) + 1;
+        updates.last_attempted_at = now;
+        if (!task.started_at) updates.started_at = now;
+      }
+      if (args.status === "done" && task.started_at) {
+        updates.actual_minutes = Math.round((now - task.started_at) / 60000);
+      }
+
+      if (args.status !== task.status) {
+        await ctx.db.insert("task_history", {
+          task_id: task._id,
+          user_id: auth.userId,
+          actor_type: "user",
+          action: "updated",
+          field: "status",
+          old_value: String(task.status),
+          new_value: args.status,
+          created_at: now,
+        });
+      }
+
+      await ctx.db.patch(task._id, updates);
+
+      if (task.plan_id && args.status !== task.status) {
+        affectedPlans.add(`${task.plan_id}:${task._id}:${args.status}`);
+      }
+
+      results.push({ short_id, success: true });
+    }
+
+    for (const key of affectedPlans) {
+      const [planId, taskId, status] = key.split(":");
+      await recalcPlanProgress(ctx, planId as Id<"plans">, taskId as Id<"tasks">, status);
+    }
+
+    return { results, updated: results.filter((r) => r.success).length };
+  },
+});
+
+export const batchAssign = mutation({
+  args: {
+    api_token: v.string(),
+    short_ids: v.array(v.string()),
+    assignee: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const now = Date.now();
+    const results: { short_id: string; success: boolean }[] = [];
+
+    for (const short_id of args.short_ids) {
+      const task = await ctx.db
+        .query("tasks")
+        .withIndex("by_short_id", (q) => q.eq("short_id", short_id))
+        .first();
+      if (!task || task.user_id !== auth.userId) {
+        results.push({ short_id, success: false });
+        continue;
+      }
+
+      if (args.assignee !== task.assignee) {
+        await ctx.db.insert("task_history", {
+          task_id: task._id,
+          user_id: auth.userId,
+          actor_type: "user",
+          action: "updated",
+          field: "assignee",
+          old_value: task.assignee || "",
+          new_value: args.assignee,
+          created_at: now,
+        });
+      }
+
+      await ctx.db.patch(task._id, { assignee: args.assignee, updated_at: now });
+      results.push({ short_id, success: true });
+    }
+
+    return { results, updated: results.filter((r) => r.success).length };
+  },
+});
+
+export const scheduleRetry = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const task = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!task || task.user_id !== auth.userId) throw new Error("Task not found");
+
+    const now = Date.now();
+    const newAttemptCount = (task.attempt_count || 0) + 1;
+
+    await ctx.db.patch(task._id, {
+      status: "open" as any,
+      execution_status: undefined,
+      attempt_count: newAttemptCount,
+      updated_at: now,
+    });
+
+    const user = await ctx.db.get(auth.userId);
+    await ctx.db.insert("task_comments", {
+      task_id: task._id,
+      author: user?.name || "system",
+      text: `Scheduled for retry (attempt ${newAttemptCount})`,
+      comment_type: "progress" as any,
+      created_at: now,
+    });
+
+    if (task.plan_id && task.status !== "open") {
+      await recalcPlanProgress(ctx, task.plan_id, task._id, "open");
+    }
+
+    return { success: true, attempt_count: newAttemptCount };
   },
 });
