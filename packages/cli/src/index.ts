@@ -8564,7 +8564,7 @@ plan
   .command("decompose")
   .description("Decompose a plan into granular implementation tasks")
   .argument("<plan_id>", "Plan short ID")
-  .option("--depth <level>", "Decomposition depth: shallow (3-5 tasks), medium (10-20), deep (50+)", "medium")
+  .option("--depth <level>", "Decomposition depth: shallow (5-10 tasks), medium (20-50), deep (100+)", "medium")
   .action(async (planId: string, options: any) => {
     const result = await cliPost("/cli/plans/get", { short_id: planId });
     if (!result) {
@@ -8580,9 +8580,9 @@ plan
     console.log(`  ${c.bold}Existing tasks:${c.reset} ${existingTasks.length}`);
 
     const depthGuide: Record<string, string> = {
-      shallow: "3-5 high-level tasks, each ~30-60 minutes of work",
-      medium: "10-20 tasks, each ~10-15 minutes of focused work",
-      deep: "50+ granular tasks, each ~2-5 minutes (single file, single function, single test)",
+      shallow: "5-10 high-level tasks, each ~30-60 minutes of work",
+      medium: "20-50 tasks, each ~10-15 minutes of focused work",
+      deep: "100+ granular tasks, each ~2-5 minutes (single file, single function, single test)",
     };
 
     const systemPrompt = `You are a task decomposition engine for software projects.
@@ -8682,7 +8682,32 @@ Output valid JSON array of task objects. Nothing else.`;
       const tasks = JSON.parse(jsonStr);
       console.log(`\n  Generated ${tasks.length} tasks:\n`);
 
-      // Create dependency map: title -> short_id (for blocked_by resolution)
+      const priorityColor: Record<string, string> = { high: c.red, medium: c.yellow, low: c.dim };
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
+        const pc = priorityColor[t.priority] || c.dim;
+        const mins = t.estimated_minutes ? ` ${c.dim}(~${t.estimated_minutes}m)${c.reset}` : "";
+        const deps = t.blocked_by?.length ? ` ${c.dim}← ${t.blocked_by.join(", ")}${c.reset}` : "";
+        console.log(`  ${c.dim}${String(i + 1).padStart(3)}.${c.reset} ${pc}${t.priority?.slice(0, 1).toUpperCase()}${c.reset} ${t.title}${mins}${deps}`);
+      }
+
+      const totalMinutes = tasks.reduce((sum: number, t: any) => sum + (t.estimated_minutes || 0), 0);
+      if (totalMinutes > 0) {
+        const hours = Math.floor(totalMinutes / 60);
+        const mins = totalMinutes % 60;
+        console.log(`\n  ${c.dim}Estimated total: ${hours > 0 ? `${hours}h ` : ""}${mins}m${c.reset}`);
+      }
+
+      const shouldCreate = await confirm({
+        message: `Create ${tasks.length} tasks for plan ${planId}?`,
+        default: true,
+      });
+
+      if (!shouldCreate) {
+        console.log(fmt.muted("\n  Cancelled."));
+        return;
+      }
+
       const titleToId = new Map<string, string>();
       for (const et of existingTasks) {
         titleToId.set(et.title, et.short_id);
@@ -8698,6 +8723,9 @@ Output valid JSON array of task objects. Nothing else.`;
             priority: task.priority || "medium",
             plan_id: planId,
             project_path: getRealCwd(),
+            ...(task.estimated_minutes && { estimated_minutes: task.estimated_minutes }),
+            ...(task.acceptance_criteria?.length && { acceptance_criteria: task.acceptance_criteria }),
+            ...(task.steps?.length && { steps: task.steps }),
           };
 
           const created = await cliPost("/cli/work/create", body);
