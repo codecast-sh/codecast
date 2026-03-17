@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -30,6 +30,8 @@ import {
   Timer,
   Activity,
   Layers,
+  Search,
+  RotateCw,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import { PlanBoardView } from "./PlanBoardView";
@@ -56,12 +58,16 @@ const TASK_STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string; l
 
 const TASK_STATUS_CYCLE = ["open", "in_progress", "done"];
 
-const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; color: string }> = {
-  urgent: { icon: AlertTriangle, color: "text-sol-red" },
-  high: { icon: ArrowUp, color: "text-sol-orange" },
-  medium: { icon: Minus, color: "text-sol-text-dim" },
-  low: { icon: ArrowDown, color: "text-sol-text-dim" },
+const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; color: string; label: string }> = {
+  urgent: { icon: AlertTriangle, color: "text-sol-red", label: "Urgent" },
+  high: { icon: ArrowUp, color: "text-sol-orange", label: "High" },
+  medium: { icon: Minus, color: "text-sol-text-dim", label: "Medium" },
+  low: { icon: ArrowDown, color: "text-sol-text-dim", label: "Low" },
 };
+
+const PRIORITY_CYCLE = ["low", "medium", "high", "urgent"];
+
+const ALL_TASK_STATUSES = ["open", "in_progress", "in_review", "done", "dropped", "draft"];
 
 function formatTimestamp(ts: number): string {
   return new Date(ts).toLocaleString("en-US", {
@@ -95,6 +101,48 @@ const OUTCOME_STYLES: Record<string, { border: string; label: string; badge: str
   blocked: { border: "border-l-sol-red/50", label: "blocked", badge: "bg-sol-red/12 text-sol-red/70" },
   unknown: { border: "border-l-sol-text-dim/15", label: "", badge: "" },
 };
+
+function DriveRoundIndicator({ driveState }: { driveState: { current_round: number; total_rounds: number; rounds: any[] } }) {
+  const { current_round, total_rounds, rounds } = driveState;
+  if (total_rounds === 0) return null;
+
+  const completedRounds = rounds.length;
+  const pct = (completedRounds / total_rounds) * 100;
+
+  return (
+    <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-violet/8 border border-sol-violet/20">
+      <RotateCw className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" />
+      <span className="text-xs font-medium text-sol-violet">
+        Round {current_round}/{total_rounds}
+      </span>
+      <div className="flex gap-0.5">
+        {Array.from({ length: total_rounds }, (_, i) => {
+          const roundNum = i + 1;
+          const isCompleted = rounds.some((r: any) => r.round === roundNum);
+          const isCurrent = roundNum === current_round && !isCompleted;
+          return (
+            <div
+              key={i}
+              className={`w-2 h-2 rounded-full transition-colors ${
+                isCompleted
+                  ? "bg-sol-green"
+                  : isCurrent
+                  ? "bg-sol-violet animate-pulse"
+                  : "bg-sol-border/40"
+              }`}
+              title={`Round ${roundNum}${isCompleted ? " (done)" : isCurrent ? " (active)" : ""}`}
+            />
+          );
+        })}
+      </div>
+      {completedRounds > 0 && completedRounds < total_rounds && (
+        <span className="text-[10px] text-sol-text-dim tabular-nums">
+          {Math.round(pct)}%
+        </span>
+      )}
+    </div>
+  );
+}
 
 function CollapsibleDoc({ content }: { content: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -391,6 +439,54 @@ function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; sessions: any[
   );
 }
 
+function InlineEditTitle({ value, onSave, className }: { value: string; onSave: (newVal: string) => void; className?: string }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const commit = useCallback(() => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== value) {
+      onSave(trimmed);
+    }
+    setEditing(false);
+  }, [draft, value, onSave]);
+
+  if (!editing) {
+    return (
+      <span
+        onClick={(e) => { e.stopPropagation(); setDraft(value); setEditing(true); }}
+        className={`cursor-text hover:bg-sol-bg-alt/60 rounded px-0.5 -mx-0.5 transition-colors ${className || ""}`}
+        title="Click to edit"
+      >
+        {value}
+      </span>
+    );
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") { setDraft(value); setEditing(false); }
+      }}
+      onClick={(e) => e.stopPropagation()}
+      className="text-sm bg-sol-bg-alt border border-sol-cyan/50 rounded px-1.5 py-0.5 text-sol-text outline-none w-full min-w-0"
+    />
+  );
+}
+
 function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string; tasks: any[]; sessions: any[] }) {
   const [showAdd, setShowAdd] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -398,6 +494,7 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [showFilterBar, setShowFilterBar] = useState(false);
   const webUpdate = useMutation(api.tasks.webUpdate);
   const webCreate = useMutation(api.tasks.webCreate);
 
@@ -409,6 +506,26 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
       toast.success(`${shortId} -> ${next}`);
     } catch {
       toast.error("Failed to update");
+    }
+  }, [webUpdate]);
+
+  const cyclePriority = useCallback(async (shortId: string, currentPriority: string) => {
+    const idx = PRIORITY_CYCLE.indexOf(currentPriority || "medium");
+    const next = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
+    try {
+      await webUpdate({ short_id: shortId, priority: next });
+      toast.success(`${shortId} priority -> ${next}`);
+    } catch {
+      toast.error("Failed to update priority");
+    }
+  }, [webUpdate]);
+
+  const updateTitle = useCallback(async (shortId: string, newTitle: string) => {
+    try {
+      await webUpdate({ short_id: shortId, title: newTitle });
+      toast.success(`${shortId} title updated`);
+    } catch {
+      toast.error("Failed to update title");
     }
   }, [webUpdate]);
 
@@ -436,16 +553,27 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
     }
   }
 
-  const filteredTasks = tasks.filter(t => {
+  const matchesFilter = useCallback((task: any) => {
+    if (statusFilter && statusFilter !== "all" && task.status !== statusFilter) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      if (!t.title?.toLowerCase().includes(q) && !t.short_id?.toLowerCase().includes(q)) return false;
+      const matchTitle = task.title?.toLowerCase().includes(q);
+      const matchId = task.short_id?.toLowerCase().includes(q);
+      if (!matchTitle && !matchId) return false;
     }
-    if (statusFilter !== "all" && t.status !== statusFilter) return false;
     return true;
-  });
-  const activeTasks = filteredTasks.filter(t => t.status !== "done" && t.status !== "dropped");
-  const doneTasks = filteredTasks.filter(t => t.status === "done" || t.status === "dropped");
+  }, [searchQuery, statusFilter]);
+
+  const activeTasks = useMemo(
+    () => tasks.filter(t => t.status !== "done" && t.status !== "dropped").filter(matchesFilter),
+    [tasks, matchesFilter]
+  );
+  const doneTasks = useMemo(
+    () => tasks.filter(t => t.status === "done" || t.status === "dropped").filter(matchesFilter),
+    [tasks, matchesFilter]
+  );
+
+  const hasActiveFilter = searchQuery || (statusFilter && statusFilter !== "all");
 
   return (
     <div className="mb-6">
@@ -459,34 +587,60 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
             </span>
           )}
         </h2>
-        <button
-          onClick={() => setShowAdd(!showAdd)}
-          className="flex items-center gap-1 text-xs text-sol-cyan hover:text-sol-text transition-colors"
-        >
-          <Plus className="w-3 h-3" />
-          Add
-        </button>
+        <div className="flex items-center gap-1.5">
+          {tasks.length > 3 && (
+            <button
+              onClick={() => setShowFilterBar(!showFilterBar)}
+              className={`flex items-center gap-1 text-xs transition-colors p-1 rounded ${
+                showFilterBar || hasActiveFilter ? "text-sol-cyan bg-sol-cyan/10" : "text-sol-text-dim hover:text-sol-text"
+              }`}
+              title="Search and filter tasks"
+            >
+              <Search className="w-3 h-3" />
+            </button>
+          )}
+          <button
+            onClick={() => setShowAdd(!showAdd)}
+            className="flex items-center gap-1 text-xs text-sol-cyan hover:text-sol-text transition-colors"
+          >
+            <Plus className="w-3 h-3" />
+            Add
+          </button>
+        </div>
       </div>
 
-      <div className="flex gap-2 mb-2">
-        <input
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          placeholder="Filter tasks..."
-          className="flex-1 text-xs px-2.5 py-1 rounded bg-sol-bg-alt border border-sol-border/30 text-sol-text placeholder:text-sol-text-dim/50 focus:outline-none focus:border-sol-cyan/50"
-        />
-        <select
-          value={statusFilter}
-          onChange={e => setStatusFilter(e.target.value)}
-          className="text-xs px-2 py-1 rounded bg-sol-bg-alt border border-sol-border/30 text-sol-text-muted focus:outline-none"
-        >
-          <option value="all">All</option>
-          <option value="open">Open</option>
-          <option value="in_progress">In Progress</option>
-          <option value="done">Done</option>
-          <option value="dropped">Dropped</option>
-        </select>
-      </div>
+      {showFilterBar && (
+        <div className="flex items-center gap-2 mb-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-sol-text-dim pointer-events-none" />
+            <input
+              autoFocus
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Filter tasks..."
+              className="w-full text-xs pl-7 pr-3 py-1.5 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
+            />
+          </div>
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            className="text-xs px-2 py-1.5 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text focus:outline-none focus:border-sol-cyan appearance-none cursor-pointer"
+          >
+            <option value="all">All statuses</option>
+            {ALL_TASK_STATUSES.map(s => (
+              <option key={s} value={s}>{TASK_STATUS_CONFIG[s]?.label || s}</option>
+            ))}
+          </select>
+          {hasActiveFilter && (
+            <button
+              onClick={() => { setSearchQuery(""); setStatusFilter("all"); }}
+              className="text-[10px] text-sol-text-dim hover:text-sol-text transition-colors whitespace-nowrap"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {showAdd && (
         <div className="flex gap-2 mb-2">
@@ -508,7 +662,7 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
         {activeTasks.map((task: any) => {
           const tc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
           const TaskIcon = tc.icon;
-          const pc = task.priority ? PRIORITY_CONFIG[task.priority] : null;
+          const pc = task.priority ? PRIORITY_CONFIG[task.priority] : PRIORITY_CONFIG.medium;
           const PriorityIcon = pc?.icon;
           const hasExec = task.execution_status && !!getExecStatusConfig(task.execution_status);
           const isExpanded = expandedTask === task._id;
@@ -524,13 +678,14 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
                 >
                   <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
                 </button>
-                <button
-                  onClick={() => setExpandedTask(isExpanded ? null : task._id)}
-                  className="flex-1 min-w-0 flex items-center gap-2 text-left hover:text-sol-cyan transition-colors"
-                >
-                  <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
-                  <span className="text-sm text-sol-text truncate">{task.title}</span>
-                </button>
+                <div className="flex-1 min-w-0 flex items-center gap-2">
+                  <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
+                  <InlineEditTitle
+                    value={task.title}
+                    onSave={(newVal) => updateTitle(task.short_id, newVal)}
+                    className="text-sm text-sol-text truncate"
+                  />
+                </div>
                 {task.activeSession && (
                   <Link
                     href={`/conversation/${task.activeSession.session_id}`}
@@ -550,10 +705,18 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
                   </span>
                 )}
                 {PriorityIcon && pc && (
-                  <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${pc.color}`} />
+                  <button
+                    onClick={() => cyclePriority(task.short_id, task.priority || "medium")}
+                    title={`${pc.label} priority (click to cycle)`}
+                    className="flex-shrink-0 hover:scale-110 transition-transform"
+                  >
+                    <PriorityIcon className={`w-3 h-3 ${pc.color}`} />
+                  </button>
                 )}
                 {hasDetail && (
-                  <ChevronRight className={`w-3 h-3 text-sol-text-dim/30 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                  <button onClick={() => setExpandedTask(isExpanded ? null : task._id)}>
+                    <ChevronRight className={`w-3 h-3 text-sol-text-dim/30 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                  </button>
                 )}
               </div>
               {isExpanded && (
@@ -585,7 +748,13 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
                     className="flex items-center gap-2.5 px-3 py-2 opacity-50 cursor-pointer hover:opacity-70 transition-opacity"
                     onClick={() => setExpandedTask(isExpanded ? null : task._id)}
                   >
-                    <TaskIcon className={`w-3.5 h-3.5 ${tc.color} flex-shrink-0`} />
+                    <button
+                      onClick={(e) => { e.stopPropagation(); cycleStatus(task.short_id, task.status); }}
+                      title={`${tc.label} (click to cycle)`}
+                      className="flex-shrink-0 hover:scale-110 transition-transform"
+                    >
+                      <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
+                    </button>
                     <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
                     <span className="text-sm text-sol-text-muted line-through truncate">{task.title}</span>
                     {taskSessions.length > 0 && (
@@ -608,6 +777,11 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
         {tasks.length === 0 && (
           <div className="px-3 py-4 text-center text-xs text-sol-text-dim">
             No tasks yet
+          </div>
+        )}
+        {hasActiveFilter && activeTasks.length === 0 && doneTasks.length === 0 && tasks.length > 0 && (
+          <div className="px-3 py-4 text-center text-xs text-sol-text-dim">
+            No tasks match filter
           </div>
         )}
       </div>
@@ -795,7 +969,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
             {status.label}
           </Badge>
         </div>
-        <div className="flex items-center gap-3 text-xs text-sol-text-dim">
+        <div className="flex items-center gap-3 text-xs text-sol-text-dim flex-wrap">
           {plan.author?.image && (
             <img src={plan.author.image} className="w-4 h-4 rounded-full" alt="" />
           )}
@@ -803,6 +977,9 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
           <span className="font-mono">{plan.short_id}</span>
           <span>Created {formatTimestamp(plan.created_at)}</span>
           <span>Updated {formatTimestamp(plan.updated_at)}</span>
+          {plan.drive_state && plan.drive_state.total_rounds > 0 && (
+            <DriveRoundIndicator driveState={plan.drive_state} />
+          )}
         </div>
         {plan.goal && (
           <p className="mt-3 text-sm text-sol-text-muted leading-relaxed">{plan.goal}</p>
