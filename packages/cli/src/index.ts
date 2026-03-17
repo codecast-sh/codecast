@@ -8371,6 +8371,28 @@ plan
 
 // --- Plan Orchestration ---
 
+function captureAgentOutput(sessionName: string, lines = 500): string {
+  const sr = spawnSync("tmux", ["capture-pane", "-p", "-J", "-t", `${sessionName}:0.0`, "-S", `-${lines}`], {
+    encoding: "utf-8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  return sr.status === 0 ? (sr.stdout || "") : "";
+}
+
+function parseAgentMarkers(output: string): { status: "blocked" | "needs_context" | "done_with_concerns" | null; detail: string } {
+  const lines = output.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    const blockedMatch = line.match(/^(?:\*\*)?(?:Status:\s*)?BLOCKED(?:\*\*)?[:\s]+(.+)/i);
+    if (blockedMatch) return { status: "blocked", detail: blockedMatch[1].trim() };
+    const needsMatch = line.match(/^(?:\*\*)?(?:Status:\s*)?NEEDS_CONTEXT(?:\*\*)?[:\s]+(.+)/i);
+    if (needsMatch) return { status: "needs_context", detail: needsMatch[1].trim() };
+    const concernsMatch = line.match(/^(?:\*\*)?(?:Status:\s*)?DONE_WITH_CONCERNS(?:\*\*)?[:\s]+(.+)/i);
+    if (concernsMatch) return { status: "done_with_concerns", detail: concernsMatch[1].trim() };
+  }
+  return { status: null, detail: "" };
+}
+
 function buildImplementerPrompt(plan: any, task: any): string {
   const acceptance = task.acceptance_criteria?.length
     ? task.acceptance_criteria.map((ac: string) => `- ${ac}`).join("\n")
@@ -8417,6 +8439,28 @@ ${steps ? `\n## Steps\n${steps}\n` : ""}
 5. **Verify everything**: Run tests, check build. Evidence before claims.
 6. **Self-review**: Before reporting done, review your changes. Check for AI slop, missing edge cases, dead code.
 
+## Verification Protocol
+
+Before marking any task as done, you MUST complete this checklist:
+
+1. **Typecheck**: Run \`npx tsc --noEmit\` in the relevant package directory. If it fails, fix the errors before proceeding.
+2. **Tests**: Run tests related to your changed files. If a test suite exists (jest, vitest, etc.), run it. Include the test output in your completion message.
+3. **Screenshot**: If the change is user-facing (UI, visual), take a screenshot as evidence using the browser or simulator tools.
+4. **Build**: If you modified build-relevant files, verify the build still succeeds.
+5. **Diff review**: Run \`git diff\` and review every changed line. Remove dead code, unnecessary comments, and AI slop.
+
+Only proceed to reporting after ALL applicable checks pass. Include verification evidence in your completion message.
+
+## Escalation Protocol
+
+When you encounter problems, use these structured markers in your output so the orchestrator can detect and act on them:
+
+- **BLOCKED: <reason>** -- You cannot complete the task due to a hard blocker (missing dependency, broken upstream, access issue). The orchestrator will pause the task and flag it for intervention.
+- **NEEDS_CONTEXT: <what you need>** -- You need information that isn't available in the codebase or task description (clarification on spec, access to an API key, design decision). The orchestrator will escalate to the user.
+- **DONE_WITH_CONCERNS: <concern>** -- You completed the task but have quality or correctness worries (untested edge case, potential regression, tech debt introduced). The orchestrator will mark it for review.
+
+Always use the exact marker format above (uppercase, colon, space, description) so automated parsing can detect it.
+
 ## Reporting
 
 When done:
@@ -8434,10 +8478,15 @@ If blocked:
 cast task comment ${task.short_id} "description of blocker" -t blocker
 \`\`\`
 
-Your final message must include:
-- **Status:** DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+Your final message MUST include one of these status markers on its own line:
+- **Status: DONE** -- Task completed, all verifications passed.
+- **Status: DONE_WITH_CONCERNS** -- Task completed but has concerns (explain after the marker).
+- **Status: BLOCKED** -- Cannot complete (explain the blocker after the marker).
+- **Status: NEEDS_CONTEXT** -- Need more information (explain what's needed after the marker).
+
+Also include:
 - What you implemented and files changed
-- How you verified (test output, build success, manual check)
+- Verification evidence (typecheck output, test results, screenshots)
 - Any concerns or follow-up needed`;
 }
 
@@ -8532,24 +8581,39 @@ plan
 
     if (options.watch) {
       console.log(fmt.muted("\n  Watching agents (Ctrl+C to stop)...\n"));
-      const agentStatusScript = path.join(os.homedir(), ".claude", "scripts", "agent-status.sh");
       const checkAgents = () => {
         const ts = new Date().toLocaleTimeString();
         console.log(fmt.muted(`  --- ${ts} ---`));
         for (const task of toSpawn) {
           const sn = `impl-${task.short_id}`;
-          const sr = spawnSync(agentStatusScript, [sn], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-          const out = (sr.stdout || "").trim();
-          if (out.includes("DONE_WITH_CONCERNS")) {
-            console.log(`  ${c.yellow}done*${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title} (concerns)`);
-          } else if (out.includes("Status: DONE") || out.includes("task done")) {
-            console.log(`  ${c.green}done${c.reset}  ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
-          } else if (out.includes("BLOCKED") || out.includes("NEEDS_CONTEXT")) {
-            console.log(`  ${c.red}block${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
-          } else if (sr.status !== 0) {
-            console.log(`  ${c.dim}exit${c.reset}  ${c.cyan}${task.short_id}${c.reset}`);
+          const tmuxAlive = spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+          if (!tmuxAlive) {
+            const lastOutput = captureAgentOutput(sn);
+            const markers = parseAgentMarkers(lastOutput);
+            if (markers.status === "done_with_concerns") {
+              console.log(`  ${c.yellow}done*${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}: ${markers.detail}`);
+            } else if (markers.status === "blocked") {
+              console.log(`  ${c.red}block${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}: ${markers.detail}`);
+            } else if (markers.status === "needs_context") {
+              console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}: ${markers.detail}`);
+            } else {
+              console.log(`  ${c.dim}exit${c.reset}  ${c.cyan}${task.short_id}${c.reset}`);
+            }
           } else {
-            console.log(`  ${c.yellow}work${c.reset}  ${c.cyan}${task.short_id}${c.reset}`);
+            const out = captureAgentOutput(sn, 100);
+            if (out.includes("Status: DONE") || out.includes("task done") || out.includes("cast task done")) {
+              console.log(`  ${c.green}done${c.reset}  ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
+            } else {
+              const markers = parseAgentMarkers(out);
+              if (markers.status) {
+                const label = markers.status === "blocked" ? `${c.red}block${c.reset}` :
+                  markers.status === "needs_context" ? `${c.yellow}needs${c.reset}` :
+                  `${c.yellow}done*${c.reset}`;
+                console.log(`  ${label} ${c.cyan}${task.short_id}${c.reset} ${task.title}: ${markers.detail}`);
+              } else {
+                console.log(`  ${c.yellow}work${c.reset}  ${c.cyan}${task.short_id}${c.reset}`);
+              }
+            }
           }
         }
       };
@@ -8882,50 +8946,78 @@ plan
           }
           activeAgents.delete(shortId);
         } else if (!tmuxAlive) {
-          // Fallback: tmux died but task not marked done -- auto-retry if under max retries
+          // Agent died -- parse output for structured markers, then fall back to auto-retry
+          const lastOutput = captureAgentOutput(sn);
+          const markers = parseAgentMarkers(lastOutput);
           const retryCount = task?.retry_count || 0;
           const maxRetries = task?.max_retries || 3;
-          if (retryCount < maxRetries) {
+
+          if (markers.status === "blocked") {
+            console.log(`  ${c.red}block${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
+            try {
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "blocked" });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `BLOCKED: ${markers.detail}`, comment_type: "blocker" });
+            } catch {}
+          } else if (markers.status === "needs_context") {
+            console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
+            try {
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `NEEDS_CONTEXT: ${markers.detail}`, comment_type: "blocker" });
+            } catch {}
+          } else if (markers.status === "done_with_concerns") {
+            console.log(`  ${c.yellow}done*${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
+            try {
+              await cliPost("/cli/work/update", { short_id: shortId, status: "done", execution_status: "done_with_concerns", execution_concerns: markers.detail });
+            } catch {}
+          } else if (retryCount < maxRetries) {
             console.log(`  ${c.yellow}retry${c.reset} ${c.cyan}${shortId}${c.reset} agent died, retrying (${retryCount + 1}/${maxRetries})`);
             try {
               await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1 });
-              await cliPost("/cli/work/comment", {
-                short_id: shortId,
-                text: `Agent session \`${sn}\` exited without completing. Auto-retrying (attempt ${retryCount + 1}/${maxRetries}).`,
-                comment_type: "progress",
-              });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `Agent session \`${sn}\` exited without completing. Auto-retrying (attempt ${retryCount + 1}/${maxRetries}).`, comment_type: "progress" });
             } catch {}
           } else {
             console.log(`  ${c.red}failed${c.reset} ${c.cyan}${shortId}${c.reset} agent died, max retries exceeded`);
             totalFailed++;
             try {
               await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
-              await cliPost("/cli/work/comment", {
-                short_id: shortId,
-                text: `Agent session \`${sn}\` exited without marking task done after ${retryCount} retries. Needs human attention.`,
-                comment_type: "blocker",
-              });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `Agent session \`${sn}\` exited without completing after ${retryCount} retries. Needs human attention.`, comment_type: "blocker" });
             } catch {}
           }
           activeAgents.delete(shortId);
-        }
-        else {
-          // Agent alive but check for timeout (default 30 min per task)
-          const elapsed = Date.now() - info.spawnedAt;
-          const taskTimeout = 30 * 60_000;
-          if (elapsed > taskTimeout) {
-            console.log(`  ${c.red}timeout${c.reset} ${c.cyan}${shortId}${c.reset} exceeded ${Math.round(taskTimeout / 60_000)}m`);
-            spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
-            const retryCount = task?.retry_count || 0;
+        } else {
+          // tmux alive -- check for structured markers or timeout
+          const lastOutput = captureAgentOutput(sn);
+          const markers = parseAgentMarkers(lastOutput);
+          if (markers.status === "blocked") {
+            console.log(`  ${c.red}block${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
             try {
-              await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1 });
-              await cliPost("/cli/work/comment", {
-                short_id: shortId,
-                text: `Agent timed out after ${Math.round(elapsed / 60_000)}m. Auto-retrying.`,
-                comment_type: "progress",
-              });
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "blocked" });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `BLOCKED: ${markers.detail}`, comment_type: "blocker" });
             } catch {}
+            spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
             activeAgents.delete(shortId);
+          } else if (markers.status === "needs_context") {
+            console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
+            try {
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
+              await cliPost("/cli/work/comment", { short_id: shortId, text: `NEEDS_CONTEXT: ${markers.detail}`, comment_type: "blocker" });
+            } catch {}
+            spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+            activeAgents.delete(shortId);
+          } else {
+            // Check for timeout (default 30 min per task)
+            const elapsed = Date.now() - info.spawnedAt;
+            const taskTimeout = 30 * 60_000;
+            if (elapsed > taskTimeout) {
+              console.log(`  ${c.red}timeout${c.reset} ${c.cyan}${shortId}${c.reset} exceeded ${Math.round(taskTimeout / 60_000)}m`);
+              spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+              const retryCount = task?.retry_count || 0;
+              try {
+                await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1 });
+                await cliPost("/cli/work/comment", { short_id: shortId, text: `Agent timed out after ${Math.round(elapsed / 60_000)}m. Auto-retrying.`, comment_type: "progress" });
+              } catch {}
+              activeAgents.delete(shortId);
+            }
           }
         }
       }
