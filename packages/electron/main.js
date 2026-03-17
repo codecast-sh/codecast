@@ -315,7 +315,7 @@ ipcMain.on("palette-navigate", (_e, navPath) => {
     mainWindow.show();
     mainWindow.focus();
     mainWindow.webContents.executeJavaScript(
-      `window.location.href = ${JSON.stringify(navPath)}`
+      `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(navPath)} }))`
     );
   }
 });
