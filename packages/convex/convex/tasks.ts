@@ -1443,3 +1443,232 @@ export const heartbeat = mutation({
     return { success: true };
   },
 });
+
+// --- Dependency graph helpers ---
+
+type TaskNode = { short_id: string; blocked_by?: string[]; status?: string };
+
+function getTopologicalOrder(tasks: TaskNode[]): { sorted: string[]; cycles: string[][] } {
+  const taskMap = new Map<string, TaskNode>();
+  for (const t of tasks) taskMap.set(t.short_id, t);
+
+  const inDegree = new Map<string, number>();
+  const adjacency = new Map<string, string[]>();
+  for (const t of tasks) {
+    inDegree.set(t.short_id, 0);
+    adjacency.set(t.short_id, []);
+  }
+
+  for (const t of tasks) {
+    if (t.blocked_by) {
+      for (const dep of t.blocked_by) {
+        if (taskMap.has(dep)) {
+          adjacency.get(dep)!.push(t.short_id);
+          inDegree.set(t.short_id, (inDegree.get(t.short_id) || 0) + 1);
+        }
+      }
+    }
+  }
+
+  const queue: string[] = [];
+  for (const [id, deg] of inDegree) {
+    if (deg === 0) queue.push(id);
+  }
+
+  const sorted: string[] = [];
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    sorted.push(node);
+    for (const neighbor of adjacency.get(node) || []) {
+      const newDeg = (inDegree.get(neighbor) || 1) - 1;
+      inDegree.set(neighbor, newDeg);
+      if (newDeg === 0) queue.push(neighbor);
+    }
+  }
+
+  const cycles: string[][] = [];
+  if (sorted.length < tasks.length) {
+    const remaining = new Set(tasks.map(t => t.short_id).filter(id => !sorted.includes(id)));
+    const visited = new Set<string>();
+    for (const start of remaining) {
+      if (visited.has(start)) continue;
+      const cycle: string[] = [];
+      let current: string | undefined = start;
+      while (current && !visited.has(current)) {
+        visited.add(current);
+        cycle.push(current);
+        const node = taskMap.get(current);
+        current = node?.blocked_by?.find(dep => remaining.has(dep) && !visited.has(dep));
+      }
+      if (cycle.length > 0) cycles.push(cycle);
+    }
+  }
+
+  return { sorted, cycles };
+}
+
+function getCriticalPath(tasks: TaskNode[]): string[] {
+  const taskMap = new Map<string, TaskNode>();
+  for (const t of tasks) taskMap.set(t.short_id, t);
+
+  const { sorted, cycles } = getTopologicalOrder(tasks);
+  if (cycles.length > 0) return [];
+
+  const dist = new Map<string, number>();
+  const prev = new Map<string, string | null>();
+  for (const id of sorted) {
+    dist.set(id, 0);
+    prev.set(id, null);
+  }
+
+  for (const id of sorted) {
+    const node = taskMap.get(id);
+    if (node?.blocked_by) {
+      for (const dep of node.blocked_by) {
+        if (taskMap.has(dep)) {
+          const newDist = (dist.get(dep) || 0) + 1;
+          if (newDist > (dist.get(id) || 0)) {
+            dist.set(id, newDist);
+            prev.set(id, dep);
+          }
+        }
+      }
+    }
+  }
+
+  let maxId = sorted[0];
+  let maxDist = 0;
+  for (const [id, d] of dist) {
+    if (d > maxDist) {
+      maxDist = d;
+      maxId = id;
+    }
+  }
+
+  const path: string[] = [];
+  let cur: string | null | undefined = maxId;
+  while (cur) {
+    path.unshift(cur);
+    cur = prev.get(cur);
+  }
+
+  return path;
+}
+
+export const getReadyTasks = query({
+  args: {
+    api_token: v.string(),
+    plan_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
+
+    let tasks: any[];
+    if (args.plan_id) {
+      const plan = await ctx.db
+        .query("plans")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
+        .first();
+      if (!plan || !plan.task_ids) return [];
+      const planTasks: any[] = [];
+      for (const tid of plan.task_ids) {
+        const t = await ctx.db.get(tid);
+        if (t) planTasks.push(t);
+      }
+      tasks = planTasks;
+    } else {
+      tasks = await db.query("tasks").collect();
+    }
+
+    const allTasks = tasks;
+    const statusMap = new Map<string, string>();
+    for (const t of allTasks) statusMap.set(t.short_id, t.status);
+
+    return allTasks.filter((t: any) => {
+      if (t.status !== "open") return false;
+      if (t.source === "insight" && !t.promoted) return false;
+      if (!t.blocked_by || t.blocked_by.length === 0) return true;
+      return t.blocked_by.every((bid: string) => {
+        const status = statusMap.get(bid);
+        return status === "done" || status === "dropped";
+      });
+    });
+  },
+});
+
+export const getDependencyChain = query({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+    project_path: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
+
+    const root = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!root) throw new Error("Task not found");
+
+    const allTasks = await db.query("tasks").collect();
+    const taskByShortId = new Map<string, any>();
+    for (const t of allTasks) taskByShortId.set(t.short_id, t);
+
+    const ancestors = new Set<string>();
+    const descendants = new Set<string>();
+
+    function collectAncestors(shortId: string) {
+      const task = taskByShortId.get(shortId);
+      if (!task?.blocked_by) return;
+      for (const dep of task.blocked_by) {
+        if (!ancestors.has(dep) && taskByShortId.has(dep)) {
+          ancestors.add(dep);
+          collectAncestors(dep);
+        }
+      }
+    }
+
+    function collectDescendants(shortId: string) {
+      const task = taskByShortId.get(shortId);
+      if (!task?.blocks) return;
+      for (const dep of task.blocks) {
+        if (!descendants.has(dep) && taskByShortId.has(dep)) {
+          descendants.add(dep);
+          collectDescendants(dep);
+        }
+      }
+      for (const t of allTasks) {
+        if (t.blocked_by?.includes(shortId) && !descendants.has(t.short_id)) {
+          descendants.add(t.short_id);
+          collectDescendants(t.short_id);
+        }
+      }
+    }
+
+    collectAncestors(args.short_id);
+    collectDescendants(args.short_id);
+
+    const chainIds = new Set([...ancestors, args.short_id, ...descendants]);
+    const chainTasks = allTasks.filter(t => chainIds.has(t.short_id));
+
+    const { sorted, cycles } = getTopologicalOrder(chainTasks);
+    const criticalPath = getCriticalPath(chainTasks);
+
+    return {
+      task: root,
+      ancestors: allTasks.filter(t => ancestors.has(t.short_id)),
+      descendants: allTasks.filter(t => descendants.has(t.short_id)),
+      topological_order: sorted,
+      critical_path: criticalPath,
+      cycles,
+    };
+  },
+});
