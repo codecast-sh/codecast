@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { resolveTeamForMutation } from "./privacy";
+import { createDataContext } from "./data";
 
 function generateShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -42,12 +42,8 @@ export const create = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const now = Date.now();
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
     const short_id = generateShortId();
-
-    const team_id = await resolveTeamForMutation(ctx, auth.userId, {
-      project_path: args.project_path,
-    });
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -67,9 +63,7 @@ export const create = mutation({
       if (conv) created_from_conversation_id = conv._id;
     }
 
-    const id = await ctx.db.insert("plans", {
-      user_id: auth.userId,
-      team_id,
+    const id = await db.insert("plans", {
       project_id,
       short_id,
       title: args.title,
@@ -86,8 +80,6 @@ export const create = mutation({
       context_pointers: [],
       session_ids: [],
       created_from_conversation_id,
-      created_at: now,
-      updated_at: now,
     });
 
     return { id, short_id };
@@ -384,6 +376,7 @@ export const list = query({
     api_token: v.string(),
     status: v.optional(v.string()),
     project_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
     team: v.optional(v.boolean()),
     include_all: v.optional(v.boolean()),
     limit: v.optional(v.number()),
@@ -392,8 +385,7 @@ export const list = query({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
 
     let plans;
     if (args.project_id) {
@@ -401,16 +393,16 @@ export const list = query({
         .query("plans")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
-    } else if (args.team && team_id) {
+    } else if (args.team && db.workspace.type === "team") {
       if (args.status) {
         plans = await ctx.db
           .query("plans")
-          .withIndex("by_team_status", (q) => q.eq("team_id", team_id).eq("status", args.status as any))
+          .withIndex("by_team_status", (q) => q.eq("team_id", db.workspace.teamId).eq("status", args.status as any))
           .collect();
       } else {
         plans = await ctx.db
           .query("plans")
-          .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
+          .withIndex("by_team_id", (q) => q.eq("team_id", db.workspace.teamId))
           .collect();
       }
     } else if (args.status) {
@@ -419,10 +411,7 @@ export const list = query({
         .withIndex("by_user_status", (q) => q.eq("user_id", auth.userId).eq("status", args.status as any))
         .collect();
     } else {
-      plans = await ctx.db
-        .query("plans")
-        .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
-        .collect();
+      plans = await db.query("plans").collect();
     }
 
     if (!args.status && !args.include_all) {
@@ -524,13 +513,14 @@ export const webCreate = mutation({
     status: v.optional(v.string()),
     source: v.optional(v.string()),
     project_id: v.optional(v.string()),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace as any, team_id: args.team_id });
     const short_id = generateShortId();
 
     let project_id: Id<"projects"> | undefined;
@@ -542,10 +532,7 @@ export const webCreate = mutation({
       if (project) project_id = project._id;
     }
 
-    const now = Date.now();
-    const id = await ctx.db.insert("plans", {
-      user_id: userId,
-      team_id,
+    const id = await db.insert("plans", {
       project_id,
       short_id,
       title: args.title,
@@ -561,8 +548,6 @@ export const webCreate = mutation({
       discoveries: [],
       context_pointers: [],
       session_ids: [],
-      created_at: now,
-      updated_at: now,
     });
 
     return { id, short_id };
@@ -573,6 +558,8 @@ export const webPromoteSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
     title: v.optional(v.string()),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -588,16 +575,12 @@ export const webPromoteSession = mutation({
       }
     }
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace as any, team_id: args.team_id });
     const short_id = generateShortId();
-    const now = Date.now();
 
     const title = args.title || conv.title || "Untitled Plan";
 
-    const id = await ctx.db.insert("plans", {
-      user_id: userId,
-      team_id,
+    const id = await db.insert("plans", {
       project_id: (conv as any).project_id,
       short_id,
       title,
@@ -614,8 +597,6 @@ export const webPromoteSession = mutation({
       session_ids: [args.conversation_id],
       current_session_id: args.conversation_id,
       created_from_conversation_id: args.conversation_id,
-      created_at: now,
-      updated_at: now,
     });
 
     await ctx.db.patch(args.conversation_id, { active_plan_id: id });
@@ -795,38 +776,16 @@ export const webList = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace as any, team_id: args.team_id });
+
     let plans;
     if (args.project_id) {
       plans = await ctx.db
         .query("plans")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
-    } else if (args.workspace === "team" && args.team_id) {
-      plans = await ctx.db
-        .query("plans")
-        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
-        .collect();
-    } else if (args.workspace === "personal") {
-      plans = await ctx.db
-        .query("plans")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
-      plans = plans.filter(p => !p.team_id);
     } else {
-      // Backwards compat: no workspace arg = all user's plans
-      const user = await ctx.db.get(userId);
-      const team_id = user?.active_team_id || user?.team_id;
-      if (team_id) {
-        plans = await ctx.db
-          .query("plans")
-          .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
-          .collect();
-      } else {
-        plans = await ctx.db
-          .query("plans")
-          .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-          .collect();
-      }
+      plans = await db.query("plans").collect();
     }
 
     if (args.status) {
@@ -843,19 +802,17 @@ export const webTeamList = query({
   args: {
     status: v.optional(v.string()),
     limit: v.optional(v.number()),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (!team_id) return [];
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace as any, team_id: args.team_id });
+    if (db.workspace.type !== "team") return [];
 
-    let plans = await ctx.db
-      .query("plans")
-      .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
-      .collect();
+    let plans = await db.query("plans").collect();
 
     if (args.status) {
       plans = plans.filter(p => p.status === args.status);
