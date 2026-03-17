@@ -183,7 +183,7 @@ export async function createTeamFeedFilter(
 // Single source of truth for resolving which team a conversation belongs to.
 // Used by dispatch.ts and conversations.ts session creation.
 
-type DirectoryMapping = {
+export type DirectoryMapping = {
   team_id: Id<"teams">;
   path_prefix: string;
   auto_share: boolean;
