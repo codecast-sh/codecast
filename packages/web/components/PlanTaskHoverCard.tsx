@@ -14,6 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { useSlideOutStore } from "../store/slideOutStore";
 
 const api = _api as any;
 
@@ -104,22 +105,30 @@ export function PlanBadge({
   plan: { _id: string; short_id: string; title: string; status?: string };
   className?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [hoverOpen, setHoverOpen] = useState(false);
   const hoverTimeout = { current: null as ReturnType<typeof setTimeout> | null };
+  const openSlideOut = useSlideOutStore((s) => s.open);
 
   const handleMouseEnter = useCallback(() => {
-    hoverTimeout.current = setTimeout(() => setOpen(true), 300);
+    hoverTimeout.current = setTimeout(() => setHoverOpen(true), 300);
   }, []);
 
   const handleMouseLeave = useCallback(() => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
-    hoverTimeout.current = setTimeout(() => setOpen(false), 200);
+    hoverTimeout.current = setTimeout(() => setHoverOpen(false), 200);
   }, []);
 
+  const handleClick = useCallback(() => {
+    setHoverOpen(false);
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+    openSlideOut("plan", plan._id);
+  }, [openSlideOut, plan._id]);
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
       <PopoverTrigger asChild>
         <button
+          onClick={handleClick}
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
           className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px] ${className || ""}`}
@@ -151,14 +160,15 @@ export function TaskBadge({
 }) {
   const Icon = STATUS_ICON[task.status || "open"] || Circle;
   const color = STATUS_COLOR[task.status || "open"] || "text-sol-text-dim";
+  const openSlideOut = useSlideOutStore((s) => s.open);
 
   return (
-    <Link
-      href={`/tasks/${task._id}`}
+    <button
+      onClick={() => openSlideOut("task", task._id)}
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] flex-shrink-0 bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/20 hover:bg-sol-yellow/20 transition-colors max-w-[200px] ${className || ""}`}
     >
       <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
       <span className="truncate">{task.title}</span>
-    </Link>
+    </button>
   );
 }

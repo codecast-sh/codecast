@@ -6,6 +6,7 @@ import { ThemeProvider } from "../components/ThemeProvider";
 import { NavigationProgress } from "../components/NavigationProgress";
 import { Toaster } from "../components/ui/sonner";
 import { DesktopProvider } from "../components/DesktopProvider";
+import { SlideOutProvider } from "../components/SlideOutProvider";
 import { useLocalStorageMigration } from "../hooks/useLocalStorageMigration";
 
 function PrefsMigration() {
@@ -24,6 +25,7 @@ export function Providers({ children }: { children: ReactNode }) {
         <NavigationProgress />
         {children}
         <DesktopProvider />
+        <SlideOutProvider />
         <PrefsMigration />
         <Toaster position="bottom-right" />
       </ThemeProvider>
