@@ -116,6 +116,153 @@ export const create = mutation({
   },
 });
 
+export const createFromTemplate = mutation({
+  args: {
+    api_token: v.string(),
+    template_id: v.id("plan_templates"),
+    title: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const template = await ctx.db.get(args.template_id);
+    if (!template) throw new Error("Template not found");
+
+    const now = Date.now();
+    const short_id = `pl-${Math.random().toString(36).slice(2, 6)}`;
+    const title = args.title || template.name;
+
+    const planId = await ctx.db.insert("plans", {
+      user_id: auth.userId,
+      team_id: template.team_id,
+      short_id,
+      title,
+      goal: template.goal_template,
+      status: "active",
+      progress: { total: template.task_templates.length, done: 0, in_progress: 0, open: template.task_templates.length },
+      task_ids: [],
+      progress_log: [{ timestamp: now, entry: `Created from template: ${template.name}` }],
+      created_at: now,
+      updated_at: now,
+    } as any);
+
+    const taskIds: Id<"tasks">[] = [];
+    const taskShortIds: string[] = [];
+
+    for (let i = 0; i < template.task_templates.length; i++) {
+      const tt = template.task_templates[i];
+      const taskShortId = `ct-${Math.random().toString(36).slice(2, 6)}`;
+      taskShortIds.push(taskShortId);
+
+      const blockedBy: string[] = [];
+      if (tt.blocked_by_indices) {
+        for (const idx of tt.blocked_by_indices) {
+          if (idx < taskShortIds.length) blockedBy.push(taskShortIds[idx]);
+        }
+      }
+
+      const taskId = await ctx.db.insert("tasks", {
+        user_id: auth.userId,
+        team_id: template.team_id,
+        plan_id: planId,
+        short_id: taskShortId,
+        title: tt.title,
+        description: tt.description,
+        task_type: tt.task_type || "task",
+        priority: tt.priority || "medium",
+        status: "open",
+        blocked_by: blockedBy,
+        estimated_minutes: tt.estimated_minutes,
+        source: "template",
+        created_at: now,
+        updated_at: now,
+      } as any);
+      taskIds.push(taskId);
+    }
+
+    await ctx.db.patch(planId, { task_ids: taskIds });
+    return { id: planId, short_id, task_count: taskIds.length };
+  },
+});
+
+export const fork = mutation({
+  args: {
+    api_token: v.string(),
+    source_short_id: v.string(),
+    title: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const source = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.source_short_id))
+      .first();
+    if (!source) throw new Error("Source plan not found");
+
+    const now = Date.now();
+    const short_id = `pl-${Math.random().toString(36).slice(2, 6)}`;
+
+    const sourceTasks: any[] = [];
+    for (const tid of source.task_ids || []) {
+      const t = await ctx.db.get(tid);
+      if (t) sourceTasks.push(t);
+    }
+
+    const planId = await ctx.db.insert("plans", {
+      user_id: auth.userId,
+      team_id: source.team_id,
+      short_id,
+      title: args.title || `${source.title} (fork)`,
+      goal: source.goal,
+      status: "active",
+      acceptance_criteria: source.acceptance_criteria,
+      progress: { total: sourceTasks.length, done: 0, in_progress: 0, open: sourceTasks.length },
+      task_ids: [],
+      progress_log: [{ timestamp: now, entry: `Forked from ${args.source_short_id}` }],
+      created_at: now,
+      updated_at: now,
+    } as any);
+
+    const oldToNew = new Map<string, string>();
+    const taskIds: Id<"tasks">[] = [];
+
+    for (const st of sourceTasks) {
+      const newShortId = `ct-${Math.random().toString(36).slice(2, 6)}`;
+      oldToNew.set(st.short_id, newShortId);
+    }
+
+    for (const st of sourceTasks) {
+      const newShortId = oldToNew.get(st.short_id)!;
+      const blockedBy = (st.blocked_by || []).map((bid: string) => oldToNew.get(bid) || bid);
+
+      const tid = await ctx.db.insert("tasks", {
+        user_id: auth.userId,
+        team_id: source.team_id,
+        plan_id: planId,
+        short_id: newShortId,
+        title: st.title,
+        description: st.description,
+        task_type: st.task_type || "task",
+        priority: st.priority || "medium",
+        status: "open",
+        blocked_by: blockedBy,
+        estimated_minutes: st.estimated_minutes,
+        source: "fork",
+        created_at: now,
+        updated_at: now,
+      } as any);
+      taskIds.push(tid);
+    }
+
+    await ctx.db.patch(planId, { task_ids: taskIds });
+    return { id: planId, short_id, task_count: taskIds.length };
+  },
+});
+
 export const update = mutation({
   args: {
     api_token: v.string(),
@@ -426,6 +573,95 @@ export const addEscalation = mutation({
   },
 });
 
+export const updateDriveState = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+    current_round: v.number(),
+    total_rounds: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
+
+    const existing = (plan as any).drive_state || { current_round: 0, total_rounds: 0, rounds: [] };
+    const drive_state = {
+      ...existing,
+      current_round: args.current_round,
+      total_rounds: args.total_rounds,
+    };
+
+    const progressLog = plan.progress_log || [];
+    progressLog.push({ timestamp: Date.now(), entry: `Starting drive round ${args.current_round}/${args.total_rounds}` });
+
+    await ctx.db.patch(plan._id, {
+      drive_state,
+      progress_log: progressLog,
+      updated_at: Date.now(),
+    } as any);
+
+    return { success: true };
+  },
+});
+
+export const recordDriveFindings = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+    round: v.number(),
+    findings: v.array(v.string()),
+    fixed: v.array(v.string()),
+    deferred: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
+
+    const drive_state = (plan as any).drive_state || { current_round: 0, total_rounds: 0, rounds: [] };
+    const existingIdx = drive_state.rounds.findIndex((r: any) => r.round === args.round);
+    const roundData = {
+      round: args.round,
+      findings: args.findings,
+      fixed: args.fixed,
+      deferred: args.deferred || [],
+    };
+
+    if (existingIdx >= 0) {
+      drive_state.rounds[existingIdx] = roundData;
+    } else {
+      drive_state.rounds.push(roundData);
+    }
+
+    const progressLog = plan.progress_log || [];
+    progressLog.push({
+      timestamp: Date.now(),
+      entry: `Drive round ${args.round}: ${args.findings.length} findings, ${args.fixed.length} fixed${args.deferred?.length ? `, ${args.deferred.length} deferred` : ""}`,
+    });
+
+    await ctx.db.patch(plan._id, {
+      drive_state,
+      progress_log: progressLog,
+      updated_at: Date.now(),
+    } as any);
+
+    return { success: true, round: roundData };
+  },
+});
+
 // --- API token queries ---
 
 export const get = query({
@@ -571,15 +807,16 @@ export const list = query({
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
     } else if (args.team && db.workspace.type === "team") {
+      const teamId = (db.workspace as { type: "team"; teamId: Id<"teams"> }).teamId;
       if (args.status) {
         plans = await ctx.db
           .query("plans")
-          .withIndex("by_team_status", (q) => q.eq("team_id", db.workspace.teamId).eq("status", args.status as any))
+          .withIndex("by_team_status", (q) => q.eq("team_id", teamId).eq("status", args.status as any))
           .collect();
       } else {
         plans = await ctx.db
           .query("plans")
-          .withIndex("by_team_id", (q) => q.eq("team_id", db.workspace.teamId))
+          .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
           .collect();
       }
     } else if (args.status) {
@@ -592,7 +829,7 @@ export const list = query({
     }
 
     if (!args.status && !args.include_all) {
-      plans = plans.filter(p => p.status !== "done" && p.status !== "abandoned");
+      plans = plans.filter((p: any) => p.status !== "done" && p.status !== "abandoned");
     }
 
     return plans.slice(0, args.limit || 50);
@@ -929,6 +1166,50 @@ export const webGet = query({
   },
 });
 
+export const qualityScore = query({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) return null;
+
+    const tasks: any[] = [];
+    for (const tid of plan.task_ids || []) {
+      const t = await ctx.db.get(tid);
+      if (t) tasks.push(t);
+    }
+
+    let readiness = 0, completeness = 0, risk = 0;
+    const total = tasks.length;
+    if (total === 0) return { readiness: 0, completeness: 0, risk: 0, overall: 0, details: {} };
+
+    const done = tasks.filter((t: any) => t.status === "done").length;
+    const withDesc = tasks.filter((t: any) => t.description && t.description.length > 10).length;
+    const withDeps = tasks.filter((t: any) => t.blocked_by?.length > 0).length;
+    const needsContext = tasks.filter((t: any) => t.execution_status === "needs_context").length;
+    const highRetry = tasks.filter((t: any) => (t.retry_count || 0) >= 2).length;
+
+    readiness = Math.round((withDesc / total) * 50 + (withDeps > 0 ? 25 : 0) + (plan.goal ? 25 : 0));
+    completeness = Math.round((done / total) * 100);
+    risk = Math.min(100, Math.round((needsContext / Math.max(1, total)) * 50 + (highRetry / Math.max(1, total)) * 50));
+
+    const overall = Math.round((readiness * 0.3 + completeness * 0.5 + (100 - risk) * 0.2));
+
+    return {
+      readiness, completeness, risk, overall,
+      details: { total, done, withDesc, withDeps, needsContext, highRetry },
+    };
+  },
+});
+
 export const webList = query({
   args: {
     status: v.optional(v.string()),
@@ -955,9 +1236,9 @@ export const webList = query({
     }
 
     if (args.status) {
-      plans = plans.filter(p => p.status === args.status);
+      plans = plans.filter((p: any) => p.status === args.status);
     } else if (!args.include_all) {
-      plans = plans.filter(p => p.status !== "done" && p.status !== "abandoned");
+      plans = plans.filter((p: any) => p.status !== "done" && p.status !== "abandoned");
     }
 
     return plans.slice(0, args.limit || 50);
@@ -981,9 +1262,9 @@ export const webTeamList = query({
     let plans = await db.query("plans").collect();
 
     if (args.status) {
-      plans = plans.filter(p => p.status === args.status);
+      plans = plans.filter((p: any) => p.status === args.status);
     } else {
-      plans = plans.filter(p => p.status !== "done" && p.status !== "abandoned");
+      plans = plans.filter((p: any) => p.status !== "done" && p.status !== "abandoned");
     }
 
     return plans.slice(0, args.limit || 100);

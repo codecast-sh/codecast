@@ -2785,6 +2785,9 @@ cliRoute("/cli/work/snippet", async (ctx, body) => {
 cliRoute("/cli/work/backfill", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.backfillTeamScope, body);
 });
+cliRoute("/cli/work/heartbeat", async (ctx, body) => {
+  return await ctx.runMutation(api.tasks.heartbeat, body);
+});
 
 cliRoute("/cli/work/mine", async (ctx, body) => {
   return await ctx.runAction(internal.taskMining.backfillDocsFromMessages, { user_id: body.user_id });
@@ -2826,6 +2829,21 @@ cliRoute("/cli/plans/status", async (ctx, body) => {
 });
 cliRoute("/cli/plans/snippet", async (ctx, body) => {
   return await ctx.runQuery(api.plans.snippet, body);
+});
+cliRoute("/cli/plans/drive-state", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.updateDriveState, body);
+});
+cliRoute("/cli/plans/drive-findings", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.recordDriveFindings, body);
+});
+cliRoute("/cli/plans/orchestration-status", async (ctx, body) => {
+  return await ctx.runQuery(api.plans.getOrchestrationStatus, body);
+});
+cliRoute("/cli/plans/escalation", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.addEscalation, body);
+});
+cliRoute("/cli/plans/recalc", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.recalcPlanProgress, body);
 });
 
 // Docs

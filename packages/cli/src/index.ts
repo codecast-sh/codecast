@@ -8740,9 +8740,13 @@ plan
   .option("--max <n>", "Max parallel agents per wave", "3")
   .option("--interval <mins>", "Minutes between status checks", "2")
   .option("--max-runtime <duration>", "Max runtime before self-rescheduling (e.g., 30m, 2h)")
+  .option("--max-waves <n>", "Max number of waves before stopping")
+  .option("--dry-run", "Show what would be spawned without doing it")
+  .option("--verify", "Run typecheck verification before merging")
   .option("--no-reschedule", "Disable automatic self-continuation on exit")
   .action(async (planId: string, options: any) => {
     const maxAgents = parseInt(options.max, 10) || 3;
+    const maxWaves = options.maxWaves ? parseInt(options.maxWaves, 10) : undefined;
     const intervalMs = (parseInt(options.interval, 10) || 2) * 60_000;
     const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;
     const reschedule = options.reschedule !== false;
@@ -8770,11 +8774,33 @@ plan
       }
     };
 
+    if (options.dryRun) {
+      const plan = await cliPost("/cli/plans/get", { short_id: planId });
+      if (!plan) { console.error("Plan not found"); process.exit(1); }
+      const allTasks = plan.tasks || [];
+      const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").flatMap((t: any) => [t._id, t.short_id]));
+      const open = allTasks.filter((t: any) => t.status === "open" || t.status === "draft");
+      const ready = open.filter((t: any) => {
+        if (!t.blocked_by || t.blocked_by.length === 0) return true;
+        return t.blocked_by.every((d: string) => resolvedIds.has(d));
+      });
+      console.log(`\n  ${c.bold}Autopilot dry-run${c.reset} for ${c.cyan}${planId}${c.reset}`);
+      console.log(`  ${ready.length} ready tasks, would spawn ${Math.min(ready.length, maxAgents)} agents:\n`);
+      for (const t of ready.slice(0, maxAgents)) {
+        console.log(`  ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
+      }
+      if (ready.length > maxAgents) console.log(fmt.muted(`  ... and ${ready.length - maxAgents} queued`));
+      return;
+    }
+
     console.log(`\n  ${c.bold}Autopilot${c.reset} for plan ${c.cyan}${planId}${c.reset}`);
     const runtimeLabel = maxRuntimeMs ? `, max runtime ${options.maxRuntime}` : "";
-    console.log(fmt.muted(`  Max ${maxAgents} agents, checking every ${options.interval}m${runtimeLabel}\n`));
+    const wavesLabel = maxWaves ? `, max ${maxWaves} waves` : "";
+    console.log(fmt.muted(`  Max ${maxAgents} agents, checking every ${options.interval}m${runtimeLabel}${wavesLabel}\n`));
 
     const activeAgents = new Map<string, { task: any; spawnedAt: number }>();
+    let waveCount = 0;
+    let totalSpawned = 0, totalCompleted = 0, totalFailed = 0, totalMerged = 0;
 
     const runCycle = async () => {
       const plan = await cliPost("/cli/plans/get", { short_id: planId });
@@ -8793,7 +8819,25 @@ plan
         // Primary detection: task marked done in Convex (agent called `cast task done`)
         if (task?.status === "done") {
           console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
+          totalCompleted++;
           if (tmuxAlive) spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+
+          // Optional verification before merge
+          if (options.verify) {
+            const verifyResult = spawnSync("npx", ["tsc", "--noEmit"], {
+              encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd(), timeout: 60_000,
+            });
+            if (verifyResult.status !== 0) {
+              console.log(`  ${c.yellow}verify-fail${c.reset} ${c.cyan}${shortId}${c.reset} typecheck failed, skipping merge`);
+              try {
+                await cliPost("/cli/work/comment", { short_id: shortId, text: "Typecheck failed after completion, merge skipped", comment_type: "blocker" });
+              } catch {}
+              activeAgents.delete(shortId);
+              continue;
+            }
+            console.log(`  ${c.green}verified${c.reset} ${c.cyan}${shortId}${c.reset}`);
+          }
+
           // Auto-merge the agent's branch if it exists
           const branch = `ashot/${shortId}`;
           const branchCheck = spawnSync("git", ["rev-parse", "--verify", branch], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
@@ -8801,6 +8845,7 @@ plan
             const mergeResult = spawnSync("git", ["merge", branch, "--no-edit"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
             if (mergeResult.status === 0) {
               console.log(`  ${c.green}merge${c.reset} ${c.cyan}${branch}${c.reset}`);
+              totalMerged++;
               spawnSync("git", ["push", "origin", "main"], { stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
             } else {
               console.log(`  ${c.yellow}merge-conflict${c.reset} ${c.cyan}${branch}${c.reset} -- needs manual resolution`);
@@ -8809,19 +8854,52 @@ plan
           }
           activeAgents.delete(shortId);
         } else if (!tmuxAlive) {
-          // Fallback: tmux died but task not marked done
-          console.log(`  ${c.yellow}dead${c.reset}  ${c.cyan}${shortId}${c.reset} agent exited without completing (task: ${task?.status || "?"})`);
-          try {
-            await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
-            await cliPost("/cli/work/comment", {
-              short_id: shortId,
-              text: `Agent session \`${sn}\` exited without marking task done. Status was \`${task?.status || "unknown"}\`. Needs re-examination.`,
-              comment_type: "blocker",
-            });
-          } catch {}
+          // Fallback: tmux died but task not marked done -- auto-retry if under max retries
+          const retryCount = task?.retry_count || 0;
+          const maxRetries = task?.max_retries || 3;
+          if (retryCount < maxRetries) {
+            console.log(`  ${c.yellow}retry${c.reset} ${c.cyan}${shortId}${c.reset} agent died, retrying (${retryCount + 1}/${maxRetries})`);
+            try {
+              await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1 });
+              await cliPost("/cli/work/comment", {
+                short_id: shortId,
+                text: `Agent session \`${sn}\` exited without completing. Auto-retrying (attempt ${retryCount + 1}/${maxRetries}).`,
+                comment_type: "progress",
+              });
+            } catch {}
+          } else {
+            console.log(`  ${c.red}failed${c.reset} ${c.cyan}${shortId}${c.reset} agent died, max retries exceeded`);
+            totalFailed++;
+            try {
+              await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
+              await cliPost("/cli/work/comment", {
+                short_id: shortId,
+                text: `Agent session \`${sn}\` exited without marking task done after ${retryCount} retries. Needs human attention.`,
+                comment_type: "blocker",
+              });
+            } catch {}
+          }
           activeAgents.delete(shortId);
         }
-        // else: tmux alive and task not done -- agent still working, do nothing
+        else {
+          // Agent alive but check for timeout (default 30 min per task)
+          const elapsed = Date.now() - info.spawnedAt;
+          const taskTimeout = 30 * 60_000;
+          if (elapsed > taskTimeout) {
+            console.log(`  ${c.red}timeout${c.reset} ${c.cyan}${shortId}${c.reset} exceeded ${Math.round(taskTimeout / 60_000)}m`);
+            spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+            const retryCount = task?.retry_count || 0;
+            try {
+              await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1 });
+              await cliPost("/cli/work/comment", {
+                short_id: shortId,
+                text: `Agent timed out after ${Math.round(elapsed / 60_000)}m. Auto-retrying.`,
+                comment_type: "progress",
+              });
+            } catch {}
+            activeAgents.delete(shortId);
+          }
+        }
       }
 
       // Check completion (dropped tasks don't block completion)
@@ -8846,6 +8924,17 @@ plan
       const slots = maxAgents - activeAgents.size;
       const toSpawn = readyTasks.slice(0, Math.max(0, slots));
 
+      // Check max-waves limit
+      if (maxWaves && toSpawn.length > 0 && activeAgents.size === 0) {
+        waveCount++;
+        if (waveCount > maxWaves) {
+          console.log(`\n  Max waves (${maxWaves}) reached. Stopping.`);
+          scheduleResume("max waves");
+          return false;
+        }
+        console.log(`  ${c.dim}Wave ${waveCount}${maxWaves ? `/${maxWaves}` : ""}${c.reset}`);
+      }
+
       const ts = new Date().toLocaleTimeString();
       console.log(`  ${c.dim}${ts}${c.reset} ${done}/${actionable} done, ${activeAgents.size} active, ${readyTasks.length} ready`);
       try { await cliPost("/cli/plans/log", { short_id: planId, entry: `Cycle: ${done}/${actionable} done, ${activeAgents.size} active, ${readyTasks.length} ready` }); } catch {}
@@ -8864,6 +8953,7 @@ plan
 
         if (sr.status === 0) {
           activeAgents.set(task.short_id, { task, spawnedAt: Date.now() });
+          totalSpawned++;
           console.log(`  ${c.green}spawn${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
           try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
         } else {
@@ -8883,7 +8973,9 @@ plan
       try {
         if (maxRuntimeMs && (Date.now() - startTime) >= maxRuntimeMs) {
           clearInterval(interval);
-          console.log(`\n  Max runtime reached. ${activeAgents.size} agents still running.`);
+          const elapsed = Math.round((Date.now() - startTime) / 60_000);
+          console.log(`\n  Max runtime reached (${elapsed}m). ${activeAgents.size} agents still running.`);
+          console.log(`  ${c.dim}Metrics: ${totalSpawned} spawned, ${totalCompleted} completed, ${totalMerged} merged, ${totalFailed} failed${c.reset}`);
           scheduleResume("max runtime");
           process.exit(0);
         }
@@ -8896,7 +8988,9 @@ plan
 
     process.on("SIGINT", () => {
       clearInterval(interval);
-      console.log(`\n  Stopped autopilot. ${activeAgents.size} agents still running.`);
+      const elapsed = Math.round((Date.now() - startTime) / 60_000);
+      console.log(`\n  Stopped autopilot after ${elapsed}m. ${activeAgents.size} agents still running.`);
+      console.log(`  ${c.dim}Metrics: ${totalSpawned} spawned, ${totalCompleted} completed, ${totalMerged} merged, ${totalFailed} failed${c.reset}`);
       scheduleResume("SIGINT");
       process.exit(0);
     });
@@ -9041,6 +9135,496 @@ plan
     try {
       await cliPost("/cli/plans/log", { short_id: planId, entry: `Retried ${resetCount} stuck tasks` });
     } catch {}
+  });
+
+plan
+  .command("wave")
+  .description("Show current wave tasks and next wave preview")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const tasks = plan.tasks || [];
+    const resolvedIds = new Set(
+      tasks.filter((t: any) => t.status === "done" || t.status === "dropped")
+        .flatMap((t: any) => [t._id, t.short_id])
+    );
+    const open = tasks.filter((t: any) => t.status === "open" || t.status === "draft");
+    const inProgress = tasks.filter((t: any) => t.status === "in_progress");
+
+    const ready = open.filter((t: any) => {
+      if (!t.blocked_by || t.blocked_by.length === 0) return true;
+      return t.blocked_by.every((d: string) => resolvedIds.has(d));
+    });
+    const blocked = open.filter((t: any) =>
+      t.blocked_by?.length > 0 && !t.blocked_by.every((d: string) => resolvedIds.has(d))
+    );
+
+    console.log(`\n  ${c.bold}${plan.title}${c.reset} ${c.dim}(${planId})${c.reset}\n`);
+
+    if (inProgress.length > 0) {
+      console.log(`  ${c.yellow}${c.bold}Current wave${c.reset} (${inProgress.length} in progress):`);
+      for (const t of inProgress) {
+        console.log(`  ${c.yellow}*${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
+      }
+      console.log();
+    }
+
+    console.log(`  ${c.blue}${c.bold}Next wave${c.reset} (${ready.length} ready):`);
+    for (const t of ready.slice(0, 20)) {
+      const pri = t.priority === "urgent" ? c.red + "!" : t.priority === "high" ? c.yellow + "^" : c.dim + " ";
+      console.log(`  ${pri}${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
+    }
+    if (ready.length > 20) console.log(fmt.muted(`  ... and ${ready.length - 20} more`));
+
+    if (blocked.length > 0) {
+      console.log(`\n  ${c.dim}Blocked${c.reset} (${blocked.length}):`);
+      for (const t of blocked.slice(0, 10)) {
+        const deps = (t.blocked_by || []).join(", ");
+        console.log(`  ${c.dim}x${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title} ${c.dim}(waiting: ${deps})${c.reset}`);
+      }
+      if (blocked.length > 10) console.log(fmt.muted(`  ... and ${blocked.length - 10} more`));
+    }
+    console.log();
+  });
+
+plan
+  .command("progress")
+  .description("Detailed progress report with ETA")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const tasks = plan.tasks || [];
+    const done = tasks.filter((t: any) => t.status === "done");
+    const total = tasks.length;
+    const pct = total > 0 ? Math.round((done.length / total) * 100) : 0;
+    const barWidth = 40;
+    const filled = Math.round(barWidth * pct / 100);
+    const bar = `${c.green}${"█".repeat(filled)}${c.dim}${"░".repeat(barWidth - filled)}${c.reset}`;
+
+    console.log(`\n  ${c.bold}${plan.title}${c.reset}`);
+    console.log(`  ${bar} ${pct}% (${done.length}/${total})\n`);
+
+    const byType: Record<string, number> = {};
+    for (const t of tasks) { byType[t.task_type || "task"] = (byType[t.task_type || "task"] || 0) + 1; }
+    const doneByType: Record<string, number> = {};
+    for (const t of done) { doneByType[t.task_type || "task"] = (doneByType[t.task_type || "task"] || 0) + 1; }
+    for (const [type, count] of Object.entries(byType)) {
+      const doneCount = doneByType[type] || 0;
+      console.log(`  ${c.dim}${type}:${c.reset} ${doneCount}/${count}`);
+    }
+
+    const totalMins = done.reduce((s: number, t: any) => s + (t.actual_minutes || 0), 0);
+    const avgMins = done.length > 0 ? Math.round(totalMins / done.length) : 10;
+    const remaining = total - done.length;
+    const estMins = remaining * avgMins;
+    const estHrs = Math.floor(estMins / 60);
+
+    console.log(`\n  ${c.dim}Avg task time:${c.reset} ${avgMins}m`);
+    console.log(`  ${c.dim}Remaining:${c.reset} ${remaining} tasks`);
+    console.log(`  ${c.dim}Est time:${c.reset} ${estHrs > 0 ? `${estHrs}h ` : ""}${estMins % 60}m`);
+
+    const progressLog = plan.progress_log || [];
+    if (progressLog.length > 0) {
+      console.log(`\n  ${c.bold}Recent activity:${c.reset}`);
+      for (const e of progressLog.slice(-10)) {
+        const ts = new Date(e.timestamp).toLocaleTimeString();
+        console.log(`  ${c.dim}${ts}${c.reset} ${e.entry}`);
+      }
+    }
+    console.log();
+  });
+
+plan
+  .command("agents")
+  .description("List active agents and their current tasks")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const tasks = plan.tasks || [];
+    const agentStatusScript = path.join(os.homedir(), ".claude", "scripts", "agent-status.sh");
+    const agentListScript = path.join(os.homedir(), ".claude", "scripts", "agent-list.sh");
+
+    let tmuxSessions: string[] = [];
+    try {
+      const sr = spawnSync(agentListScript, [], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      if (sr.status === 0 && sr.stdout?.trim()) {
+        tmuxSessions = sr.stdout.trim().split("\n");
+      }
+    } catch {}
+
+    const agentSessions = tmuxSessions.filter((s: string) => s.includes("impl-ct-"));
+    console.log(`\n  ${c.bold}${plan.title}${c.reset} ${c.dim}(${planId})${c.reset}\n`);
+
+    if (agentSessions.length === 0) {
+      console.log(fmt.muted("  No active agents."));
+      const inProg = tasks.filter((t: any) => t.status === "in_progress");
+      if (inProg.length > 0) {
+        console.log(`\n  ${c.yellow}${inProg.length} tasks still in_progress (agents may have exited):${c.reset}`);
+        for (const t of inProg) {
+          console.log(`  ${c.yellow}!${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
+        }
+      }
+    } else {
+      console.log(`  ${c.green}${agentSessions.length}${c.reset} active agents:\n`);
+      for (const session of agentSessions) {
+        const match = session.match(/impl-(ct-\w+)/);
+        if (!match) continue;
+        const taskId = match[1];
+        const task = tasks.find((t: any) => t.short_id === taskId);
+        const sessionName = `impl-${taskId}`;
+
+        let status = "working";
+        try {
+          const sr = spawnSync(agentStatusScript, [sessionName], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+          const out = (sr.stdout || "").trim();
+          if (out.includes("DONE")) status = "done";
+          else if (out.includes("BLOCKED")) status = "blocked";
+          else if (out.includes("NEEDS_CONTEXT")) status = "needs_context";
+        } catch {}
+
+        const statusColor = status === "done" ? c.green : status === "blocked" ? c.red : status === "needs_context" ? c.yellow : c.blue;
+        console.log(`  ${statusColor}${status}${c.reset} ${c.cyan}${taskId}${c.reset} ${task?.title || ""}`);
+        console.log(fmt.muted(`    tmux attach -t ${sessionName}`));
+      }
+    }
+    console.log();
+  });
+
+plan
+  .command("kill")
+  .description("Kill all agents working on a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .option("--reset", "Also reset task status to open")
+  .action(async (planId: string, options: any) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const tasks = plan.tasks || [];
+    const inProgress = tasks.filter((t: any) => t.status === "in_progress");
+    let killed = 0;
+
+    for (const t of inProgress) {
+      const sessionName = `impl-${t.short_id}`;
+      const check = spawnSync("tmux", ["has-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] });
+      if (check.status === 0) {
+        spawnSync("tmux", ["kill-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] });
+        console.log(`  ${c.red}killed${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
+        killed++;
+      }
+      if (options.reset) {
+        try {
+          await cliPost("/cli/work/update", { short_id: t.short_id, status: "open" });
+          console.log(`  ${c.green}reset${c.reset} ${c.cyan}${t.short_id}${c.reset} -> open`);
+        } catch {}
+      }
+    }
+
+    console.log(`\n${c.green}ok${c.reset} Killed ${killed} agents${options.reset ? `, reset ${inProgress.length} tasks` : ""}`);
+    try {
+      await cliPost("/cli/plans/log", { short_id: planId, entry: `Killed ${killed} agents${options.reset ? ", reset tasks to open" : ""}` });
+    } catch {}
+  });
+
+plan
+  .command("merge")
+  .description("Manually merge all completed task branches")
+  .argument("<plan_id>", "Plan short ID")
+  .option("--dry-run", "Show what would be merged")
+  .action(async (planId: string, options: any) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const tasks = plan.tasks || [];
+    const done = tasks.filter((t: any) => t.status === "done");
+    const cwd = getRealCwd();
+    let merged = 0, conflicts = 0;
+
+    console.log(`\n  ${c.bold}${plan.title}${c.reset} - merging ${done.length} completed task branches\n`);
+
+    for (const t of done) {
+      const branch = `ashot/${t.short_id}`;
+      const check = spawnSync("git", ["rev-parse", "--verify", branch], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd });
+      if (check.status !== 0) continue;
+
+      if (options.dryRun) {
+        console.log(`  ${c.dim}merge${c.reset} ${c.cyan}${branch}${c.reset}`);
+        merged++;
+        continue;
+      }
+
+      const result = spawnSync("git", ["merge", branch, "--no-edit"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd });
+      if (result.status === 0) {
+        console.log(`  ${c.green}merged${c.reset} ${c.cyan}${branch}${c.reset}`);
+        merged++;
+      } else {
+        console.log(`  ${c.red}conflict${c.reset} ${c.cyan}${branch}${c.reset}`);
+        spawnSync("git", ["merge", "--abort"], { stdio: ["pipe", "pipe", "pipe"], cwd });
+        conflicts++;
+      }
+    }
+
+    if (options.dryRun) {
+      console.log(fmt.muted(`\n  --dry-run: ${merged} branches would be merged`));
+    } else {
+      console.log(`\n${c.green}ok${c.reset} Merged ${merged} branches${conflicts > 0 ? `, ${conflicts} conflicts` : ""}`);
+    }
+  });
+
+plan
+  .command("verify")
+  .description("Run verification checks on completed tasks")
+  .argument("<plan_id>", "Plan short ID")
+  .option("--typecheck", "Run TypeScript type checking")
+  .option("--test", "Run test suite")
+  .option("--lint", "Run linter")
+  .option("--all", "Run all verification checks")
+  .action(async (planId: string, options: any) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const cwd = getRealCwd();
+    const checks: { name: string; cmd: string; args: string[] }[] = [];
+
+    if (options.all || options.typecheck) {
+      checks.push({ name: "typecheck", cmd: "npx", args: ["tsc", "--noEmit"] });
+    }
+    if (options.all || options.test) {
+      checks.push({ name: "test", cmd: "npm", args: ["test", "--if-present"] });
+    }
+    if (options.all || options.lint) {
+      checks.push({ name: "lint", cmd: "npx", args: ["eslint", ".", "--max-warnings=0"] });
+    }
+
+    if (checks.length === 0) {
+      checks.push({ name: "typecheck", cmd: "npx", args: ["tsc", "--noEmit"] });
+    }
+
+    console.log(`\n  ${c.bold}Verifying plan ${planId}${c.reset}\n`);
+
+    let passed = 0, failed = 0;
+    for (const check of checks) {
+      process.stdout.write(`  ${c.dim}${check.name}...${c.reset} `);
+      const result = spawnSync(check.cmd, check.args, {
+        encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], cwd, timeout: 120_000,
+      });
+      if (result.status === 0) {
+        console.log(`${c.green}pass${c.reset}`);
+        passed++;
+      } else {
+        console.log(`${c.red}fail${c.reset}`);
+        const output = (result.stderr || result.stdout || "").trim();
+        if (output) console.log(fmt.muted(`    ${output.split("\n").slice(0, 5).join("\n    ")}`));
+        failed++;
+      }
+    }
+
+    console.log(`\n  ${passed} passed, ${failed} failed`);
+    try {
+      await cliPost("/cli/plans/log", {
+        short_id: planId,
+        entry: `Verification: ${passed} passed, ${failed} failed (${checks.map((ch: any) => ch.name).join(", ")})`,
+      });
+    } catch {}
+  });
+
+plan
+  .command("drive")
+  .description("Iterative polish loop: critic -> fix -> validate rounds")
+  .argument("<plan_id>", "Plan short ID")
+  .option("--rounds <n>", "Number of drive rounds", "3")
+  .option("--scope <path>", "Focus area (directory or file pattern)")
+  .action(async (planId: string, options: any) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const totalRounds = parseInt(options.rounds, 10) || 3;
+    const cwd = getRealCwd();
+    const agentScript = path.join(os.homedir(), ".claude", "scripts", "agent-spawn.sh");
+
+    console.log(`\n  ${c.bold}Drive${c.reset} for ${c.cyan}${planId}${c.reset} - ${totalRounds} rounds\n`);
+
+    for (let round = 1; round <= totalRounds; round++) {
+      console.log(`  ${c.bold}Round ${round}/${totalRounds}${c.reset}`);
+
+      // Update drive state
+      try {
+        await cliPost("/cli/plans/drive-state", { short_id: planId, current_round: round, total_rounds: totalRounds });
+      } catch {}
+
+      // Critic pass - spawn critic agent
+      console.log(`  ${c.dim}critic...${c.reset}`);
+      const criticSession = `critic-${planId}-r${round}`;
+      const scope = options.scope ? `Focus on: ${options.scope}` : "";
+      const criticPrompt = `Review plan ${planId} (${plan.title}). Round ${round}/${totalRounds}. ${scope}\nFind bugs, UX issues, missing features, code quality problems. Output FINDINGS list.`;
+
+      const criticResult = spawnSync(agentScript, ["critic", criticSession, cwd, criticPrompt], {
+        encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], timeout: 300_000,
+      });
+
+      if (criticResult.status !== 0) {
+        console.log(`  ${c.yellow}critic skipped${c.reset} (spawn failed)`);
+        continue;
+      }
+
+      // Wait for critic to finish (check tmux periodically)
+      let criticDone = false;
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const alive = spawnSync("tmux", ["has-session", "-t", criticSession], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+        if (!alive) { criticDone = true; break; }
+      }
+
+      if (!criticDone) {
+        console.log(`  ${c.yellow}critic timed out${c.reset}`);
+        spawnSync("tmux", ["kill-session", "-t", criticSession], { stdio: ["pipe", "pipe", "pipe"] });
+      }
+
+      // Record findings (agent should have output to task system)
+      try {
+        await cliPost("/cli/plans/drive-findings", {
+          short_id: planId, round, findings: [`Round ${round} critic pass completed`], fixed: [], deferred: [],
+        });
+      } catch {}
+
+      console.log(`  ${c.green}round ${round} complete${c.reset}`);
+    }
+
+    console.log(`\n  ${c.green}Drive complete${c.reset} - ${totalRounds} rounds finished`);
+    try {
+      await cliPost("/cli/plans/log", { short_id: planId, entry: `Drive completed: ${totalRounds} rounds` });
+    } catch {}
+  });
+
+plan
+  .command("export")
+  .description("Export a plan to markdown")
+  .argument("<plan_id>", "Plan short ID")
+  .option("-o, --output <file>", "Output file (default: stdout)")
+  .action(async (planId: string, options: any) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const lines: string[] = [];
+    lines.push(`# Plan: ${plan.title}`);
+    lines.push(`**Goal:** ${plan.goal || "N/A"}`);
+    lines.push(`**Status:** ${plan.status}`);
+    if (plan.acceptance_criteria?.length) {
+      lines.push("");
+      lines.push("## Acceptance Criteria");
+      for (const ac of plan.acceptance_criteria) {
+        lines.push(`- ${ac}`);
+      }
+    }
+    if (plan.tasks?.length) {
+      lines.push("");
+      lines.push("## Tasks");
+      for (const t of plan.tasks) {
+        const done = t.status === "done";
+        const check = done ? "x" : " ";
+        let suffix = `(${t.status})`;
+        if (t.priority) suffix = `(${t.status}, ${t.priority})`;
+        const deps = t.blocked_by?.length ? ` [blocked by: ${t.blocked_by.join(", ")}]` : "";
+        lines.push(`- [${check}] ${t.short_id}: ${t.title} ${suffix}${deps}`);
+      }
+    }
+    lines.push("");
+
+    const md = lines.join("\n");
+    if (options.output) {
+      fs.writeFileSync(options.output, md, "utf-8");
+      console.log(`${c.green}ok${c.reset} Exported plan ${c.cyan}${planId}${c.reset} to ${options.output}`);
+    } else {
+      process.stdout.write(md);
+    }
+  });
+
+plan
+  .command("import")
+  .description("Import a plan from a YAML file")
+  .argument("<file>", "YAML file path")
+  .option("--project <id>", "Project ID")
+  .action(async (file: string, options: any) => {
+    const filePath = path.resolve(getRealCwd(), file);
+    if (!fs.existsSync(filePath)) {
+      console.error(`File not found: ${filePath}`);
+      process.exit(1);
+    }
+
+    const content = fs.readFileSync(filePath, "utf-8");
+
+    // Simple YAML parser for the expected structure
+    let title = "";
+    let goal = "";
+    const tasks: { title: string; priority?: string; blocked_by?: string[] }[] = [];
+    let inTasks = false;
+    let currentTask: { title: string; priority?: string; blocked_by?: string[] } | null = null;
+
+    for (const raw of content.split("\n")) {
+      const line = raw.trim();
+      if (!inTasks) {
+        if (line.startsWith("title:")) title = line.slice(6).trim().replace(/^["']|["']$/g, "");
+        else if (line.startsWith("goal:")) goal = line.slice(5).trim().replace(/^["']|["']$/g, "");
+        else if (line === "tasks:" || line.startsWith("tasks:")) inTasks = true;
+      } else {
+        if (line.startsWith("- title:")) {
+          if (currentTask) tasks.push(currentTask);
+          currentTask = { title: line.slice(8).trim().replace(/^["']|["']$/g, "") };
+        } else if (line.startsWith("title:") && currentTask) {
+          currentTask.title = line.slice(6).trim().replace(/^["']|["']$/g, "");
+        } else if (line.startsWith("priority:") && currentTask) {
+          currentTask.priority = line.slice(9).trim().replace(/^["']|["']$/g, "");
+        } else if (line.startsWith("blocked_by:") && currentTask) {
+          const val = line.slice(11).trim();
+          const match = val.match(/^\[(.+)\]$/);
+          if (match) {
+            currentTask.blocked_by = match[1].split(",").map(s => s.trim().replace(/^["']|["']$/g, ""));
+          }
+        } else if (line.startsWith("- ") && !line.startsWith("- title:") && currentTask && line.match(/^- ["']?.+["']?$/)) {
+          if (!currentTask.blocked_by) currentTask.blocked_by = [];
+          currentTask.blocked_by.push(line.slice(2).trim().replace(/^["']|["']$/g, ""));
+        }
+      }
+    }
+    if (currentTask) tasks.push(currentTask);
+
+    if (!title) {
+      console.error("No title found in file");
+      process.exit(1);
+    }
+
+    const planBody: Record<string, any> = { title, source: "imported", project_path: getRealCwd() };
+    if (goal) planBody.goal = goal;
+    if (options.project) planBody.project_id = options.project;
+
+    const planResult = await cliPost("/cli/plans/create", planBody);
+    console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${planResult.short_id}${c.reset}: ${title}`);
+
+    const titleToShortId: Record<string, string> = {};
+    for (const t of tasks) {
+      const taskBody: Record<string, any> = {
+        title: t.title,
+        task_type: "task",
+        status: "open",
+        priority: t.priority || "medium",
+        plan_id: planResult.short_id,
+        project_path: getRealCwd(),
+      };
+      if (t.blocked_by?.length) {
+        const resolvedDeps = t.blocked_by.map(dep => titleToShortId[dep] || dep).filter(Boolean);
+        if (resolvedDeps.length) taskBody.blocked_by = resolvedDeps;
+      }
+      const taskResult = await cliPost("/cli/work/create", taskBody);
+      titleToShortId[t.title] = taskResult.short_id;
+      console.log(`  ${c.green}+${c.reset} ${c.cyan}${taskResult.short_id}${c.reset}: ${t.title}`);
+    }
+
+    console.log(fmt.muted(`\n  ${tasks.length} tasks imported`));
   });
 
 // --- Stable Mode ---

@@ -1028,6 +1028,8 @@ export default defineSchema({
     agent_session_id: v.optional(v.string()),
     wave_number: v.optional(v.number()),
     priority_weight: v.optional(v.number()),
+    last_heartbeat: v.optional(v.number()),
+    progress_pct: v.optional(v.number()),
 
     created_at: v.number(),
     updated_at: v.number(),
@@ -1202,4 +1204,37 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_timestamp", ["user_id", "timestamp"])
     .index("by_user_level", ["user_id", "level"]),
+
+  plan_templates: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    name: v.string(),
+    description: v.optional(v.string()),
+    goal_template: v.optional(v.string()),
+    task_templates: v.array(
+      v.object({
+        title: v.string(),
+        description: v.optional(v.string()),
+        task_type: v.optional(v.string()),
+        priority: v.optional(v.string()),
+        blocked_by_indices: v.optional(v.array(v.number())),
+        estimated_minutes: v.optional(v.number()),
+      }),
+    ),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"]),
+
+  orchestration_events: defineTable({
+    plan_id: v.id("plans"),
+    event_type: v.string(),
+    task_id: v.optional(v.string()),
+    agent_session: v.optional(v.string()),
+    details: v.optional(v.string()),
+    timestamp: v.number(),
+  })
+    .index("by_plan_id", ["plan_id"])
+    .index("by_plan_timestamp", ["plan_id", "timestamp"]),
 });

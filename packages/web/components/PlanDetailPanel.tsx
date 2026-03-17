@@ -32,6 +32,7 @@ import {
   Layers,
 } from "lucide-react";
 import Markdown from "react-markdown";
+import { PlanBoardView } from "./PlanBoardView";
 
 const api = _api as any;
 
@@ -395,6 +396,8 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
   const [newTitle, setNewTitle] = useState("");
   const [showDone, setShowDone] = useState(false);
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const webUpdate = useMutation(api.tasks.webUpdate);
   const webCreate = useMutation(api.tasks.webCreate);
 
@@ -433,8 +436,16 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
     }
   }
 
-  const activeTasks = tasks.filter(t => t.status !== "done" && t.status !== "dropped");
-  const doneTasks = tasks.filter(t => t.status === "done" || t.status === "dropped");
+  const filteredTasks = tasks.filter(t => {
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      if (!t.title?.toLowerCase().includes(q) && !t.short_id?.toLowerCase().includes(q)) return false;
+    }
+    if (statusFilter !== "all" && t.status !== statusFilter) return false;
+    return true;
+  });
+  const activeTasks = filteredTasks.filter(t => t.status !== "done" && t.status !== "dropped");
+  const doneTasks = filteredTasks.filter(t => t.status === "done" || t.status === "dropped");
 
   return (
     <div className="mb-6">
@@ -455,6 +466,26 @@ function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId: string
           <Plus className="w-3 h-3" />
           Add
         </button>
+      </div>
+
+      <div className="flex gap-2 mb-2">
+        <input
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          placeholder="Filter tasks..."
+          className="flex-1 text-xs px-2.5 py-1 rounded bg-sol-bg-alt border border-sol-border/30 text-sol-text placeholder:text-sol-text-dim/50 focus:outline-none focus:border-sol-cyan/50"
+        />
+        <select
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+          className="text-xs px-2 py-1 rounded bg-sol-bg-alt border border-sol-border/30 text-sol-text-muted focus:outline-none"
+        >
+          <option value="all">All</option>
+          <option value="open">Open</option>
+          <option value="in_progress">In Progress</option>
+          <option value="done">Done</option>
+          <option value="dropped">Dropped</option>
+        </select>
       </div>
 
       {showAdd && (
@@ -726,7 +757,7 @@ function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: any[] }
   );
 }
 
-type PlanTab = "overview" | "orchestration";
+type PlanTab = "overview" | "orchestration" | "board";
 
 export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
@@ -836,10 +867,23 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             )}
           </button>
+          <button
+            onClick={() => setActiveTab("board")}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === "board"
+                ? "text-sol-text border-sol-cyan"
+                : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Board
+          </button>
         </div>
       )}
 
-      {activeTab === "overview" ? (
+      {activeTab === "board" ? (
+        <PlanBoardView tasks={plan.tasks || []} planShortId={plan.short_id} />
+      ) : activeTab === "overview" ? (
         <>
           <OrchestrationHeader tasks={plan.tasks || []} sessions={plan.sessions || []} />
 

@@ -1419,3 +1419,27 @@ export const scheduleRetry = mutation({
     return { success: true, attempt_count: newAttemptCount };
   },
 });
+
+export const heartbeat = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+    progress_pct: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const task = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q: any) => q.eq("short_id", args.short_id))
+      .first();
+    if (!task) throw new Error("Task not found");
+
+    const updates: any = { last_heartbeat: Date.now() };
+    if (args.progress_pct !== undefined) updates.progress_pct = args.progress_pct;
+
+    await ctx.db.patch(task._id, updates);
+    return { success: true };
+  },
+});
