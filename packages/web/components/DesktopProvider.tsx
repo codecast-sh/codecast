@@ -40,6 +40,8 @@ export function DesktopProvider() {
 
   useEffect(() => {
     if (!notifications) return;
+    const isPalette = typeof window !== "undefined" && window.location.pathname === "/palette";
+    if (isPalette) return;
     const canNotify = isDesktop() || hasBrowserNotificationPermission();
 
     if (seenIdsRef.current === null) {
@@ -79,6 +81,12 @@ export function DesktopProvider() {
         } catch {}
       }
     });
+
+    const handleNavigate = (e: Event) => {
+      const path = (e as CustomEvent).detail;
+      if (path) router.push(path);
+    };
+    window.addEventListener("codecast-navigate", handleNavigate);
 
     checkForUpdates().catch(() => {});
 

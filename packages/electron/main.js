@@ -299,8 +299,9 @@ ipcMain.handle("show-notification", (_e, { title, body, data }) => {
       mainWindow.show();
       mainWindow.focus();
       if (data?.conversationId) {
+        const path = `/conversation/${data.conversationId}`;
         mainWindow.webContents.executeJavaScript(
-          `window.location.href = '/conversation/${data.conversationId}'`
+          `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify(path)} }))`
         );
       }
     }
