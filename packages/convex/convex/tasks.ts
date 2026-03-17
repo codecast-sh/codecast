@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { resolveTeamForMutation } from "./privacy";
+import { createDataContext } from "./data";
 
 async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
   const plan = await ctx.db.get(planId);
@@ -74,12 +74,9 @@ export const create = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
     const now = Date.now();
     const short_id = generateShortId();
-
-    const team_id = await resolveTeamForMutation(ctx, auth.userId, {
-      project_path: args.project_path,
-    });
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
@@ -112,9 +109,7 @@ export const create = mutation({
       if (plan) plan_id = plan._id;
     }
 
-    const id = await ctx.db.insert("tasks", {
-      user_id: auth.userId,
-      team_id,
+    const id = await db.insert("tasks", {
       project_id,
       parent_id: args.parent_id as any,
       plan_id,
@@ -136,8 +131,6 @@ export const create = mutation({
       attempt_count: 0,
       retry_count: 0,
       max_retries: args.max_retries ?? 3,
-      created_at: now,
-      updated_at: now,
     } as any);
 
     if (plan_id) {
@@ -171,10 +164,13 @@ export const promote = mutation({
   args: {
     api_token: v.string(),
     short_id: v.string(),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
 
     const task = await ctx.db
       .query("tasks")
@@ -182,9 +178,10 @@ export const promote = mutation({
       .first();
     if (!task) throw new Error("Task not found");
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (task.user_id !== auth.userId && task.team_id !== team_id) throw new Error("Task not found");
+    if (task.user_id !== auth.userId) {
+      const accessed = await db.get(task._id);
+      if (!accessed) throw new Error("Task not found");
+    }
 
     await ctx.db.patch(task._id, { promoted: true, updated_at: Date.now() });
     return { success: true };
@@ -196,26 +193,15 @@ export const snippet = query({
   args: {
     api_token: v.string(),
     conversation_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
 
-    let tasks;
-    if (team_id) {
-      tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
-        .collect();
-    } else {
-      tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
-        .collect();
-    }
+    const tasks = await db.query("tasks").collect();
 
     const activeTasks = tasks.filter(t =>
       (t.status === "open" || t.status === "in_progress" || t.status === "in_review") &&
@@ -237,9 +223,7 @@ export const snippet = query({
         .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
         .first();
       if (conv) {
-        const allDocs = team_id
-          ? await ctx.db.query("docs").withIndex("by_team_id", (q) => q.eq("team_id", team_id)).collect()
-          : await ctx.db.query("docs").withIndex("by_user_id", (q) => q.eq("user_id", auth.userId)).collect();
+        const allDocs = await db.query("docs").collect();
 
         sessionPlans = allDocs
           .filter(d => !d.archived_at && (d.conversation_id === conv._id || d.project_path === conv.project_path))
@@ -319,13 +303,22 @@ export const list = query({
     limit: v.optional(v.number()),
     team: v.optional(v.boolean()),
     include_derived: v.optional(v.boolean()),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
 
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
+    let teamIdForScope: Id<"teams"> | undefined;
+    if (args.team) {
+      const user = await ctx.db.get(auth.userId);
+      teamIdForScope = user?.active_team_id || user?.team_id;
+    }
+    const db = await createDataContext(ctx, {
+      userId: auth.userId,
+      project_path: args.project_path,
+      ...(args.team && teamIdForScope ? { workspace: "team" as const, team_id: teamIdForScope } : {}),
+    });
 
     let tasks: any[];
     if (args.project_id) {
@@ -333,12 +326,7 @@ export const list = query({
         .query("tasks")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
-    } else if (args.team && team_id) {
-      tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
-        .collect();
-    } else if (args.status) {
+    } else if (args.status && !args.team) {
       tasks = await ctx.db
         .query("tasks")
         .withIndex("by_user_status", (q) =>
@@ -346,10 +334,7 @@ export const list = query({
         )
         .collect();
     } else {
-      tasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
-        .collect();
+      tasks = await db.query("tasks").collect();
     }
 
     // Filter out done/dropped unless explicitly requested
@@ -645,10 +630,13 @@ export const context = query({
   args: {
     api_token: v.string(),
     short_id: v.string(),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
+
+    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
 
     const task = await ctx.db
       .query("tasks")
@@ -656,10 +644,10 @@ export const context = query({
       .first();
     if (!task) return null;
 
-    // Allow same-team access
-    const user = await ctx.db.get(auth.userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (task.user_id !== auth.userId && task.team_id !== team_id) return null;
+    if (task.user_id !== auth.userId) {
+      const accessed = await db.get(task._id);
+      if (!accessed) return null;
+    }
 
     const comments = await ctx.db
       .query("task_comments")
@@ -753,20 +741,8 @@ export const webList = query({
         tasks = tasks.filter((t) => t.status === args.status);
       }
     } else {
-      // Backwards compat: no workspace arg = all user's items
-      const user = await ctx.db.get(userId);
-      const team_id = user?.active_team_id || user?.team_id;
-      if (team_id) {
-        tasks = await ctx.db
-          .query("tasks")
-          .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
-          .collect();
-      } else {
-        tasks = await ctx.db
-          .query("tasks")
-          .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-          .collect();
-      }
+      const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id });
+      tasks = await db.query("tasks").collect();
       if (args.status) {
         tasks = tasks.filter((t) => t.status === args.status);
       }
@@ -1012,11 +988,7 @@ export const webCreate = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const team_id = args.workspace === "personal"
-      ? undefined
-      : args.workspace === "team" && args.team_id
-        ? args.team_id
-        : await resolveTeamForMutation(ctx, userId);
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id });
     const short_id = generateShortId();
 
     let project_id: Id<"projects"> | undefined;
@@ -1038,9 +1010,7 @@ export const webCreate = mutation({
     }
 
     const now = Date.now();
-    const id = await ctx.db.insert("tasks", {
-      user_id: userId,
-      team_id,
+    const id = await db.insert("tasks", {
       project_id,
       plan_id,
       short_id,
@@ -1054,8 +1024,6 @@ export const webCreate = mutation({
       attempt_count: 0,
       retry_count: 0,
       max_retries: 3,
-      created_at: now,
-      updated_at: now,
     } as any);
 
     if (plan_id) {
@@ -1085,19 +1053,22 @@ export const webTeamList = query({
     execution_status: v.optional(v.string()),
     promoted_only: v.optional(v.boolean()),
     limit: v.optional(v.number()),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (!team_id) return [];
+    let teamId = args.team_id;
+    if (!teamId) {
+      const user = await ctx.db.get(userId);
+      teamId = user?.active_team_id || user?.team_id;
+    }
+    if (!teamId) return [];
+    const db = await createDataContext(ctx, { userId, workspace: "team", team_id: teamId });
 
-    let tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_team_id", (q) => q.eq("team_id", team_id))
-      .collect();
+    let tasks = await db.query("tasks").collect();
 
     if (args.status) {
       tasks = tasks.filter(t => t.status === args.status);
@@ -1121,10 +1092,14 @@ export const webTeamList = query({
 export const webPromote = mutation({
   args: {
     short_id: v.string(),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
+
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id });
 
     const task = await ctx.db
       .query("tasks")
@@ -1132,9 +1107,10 @@ export const webPromote = mutation({
       .first();
     if (!task) throw new Error("Task not found");
 
-    const user = await ctx.db.get(userId);
-    const team_id = user?.active_team_id || user?.team_id;
-    if (task.user_id !== userId && task.team_id !== team_id) throw new Error("Task not found");
+    if (task.user_id !== userId) {
+      const accessed = await db.get(task._id);
+      if (!accessed) throw new Error("Task not found");
+    }
 
     await ctx.db.patch(task._id, { promoted: true, updated_at: Date.now() });
     return { success: true };
