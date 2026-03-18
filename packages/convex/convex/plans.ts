@@ -1260,6 +1260,7 @@ export const webList = query({
       plans = plans.filter((p: any) => p.status !== "done" && p.status !== "abandoned");
     }
 
+    plans.sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
     return plans.slice(0, args.limit || 50);
   },
 });
