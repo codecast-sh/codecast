@@ -222,6 +222,45 @@ async function executeHumanGate(
   return first.key.toLowerCase();
 }
 
+async function executeRemoteHumanGate(
+  node: WorkflowNode,
+  graph: WorkflowGraph,
+  context: Record<string, string>,
+  options: RunOptions
+): Promise<NodeOutcome> {
+  const outEdges = graph.edges.filter(e => e.from === node.id);
+  const choices = outEdges
+    .filter(e => e.label)
+    .map((e) => ({ key: extractKey(e.label!), label: e.label!, target: e.to }));
+
+  console.log(`\n${c.bold}${c.magenta}  Human gate: ${node.label} (waiting for web response)${c.reset}`);
+
+  if (choices.length === 0) {
+    const response = await reportGate(options, node.id, node.label, [
+      { key: "ok", label: "Continue", target: "" },
+    ]);
+    return response ? "success" : "failure";
+  }
+
+  const response = await reportGate(options, node.id, node.label, choices);
+  if (!response) return "failure";
+
+  const match = choices.find(ch => ch.key.toUpperCase() === response.toUpperCase());
+  if (match) {
+    context["human.gate.selected"] = match.key;
+    context["human.gate.label"] = match.label;
+    context["human.gate.target"] = match.target;
+    console.log(`  ${c.green}✓ received: ${match.label}${c.reset}`);
+    return match.key.toLowerCase();
+  }
+
+  const first = choices[0];
+  context["human.gate.selected"] = first.key;
+  context["human.gate.label"] = first.label;
+  context["human.gate.target"] = first.target;
+  return first.key.toLowerCase();
+}
+
 // Extract key from label like "[A] Approve" → "A"
 function extractKey(label: string): string {
   const m = label.match(/^\[(.)\]/);
@@ -326,6 +365,9 @@ export interface RunOptions {
   goalOverride?: string;
   agentTimeout?: number;
   cwd?: string;
+  runId?: string;
+  convexSiteUrl?: string;
+  apiToken?: string;
 }
 
 // ─── Goal gate check (runs when exit node is reached) ────
@@ -349,6 +391,57 @@ function getRetryTarget(nodeId: string, graph: WorkflowGraph): WorkflowNode | nu
   const node = graph.nodes.get(nodeId);
   const targetId = node?.retry_target;
   if (targetId && graph.nodes.has(targetId)) return graph.nodes.get(targetId)!;
+  return null;
+}
+
+async function reportProgress(options: RunOptions, payload: Record<string, any>): Promise<void> {
+  if (!options.runId || !options.convexSiteUrl || !options.apiToken) return;
+  const body = { api_token: options.apiToken, run_id: options.runId, ...payload };
+  try {
+    await fetch(`${options.convexSiteUrl}/cli/workflow-runs/progress`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {}
+}
+
+async function reportGate(
+  options: RunOptions,
+  nodeId: string,
+  prompt: string,
+  choices: Array<{ key: string; label: string; target: string }>
+): Promise<string | null> {
+  if (!options.runId || !options.convexSiteUrl || !options.apiToken) return null;
+  try {
+    await fetch(`${options.convexSiteUrl}/cli/workflow-runs/gate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: options.apiToken,
+        run_id: options.runId,
+        node_id: nodeId,
+        prompt,
+        choices,
+      }),
+    });
+  } catch {
+    return null;
+  }
+
+  for (let i = 0; i < 3600; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const resp = await fetch(`${options.convexSiteUrl}/cli/workflow-runs/poll-gate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: options.apiToken, run_id: options.runId }),
+      });
+      const data = await resp.json() as { status?: string; gate_response?: string | null };
+      if (data.gate_response) return data.gate_response;
+      if (data.status !== "paused") return null;
+    } catch {}
+  }
   return null;
 }
 
@@ -379,6 +472,15 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   // Per-run outcome record for goal gate checking (all completed nodes)
   const nodeOutcomes: Record<string, NodeOutcome> = {};
 
+  if (options.runId) {
+    await reportProgress(options, {
+      current_node_id: startNode.id,
+      node_id: startNode.id,
+      node_status: "running",
+      run_status: "running",
+    });
+  }
+
   console.log(`\n${c.bold}${c.cyan}━━━ Workflow: ${graph.name} ━━━${c.reset}`);
   if (graph.goal) console.log(`${c.dim}Goal: ${graph.goal}${c.reset}`);
   console.log();
@@ -404,6 +506,14 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     console.log(`${c.bold}${icon} ${current.label}${c.reset}${visits > 1 ? c.dim + ` (visit ${visits})` + c.reset : ""}`);
 
     // ── Stage 3: Execute node ─────────────────────────────────────────────────
+    if (options.runId) {
+      await reportProgress(options, {
+        current_node_id: current.id,
+        node_id: current.id,
+        node_status: "running",
+      });
+    }
+
     let outcome: NodeOutcome;
 
     if (options.dryRun) {
@@ -413,12 +523,23 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
       outcome = "success";
     } else if (current.type === "command") {
       outcome = await executeCommand(current, state.context, cwd);
+    } else if (current.type === "human" && options.runId) {
+      outcome = await executeRemoteHumanGate(current, graph, state.context, options);
     } else if (current.type === "human") {
       outcome = await executeHumanGate(current, graph, state.context);
     } else if (current.type === "agent" || current.type === "prompt") {
       outcome = await executeAgent(current, graph, state.context, cwd, options);
     } else {
       outcome = "success";
+    }
+
+    if (options.runId) {
+      await reportProgress(options, {
+        current_node_id: current.id,
+        node_id: current.id,
+        node_status: outcome === "success" ? "completed" : "failed",
+        outcome,
+      });
     }
 
     // ── Stage 4: Record outcome in context and per-node map ───────────────────
@@ -528,9 +649,26 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   if (current.type === "exit" && !state.failed) {
     console.log(`\n${c.bold}${c.green}━━━ Workflow complete ━━━${c.reset}`);
     console.log(`${c.dim}Nodes: ${state.completed.join(" → ")}${c.reset}`);
+    if (options.runId) {
+      await reportProgress(options, {
+        current_node_id: current.id,
+        node_id: current.id,
+        node_status: "completed",
+        run_status: "completed",
+      });
+    }
   } else if (state.failed) {
     console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
     process.exitCode = 1;
+    if (options.runId) {
+      await reportProgress(options, {
+        current_node_id: current.id,
+        node_id: current.id,
+        node_status: "failed",
+        run_status: "failed",
+        fail_reason: state.failReason,
+      });
+    }
   }
 }
 

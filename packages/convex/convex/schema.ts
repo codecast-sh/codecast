@@ -89,7 +89,8 @@ export default defineSchema({
       v.literal("config_read"),
       v.literal("config_write"),
       v.literal("config_create"),
-      v.literal("config_delete")
+      v.literal("config_delete"),
+      v.literal("run_workflow")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),
@@ -1253,6 +1254,35 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
     .index("by_user_slug", ["user_id", "slug"]),
+
+  workflow_runs: defineTable({
+    user_id: v.id("users"),
+    workflow_id: v.id("workflows"),
+    status: v.union(v.literal("pending"), v.literal("running"), v.literal("paused"), v.literal("completed"), v.literal("failed")),
+    current_node_id: v.optional(v.string()),
+    node_statuses: v.array(v.object({
+      node_id: v.string(),
+      status: v.union(v.literal("pending"), v.literal("running"), v.literal("completed"), v.literal("failed")),
+      outcome: v.optional(v.string()),
+      started_at: v.optional(v.number()),
+      completed_at: v.optional(v.number()),
+    })),
+    goal_override: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+    gate_prompt: v.optional(v.string()),
+    gate_choices: v.optional(v.array(v.object({
+      key: v.string(),
+      label: v.string(),
+      target: v.string(),
+    }))),
+    gate_response: v.optional(v.string()),
+    fail_reason: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_workflow_id", ["workflow_id"])
+    .index("by_status", ["status"]),
 
   client_state: defineTable({
     user_id: v.id("users"),

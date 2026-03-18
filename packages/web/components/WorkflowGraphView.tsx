@@ -42,11 +42,15 @@ export interface WFEdge {
   condition?: string;
 }
 
+type NodeStatus = "pending" | "running" | "completed" | "failed";
+
 interface WorkflowGraphViewProps {
   nodes: WFNode[];
   edges: WFEdge[];
   onNodeSelect?: (node: WFNode | null) => void;
   selectedNodeId?: string | null;
+  nodeStatuses?: Record<string, NodeStatus>;
+  currentNodeId?: string;
 }
 
 // Solarized palette
@@ -111,28 +115,48 @@ const GAP_Y = 36;
 const PAD = 60;
 
 // Custom node — theme aware via CSS variables
+function getStatusOverride(status: NodeStatus | undefined, isCurrent: boolean, p: SolPalette): { border?: string; bg?: string; shadow?: string } | null {
+  if (!status) return null;
+  switch (status) {
+    case "running":  return { border: p.cyan, bg: p.bgAlt, shadow: `0 0 8px ${p.cyan}44` };
+    case "completed": return { border: p.green };
+    case "failed":    return { border: p.red };
+    default:          return null;
+  }
+}
+
 function WorkflowNode({ data, selected }: { data: any; selected?: boolean }) {
   const node = data.wfNode as WFNode;
+  const nodeStatus = data.nodeStatus as NodeStatus | undefined;
+  const isCurrent = data.isCurrent as boolean;
   const { theme } = useTheme();
   const p = SOL[theme];
   const colors = getNodeColors(node.type, p);
   const shapeStyle = getClipPath(node.shape);
+  const statusOverride = getStatusOverride(nodeStatus, isCurrent, p);
+
+  const borderColor = statusOverride?.border ?? (selected ? colors.border : colors.border + "99");
+  const bgColor = statusOverride?.bg ?? colors.bg;
+  const shadow = isCurrent && nodeStatus === "running"
+    ? `0 0 12px ${p.cyan}66, 0 0 4px ${p.cyan}33`
+    : statusOverride?.shadow ?? (selected ? `0 0 0 3px ${colors.border}33` : "none");
 
   return (
     <div
       style={{
         width: NODE_W,
         height: NODE_H,
-        background: colors.bg,
-        border: `${selected ? 2 : 1.5}px solid ${selected ? colors.border : colors.border + "99"}`,
+        background: bgColor,
+        border: `${selected ? 2 : 1.5}px solid ${borderColor}`,
         color: colors.text,
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
         gap: 2,
-        boxShadow: selected ? `0 0 0 3px ${colors.border}33` : "none",
+        boxShadow: shadow,
         position: "relative",
+        animation: isCurrent && nodeStatus === "running" ? "pulse 2s ease-in-out infinite" : undefined,
         ...shapeStyle,
       }}
     >
@@ -242,7 +266,7 @@ function bfsLayers(nodes: WFNode[], edges: WFEdge[]): WFNode[][] {
   return layers;
 }
 
-function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette) {
+function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette, nodeStatuses?: Record<string, NodeStatus>, currentNodeId?: string) {
   const layers = bfsLayers(wfNodes, wfEdges);
 
   // Re-detect back-edges for edge styling
@@ -276,7 +300,12 @@ function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette) {
     id: n.id,
     type: "workflow",
     position: pos.get(n.id) || { x: 0, y: 0 },
-    data: { wfNode: n, label: n.label },
+    data: {
+      wfNode: n,
+      label: n.label,
+      nodeStatus: nodeStatuses?.[n.id],
+      isCurrent: currentNodeId === n.id,
+    },
     style: { width: NODE_W, height: NODE_H },
   }));
 
@@ -300,14 +329,14 @@ function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette) {
   return { nodes, edges };
 }
 
-export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId }: WorkflowGraphViewProps) {
+export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId, nodeStatuses, currentNodeId }: WorkflowGraphViewProps) {
   const { theme } = useTheme();
   const p = SOL[theme];
 
   const { nodes: initNodes, edges: initEdges } = useMemo(
-    () => buildGraph(wfNodes, wfEdges, p),
+    () => buildGraph(wfNodes, wfEdges, p, nodeStatuses, currentNodeId),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [wfNodes, wfEdges, theme]
+    [wfNodes, wfEdges, theme, nodeStatuses, currentNodeId]
   );
 
   const [nodes, , onNodesChange] = useNodesState(initNodes);

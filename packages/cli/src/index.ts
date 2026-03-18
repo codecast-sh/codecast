@@ -10464,6 +10464,47 @@ workflow
   });
 
 workflow
+  .command("run-daemon <run_id>")
+  .description("Execute a workflow run from the daemon (internal)")
+  .action(async (runId: string) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast login");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await fetch(`${siteUrl}/cli/workflow-runs/get`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, run_id: runId }),
+    });
+    const data = await resp.json() as any;
+    if (data.error) {
+      console.error(`Error: ${data.error}`);
+      process.exit(1);
+    }
+    const { run, workflow: wf } = data;
+    const { runWorkflow } = await import("./workflow/runner.js");
+    const nodesMap = new Map<string, any>();
+    for (const n of wf.nodes) nodesMap.set(n.id, n);
+    const graph = {
+      name: wf.name,
+      goal: run.goal_override || wf.goal,
+      model_stylesheet: wf.model_stylesheet,
+      nodes: nodesMap,
+      edges: wf.edges,
+    };
+    const projectPath = run.project_path || process.cwd();
+    await runWorkflow(graph as any, {
+      runId,
+      convexSiteUrl: siteUrl,
+      apiToken: config.auth_token,
+      goalOverride: run.goal_override,
+      cwd: projectPath,
+    });
+  });
+
+workflow
   .command("validate <file>")
   .description("Validate a workflow file without running it")
   .action(async (file: string) => {

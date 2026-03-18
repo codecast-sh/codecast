@@ -762,6 +762,50 @@ async function executeRemoteCommand(
         }, 1000);
         return;
       }
+      case "run_workflow": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const workflowRunId = parsed.workflow_run_id;
+        if (!workflowRunId) {
+          error = "Missing workflow_run_id";
+          break;
+        }
+
+        let projectPath = process.env.HOME || "/tmp";
+        try {
+          const resp = await fetch(`${siteUrl}/cli/workflow-runs/get`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_token: config.auth_token, run_id: workflowRunId }),
+          });
+          const data = await resp.json() as any;
+          if (data.run?.project_path) {
+            const vp = validatePath(data.run.project_path);
+            if (vp) projectPath = vp;
+          }
+        } catch {}
+
+        const shortId = workflowRunId.slice(-6);
+        const tmuxSession = `wf-${shortId}`;
+
+        if (!hasTmux()) {
+          error = "tmux is not installed";
+          break;
+        }
+
+        const castBin = process.argv[0] || "cast";
+        const cmdText = `${castBin} workflow run-daemon ${workflowRunId}`;
+
+        try {
+          tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+          tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
+          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+          result = JSON.stringify({ tmux_session: tmuxSession, workflow_run_id: workflowRunId });
+          log(`[REMOTE] Started workflow run ${workflowRunId} in tmux: ${tmuxSession}`);
+        } catch (spawnErr) {
+          error = `Failed to start workflow: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
+        }
+        break;
+      }
       case "start_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const rawAgentType = parsed.agent_type;
