@@ -1003,11 +1003,12 @@ export const getAllUsers = internalQuery({
 export const getStalePlansWithSessions = internalQuery({
   args: { user_id: v.id("users"), stale_before: v.number() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const plans = await ctx.db
       .query("plans")
       .withIndex("by_user_status", (q) => q.eq("user_id", args.user_id).eq("status", "active"))
-      .filter((q) => q.lt(q.field("updated_at"), args.stale_before))
       .collect();
+    // Return plans with session links — the caller checks if insight is newer than plan
+    return plans.filter((p: any) => p.session_ids?.length > 0);
   },
 });
 
