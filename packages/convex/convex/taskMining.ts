@@ -253,7 +253,19 @@ export const mineTasksFromInsights = internalMutation({
         .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
         .filter((q) => q.eq(q.field("created_from_insight"), insight._id))
         .first();
-      if (alreadyMined) continue;
+      if (alreadyMined) {
+        // Still refresh any matching plan's updated_at to keep plans fresh
+        const title = insight.goal || insight.summary?.slice(0, 200);
+        if (title) {
+          const matchedPlan = findSimilarPlan(title);
+          const ts = insight.generated_at || Date.now();
+          if (matchedPlan && ts > matchedPlan.updated_at) {
+            await ctx.db.patch(matchedPlan._id, { updated_at: ts });
+            plansUpdated++;
+          }
+        }
+        continue;
+      }
 
       // 1. Primary task from the goal/summary
       if (insight.goal || insight.summary) {
