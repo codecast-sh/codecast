@@ -63,3 +63,4 @@ packages/web/binaries/
 .wrangler/
 logs/
 packages/desktop/src-tauri/target/
+docs/workflow-execution-plan.md
