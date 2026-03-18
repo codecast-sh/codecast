@@ -145,6 +145,28 @@ export const updateProgress = mutation({
       updated_at: now,
     });
 
+    // Link the session conversation to this workflow run
+    if (args.session_id) {
+      const sessionId = args.session_id;
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", sessionId))
+        .first();
+      if (conv) {
+        const isFirst = !run.primary_session_id;
+        await ctx.db.patch(conv._id, {
+          workflow_run_id: args.run_id,
+          is_workflow_sub: !isFirst,
+        });
+        if (isFirst) {
+          await ctx.db.patch(args.run_id, {
+            primary_session_id: sessionId,
+            updated_at: now,
+          });
+        }
+      }
+    }
+
     return { ok: true };
   },
 });
@@ -214,5 +236,21 @@ export const pollGateResponse = mutation({
       status: run.status,
       gate_response: run.gate_response ?? null,
     };
+  },
+});
+
+export const cancel = mutation({
+  args: { id: v.id("workflow_runs") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const run = await ctx.db.get(args.id);
+    if (!run || run.user_id !== userId) throw new Error("Not found");
+    if (run.status === "completed" || run.status === "failed") return;
+    await ctx.db.patch(args.id, {
+      status: "failed",
+      fail_reason: "Cancelled by user",
+      updated_at: Date.now(),
+    });
   },
 });

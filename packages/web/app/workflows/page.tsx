@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { WorkflowGraphView, type WFNode, type WFEdge } from "../../components/WorkflowGraphView";
-import { GitBranch, Clock, ChevronRight, X, Terminal, Bot, User, Zap, GitFork, Merge, Play, Pause, CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { GitBranch, Clock, ChevronRight, X, Terminal, Bot, User, Zap, GitFork, Merge, Play, Pause, CheckCircle, XCircle, Loader2, ExternalLink, Square } from "lucide-react";
 
 const api = _api as any;
 
@@ -52,9 +53,11 @@ interface WorkflowRun {
     node_id: string;
     status: "pending" | "running" | "completed" | "failed";
     outcome?: string;
+    session_id?: string;
     started_at?: number;
     completed_at?: number;
   }>;
+  primary_session_id?: string;
   goal_override?: string;
   gate_prompt?: string;
   gate_choices?: Array<{ key: string; label: string; target: string }>;
@@ -150,25 +153,42 @@ function NodeDetail({ node, onClose }: { node: WFNode; onClose: () => void }) {
 
 function RunDialog({ workflowId, onClose }: { workflowId: string; onClose: () => void }) {
   const [goalOverride, setGoalOverride] = useState("");
+  const [projectPath, setProjectPath] = useState(() => {
+    try { return localStorage.getItem("wf_last_project_path") || ""; } catch { return ""; }
+  });
   const createRun = useMutation(api.workflow_runs.create);
   const [running, setRunning] = useState(false);
 
   const handleRun = async () => {
     setRunning(true);
+    if (projectPath) {
+      try { localStorage.setItem("wf_last_project_path", projectPath); } catch {}
+    }
     await createRun({
       workflow_id: workflowId,
       goal_override: goalOverride || undefined,
+      project_path: projectPath || undefined,
     });
     setRunning(false);
     onClose();
   };
 
   return (
-    <div className="absolute top-12 right-4 z-20 w-72 bg-sol-bg-alt border border-sol-border/40 rounded-xl shadow-2xl overflow-hidden">
+    <div className="absolute top-12 right-4 z-20 w-80 bg-sol-bg-alt border border-sol-border/40 rounded-xl shadow-2xl overflow-hidden">
       <div className="px-4 py-3 border-b border-sol-border/30">
         <span className="text-xs font-semibold text-sol-text uppercase tracking-wider">Run Workflow</span>
       </div>
       <div className="p-4 space-y-3">
+        <div>
+          <label className="text-[10px] text-sol-text-dim uppercase tracking-wider block mb-1">Project path</label>
+          <input
+            type="text"
+            value={projectPath}
+            onChange={e => setProjectPath(e.target.value)}
+            placeholder="/Users/you/src/myproject"
+            className="w-full px-3 py-1.5 text-xs bg-sol-bg border border-sol-border/30 rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:border-sol-cyan/50 font-mono"
+          />
+        </div>
         <div>
           <label className="text-[10px] text-sol-text-dim uppercase tracking-wider block mb-1">Goal override (optional)</label>
           <input
@@ -245,6 +265,7 @@ function RunsPanel({ workflowId, activeRunId, onSelectRun }: {
   onSelectRun: (id: string | null) => void;
 }) {
   const runs = useQuery(api.workflow_runs.listForWorkflow, { workflow_id: workflowId }) as WorkflowRun[] | undefined;
+  const cancelRun = useMutation(api.workflow_runs.cancel);
 
   if (!runs || runs.length === 0) return null;
 
@@ -259,18 +280,35 @@ function RunsPanel({ workflowId, activeRunId, onSelectRun }: {
           const StatusIcon = st.icon;
           const isActive = activeRunId === run._id;
           return (
-            <button
-              key={run._id}
-              onClick={() => onSelectRun(isActive ? null : run._id)}
-              className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-                isActive ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/40"
-              }`}
-            >
-              <StatusIcon className={`w-3 h-3 flex-shrink-0 ${st.color} ${run.status === "running" ? "animate-spin" : ""}`} />
-              <span className="text-[10px] text-sol-text-muted font-mono truncate">{run._id.slice(-8)}</span>
-              <span className={`text-[10px] ${st.color} capitalize`}>{run.status}</span>
-              <span className="text-[10px] text-sol-text-dim ml-auto">{timeAgo(run.created_at)}</span>
-            </button>
+            <div key={run._id} className={`flex items-center transition-colors ${isActive ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/40"}`}>
+              <button
+                onClick={() => onSelectRun(isActive ? null : run._id)}
+                className="flex-1 flex items-center gap-2 px-3 py-1.5 text-left min-w-0"
+              >
+                <StatusIcon className={`w-3 h-3 flex-shrink-0 ${st.color} ${run.status === "running" ? "animate-spin" : ""}`} />
+                <span className="text-[10px] text-sol-text-muted font-mono truncate">{run._id.slice(-8)}</span>
+                <span className={`text-[10px] ${st.color} capitalize`}>{run.status}</span>
+                <span className="text-[10px] text-sol-text-dim ml-auto">{timeAgo(run.created_at)}</span>
+              </button>
+              {run.primary_session_id && (
+                <Link
+                  href={`/conversation/${run.primary_session_id}`}
+                  className="px-2 py-1.5 text-sol-text-dim hover:text-sol-cyan transition-colors"
+                  title="View in inbox"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                </Link>
+              )}
+              {(run.status === "running" || run.status === "paused" || run.status === "pending") && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); cancelRun({ id: run._id as any }); }}
+                  className="px-2 py-1.5 text-sol-text-dim hover:text-sol-red transition-colors"
+                  title="Stop run"
+                >
+                  <Square className="w-3 h-3" />
+                </button>
+              )}
+            </div>
           );
         })}
       </div>

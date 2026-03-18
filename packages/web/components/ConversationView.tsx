@@ -145,6 +145,7 @@ export type ConversationData = {
     username: string;
   } | null;
   is_favorite?: boolean;
+  workflow_run_id?: string | null;
   draft_message?: string;
   compaction_count?: number;
   loaded_start_index?: number;
@@ -5677,6 +5678,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
   const isSessionLive = managedSession?.managed === true;
 
+  const workflowRun = useQuery(
+    api.workflow_runs.get,
+    conversation?.workflow_run_id ? { id: conversation.workflow_run_id as any } : "skip"
+  ) as { _id: string; status: string; gate_prompt?: string; gate_choices?: Array<{ key: string; label: string; target: string }> } | null | undefined;
+  const respondToGate = useMutation(api.workflow_runs.respondToGate);
+  const [gateResponding, setGateResponding] = useState(false);
+  const handleGateChoice = useCallback(async (key: string) => {
+    if (!workflowRun) return;
+    setGateResponding(true);
+    try { await respondToGate({ id: workflowRun._id as any, response: key }); } finally { setGateResponding(false); }
+  }, [workflowRun, respondToGate]);
+
   const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
   const optimisticTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const handleCycleMode = useCallback(() => {
@@ -8091,6 +8104,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
       </div>
 
+      {workflowRun?.status === "paused" && workflowRun.gate_prompt && (
+        <div className="border-t border-sol-magenta/30 bg-sol-magenta/5 px-4 py-3">
+          <div className="text-[10px] text-sol-magenta uppercase tracking-wider font-semibold mb-2">Human Gate</div>
+          <p className="text-sm text-sol-text mb-3">{workflowRun.gate_prompt}</p>
+          <div className="flex flex-wrap gap-2">
+            {workflowRun.gate_choices?.map(choice => (
+              <button
+                key={choice.key}
+                onClick={() => handleGateChoice(choice.key)}
+                disabled={gateResponding}
+                className="px-3 py-1.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded-lg hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-50"
+              >
+                <span className="font-mono text-sol-magenta mr-1.5">[{choice.key}]</span>
+                {choice.label.replace(/^\[.\]\s*/, "")}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
           {conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (

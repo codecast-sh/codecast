@@ -242,6 +242,8 @@ type Conversation = {
   parent_conversation_id?: string | null;
   parent_message_uuid?: string | null;
   is_subagent?: boolean;
+  is_workflow_sub?: boolean;
+  workflow_run_id?: string | null;
   parent_title?: string | null;
   children?: Conversation[];
   latest_todos?: { todos: Array<{ status: string; content: string; activeForm?: string }>; timestamp: number };
@@ -1381,6 +1383,11 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                               : "bg-violet-900/40 text-violet-300 border border-violet-600/50"
                           }`}>
                             {!conv.is_active ? "Terminated" : "Subagent"}
+                          </span>
+                        )}
+                        {conv.workflow_run_id && !conv.is_workflow_sub && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 text-[10px] font-medium">
+                            Workflow
                           </span>
                         )}
                         {conv.parent_conversation_id && !conv.is_subagent && (

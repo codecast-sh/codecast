@@ -8,6 +8,7 @@ export type FilterableSession = {
   subagent_types?: string[];
   parent_conversation_id?: string | null;
   is_subagent?: boolean;
+  is_workflow_sub?: boolean;
 };
 
 export function isSubagent(c: FilterableSession): boolean {
@@ -69,8 +70,9 @@ export function isWarmupSession(c: FilterableSession): boolean {
   return warmupPatterns.some((p) => firstAssistantMsg.includes(p));
 }
 
-export function shouldShowSession(c: FilterableSession, options?: { excludeDefaultTitles?: boolean }): boolean {
+export function shouldShowSession(c: FilterableSession, options?: { excludeDefaultTitles?: boolean; showWorkflowSubs?: boolean }): boolean {
   if (isTrivialSubagent(c) || isWarmupSession(c) || isSystemMessageSession(c)) return false;
   if (options?.excludeDefaultTitles && isDefaultTitleSession(c)) return false;
+  if (c.is_workflow_sub && !options?.showWorkflowSubs) return false;
   return true;
 }
