@@ -14,4 +14,5 @@ export {
   buildImplementerPrompt,
   buildReviewerPrompt,
   buildCriticPrompt,
+  resolveTaskModel,
 } from "./prompts";

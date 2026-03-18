@@ -29,7 +29,7 @@ import {
 } from "./jsonlGenerator.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
-import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt } from "./agents/index.js";
+import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 
 const program = new Command();
@@ -8456,16 +8456,18 @@ plan
 
       try {
         const runtime = getAgentRuntime();
+        const taskModel = resolveTaskModel(plan, task);
         const handle = runtime.spawn({
           sessionName,
           prompt,
-          model: "opus",
+          model: taskModel,
           workingDir: getRealCwd(),
           resourceIndex: i,
           taskShortId: task.short_id,
         });
         activeHandles.set(sessionName, handle);
-        console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title} ${c.dim}(${runtime.name})${c.reset}`);
+        const modelTag = taskModel !== "opus" ? ` ${c.dim}[${taskModel}]${c.reset}` : "";
+        console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}${modelTag} ${c.dim}(${runtime.name})${c.reset}`);
         try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
       } catch (err: any) {
         console.error(`  ${c.red}error${c.reset} spawning ${task.short_id}: ${err.message}`);
@@ -8820,6 +8822,29 @@ plan
           totalCompleted++;
           if (agentAlive && handle) runtime.kill(handle);
 
+          if (task.verify_with) {
+            const verifyTask = allTasks.find((t: any) => t.short_id === task.verify_with);
+            if (verifyTask && verifyTask.status !== "done" && verifyTask.status !== "dropped" && !activeAgents.has(verifyTask.short_id)) {
+              const verifyRetries = verifyTask.retry_count || 0;
+              const verifyMaxRetries = verifyTask.max_retries || 3;
+              if (verifyRetries < verifyMaxRetries) {
+                console.log(`  ${c.dim}verify${c.reset} ${c.cyan}${shortId}${c.reset} -> spawning ${c.cyan}${verifyTask.short_id}${c.reset}`);
+                const vSessionName = `impl-${verifyTask.short_id}`;
+                const vPrompt = buildImplementerPrompt(plan, verifyTask);
+                const vModel = resolveTaskModel(plan, verifyTask, "sonnet");
+                try {
+                  const vHandle = runtime.spawn({
+                    sessionName: vSessionName, prompt: vPrompt, model: vModel,
+                    workingDir: getRealCwd(), taskShortId: verifyTask.short_id,
+                  });
+                  activeHandles.set(vSessionName, vHandle);
+                  activeAgents.set(verifyTask.short_id, { task: verifyTask, spawnedAt: Date.now() });
+                  try { await cliPost("/cli/work/update", { short_id: verifyTask.short_id, status: "in_progress" }); } catch {}
+                } catch {}
+              }
+            }
+          }
+
           // Optional verification before merge
           if (options.verify) {
             const verifyResult = spawnSync("npx", ["tsc", "--noEmit"], {
@@ -8972,10 +8997,11 @@ plan
         const resourceIdx = [...activeAgents.values()].length + i;
 
         try {
+          const taskModel = resolveTaskModel(plan, task);
           const handle = runtime.spawn({
             sessionName,
             prompt,
-            model: "opus",
+            model: taskModel,
             workingDir: getRealCwd(),
             resourceIndex: resourceIdx % 4,
             taskShortId: task.short_id,
@@ -8983,7 +9009,8 @@ plan
           activeHandles.set(sessionName, handle);
           activeAgents.set(task.short_id, { task, spawnedAt: Date.now() });
           totalSpawned++;
-          console.log(`  ${c.green}spawn${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
+          const modelTag = taskModel !== "opus" ? ` [${taskModel}]` : "";
+          console.log(`  ${c.green}spawn${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}${modelTag}`);
           try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
         } catch (err: any) {
           console.error(`  ${c.red}fail${c.reset}  ${task.short_id}: ${err.message}`);
@@ -9533,6 +9560,137 @@ plan
     try {
       await cliPost("/cli/plans/log", { short_id: planId, entry: `Drive completed: ${totalRounds} rounds` });
     } catch {}
+  });
+
+plan
+  .command("retro")
+  .description("Generate a retrospective for a completed plan")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const tasks = plan.tasks || [];
+    const done = tasks.filter((t: any) => t.status === "done");
+    const failed = tasks.filter((t: any) => t.status === "dropped");
+    const blocked = tasks.filter((t: any) => t.execution_status === "blocked" || t.execution_status === "needs_context");
+    const withConcerns = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
+
+    const totalTime = tasks.reduce((sum: number, t: any) => sum + (t.actual_minutes || 0), 0);
+    const retryCount = tasks.reduce((sum: number, t: any) => sum + (t.retry_count || 0), 0);
+
+    const taskSummaries = tasks.map((t: any) => {
+      const parts = [`- [${t.status}] ${t.title} (${t.short_id})`];
+      if (t.execution_concerns) parts.push(`  concern: ${t.execution_concerns}`);
+      if (t.retry_count) parts.push(`  retries: ${t.retry_count}`);
+      return parts.join("\n");
+    }).join("\n");
+
+    const driveRounds = plan.drive_state?.rounds?.map((r: any) =>
+      `Round ${r.round}: ${r.findings.length} findings, ${r.fixed.length} fixed${r.deferred?.length ? `, ${r.deferred.length} deferred` : ""}`
+    ).join("\n") || "No drive rounds";
+
+    const prompt = `Generate a structured retrospective for this plan. Return ONLY valid JSON.
+
+Plan: ${plan.title} (${planId})
+Goal: ${plan.goal || "N/A"}
+Status: ${plan.status}
+Stats: ${done.length} done, ${failed.length} dropped, ${blocked.length} blocked, ${withConcerns.length} with concerns
+Total retries: ${retryCount}
+Time: ${totalTime ? `${totalTime}m` : "not tracked"}
+
+Tasks:
+${taskSummaries}
+
+Drive rounds:
+${driveRounds}
+
+Activity log (last 10):
+${(plan.progress_log || []).slice(-10).map((e: any) => `- ${e.entry}`).join("\n")}
+
+Return JSON with this shape:
+{
+  "smoothness": "effortless|smooth|bumpy|struggled|failed",
+  "headline": "One sentence summary of the plan execution",
+  "learnings": ["What worked well or what we learned (2-4 items)"],
+  "friction_points": ["What caused delays, retries, or issues (2-4 items)"],
+  "open_items": ["Tech debt, follow-ups, or investigations needed (0-3 items)"]
+}`;
+
+    console.log(`\n  ${c.bold}Generating retro${c.reset} for ${c.cyan}${planId}${c.reset}...\n`);
+
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.ANTHROPIC_API_KEY || "",
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 500,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      if (!response.ok) {
+        console.error(`  API error: ${response.status}`);
+        process.exit(1);
+      }
+
+      const data = await response.json() as any;
+      const raw = data.content?.[0]?.text?.trim();
+      if (!raw) { console.error("  Empty response"); process.exit(1); }
+
+      const cleaned = raw.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+      const retro = JSON.parse(cleaned);
+
+      const smoothnessEmoji: Record<string, string> = {
+        effortless: "++", smooth: "+", bumpy: "~", struggled: "-", failed: "--",
+      };
+
+      console.log(`  ${c.bold}Smoothness:${c.reset} ${retro.smoothness} ${smoothnessEmoji[retro.smoothness] || ""}`);
+      console.log(`  ${c.bold}Summary:${c.reset} ${retro.headline}\n`);
+
+      if (retro.learnings?.length) {
+        console.log(`  ${c.bold}Learnings:${c.reset}`);
+        retro.learnings.forEach((l: string) => console.log(`    - ${l}`));
+        console.log();
+      }
+
+      if (retro.friction_points?.length) {
+        console.log(`  ${c.bold}Friction:${c.reset}`);
+        retro.friction_points.forEach((f: string) => console.log(`    - ${f}`));
+        console.log();
+      }
+
+      if (retro.open_items?.length) {
+        console.log(`  ${c.bold}Open items:${c.reset}`);
+        retro.open_items.forEach((o: string) => console.log(`    - ${o}`));
+        console.log();
+      }
+
+      try {
+        await cliPost("/cli/plans/save-retro", {
+          short_id: planId,
+          ...retro,
+        });
+        console.log(fmt.muted("  Retro saved to plan."));
+      } catch {
+        console.log(fmt.muted("  (Could not save retro to backend)"));
+      }
+
+      try {
+        await cliPost("/cli/plans/log", {
+          short_id: planId,
+          entry: `Retro generated: ${retro.smoothness} - ${retro.headline}`,
+        });
+      } catch {}
+    } catch (err: any) {
+      console.error(`  Error: ${err.message}`);
+      process.exit(1);
+    }
   });
 
 plan

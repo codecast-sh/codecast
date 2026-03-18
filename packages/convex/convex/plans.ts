@@ -67,6 +67,7 @@ export const create = mutation({
     project_id: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    model_stylesheet: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -110,6 +111,7 @@ export const create = mutation({
       context_pointers: [],
       session_ids: [],
       created_from_conversation_id,
+      model_stylesheet: args.model_stylesheet,
     });
 
     return { id, short_id };
@@ -277,6 +279,7 @@ export const update = mutation({
       path_or_url: v.string(),
     }))),
     doc_id: v.optional(v.string()),
+    model_stylesheet: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -297,6 +300,7 @@ export const update = mutation({
     if (args.status) updates.status = args.status;
     if (args.context_pointers) updates.context_pointers = args.context_pointers;
     if (args.doc_id) updates.doc_id = args.doc_id as Id<"docs">;
+    if (args.model_stylesheet !== undefined) updates.model_stylesheet = args.model_stylesheet;
 
     if (args.task_ids) {
       const taskDocIds = args.task_ids.map(id => id as Id<"tasks">);
@@ -1311,5 +1315,41 @@ export const webPlanContext = query({
       progress: { total: tasks.length, done, in_progress: inProgress },
       recent_log: (plan.progress_log || []).slice(-3),
     };
+  },
+});
+
+export const saveRetro = mutation({
+  args: {
+    api_token: v.string(),
+    short_id: v.string(),
+    smoothness: v.string(),
+    headline: v.string(),
+    learnings: v.array(v.string()),
+    friction_points: v.array(v.string()),
+    open_items: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+      .first();
+    if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
+
+    await ctx.db.patch(plan._id, {
+      retro: {
+        smoothness: args.smoothness,
+        headline: args.headline,
+        learnings: args.learnings,
+        friction_points: args.friction_points,
+        open_items: args.open_items,
+        generated_at: Date.now(),
+      },
+      updated_at: Date.now(),
+    });
+    return { success: true };
   },
 });

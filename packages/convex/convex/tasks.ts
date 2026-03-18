@@ -68,6 +68,8 @@ export const create = mutation({
     insight_id: v.optional(v.string()),
     plan_id: v.optional(v.string()),
     max_retries: v.optional(v.number()),
+    model: v.optional(v.string()),
+    verify_with: v.optional(v.string()),
     project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -131,6 +133,8 @@ export const create = mutation({
       attempt_count: 0,
       retry_count: 0,
       max_retries: args.max_retries ?? 3,
+      model: args.model,
+      verify_with: args.verify_with,
     } as any);
 
     if (plan_id) {

@@ -1,3 +1,88 @@
+export function resolveTaskModel(plan: any, task: any, defaultModel = "opus"): string {
+  if (task.model) return task.model;
+  if (!plan.model_stylesheet) return defaultModel;
+
+  const rules = parseModelStylesheet(plan.model_stylesheet);
+  let bestMatch = defaultModel;
+  let bestSpecificity = -1;
+
+  for (const rule of rules) {
+    let specificity = 0;
+    let matches = false;
+
+    if (rule.selector === "*") {
+      matches = true;
+      specificity = 0;
+    } else if (rule.selector.startsWith("#")) {
+      if (task.short_id === rule.selector.slice(1)) {
+        matches = true;
+        specificity = 3;
+      }
+    } else if (rule.selector.startsWith(".")) {
+      const tag = rule.selector.slice(1);
+      if (task.labels?.includes(tag) || task.tags?.includes(tag)) {
+        matches = true;
+        specificity = 2;
+      }
+    } else {
+      if (task.task_type === rule.selector) {
+        matches = true;
+        specificity = 1;
+      }
+    }
+
+    if (matches && specificity > bestSpecificity) {
+      bestSpecificity = specificity;
+      bestMatch = rule.model;
+    }
+  }
+
+  return bestMatch;
+}
+
+interface StylesheetRule {
+  selector: string;
+  model: string;
+}
+
+function parseModelStylesheet(stylesheet: string): StylesheetRule[] {
+  const rules: StylesheetRule[] = [];
+  const lines = stylesheet.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("//"));
+
+  for (const line of lines) {
+    const match = line.match(/^([*#.]\S*)\s*\{\s*model:\s*([^;}\s]+)/);
+    if (match) {
+      rules.push({ selector: match[1], model: match[2] });
+    }
+  }
+  return rules;
+}
+
+function buildDoneContext(doneTasks: any[], waveNumber?: number): string {
+  if (doneTasks.length === 0) return "";
+
+  const maxFull = 15;
+  if (doneTasks.length <= maxFull) {
+    return `\nAlready completed:\n${doneTasks.map((t: any) => `- ${t.title}`).join("\n")}`;
+  }
+
+  const recent = doneTasks.slice(-8);
+  const earlier = doneTasks.slice(0, -8);
+  const summary = `${earlier.length} earlier tasks completed (covering: ${summarizeTaskTopics(earlier)})`;
+  return `\nAlready completed (${doneTasks.length} total):\n- ${summary}\n${recent.map((t: any) => `- ${t.title}`).join("\n")}`;
+}
+
+function summarizeTaskTopics(tasks: any[]): string {
+  const labels = new Set<string>();
+  for (const t of tasks) {
+    if (t.labels) t.labels.forEach((l: string) => labels.add(l));
+    const words = t.title.split(/\s+/).slice(0, 3).join(" ");
+    if (words) labels.add(words);
+    if (labels.size >= 6) break;
+  }
+  return [...labels].slice(0, 5).join(", ");
+}
+
 export function buildImplementerPrompt(plan: any, task: any): string {
   const acceptance = task.acceptance_criteria?.length
     ? task.acceptance_criteria.map((ac: string) => `- ${ac}`).join("\n")
@@ -8,9 +93,7 @@ export function buildImplementerPrompt(plan: any, task: any): string {
     : "";
 
   const doneTasks = (plan.tasks || []).filter((t: any) => t.status === "done");
-  const doneContext = doneTasks.length
-    ? `\nAlready completed:\n${doneTasks.map((t: any) => `- ${t.title}`).join("\n")}`
-    : "";
+  const doneContext = buildDoneContext(doneTasks, task.wave_number);
 
   const planContext = [
     `Plan: ${plan.title} (${plan.short_id})`,
@@ -40,7 +123,13 @@ ${steps ? `\n## Steps\n${steps}\n` : ""}
 1. **Understand first**: Read acceptance criteria and relevant code. If unclear, report NEEDS_CONTEXT.
 2. **Worktree**: If available, work in your worktree branch. Commit on the branch -- autopilot handles merging to main.
 3. **Test-driven**: Write failing test -> implement minimal code -> verify -> commit.
-4. **Small commits**: One logical change per commit. Conventional commits format.
+4. **Small commits**: One logical change per commit. Conventional commits format. Add trailers to every commit:
+   \`\`\`
+   git commit -m "feat(scope): description
+
+   Codecast-Plan: ${plan.short_id}
+   Codecast-Task: ${task.short_id}"
+   \`\`\`
 5. **Verify everything**: Run tests, check build. Evidence before claims.
 6. **Self-review**: Before reporting done, review your changes. Check for AI slop, missing edge cases, dead code.
 

@@ -901,6 +901,15 @@ export default defineSchema({
         ),
       }),
     ),
+    model_stylesheet: v.optional(v.string()),
+    retro: v.optional(v.object({
+      smoothness: v.string(),
+      headline: v.string(),
+      learnings: v.array(v.string()),
+      friction_points: v.array(v.string()),
+      open_items: v.array(v.string()),
+      generated_at: v.number(),
+    })),
     orchestration_metadata: v.optional(
       v.object({
         wave_count: v.optional(v.number()),
@@ -965,6 +974,9 @@ export default defineSchema({
 
     assignee: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
+
+    model: v.optional(v.string()),
+    verify_with: v.optional(v.string()),
 
     // Dependencies
     blocked_by: v.optional(v.array(v.string())),
