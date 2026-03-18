@@ -1,5 +1,6 @@
 "use client";
-import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { createContext, useContext, useState, useCallback, useRef, useMemo } from "react";
+import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";
 
 type ImageGalleryContextType = {
@@ -46,16 +47,12 @@ export function ImageGalleryProvider({ children }: { children: React.ReactNode }
     setCurrentIndex(i => (i > 0 ? i - 1 : i));
   }, []);
 
-  useEffect(() => {
+  useEventListener("keydown", (e: KeyboardEvent) => {
     if (!isOpen) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); close(); }
-      else if (e.key === "ArrowRight") { e.preventDefault(); goNext(); }
-      else if (e.key === "ArrowLeft") { e.preventDefault(); goPrev(); }
-    };
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [isOpen, close, goNext, goPrev]);
+    if (e.key === "Escape") { e.preventDefault(); close(); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); goNext(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); goPrev(); }
+  }, document);
 
   const ctx = useMemo(() => ({ register, open }), [register, open]);
 

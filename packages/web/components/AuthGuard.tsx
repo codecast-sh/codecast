@@ -1,13 +1,12 @@
 "use client";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
 
 function RedirectToHome() {
   const router = useRouter();
-  useEffect(() => {
-    router.push("/");
-  }, [router]);
+  useMountEffect(() => { router.push("/"); });
   return null;
 }
 
@@ -34,10 +33,10 @@ let hasHydrated = false;
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(hasHydrated);
 
-  useEffect(() => {
+  useMountEffect(() => {
     hasHydrated = true;
     setMounted(true);
-  }, []);
+  });
 
   if (!mounted) {
     return (

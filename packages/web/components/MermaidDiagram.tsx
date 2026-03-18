@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import mermaid from "mermaid";
 
 let initialized = false;
@@ -31,7 +32,7 @@ export function MermaidDiagram({ code }: { code: string }) {
   const [error, setError] = useState<string | null>(null);
   const id = useRef(`mermaid-${++idCounter}`);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     ensureInit();
     let cancelled = false;
     setError(null);

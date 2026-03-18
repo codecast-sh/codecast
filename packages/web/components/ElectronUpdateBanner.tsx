@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
 import { isElectron, getAppVersion } from "../lib/desktop";
 
 function compareVersions(a: string, b: string): number {
@@ -17,7 +18,7 @@ function compareVersions(a: string, b: string): number {
 export function ElectronUpdateBanner() {
   const [updateInfo, setUpdateInfo] = useState<{ downloadUrl: string; latest: string; current: string } | null>(null);
 
-  useEffect(() => {
+  useMountEffect(() => {
     if (!isElectron()) return;
     let cancelled = false;
 
@@ -37,7 +38,7 @@ export function ElectronUpdateBanner() {
     check();
     const interval = setInterval(check, 60 * 60 * 1000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, []);
+  });
 
   if (!updateInfo) return null;
 

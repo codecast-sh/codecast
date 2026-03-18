@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useEventListener } from "../hooks/useEventListener";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { ReviewView } from "./ReviewView";
 import { useBatchReview } from "./BatchReviewContext";
@@ -66,14 +68,9 @@ export function BatchReviewView() {
     [currentPrId, currentPrIndex, goToNextPR, goToPrevPR, markPRReviewed, prIds.length, router]
   );
 
-  useEffect(() => {
-    window.addEventListener("keydown", handleKeyPress);
-    return () => window.removeEventListener("keydown", handleKeyPress);
-  }, [handleKeyPress]);
+  useEventListener("keydown", handleKeyPress);
 
-  useEffect(() => {
-    setCurrentFileIndex(0);
-  }, [currentPrIndex]);
+  useWatchEffect(() => { setCurrentFileIndex(0); }, [currentPrIndex]);
 
   return (
     <div className="h-screen flex flex-col bg-sol-bg">

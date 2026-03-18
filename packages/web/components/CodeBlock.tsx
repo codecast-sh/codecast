@@ -1,5 +1,6 @@
 "use client";
-import { useState, useRef, useMemo, useCallback, useEffect } from "react";
+import { useState, useRef, useMemo, useCallback } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";
 import { Copy, Check, MoveHorizontal } from "lucide-react";
@@ -71,7 +72,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = containerRef.current;
     if (!el || !expanded) return;
     requestAnimationFrame(() => {
