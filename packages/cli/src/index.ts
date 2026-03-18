@@ -7851,6 +7851,7 @@ work
     if (options.status) body.status = options.status;
     if (options.ready) body.ready = true;
     if (options.all) body.include_derived = true;
+    body.project_path = getRealCwd();
 
     const tasks = await cliPost("/cli/work/list", body);
     if (!Array.isArray(tasks) || tasks.length === 0) {
@@ -8055,6 +8056,7 @@ work
     const body: Record<string, any> = { ready: true };
     if (options.project) body.project_id = options.project;
     if (options.plan) body.plan_id = options.plan;
+    body.project_path = getRealCwd();
     const tasks = await cliPost("/cli/work/list", body);
     if (!Array.isArray(tasks) || tasks.length === 0) {
       console.log(fmt.muted("No ready tasks."));
@@ -8082,6 +8084,7 @@ work
     const sessionId = detectCurrentSessionId();
     const body: Record<string, any> = {};
     if (sessionId) body.conversation_id = sessionId;
+    body.project_path = getRealCwd();
     const result = await cliPost("/cli/work/snippet", body);
     if (result.snippet) {
       console.log(result.snippet);
@@ -8235,6 +8238,7 @@ plan
     else if (options.done) body.status = "done";
     else if (options.active) body.status = "active";
     if (options.project) body.project_id = options.project;
+    body.project_path = getRealCwd();
 
     const plans = await cliPost("/cli/plans/list", body);
     if (!Array.isArray(plans) || plans.length === 0) {

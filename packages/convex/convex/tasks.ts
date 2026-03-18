@@ -404,7 +404,8 @@ export const get = query({
       task = await ctx.db.get(args.id as Id<"tasks">);
     }
 
-    if (!task || task.user_id !== auth.userId) return null;
+    if (!task) return null;
+    if (!(await canAccessTask(ctx, auth.userId, task))) return null;
 
     const comments = await ctx.db
       .query("task_comments")
@@ -451,7 +452,7 @@ export const update = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task || task.user_id !== auth.userId) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     const now = Date.now();
     const updates: any = { updated_at: now };
@@ -557,7 +558,7 @@ export const addComment = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task || task.user_id !== auth.userId) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     const user = await ctx.db.get(auth.userId);
 
@@ -598,7 +599,7 @@ export const addDep = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task || task.user_id !== auth.userId) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     if (args.blocks) {
       const current = task.blocks || [];
@@ -1144,7 +1145,7 @@ export const incrementRetryCount = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task || task.user_id !== auth.userId) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     const now = Date.now();
     const newRetryCount = ((task as any).retry_count || 0) + 1;
@@ -1195,7 +1196,7 @@ export const updateExecutionStatus = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task || task.user_id !== auth.userId) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     const now = Date.now();
     await ctx.db.patch(task._id, { execution_status: args.execution_status, updated_at: now });
@@ -1405,7 +1406,7 @@ export const scheduleRetry = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task || task.user_id !== auth.userId) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     const now = Date.now();
     const newAttemptCount = (task.attempt_count || 0) + 1;
