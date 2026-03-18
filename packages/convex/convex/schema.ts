@@ -1060,6 +1060,36 @@ export default defineSchema({
       filterFields: ["user_id", "project_id", "status"],
     }),
 
+  orchestration_events: defineTable({
+    user_id: v.id("users"),
+    plan_id: v.optional(v.id("plans")),
+    plan_short_id: v.optional(v.string()),
+    task_short_id: v.optional(v.string()),
+    event_type: v.union(
+      v.literal("agent_spawned"),
+      v.literal("agent_completed"),
+      v.literal("agent_failed"),
+      v.literal("agent_timeout"),
+      v.literal("task_completed"),
+      v.literal("task_blocked"),
+      v.literal("task_needs_context"),
+      v.literal("merge_succeeded"),
+      v.literal("merge_failed"),
+      v.literal("wave_started"),
+      v.literal("drive_round_started"),
+      v.literal("drive_round_completed"),
+      v.literal("plan_completed"),
+      v.literal("retro_generated"),
+      v.literal("verification_spawned"),
+    ),
+    detail: v.optional(v.string()),
+    metadata: v.optional(v.any()),
+    created_at: v.number(),
+  })
+    .index("by_plan_id", ["plan_id", "created_at"])
+    .index("by_plan_short_id", ["plan_short_id", "created_at"])
+    .index("by_user_id", ["user_id", "created_at"]),
+
   task_comments: defineTable({
     task_id: v.id("tasks"),
     author: v.string(),

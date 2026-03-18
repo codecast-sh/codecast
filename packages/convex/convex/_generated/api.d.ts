@@ -36,6 +36,7 @@ import type * as managedSessions from "../managedSessions.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
 import type * as notifications from "../notifications.js";
+import type * as orchestrationEvents from "../orchestrationEvents.js";
 import type * as patterns from "../patterns.js";
 import type * as pendingMessages from "../pendingMessages.js";
 import type * as permissions from "../permissions.js";
@@ -92,6 +93,7 @@ declare const fullApi: ApiFromModules<{
   messages: typeof messages;
   migrations: typeof migrations;
   notifications: typeof notifications;
+  orchestrationEvents: typeof orchestrationEvents;
   patterns: typeof patterns;
   pendingMessages: typeof pendingMessages;
   permissions: typeof permissions;

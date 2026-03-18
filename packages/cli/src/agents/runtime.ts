@@ -35,6 +35,62 @@ export interface AgentRuntime {
   kill(handle: AgentHandle): void;
 }
 
+export interface ExecResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface Sandbox {
+  name: string;
+  execCommand(command: string, opts?: { cwd?: string; timeout?: number }): ExecResult;
+  readFile(path: string): string;
+  writeFile(path: string, content: string): void;
+  fileExists(path: string): boolean;
+  spawnAgent(opts: SpawnOpts): AgentHandle;
+}
+
+export class LocalSandbox implements Sandbox {
+  name = "local";
+  private runtime: AgentRuntime;
+
+  constructor(runtime?: AgentRuntime) {
+    this.runtime = runtime || detectRuntime();
+  }
+
+  execCommand(command: string, opts?: { cwd?: string; timeout?: number }): ExecResult {
+    const result = spawnSync("sh", ["-c", command], {
+      encoding: "utf-8",
+      cwd: opts?.cwd,
+      timeout: opts?.timeout || 60_000,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return {
+      exitCode: result.status ?? 1,
+      stdout: result.stdout || "",
+      stderr: result.stderr || "",
+    };
+  }
+
+  readFile(path: string): string {
+    const { readFileSync } = require("fs");
+    return readFileSync(path, "utf-8");
+  }
+
+  writeFile(path: string, content: string): void {
+    const { writeFileSync } = require("fs");
+    writeFileSync(path, content, "utf-8");
+  }
+
+  fileExists(path: string): boolean {
+    return existsSync(path);
+  }
+
+  spawnAgent(opts: SpawnOpts): AgentHandle {
+    return this.runtime.spawn(opts);
+  }
+}
+
 const childProcesses = new Map<string, ChildProcess>();
 
 function logPath(sessionName: string): string {

@@ -168,7 +168,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
           });
         }
       }
-      if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey) {
+      if (e.key.toLowerCase() === "n" && e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey) {
         e.preventDefault();
         handleQuickCreateIsolated();
       }

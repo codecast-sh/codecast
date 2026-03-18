@@ -1,3 +1,28 @@
+export interface ResolvedModel {
+  provider: "anthropic" | "openai" | "gemini" | "unknown";
+  model: string;
+  raw: string;
+}
+
+export function parseModelSpec(raw: string): ResolvedModel {
+  if (raw.includes("/")) {
+    const [provider, ...rest] = raw.split("/");
+    const model = rest.join("/");
+    const knownProviders: Record<string, ResolvedModel["provider"]> = {
+      anthropic: "anthropic", openai: "openai", gemini: "gemini", google: "gemini",
+    };
+    return { provider: knownProviders[provider] || "unknown", model, raw };
+  }
+
+  if (raw.startsWith("gpt-") || raw.startsWith("o1") || raw.startsWith("o3") || raw.startsWith("o4")) {
+    return { provider: "openai", model: raw, raw };
+  }
+  if (raw.startsWith("gemini")) {
+    return { provider: "gemini", model: raw, raw };
+  }
+  return { provider: "anthropic", model: raw, raw };
+}
+
 export function resolveTaskModel(plan: any, task: any, defaultModel = "opus"): string {
   if (task.model) return task.model;
   if (!plan.model_stylesheet) return defaultModel;

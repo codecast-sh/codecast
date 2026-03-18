@@ -2852,6 +2852,12 @@ cliRoute("/cli/plans/recalc", async (ctx, body) => {
 cliRoute("/cli/plans/save-retro", async (ctx, body) => {
   return await ctx.runMutation(api.plans.saveRetro, body);
 });
+cliRoute("/cli/orchestration/emit", async (ctx, body) => {
+  return await ctx.runMutation(api.orchestrationEvents.emit, body);
+});
+cliRoute("/cli/orchestration/events", async (ctx, body) => {
+  return await ctx.runQuery(api.orchestrationEvents.listByPlan, body);
+});
 
 // Docs
 cliRoute("/cli/docs/create", async (ctx, body) => {

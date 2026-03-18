@@ -5,6 +5,13 @@
   "rules": {
     "@typescript-eslint/no-explicit-any": "off",
     "react/no-unescaped-entities": "off",
-    "react/jsx-no-comment-textnodes": "off"
+    "react/jsx-no-comment-textnodes": "off",
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "CallExpression[callee.name='useEffect']",
+        "message": "Direct useEffect is banned. Use useMountEffect() for one-time external sync, useEventListener() for event subscriptions, or derive state inline. See CLAUDE.md for patterns."
+      }
+    ]
   }
 }

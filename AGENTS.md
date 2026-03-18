@@ -84,6 +84,25 @@ The web app auto-deploys on push to main via Railway. No manual deploy needed.
 
 `deploy-all.sh` automatically tails Railway logs after deploy completes.
 
+## React: No Direct useEffect
+
+`useEffect` is banned in `packages/web`. The lint rule enforces this. Two escape hatches exist:
+
+- **`useMountEffect(fn)`** — one-time external sync on mount (DOM integration, third-party widgets, browser API subscriptions). If preconditions aren't met, move the mount up the tree behind a conditional render instead of guarding inside the effect.
+- **`useEventListener(event, handler, target?, options?)`** — event subscriptions with automatic cleanup. Handler is stable via ref internally.
+
+Five patterns replace everything else:
+
+1. **Derive state, don't sync it.** If you're about to write `useEffect(() => setX(f(y)), [y])`, write `const x = f(y)` instead.
+
+2. **Data fetching belongs in the library.** We use Convex queries (`useQuery`, `usePaginatedQuery`). Never fetch in an effect.
+
+3. **Event handlers, not effects.** If the trigger is a user action, put the logic in the onClick/onChange handler directly.
+
+4. **`key` to reset, not effect choreography.** If a component should start fresh when an ID changes, pass `key={id}` and use `useMountEffect` inside. Don't write `useEffect(() => reset(), [id])`.
+
+5. **Conditional mount over guarded effect.** Instead of `useEffect(() => { if (!ready) return; init() }, [ready])`, render the component only when `ready` is true.
+
 ## Debugging Lessons
 
 ### Convex Auth Issues

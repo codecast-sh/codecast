@@ -21,6 +21,7 @@ const api = _api as any;
 const BOARD_COLUMNS = [
   { status: "open", label: "Open", icon: Circle, color: "text-sol-blue", border: "border-sol-blue/30" },
   { status: "in_progress", label: "In Progress", icon: CircleDot, color: "text-sol-yellow", border: "border-sol-yellow/30" },
+  { status: "in_review", label: "Verify", icon: CircleDot, color: "text-sol-violet", border: "border-sol-violet/30" },
   { status: "done", label: "Done", icon: CheckCircle2, color: "text-sol-green", border: "border-sol-green/30" },
   { status: "dropped", label: "Dropped", icon: XCircle, color: "text-sol-text-dim", border: "border-sol-text-dim/30" },
 ] as const;
@@ -80,7 +81,7 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
   }, []);
 
   return (
-    <div className="grid grid-cols-4 gap-3 min-h-[300px]">
+    <div className="grid grid-cols-5 gap-3 min-h-[300px]">
       {BOARD_COLUMNS.map(col => {
         const ColIcon = col.icon;
         const columnTasks = tasks.filter(t => t.status === col.status);
@@ -135,6 +136,16 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
                     {hasExec && (
                       <div className="mt-1.5">
                         <TaskStatusBadge status={task.execution_status} type="execution" />
+                      </div>
+                    )}
+                    {task.execution_status === "needs_context" && (
+                      <div className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-sol-orange/15 text-sol-orange border border-sol-orange/25">
+                        Needs input
+                      </div>
+                    )}
+                    {task.execution_status === "blocked" && (
+                      <div className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-sol-red/15 text-sol-red border border-sol-red/25">
+                        Blocked
                       </div>
                     )}
                   </div>

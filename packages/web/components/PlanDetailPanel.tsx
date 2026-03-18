@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import Markdown from "react-markdown";
 import { PlanBoardView } from "./PlanBoardView";
+import { PlanGraphView } from "./PlanGraphView";
 
 const api = _api as any;
 
@@ -931,7 +932,7 @@ function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: any[] }
   );
 }
 
-type PlanTab = "overview" | "orchestration" | "board";
+type PlanTab = "overview" | "orchestration" | "board" | "graph";
 
 export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
@@ -1055,10 +1056,23 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
             <Layers className="w-3.5 h-3.5" />
             Board
           </button>
+          <button
+            onClick={() => setActiveTab("graph")}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === "graph"
+                ? "text-sol-text border-sol-cyan"
+                : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
+            }`}
+          >
+            <GitBranch className="w-3.5 h-3.5" />
+            Graph
+          </button>
         </div>
       )}
 
-      {activeTab === "board" ? (
+      {activeTab === "graph" ? (
+        <PlanGraphView tasks={plan.tasks || []} />
+      ) : activeTab === "board" ? (
         <PlanBoardView tasks={plan.tasks || []} planShortId={plan.short_id} />
       ) : activeTab === "overview" ? (
         <>

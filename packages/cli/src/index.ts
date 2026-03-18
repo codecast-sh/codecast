@@ -7694,6 +7694,18 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
   return result;
 }
 
+async function emitOrchEvent(planShortId: string, eventType: string, taskShortId?: string, detail?: string, metadata?: any) {
+  try {
+    await cliPost("/cli/orchestration/emit", {
+      plan_short_id: planShortId,
+      task_short_id: taskShortId,
+      event_type: eventType,
+      detail,
+      metadata,
+    });
+  } catch {}
+}
+
 const PRIORITY_COLORS: Record<string, string> = {
   urgent: c.red,
   high: c.yellow,
@@ -8079,11 +8091,14 @@ plan
   .option("-a, --acceptance <criteria>", "Acceptance criterion (repeatable)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .option("--from-session", "Promote from current session")
   .option("--project <id>", "Project ID")
+  .option("-t, --template <name>", "Use a workflow template (plan-implement-verify, implement-review-fix, full-lifecycle)")
+  .option("--model-stylesheet <stylesheet>", "CSS-like model routing rules")
   .action(async (title: string, options: any) => {
     const body: Record<string, any> = { title };
     if (options.goal) body.goal = options.goal;
     if (options.acceptance?.length) body.acceptance_criteria = options.acceptance;
     if (options.project) body.project_id = options.project;
+    if (options.modelStylesheet) body.model_stylesheet = options.modelStylesheet;
 
     const sessionId = detectCurrentSessionId();
     if (options.fromSession) {
@@ -8096,6 +8111,53 @@ plan
 
     const result = await cliPost("/cli/plans/create", body);
     console.log(`${c.green}ok${c.reset} Created plan ${c.cyan}${result.short_id}${c.reset}: ${title}`);
+
+    if (options.template) {
+      const templates: Record<string, Array<{ title: string; description: string; blocked_by?: string[]; labels?: string[] }>> = {
+        "plan-implement-verify": [
+          { title: "Research and plan approach", description: "Investigate the codebase, understand requirements, and outline the implementation strategy.", labels: ["planning"] },
+          { title: "Implement core changes", description: "Build the feature or fix based on the plan.", blocked_by: ["Research and plan approach"], labels: ["coding"] },
+          { title: "Write tests", description: "Add unit and integration tests covering the implementation.", blocked_by: ["Implement core changes"], labels: ["testing"] },
+          { title: "Verify and polish", description: "Run full test suite, typecheck, review diff, fix issues.", blocked_by: ["Write tests"], labels: ["verification"] },
+        ],
+        "implement-review-fix": [
+          { title: "Initial implementation", description: "Build the feature or fix.", labels: ["coding"] },
+          { title: "Self-review and identify issues", description: "Review the diff, run tests, identify problems.", blocked_by: ["Initial implementation"], labels: ["review"] },
+          { title: "Fix identified issues", description: "Address all issues found during review.", blocked_by: ["Self-review and identify issues"], labels: ["coding"] },
+          { title: "Final verification", description: "Confirm all issues resolved, tests pass, code is clean.", blocked_by: ["Fix identified issues"], labels: ["verification"] },
+        ],
+        "full-lifecycle": [
+          { title: "Research and scope", description: "Understand the problem space, read relevant code, define scope.", labels: ["planning"] },
+          { title: "Design approach", description: "Outline the technical approach, identify risks and dependencies.", blocked_by: ["Research and scope"], labels: ["planning"] },
+          { title: "Implement", description: "Build the feature following the design.", blocked_by: ["Design approach"], labels: ["coding"] },
+          { title: "Test", description: "Write and run tests.", blocked_by: ["Implement"], labels: ["testing"] },
+          { title: "Review", description: "Self-review the changes, check for issues.", blocked_by: ["Test"], labels: ["review"] },
+          { title: "Fix review findings", description: "Address any issues found during review.", blocked_by: ["Review"], labels: ["coding"] },
+          { title: "Final verification and cleanup", description: "Run full CI, clean up dead code, verify everything.", blocked_by: ["Fix review findings"], labels: ["verification"] },
+        ],
+      };
+
+      const tmpl = templates[options.template];
+      if (!tmpl) {
+        console.log(`${c.yellow}Unknown template:${c.reset} ${options.template}`);
+        console.log(fmt.muted(`  Available: ${Object.keys(templates).join(", ")}`));
+        return;
+      }
+
+      const shortIdMap = new Map<string, string>();
+      for (const t of tmpl) {
+        const blockedBy = t.blocked_by?.map((dep: string) => shortIdMap.get(dep)).filter(Boolean) as string[] | undefined;
+        const taskResult = await cliPost("/cli/work/create", {
+          title: t.title, description: t.description,
+          plan_id: result.short_id, labels: t.labels,
+          blocked_by: blockedBy?.length ? blockedBy : undefined,
+          project_path: getRealCwd(),
+        });
+        shortIdMap.set(t.title, taskResult.short_id);
+        console.log(`  ${c.green}+${c.reset} ${c.cyan}${taskResult.short_id}${c.reset}: ${t.title}`);
+      }
+      console.log(fmt.muted(`\n  ${tmpl.length} tasks from template "${options.template}"`));
+    }
   });
 
 plan
@@ -8469,6 +8531,7 @@ plan
         const modelTag = taskModel !== "opus" ? ` ${c.dim}[${taskModel}]${c.reset}` : "";
         console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}${modelTag} ${c.dim}(${runtime.name})${c.reset}`);
         try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
+        await emitOrchEvent(planId, "agent_spawned", task.short_id, task.title, { model: taskModel, runtime: runtime.name });
       } catch (err: any) {
         console.error(`  ${c.red}error${c.reset} spawning ${task.short_id}: ${err.message}`);
       }
@@ -8820,6 +8883,7 @@ plan
         if (task?.status === "done") {
           console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
           totalCompleted++;
+          await emitOrchEvent(planId, "task_completed", shortId, info.task.title);
           if (agentAlive && handle) runtime.kill(handle);
 
           if (task.verify_with) {
@@ -8869,9 +8933,11 @@ plan
             if (mergeResult.status === 0) {
               console.log(`  ${c.green}merge${c.reset} ${c.cyan}${branch}${c.reset}`);
               totalMerged++;
+              await emitOrchEvent(planId, "merge_succeeded", shortId, branch);
               spawnSync("git", ["push", "origin", "main"], { stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
             } else {
               console.log(`  ${c.yellow}merge-conflict${c.reset} ${c.cyan}${branch}${c.reset} -- needs manual resolution`);
+              await emitOrchEvent(planId, "merge_failed", shortId, `Conflict on ${branch}`);
               spawnSync("git", ["merge", "--abort"], { stdio: ["pipe", "pipe", "pipe"], cwd: getRealCwd() });
             }
           }
@@ -8960,6 +9026,7 @@ plan
         console.log(`\n  ${c.green}${c.bold}All ${actionable} tasks done!${c.reset}${dropped ? ` (${dropped} dropped)` : ""}`);
         try { await cliPost("/cli/plans/status", { short_id: planId, status: "done" }); } catch {}
         try { await cliPost("/cli/plans/log", { short_id: planId, entry: `Autopilot completed: ${done} done, ${dropped} dropped` }); } catch {}
+        await emitOrchEvent(planId, "plan_completed", undefined, `${done} done, ${dropped} dropped`, { totalSpawned, totalCompleted, totalMerged, totalFailed });
         return false;
       }
 
@@ -9012,8 +9079,10 @@ plan
           const modelTag = taskModel !== "opus" ? ` [${taskModel}]` : "";
           console.log(`  ${c.green}spawn${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}${modelTag}`);
           try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
+          await emitOrchEvent(planId, "agent_spawned", task.short_id, task.title, { model: taskModel });
         } catch (err: any) {
           console.error(`  ${c.red}fail${c.reset}  ${task.short_id}: ${err.message}`);
+          await emitOrchEvent(planId, "agent_failed", task.short_id, err.message);
         }
       }
 
@@ -9691,6 +9760,82 @@ Return JSON with this shape:
       console.error(`  Error: ${err.message}`);
       process.exit(1);
     }
+  });
+
+plan
+  .command("eval")
+  .description("Evaluate a plan's execution metrics")
+  .argument("<plan_id>", "Plan short ID")
+  .action(async (planId: string) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) { console.error("Plan not found"); process.exit(1); }
+
+    const tasks = plan.tasks || [];
+    const done = tasks.filter((t: any) => t.status === "done");
+    const dropped = tasks.filter((t: any) => t.status === "dropped");
+    const blocked = tasks.filter((t: any) => t.execution_status === "blocked");
+    const needsCtx = tasks.filter((t: any) => t.execution_status === "needs_context");
+    const withConcerns = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
+
+    const totalRetries = tasks.reduce((sum: number, t: any) => sum + (t.retry_count || 0), 0);
+    const totalAttempts = tasks.reduce((sum: number, t: any) => sum + (t.attempt_count || 0), 0);
+    const totalTime = tasks.reduce((sum: number, t: any) => sum + (t.actual_minutes || 0), 0);
+
+    const waves = tasks.reduce((max: number, t: any) => Math.max(max, t.wave_number || 0), 0);
+
+    const completionRate = tasks.length > 0 ? ((done.length / (tasks.length - dropped.length)) * 100).toFixed(1) : "0";
+    const retryRate = totalAttempts > 0 ? ((totalRetries / totalAttempts) * 100).toFixed(1) : "0";
+
+    const driveRounds = plan.drive_state?.rounds?.length || 0;
+    const totalFindings = plan.drive_state?.rounds?.reduce(
+      (sum: number, r: any) => sum + (r.findings?.length || 0), 0
+    ) || 0;
+    const totalFixed = plan.drive_state?.rounds?.reduce(
+      (sum: number, r: any) => sum + (r.fixed?.length || 0), 0
+    ) || 0;
+
+    console.log(`\n  ${c.bold}Plan Evaluation: ${plan.title}${c.reset} ${c.dim}(${planId})${c.reset}\n`);
+    console.log(`  ${c.bold}Completion${c.reset}`);
+    console.log(`    Tasks:         ${done.length}/${tasks.length} done (${completionRate}%)`);
+    console.log(`    Dropped:       ${dropped.length}`);
+    console.log(`    Blocked:       ${blocked.length}`);
+    console.log(`    Needs context: ${needsCtx.length}`);
+    console.log(`    With concerns: ${withConcerns.length}`);
+
+    console.log(`\n  ${c.bold}Reliability${c.reset}`);
+    console.log(`    Retry rate:    ${retryRate}% (${totalRetries} retries / ${totalAttempts || tasks.length} attempts)`);
+    console.log(`    Waves:         ${waves || "N/A"}`);
+    console.log(`    Time:          ${totalTime ? `${totalTime}m` : "not tracked"}`);
+
+    if (driveRounds > 0) {
+      console.log(`\n  ${c.bold}Drive${c.reset}`);
+      console.log(`    Rounds:        ${driveRounds}`);
+      console.log(`    Findings:      ${totalFindings}`);
+      console.log(`    Fixed:         ${totalFixed}`);
+    }
+
+    if (plan.retro) {
+      console.log(`\n  ${c.bold}Retro${c.reset}`);
+      console.log(`    Smoothness:    ${plan.retro.smoothness}`);
+      console.log(`    Headline:      ${plan.retro.headline}`);
+    }
+
+    const score = Math.round(
+      (done.length / Math.max(1, tasks.length - dropped.length)) * 40 +
+      (1 - Math.min(1, totalRetries / Math.max(1, tasks.length))) * 30 +
+      (blocked.length === 0 && needsCtx.length === 0 ? 20 : Math.max(0, 20 - (blocked.length + needsCtx.length) * 5)) +
+      (plan.retro ? 10 : 0)
+    );
+
+    console.log(`\n  ${c.bold}Score: ${score}/100${c.reset}`);
+    console.log();
+
+    try {
+      await cliPost("/cli/plans/log", {
+        short_id: planId,
+        entry: `Eval: ${score}/100 (${completionRate}% completion, ${retryRate}% retry, ${blocked.length} blocked)`,
+      });
+    } catch {}
   });
 
 plan
