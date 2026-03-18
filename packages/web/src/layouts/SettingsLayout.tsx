@@ -1,13 +1,12 @@
-"use client";
-
+import { Outlet } from "react-router";
 import { usePathname, useRouter } from "next/navigation";
-import { AuthGuard } from "../../components/AuthGuard";
-import { DashboardLayout } from "../../components/DashboardLayout";
-import { Button } from "../../components/ui/button";
+import { AuthGuard } from "@/components/AuthGuard";
+import { DashboardLayout } from "@/components/DashboardLayout";
+import { Button } from "@/components/ui/button";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor,
 } from "lucide-react";
-import { useIsDesktop } from "../../lib/desktop";
+import { useIsDesktop } from "@/lib/desktop";
 
 const baseTabs = [
   { name: "CLI", path: "/settings/cli", icon: Terminal },
@@ -21,11 +20,7 @@ const baseTabs = [
 
 const desktopTab = { name: "Desktop", path: "/settings/desktop", icon: Monitor };
 
-export default function SettingsLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export function SettingsLayout() {
   const pathname = usePathname();
   const router = useRouter();
   const isDesktop = useIsDesktop();
@@ -48,7 +43,7 @@ export default function SettingsLayout({
 
           <div className="flex gap-8">
             <div className="flex-1 min-w-0">
-              {children}
+              <Outlet />
             </div>
 
             <nav className="w-44 flex-shrink-0">

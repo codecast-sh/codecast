@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "start": "bun run server/index.ts",
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
@@ -13,6 +14,7 @@
   "dependencies": {
     "@codecast/shared": "workspace:*",
     "@convex-dev/auth": "^0.0.79",
+    "@hono/node-server": "^1.19.11",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-avatar": "^1.1.11",
     "@radix-ui/react-dialog": "^1.1.15",
@@ -24,10 +26,6 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tanstack/react-virtual": "^3.13.18",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-deep-link": "^2",
-    "@tauri-apps/plugin-notification": "^2",
-    "@tauri-apps/plugin-updater": "^2",
     "@types/prismjs": "^1.26.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -35,6 +33,7 @@
     "convex": "^1.31.6",
     "diff": "^8.0.2",
     "diff-match-patch": "^1.0.5",
+    "hono": "^4.12.8",
     "idb-keyval": "^6.2.2",
     "lucide-react": "^0.556.0",
     "mermaid": "^11.13.0",
@@ -64,8 +63,11 @@
     "@vitejs/plugin-react": "^4.5.2",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.19.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.2",
     "vite": "^6.3.5"
   }

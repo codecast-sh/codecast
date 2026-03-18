@@ -1,11 +1,29 @@
 {
+  "env": {
+    "browser": true,
+    "es2021": true
+  },
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module",
+    "ecmaFeatures": { "jsx": true }
+  },
+  "settings": {
+    "react": { "version": "detect" }
+  },
+  "plugins": ["react", "react-hooks"],
   "extends": [
-    "next/core-web-vitals"
+    "eslint:recommended",
+    "plugin:react/recommended",
+    "plugin:react-hooks/recommended",
+    "plugin:react/jsx-runtime"
   ],
   "rules": {
     "@typescript-eslint/no-explicit-any": "off",
     "react/no-unescaped-entities": "off",
     "react/jsx-no-comment-textnodes": "off",
+    "react/prop-types": "off",
+    "no-unused-vars": "off",
     "no-restricted-syntax": [
       "error",
       {

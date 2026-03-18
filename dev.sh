@@ -65,8 +65,7 @@ kill_port() {
 }
 
 kill_web() {
-    pkill -f "next dev -p $PORT" 2>/dev/null || true
-    pkill -f "next-server" 2>/dev/null || true
+    pkill -f "vite.*--port $PORT" 2>/dev/null || true
     kill_port $PORT
 }
 
@@ -119,7 +118,7 @@ start_web() {
 
     kill_web
     cd "$ROOT_DIR/packages/web"
-    "$ROOT_DIR/node_modules/.bin/next" dev -p $PORT -H 0.0.0.0 &
+    "$ROOT_DIR/node_modules/.bin/vite" --port $PORT --host 0.0.0.0 &
     cd "$ROOT_DIR"
 
     local attempts=0
@@ -143,7 +142,7 @@ port_is_listening() {
 
 http_is_healthy() {
     local status
-    status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://localhost:$PORT/api/health" 2>/dev/null)
+    status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://localhost:$PORT/" 2>/dev/null)
     [ "$status" = "200" ]
 }
 

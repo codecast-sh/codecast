@@ -3,6 +3,7 @@ import { Routes, Route } from "react-router";
 import { Providers } from "./providers";
 import { MarketingLayout } from "./layouts/MarketingLayout";
 import { PaletteLayout } from "./layouts/PaletteLayout";
+import { SettingsLayout } from "./layouts/SettingsLayout";
 
 const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
@@ -139,19 +140,21 @@ export function App() {
             <Route path="palette" element={<Palette />} />
           </Route>
 
-          {/* Settings */}
-          <Route path="settings" element={<Settings />} />
-          <Route path="settings/cli" element={<SettingsCli />} />
-          <Route path="settings/agents" element={<SettingsAgents />} />
-          <Route path="settings/sync" element={<SettingsSync />} />
-          <Route path="settings/profile" element={<SettingsProfile />} />
-          <Route path="settings/accounts" element={<SettingsAccounts />} />
-          <Route path="settings/accounts/link-github" element={<SettingsAccountsLinkGithub />} />
-          <Route path="settings/team" element={<SettingsTeam />} />
-          <Route path="settings/team/create" element={<SettingsTeamCreate />} />
-          <Route path="settings/team/join" element={<SettingsTeamJoin />} />
-          <Route path="settings/integrations/github-app" element={<SettingsIntegrationsGithub />} />
-          <Route path="settings/desktop" element={<SettingsDesktop />} />
+          {/* Settings - shared sidebar layout */}
+          <Route path="settings" element={<SettingsLayout />}>
+            <Route index element={<Settings />} />
+            <Route path="cli" element={<SettingsCli />} />
+            <Route path="agents" element={<SettingsAgents />} />
+            <Route path="sync" element={<SettingsSync />} />
+            <Route path="profile" element={<SettingsProfile />} />
+            <Route path="accounts" element={<SettingsAccounts />} />
+            <Route path="accounts/link-github" element={<SettingsAccountsLinkGithub />} />
+            <Route path="team" element={<SettingsTeam />} />
+            <Route path="team/create" element={<SettingsTeamCreate />} />
+            <Route path="team/join" element={<SettingsTeamJoin />} />
+            <Route path="integrations/github-app" element={<SettingsIntegrationsGithub />} />
+            <Route path="desktop" element={<SettingsDesktop />} />
+          </Route>
         </Routes>
       </Suspense>
     </Providers>
