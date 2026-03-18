@@ -117,6 +117,23 @@ async function executeCommand(
   }
 }
 
+function findNewestSessionId(cwd: string, afterMs: number): string | null {
+  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+  const projectDirName = cwd.replace(/\//g, "-");
+  const projectDir = path.join(claudeProjectsDir, projectDirName);
+  if (!fs.existsSync(projectDir)) return null;
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/;
+  let newest: { id: string; mtime: number } | null = null;
+  for (const f of fs.readdirSync(projectDir)) {
+    if (!UUID_RE.test(f)) continue;
+    const stat = fs.statSync(path.join(projectDir, f));
+    if (stat.mtimeMs >= afterMs && (!newest || stat.mtimeMs > newest.mtime)) {
+      newest = { id: f.replace(".jsonl", ""), mtime: stat.mtimeMs };
+    }
+  }
+  return newest?.id ?? null;
+}
+
 async function executeAgent(
   node: WorkflowNode,
   graph: WorkflowGraph,
@@ -148,12 +165,15 @@ async function executeAgent(
       args.push("--dangerously-skip-permissions");
     }
 
+    const beforeMs = Date.now();
     const result = spawnSync(args[0], args.slice(1), {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf-8",
       timeout: options.agentTimeout || 600_000,
     });
+
+    const sessionId = findNewestSessionId(cwd, beforeMs);
 
     const output = (result.stdout || "").trim();
     const stderr = (result.stderr || "").trim();
@@ -168,9 +188,10 @@ async function executeAgent(
     }
 
     context[`${node.id}.output`] = output.slice(0, 4000);
+    if (sessionId) context[`${node.id}.session_id`] = sessionId;
 
     if (result.status === 0) {
-      console.log(`  ${c.green}✓ done${c.reset}`);
+      console.log(`  ${c.green}✓ done${c.reset}${sessionId ? c.dim + " [" + sessionId.slice(0, 8) + "]" + c.reset : ""}`);
       return "success";
     } else {
       console.log(`  ${c.red}✗ agent failed (exit ${result.status})${c.reset}`);
@@ -539,6 +560,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
         node_id: current.id,
         node_status: outcome === "success" ? "completed" : "failed",
         outcome,
+        session_id: state.context[`${current.id}.session_id`],
       });
     }
 

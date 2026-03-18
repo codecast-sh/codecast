@@ -107,6 +107,7 @@ export const updateProgress = mutation({
     node_id: v.string(),
     node_status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
     outcome: v.optional(v.string()),
+    session_id: v.optional(v.string()),
     run_status: v.optional(v.union(v.literal("running"), v.literal("completed"), v.literal("failed"))),
     fail_reason: v.optional(v.string()),
   },
@@ -120,11 +121,13 @@ export const updateProgress = mutation({
     const now = Date.now();
     const nodeStatuses = [...run.node_statuses];
     const existing = nodeStatuses.findIndex((n) => n.node_id === args.node_id);
+    const prev = existing >= 0 ? nodeStatuses[existing] : undefined;
     const nodeEntry = {
       node_id: args.node_id,
       status: args.node_status,
       outcome: args.outcome,
-      started_at: args.node_status === "running" ? now : (existing >= 0 ? nodeStatuses[existing].started_at : now),
+      session_id: args.session_id ?? prev?.session_id,
+      started_at: args.node_status === "running" ? now : (prev?.started_at ?? now),
       completed_at: args.node_status !== "running" ? now : undefined,
     };
 
@@ -142,6 +145,27 @@ export const updateProgress = mutation({
       updated_at: now,
     });
 
+    return { ok: true };
+  },
+});
+
+export const setPrimarySession = mutation({
+  args: {
+    api_token: v.string(),
+    run_id: v.id("workflow_runs"),
+    primary_session_id: v.string(),
+    tmux_session: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) return { error: "Unauthorized" };
+    const run = await ctx.db.get(args.run_id);
+    if (!run || run.user_id !== auth.userId) return { error: "Not found" };
+    await ctx.db.patch(args.run_id, {
+      primary_session_id: args.primary_session_id,
+      tmux_session: args.tmux_session,
+      updated_at: Date.now(),
+    });
     return { ok: true };
   },
 });

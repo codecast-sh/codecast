@@ -201,6 +201,8 @@ export default defineSchema({
       v.literal("merged"),
       v.literal("archived")
     )),
+    workflow_run_id: v.optional(v.id("workflow_runs")),
+    is_workflow_sub: v.optional(v.boolean()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -222,7 +224,8 @@ export default defineSchema({
     .index("by_git_branch", ["git_branch"])
     .index("by_parent_message_uuid", ["parent_message_uuid"])
     .index("by_parent_conversation_id", ["parent_conversation_id"])
-    .index("by_user_pinned", ["user_id", "inbox_pinned_at"]),
+    .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
+    .index("by_workflow_run", ["workflow_run_id"]),
 
   public_conversations: defineTable({
     conversation_id: v.id("conversations"),
@@ -1264,11 +1267,14 @@ export default defineSchema({
       node_id: v.string(),
       status: v.union(v.literal("pending"), v.literal("running"), v.literal("completed"), v.literal("failed")),
       outcome: v.optional(v.string()),
+      session_id: v.optional(v.string()),
       started_at: v.optional(v.number()),
       completed_at: v.optional(v.number()),
     })),
     goal_override: v.optional(v.string()),
     project_path: v.optional(v.string()),
+    primary_session_id: v.optional(v.string()),
+    tmux_session: v.optional(v.string()),
     gate_prompt: v.optional(v.string()),
     gate_choices: v.optional(v.array(v.object({
       key: v.string(),
