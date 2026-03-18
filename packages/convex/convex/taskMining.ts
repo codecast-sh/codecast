@@ -254,13 +254,12 @@ export const mineTasksFromInsights = internalMutation({
         .filter((q) => q.eq(q.field("created_from_insight"), insight._id))
         .first();
       if (alreadyMined) {
-        // Still refresh any matching plan's updated_at to keep plans fresh
-        const title = insight.goal || insight.summary?.slice(0, 200);
-        if (title) {
-          const matchedPlan = findSimilarPlan(title);
-          const ts = insight.generated_at || Date.now();
-          if (matchedPlan && ts > matchedPlan.updated_at) {
-            await ctx.db.patch(matchedPlan._id, { updated_at: ts });
+        // Refresh the plan this task belongs to (insight → task → plan)
+        const ts = insight.generated_at || Date.now();
+        if (alreadyMined.plan_id) {
+          const plan = await ctx.db.get(alreadyMined.plan_id);
+          if (plan && ts > plan.updated_at) {
+            await ctx.db.patch(plan._id, { updated_at: ts });
             plansUpdated++;
           }
         }
