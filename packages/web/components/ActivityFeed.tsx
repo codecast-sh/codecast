@@ -6,6 +6,7 @@ import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { ConversationList } from "./ConversationList";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useEventListener } from "../hooks/useEventListener";
 
 function getRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -196,7 +197,79 @@ function SessionTimeline({ timeline, startedAt }: { timeline: any[]; startedAt?:
   );
 }
 
-function SessionTurns({ turns }: { turns: Array<{ ask: string; did: string[] }> }) {
+function SessionNarrativeOverlay({ item, onClose }: { item: any; onClose: () => void }) {
+  const turns = item.turns || [];
+  const router = useRouter();
+  useEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); });
+  return (
+    <div
+      className="fixed inset-0 z-[10000] flex items-start justify-center bg-sol-bg/80 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="relative mt-12 mb-12 w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-xl bg-sol-bg border border-sol-border/20 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-sol-bg/95 backdrop-blur border-b border-sol-border/10">
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-sol-text truncate">{item.title}</p>
+            <p className="text-[11px] text-sol-text-muted/50 mt-0.5 truncate">{item.headline}</p>
+          </div>
+          <div className="flex items-center gap-3 shrink-0 ml-4">
+            <button
+              onClick={() => router.push(`/conversation/${item.conversation_id}`)}
+              className="text-[11px] text-sol-cyan/60 hover:text-sol-cyan transition-colors"
+            >
+              open session
+            </button>
+            <button onClick={onClose} className="text-sol-text-dim/40 hover:text-sol-text/60 transition-colors text-[16px] leading-none">
+              ×
+            </button>
+          </div>
+        </div>
+        <div className="px-6 py-5 space-y-6">
+          {turns.map((turn: any, i: number) => (
+            <div key={i} className="relative">
+              <div className="flex items-start gap-3">
+                <span className="text-[8px] font-bold uppercase tracking-widest text-sol-yellow/40 select-none shrink-0 mt-1">ask</span>
+                <p className="text-[14px] text-sol-yellow/90 font-medium leading-relaxed">{turn.ask}</p>
+              </div>
+              {turn.did.length > 0 && (
+                <ul className="mt-2 ml-[36px] space-y-1.5">
+                  {turn.did.map((d: string, j: number) => (
+                    <li key={j} className="flex gap-2 text-[12px] text-sol-text-muted/70 leading-relaxed">
+                      <span className="text-sol-text-dim/25 select-none shrink-0 mt-0.5">—</span>
+                      <span>{highlightCode(d)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {i < turns.length - 1 && <div className="mt-6 ml-[36px] h-px bg-sol-border/8" />}
+            </div>
+          ))}
+          {(item.blockers || item.next_action) && (
+            <div className="pt-2 border-t border-sol-border/10 space-y-1.5">
+              {item.blockers && (
+                <p className="text-[12px]">
+                  <span className="text-sol-red/60 font-medium">Blocked: </span>
+                  <span className="text-sol-text-muted/70">{item.blockers}</span>
+                </p>
+              )}
+              {item.next_action && (
+                <p className="text-[12px]">
+                  <span className="text-sol-cyan/50 font-medium">Next: </span>
+                  <span className="text-sol-text-muted/60">{item.next_action}</span>
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SessionTurns({ turns, onDeepDive }: { turns: Array<{ ask: string; did: string[] }>; onDeepDive?: () => void }) {
   if (!turns?.length) return null;
   return (
     <div className="space-y-2">
@@ -220,6 +293,14 @@ function SessionTurns({ turns }: { turns: Array<{ ask: string; did: string[] }> 
           )}
         </div>
       ))}
+      {onDeepDive && (
+        <button
+          onClick={onDeepDive}
+          className="mt-1 text-[10px] text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors"
+        >
+          read session ↗
+        </button>
+      )}
     </div>
   );
 }
@@ -233,6 +314,7 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
 }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
+  const [deepDive, setDeepDive] = useState(false);
   const actorName = item.actor?.name || "Unknown";
   const project = extractProject(item.project_path);
   const outcome = OUTCOME_STYLES[item.outcome_type] || OUTCOME_STYLES.unknown;
@@ -336,7 +418,7 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
             </div>
           )}
           {hasTurns ? (
-            <SessionTurns turns={item.turns} />
+            <SessionTurns turns={item.turns} onDeepDive={() => setDeepDive(true)} />
           ) : changes.length > 0 ? (
             <ul className="space-y-0.5">
               {changes.map((c: string, i: number) => (
@@ -360,6 +442,7 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
           )}
         </div>
       )}
+      {deepDive && <SessionNarrativeOverlay item={item} onClose={() => setDeepDive(false)} />}
     </div>
   );
 }

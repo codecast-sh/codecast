@@ -10897,7 +10897,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.77";
+var VERSION = "1.0.78";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -13094,8 +13094,15 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             return;
           try {
             for (const f of fs14.readdirSync(dir)) {
-              if (f.endsWith(".md") || f.endsWith(".json") || f.endsWith(".toml")) {
-                files.push({ path: path13.join(dir, f), type, label: f.replace(/\.md$/, ""), tool });
+              const fullPath = path13.join(dir, f);
+              const stat4 = fs14.statSync(fullPath);
+              if (stat4.isDirectory()) {
+                const skillFile = path13.join(fullPath, "SKILL.md");
+                if (fs14.existsSync(skillFile)) {
+                  files.push({ path: skillFile, type, label: f, tool });
+                }
+              } else if (f.endsWith(".md") || f.endsWith(".json") || f.endsWith(".toml")) {
+                files.push({ path: fullPath, type, label: f.replace(/\.(md|json|toml)$/, ""), tool });
               }
             }
           } catch {
