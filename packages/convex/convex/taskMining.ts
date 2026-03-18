@@ -26,7 +26,35 @@ export const mineConversationAfterInsight = internalAction({
       });
     }
 
-    // Mine docs from this conversation's messages
+    // Mine session-summary doc from insight (if conversation has enough messages)
+    if (insight) {
+      const conv: any = await ctx.runQuery(internalApi.taskMining.getConversationById, { conversation_id: args.conversation_id });
+      if (conv && (conv.message_count || 0) >= 10 && insight.outcome_type !== "unknown" && insight.summary?.length >= 50) {
+        await ctx.runMutation(internalApi.taskMining.mineDocsFromSessions, {
+          user_id: args.user_id,
+          team_id: args.team_id,
+          sessions: [{
+            conversation_id: args.conversation_id,
+            title: conv.title || insight.goal || "Untitled",
+            message_count: conv.message_count || 0,
+            project_path: conv.project_path,
+            started_at: conv.started_at,
+            is_private: conv.is_private,
+            team_visibility: conv.team_visibility,
+            insight: {
+              summary: insight.summary,
+              goal: insight.goal,
+              what_changed: insight.what_changed,
+              blockers: insight.blockers,
+              outcome_type: insight.outcome_type,
+              themes: insight.themes || [],
+            },
+          }],
+        });
+      }
+    }
+
+    // Mine raw markdown docs from this conversation's messages
     let afterCreation: number | undefined;
     for (let page = 0; page < 20; page++) {
       const batch: any = await ctx.runQuery(internalApi.taskMining.findMarkdownWrites, {
@@ -44,6 +72,14 @@ export const mineConversationAfterInsight = internalAction({
       if (!batch.hasMore) break;
       afterCreation = batch.lastCreation;
     }
+  },
+});
+
+// Retrieve a single conversation by ID
+export const getConversationById = internalQuery({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.conversation_id);
   },
 });
 
@@ -1474,9 +1510,11 @@ export const backfillAllTeams = internalAction({
           since,
         });
         const memberInsights = insights.filter((i: any) => i.actor_user_id === member._id);
+        const conversationIds = [...new Set(memberInsights.map((i: any) => i.conversation_id))];
+        const conversations: any[] = memberInsights.length > 0
+          ? await ctx.runQuery(internalApi.taskMining.getConversationsByIds, { conversation_ids: conversationIds })
+          : [];
         if (memberInsights.length > 0) {
-          const conversationIds = [...new Set(memberInsights.map((i: any) => i.conversation_id))];
-          const conversations: any[] = await ctx.runQuery(internalApi.taskMining.getConversationsByIds, { conversation_ids: conversationIds });
           const BATCH_SIZE = 25;
           for (let i = 0; i < memberInsights.length; i += BATCH_SIZE) {
             const batch = memberInsights.slice(i, i + BATCH_SIZE).map((ins: any) => {
@@ -1506,7 +1544,43 @@ export const backfillAllTeams = internalAction({
           }
         }
 
-        // Mine docs from recent conversation messages
+        // Mine session-summary docs from insights
+        if (memberInsights.length > 0) {
+          const sessionsForDocs: any[] = [];
+          for (const ins of memberInsights) {
+            if (ins.outcome_type === "unknown" || !ins.summary || ins.summary.length < 50) continue;
+            const conv = conversations.find((c: any) => c._id === ins.conversation_id);
+            if (!conv || (conv.message_count || 0) < 10) continue;
+            sessionsForDocs.push({
+              conversation_id: ins.conversation_id,
+              title: conv.title || ins.goal || "Untitled",
+              message_count: conv.message_count || 0,
+              project_path: conv.project_path,
+              started_at: conv.started_at,
+              is_private: conv.is_private,
+              team_visibility: conv.team_visibility,
+              insight: {
+                summary: ins.summary,
+                goal: ins.goal,
+                what_changed: ins.what_changed,
+                blockers: ins.blockers,
+                outcome_type: ins.outcome_type,
+                themes: ins.themes || [],
+              },
+            });
+          }
+          const BATCH_SIZE = 25;
+          for (let i = 0; i < sessionsForDocs.length; i += BATCH_SIZE) {
+            const result: any = await ctx.runMutation(internalApi.taskMining.mineDocsFromSessions, {
+              user_id: member._id,
+              team_id: team._id,
+              sessions: sessionsForDocs.slice(i, i + BATCH_SIZE),
+            });
+            totalDocs += result.docs_created;
+          }
+        }
+
+        // Mine raw markdown docs from recent conversation messages
         const convResult: any = await ctx.runQuery(internalApi.taskMining.getRecentConversations, {
           user_id: member._id,
           since,
