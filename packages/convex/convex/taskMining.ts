@@ -1000,6 +1000,35 @@ export const getAllUsers = internalQuery({
   },
 });
 
+export const getStalePlansWithSessions = internalQuery({
+  args: { user_id: v.id("users"), stale_before: v.number() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("plans")
+      .withIndex("by_user_status", (q) => q.eq("user_id", args.user_id).eq("status", "active"))
+      .filter((q) => q.lt(q.field("updated_at"), args.stale_before))
+      .collect();
+  },
+});
+
+export const getLatestInsightForConversation = internalQuery({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("session_insights")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .order("desc")
+      .first();
+  },
+});
+
+export const refreshPlanTimestamp = internalMutation({
+  args: { plan_id: v.id("plans"), updated_at: v.number() },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.plan_id, { updated_at: args.updated_at });
+  },
+});
+
 // Keep for backward compat
 export const getRecentInsights = internalQuery({
   args: {
@@ -1699,6 +1728,32 @@ export const backfillAllTeams = internalAction({
       // Only process insights that have no team_id (personal sessions)
       const personalInsights = allUserInsights.filter((i: any) => !i.team_id);
       await mineForUser(user._id, undefined, personalInsights);
+    }
+
+    // Part 3: Refresh plan updated_at via session_ids → session_insights
+    // This covers promoted plans with no task links but with linked sessions
+    const allUsers2: any[] = await ctx.runQuery(internalApi.taskMining.getAllUsers);
+    for (const user of allUsers2) {
+      const stalePlans: any[] = await ctx.runQuery(internalApi.taskMining.getStalePlansWithSessions, {
+        user_id: user._id,
+        stale_before: since,
+      });
+      for (const plan of stalePlans) {
+        if (!plan.session_ids?.length) continue;
+        for (const convId of plan.session_ids) {
+          const insight: any = await ctx.runQuery(internalApi.taskMining.getLatestInsightForConversation, {
+            conversation_id: convId,
+          });
+          if (insight && insight.generated_at > plan.updated_at) {
+            await ctx.runMutation(internalApi.taskMining.refreshPlanTimestamp, {
+              plan_id: plan._id,
+              updated_at: insight.generated_at,
+            });
+            totalPlansUpdated++;
+            break;
+          }
+        }
+      }
     }
 
     return { docs_created: totalDocs, tasks_created: totalTasks, teams_processed: teams.length, insights_processed: totalInsights, plans_updated: totalPlansUpdated };
