@@ -1,8 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
 import { soundIdle } from "../lib/sounds";
+import { useConvexSync } from "./useConvexSync";
+import { useMountEffect } from "./useMountEffect";
 
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
@@ -39,42 +41,40 @@ export function useSyncInboxSessions(showAll: boolean) {
   const prevActiveIdsRef = useRef<Set<string> | null>(null);
   const prevIdleMapRef = useRef<Map<string, boolean> | null>(null);
 
-  useEffect(() => {
-    _setDispatch((action, args, patches) => dispatchMutation({ action, args, patches }));
-  }, [dispatchMutation, _setDispatch]);
+  const dispatchRef = useRef(dispatchMutation);
+  dispatchRef.current = dispatchMutation;
 
-  useEffect(() => {
-    if (activeSessions) {
-      const prev = prevIdleMapRef.current;
-      if (prev) {
-        for (const s of activeSessions) {
-          const id = s._id.toString();
-          if (s.is_idle && prev.has(id) && !prev.get(id) && (s as any).message_count > 0) {
-            soundIdle();
-            break;
-          }
+  useMountEffect(() => {
+    _setDispatch((action, args, patches) => dispatchRef.current({ action, args, patches }));
+  });
+
+  useConvexSync(activeSessions, useCallback((sessions: any) => {
+    const prev = prevIdleMapRef.current;
+    if (prev) {
+      for (const s of sessions) {
+        const id = s._id.toString();
+        if (s.is_idle && prev.has(id) && !prev.get(id) && (s as any).message_count > 0) {
+          soundIdle();
+          break;
         }
       }
-      prevIdleMapRef.current = new Map(activeSessions.map((s) => [s._id.toString(), !!s.is_idle]));
-      syncTable("sessions", activeSessions as unknown as InboxSession[]);
     }
-  }, [activeSessions, syncTable]);
+    prevIdleMapRef.current = new Map(sessions.map((s: any) => [s._id.toString(), !!s.is_idle]));
+    syncTable("sessions", sessions as unknown as InboxSession[]);
+  }, [syncTable]));
 
-  useEffect(() => {
-    if (dismissedQuery) {
-      syncTable("dismissedSessions", dismissedQuery as unknown as InboxSession[]);
-    }
-  }, [dismissedQuery, syncTable]);
+  useConvexSync(dismissedQuery, useCallback((data: any) => {
+    syncTable("dismissedSessions", data as unknown as InboxSession[]);
+  }, [syncTable]));
 
-  useEffect(() => {
-    if (clientState) {
-      useInboxStore.getState().syncClientState(clientState);
-    }
-  }, [clientState]);
+  useConvexSync(clientState, useCallback((data: any) => {
+    useInboxStore.getState().syncClientState(data);
+  }, []));
 
+  // eslint-disable-next-line no-restricted-syntax -- navigation side effect on session list change
   useEffect(() => {
     if (!activeSessions || !dismissedQuery) return;
-    const activeIds = new Set(activeSessions.map((s) => s._id.toString()));
+    const activeIds = new Set<string>(activeSessions.map((s: any) => s._id.toString()));
     const prev = prevActiveIdsRef.current;
     if (prev) {
       const currentSessionId = useInboxStore.getState().currentSessionId;

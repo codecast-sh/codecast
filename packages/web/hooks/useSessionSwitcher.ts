@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useRef, useCallback, useState } from "react";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
+import { useEventListener } from "./useEventListener";
 
 export type SwitcherState = {
   open: boolean;
@@ -63,92 +64,82 @@ export function useSessionSwitcher() {
     });
   }, []);
 
-  useEffect(() => {
-    const onDown = (e: KeyboardEvent) => {
-      if (e.key === "Control") { ctrlHeld.current = true; return; }
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Control") { ctrlHeld.current = true; return; }
 
-      if (e.key === "Tab" && (ctrlHeld.current || e.ctrlKey)) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
+    if (e.key === "Tab" && (ctrlHeld.current || e.ctrlKey)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
 
-        if (!mruSnap.current.length || tabCount.current === 0) {
-          mruSnap.current = getMruSessions();
+      if (!mruSnap.current.length || tabCount.current === 0) {
+        mruSnap.current = getMruSessions();
+      }
+      const mru = mruSnap.current;
+      if (mru.length < 2) return;
+
+      if (e.shiftKey) {
+        if (overlayOpen.current) {
+          selectedIdx.current = Math.max(0, selectedIdx.current - 1);
+          updateRender();
         }
-        const mru = mruSnap.current;
-        if (mru.length < 2) return;
+        return;
+      }
 
-        if (e.shiftKey) {
-          if (overlayOpen.current) {
-            selectedIdx.current = Math.max(0, selectedIdx.current - 1);
+      tabCount.current++;
+
+      if (tabCount.current === 1) {
+        pending.current = true;
+        selectedIdx.current = 1;
+        peekTimer.current = setTimeout(() => {
+          peekTimer.current = null;
+          if (pending.current && ctrlHeld.current) {
+            pending.current = false;
+            overlayOpen.current = true;
             updateRender();
           }
-          return;
-        }
+        }, 200);
+        return;
+      }
 
-        tabCount.current++;
-
-        if (tabCount.current === 1) {
-          pending.current = true;
-          selectedIdx.current = 1;
-          peekTimer.current = setTimeout(() => {
-            peekTimer.current = null;
-            if (pending.current && ctrlHeld.current) {
-              pending.current = false;
-              overlayOpen.current = true;
-              updateRender();
-            }
-          }, 200);
-          return;
-        }
-
-        if (tabCount.current === 2) {
-          if (peekTimer.current) { clearTimeout(peekTimer.current); peekTimer.current = null; }
-          pending.current = false;
-          overlayOpen.current = true;
-          selectedIdx.current = Math.min(2, mru.length - 1);
-          updateRender();
-          return;
-        }
-
-        selectedIdx.current = Math.min(selectedIdx.current + 1, mru.length - 1);
+      if (tabCount.current === 2) {
+        if (peekTimer.current) { clearTimeout(peekTimer.current); peekTimer.current = null; }
+        pending.current = false;
+        overlayOpen.current = true;
+        selectedIdx.current = Math.min(2, mru.length - 1);
         updateRender();
         return;
       }
-    };
 
-    const onUp = (e: KeyboardEvent) => {
-      if (e.key === "Control") {
-        ctrlHeld.current = false;
+      selectedIdx.current = Math.min(selectedIdx.current + 1, mru.length - 1);
+      updateRender();
+      return;
+    }
+  }, undefined, { capture: true });
 
-        if (pending.current) {
-          if (peekTimer.current) { clearTimeout(peekTimer.current); peekTimer.current = null; }
-          const mru = mruSnap.current.length >= 2 ? mruSnap.current : getMruSessions();
-          if (mru.length >= 2) {
-            commit(mru, 1);
-          } else {
-            pending.current = false;
-            tabCount.current = 0;
-          }
-          return;
+  useEventListener("keyup", (e: KeyboardEvent) => {
+    if (e.key === "Control") {
+      ctrlHeld.current = false;
+
+      if (pending.current) {
+        if (peekTimer.current) { clearTimeout(peekTimer.current); peekTimer.current = null; }
+        const mru = mruSnap.current.length >= 2 ? mruSnap.current : getMruSessions();
+        if (mru.length >= 2) {
+          commit(mru, 1);
+        } else {
+          pending.current = false;
+          tabCount.current = 0;
         }
-
-        if (overlayOpen.current) {
-          commit(mruSnap.current, selectedIdx.current);
-          return;
-        }
-
-        tabCount.current = 0;
+        return;
       }
-    };
 
-    window.addEventListener("keydown", onDown, true);
-    window.addEventListener("keyup", onUp, true);
-    return () => {
-      window.removeEventListener("keydown", onDown, true);
-      window.removeEventListener("keyup", onUp, true);
-      if (peekTimer.current) clearTimeout(peekTimer.current);
-    };
-  }, [getMruSessions, commit, updateRender]);
+      if (overlayOpen.current) {
+        commit(mruSnap.current, selectedIdx.current);
+        return;
+      }
+
+      tabCount.current = 0;
+    }
+  }, undefined, { capture: true });
 
   return renderState;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -33,6 +33,22 @@ export function useConversationsWithError(
   const loadingStartTime = useRef<number | null>(null);
   const retryToastId = useRef<string | number | null>(null);
 
+  // Reset when any filter changes
+  const [trackedFilters, setTrackedFilters] = useState({ filter, memberId, activeTeamId, subagentFilter, directoryFilter, timeFilter });
+  if (
+    trackedFilters.filter !== filter ||
+    trackedFilters.memberId !== memberId ||
+    trackedFilters.activeTeamId !== activeTeamId ||
+    trackedFilters.subagentFilter !== subagentFilter ||
+    trackedFilters.directoryFilter !== directoryFilter ||
+    trackedFilters.timeFilter !== timeFilter
+  ) {
+    setTrackedFilters({ filter, memberId, activeTeamId, subagentFilter, directoryFilter, timeFilter });
+    setCursor(undefined);
+    setAllConversations([]);
+  }
+
+  // eslint-disable-next-line no-restricted-syntax -- timeout-based error toast requires reactive timer
   useEffect(() => {
     if (result === undefined) {
       if (loadingStartTime.current === null) {
@@ -69,29 +85,21 @@ export function useConversationsWithError(
     }
   }, [result, hasShownError]);
 
-  // Update conversations when result changes
+  // eslint-disable-next-line no-restricted-syntax -- cursor-dependent pagination merge
   useEffect(() => {
     if (result?.conversations) {
       if (cursor) {
-        // Append to existing
         setAllConversations(prev => {
           const existingIds = new Set(prev.map(c => c._id));
-          const newConvs = result.conversations.filter(c => !existingIds.has(c._id));
+          const newConvs = result.conversations.filter((c: any) => !existingIds.has(c._id));
           return [...prev, ...newConvs];
         });
       } else {
-        // Replace (initial load or filter change)
         setAllConversations(result.conversations);
       }
       setIsLoadingMore(false);
     }
   }, [result, cursor]);
-
-  // Reset when any filter changes
-  useEffect(() => {
-    setCursor(undefined);
-    setAllConversations([]);
-  }, [filter, memberId, activeTeamId, subagentFilter, directoryFilter, timeFilter]);
 
   const loadMore = useCallback(() => {
     if (result?.nextCursor && !isLoadingMore) {

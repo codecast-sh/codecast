@@ -1,5 +1,6 @@
-import { useEffect, useCallback } from "react";
+import { useCallback } from "react";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
+import { useEventListener } from "./useEventListener";
 
 type TimelineItem = {
   type: string;
@@ -62,73 +63,58 @@ export function useMessageSelection({
     }
   }, [timeline, virtualizer, setSelectedIndex, onSelectMessage]);
 
-  useEffect(() => {
+  useEventListener("keydown", (e: KeyboardEvent) => {
     if (!enabled) return;
 
-    const handler = (e: KeyboardEvent) => {
-      // Escape clears selection
-      if (e.key === "Escape" && selectedIndex !== null) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
+    if (e.key === "Escape" && selectedIndex !== null) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      selectAndNotify(null);
+      return;
+    }
+
+    if (e.altKey && (e.code === "KeyJ" || e.code === "KeyK")) {
+      if (isInputFocused()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const indices = getUserMessageIndices();
+      if (indices.length === 0) return;
+
+      if (selectedIndex === null) {
+        selectAndNotify(indices[indices.length - 1]);
+        return;
+      }
+
+      const currentPos = indices.indexOf(selectedIndex);
+      if (currentPos === -1) {
+        const closest = indices.reduce((best, idx) =>
+          Math.abs(idx - selectedIndex) < Math.abs(best - selectedIndex) ? idx : best
+        );
+        selectAndNotify(closest);
+        return;
+      }
+
+      if (e.code === "KeyK") {
+        const next = currentPos > 0 ? indices[currentPos - 1] : selectedIndex;
+        selectAndNotify(next);
+      } else {
+        const next = currentPos < indices.length - 1 ? indices[currentPos + 1] : selectedIndex;
+        selectAndNotify(next);
+      }
+      return;
+    }
+
+    if (e.altKey && e.code === "KeyF" && selectedIndex !== null) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const item = timeline[selectedIndex];
+      if (item?.type === "message" && item.data.message_uuid && onForkFromMessage) {
         selectAndNotify(null);
-        return;
+        onForkFromMessage(item.data.message_uuid);
       }
-
-      // Option+j / Option+k to navigate user messages (use e.code for Mac compatibility)
-      if (e.altKey && (e.code === "KeyJ" || e.code === "KeyK")) {
-        if (isInputFocused()) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        const indices = getUserMessageIndices();
-        if (indices.length === 0) return;
-
-        if (selectedIndex === null) {
-          selectAndNotify(indices[indices.length - 1]);
-          return;
-        }
-
-        const currentPos = indices.indexOf(selectedIndex);
-        if (currentPos === -1) {
-          const closest = indices.reduce((best, idx) =>
-            Math.abs(idx - selectedIndex) < Math.abs(best - selectedIndex) ? idx : best
-          );
-          selectAndNotify(closest);
-          return;
-        }
-
-        if (e.code === "KeyK") {
-          const next = currentPos > 0 ? indices[currentPos - 1] : selectedIndex;
-          selectAndNotify(next);
-        } else {
-          const next = currentPos < indices.length - 1 ? indices[currentPos + 1] : selectedIndex;
-          selectAndNotify(next);
-        }
-        return;
-      }
-
-      // Option+f to fork inline from selected message
-      if (e.altKey && e.code === "KeyF" && selectedIndex !== null) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        const item = timeline[selectedIndex];
-        if (item?.type === "message" && item.data.message_uuid && onForkFromMessage) {
-          selectAndNotify(null);
-          onForkFromMessage(item.data.message_uuid);
-        }
-        return;
-      }
-    };
-
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
-  }, [
-    enabled,
-    selectedIndex,
-    timeline,
-    selectAndNotify,
-    getUserMessageIndices,
-    onForkFromMessage,
-  ]);
+      return;
+    }
+  }, undefined, { capture: true });
 
   return { selectedIndex };
 }

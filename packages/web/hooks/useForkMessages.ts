@@ -1,7 +1,8 @@
+import { useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useEffect } from "react";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useConvexSync } from "./useConvexSync";
 
 export function useForkMessages(forkConvId: string | null) {
   const setMessages = useInboxStore((s) => s.setMessages);
@@ -16,11 +17,11 @@ export function useForkMessages(forkConvId: string | null) {
     shouldSkip ? "skip" : { conversation_id: forkConvId! }
   );
 
-  useEffect(() => {
-    if (forkConvId && result && !("error" in result) && result.messages) {
-      setMessages(forkConvId, result.messages as any);
+  useConvexSync(result, useCallback((data: any) => {
+    if (forkConvId && !("error" in data) && data.messages) {
+      setMessages(forkConvId, data.messages as any);
     }
-  }, [forkConvId, result, setMessages]);
+  }, [forkConvId, setMessages]));
 
   return {
     messages: cached || (result && !("error" in result) ? result.messages : null),

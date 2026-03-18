@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useCallback } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
 import { useWorkspaceArgs } from "./useWorkspaceArgs";
+import { useConvexSync } from "./useConvexSync";
 
 const api = _api as any;
 
@@ -17,15 +18,14 @@ export function useSyncDocs(typeFilter?: string, searchQuery?: string, projectFi
   );
   const syncTable = useInboxStore((s) => s.syncTable);
 
-  useEffect(() => {
-    if (!result) return;
+  useConvexSync(result, useCallback((data: any) => {
     if (searchQuery) {
-      syncTable("docs", result as any);
+      syncTable("docs", data as any);
     } else {
-      const { docs, projectPaths } = result as any;
+      const { docs, projectPaths } = data as any;
       syncTable("docs", docs as any, { docProjectPaths: projectPaths });
     }
-  }, [result, syncTable, searchQuery]);
+  }, [syncTable, searchQuery]));
 }
 
 export function useSyncDocDetail(id?: string) {
@@ -35,9 +35,7 @@ export function useSyncDocDetail(id?: string) {
   );
   const syncDocDetail = useInboxStore((s) => s.syncDocDetail);
 
-  useEffect(() => {
-    if (data && id) {
-      syncDocDetail(id, data as unknown as DocDetail);
-    }
-  }, [data, id, syncDocDetail]);
+  useConvexSync(data, useCallback((d: any) => {
+    if (id) syncDocDetail(id, d as unknown as DocDetail);
+  }, [id, syncDocDetail]));
 }

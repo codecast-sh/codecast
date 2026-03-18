@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -68,6 +68,7 @@ export function useSharedConversationMessages(conversationId: string, highlightQ
       : "skip"
   );
 
+  // eslint-disable-next-line no-restricted-syntax -- Convex query result to local state with conditional merge logic
   useEffect(() => {
     if (initialData && initialData.conversation) {
       setAccessLevel(initialData.access_level);
@@ -90,6 +91,7 @@ export function useSharedConversationMessages(conversationId: string, highlightQ
     }
   }, [initialData]);
 
+  // eslint-disable-next-line no-restricted-syntax -- older messages merge into local cache
   useEffect(() => {
     const conv = olderMessagesData?.conversation;
     const messages = conv?.messages;
@@ -113,7 +115,7 @@ export function useSharedConversationMessages(conversationId: string, highlightQ
     }
   }, [olderMessagesData]);
 
-  // Handle jump to start
+  // eslint-disable-next-line no-restricted-syntax -- jump-to-start data replaces local cache
   useEffect(() => {
     if (jumpStartData && jumpMode === 'start') {
       setCachedMessages(jumpStartData.messages || []);
@@ -125,6 +127,7 @@ export function useSharedConversationMessages(conversationId: string, highlightQ
     }
   }, [jumpStartData, jumpMode]);
 
+  // eslint-disable-next-line no-restricted-syntax -- reactive search triggers progressive older-message loading
   useEffect(() => {
     if (!highlightMessageResult || !cachedMessages.length) {
       return;

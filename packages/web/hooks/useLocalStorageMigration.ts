@@ -1,24 +1,21 @@
-import { useEffect, useRef } from "react";
 import { useInboxStore } from "../store/inboxStore";
+import { useMountEffect } from "./useMountEffect";
 
 const MIGRATION_KEY = "codecast-prefs-migrated-v1";
 
 export function useLocalStorageMigration() {
-  const ran = useRef(false);
   const updateUI = useInboxStore((s) => s.updateClientUI);
   const updateLayout = useInboxStore((s) => s.updateClientLayout);
   const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
   const hasServerPrefs = useInboxStore((s) => !!s.clientState.ui);
 
-  useEffect(() => {
-    if (ran.current || typeof window === "undefined") return;
+  useMountEffect(() => {
+    if (typeof window === "undefined") return;
     if (localStorage.getItem(MIGRATION_KEY)) return;
     if (hasServerPrefs) {
       localStorage.setItem(MIGRATION_KEY, "1");
       return;
     }
-
-    ran.current = true;
 
     const ui: Record<string, any> = {};
     const layouts: Record<string, any> = {};
@@ -74,5 +71,5 @@ export function useLocalStorageMigration() {
     for (const [k, v] of Object.entries(dismissed)) updateDismissed(k as any, v);
 
     localStorage.setItem(MIGRATION_KEY, "1");
-  }, [hasServerPrefs, updateUI, updateLayout, updateDismissed]);
+  });
 }

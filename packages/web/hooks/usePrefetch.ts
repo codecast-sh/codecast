@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useCallback } from "react";
 import { useQuery } from "convex/react";
 import { usePathname } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceArgs } from "./useWorkspaceArgs";
+import { useConvexSync } from "./useConvexSync";
 
 const api = _api as any;
 
@@ -21,14 +22,12 @@ export function usePrefetch() {
   );
   const syncTable = useInboxStore((s) => s.syncTable);
 
-  useEffect(() => {
-    if (tasks) syncTable("tasks", tasks as any);
-  }, [tasks, syncTable]);
+  useConvexSync(tasks, useCallback((data: any) => {
+    syncTable("tasks", data as any);
+  }, [syncTable]));
 
-  useEffect(() => {
-    if (docsResult) {
-      const { docs, projectPaths } = docsResult as any;
-      syncTable("docs", docs as any, { docProjectPaths: projectPaths });
-    }
-  }, [docsResult, syncTable]);
+  useConvexSync(docsResult, useCallback((data: any) => {
+    const { docs, projectPaths } = data as any;
+    syncTable("docs", docs as any, { docProjectPaths: projectPaths });
+  }, [syncTable]));
 }

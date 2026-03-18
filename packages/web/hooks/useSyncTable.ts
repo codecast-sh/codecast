@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useCallback } from "react";
 import { useQuery } from "convex/react";
 import { useInboxStore } from "../store/inboxStore";
+import { useConvexSync } from "./useConvexSync";
 
 export function useSyncTable(
   tableName: string,
@@ -11,12 +12,10 @@ export function useSyncTable(
   const data = useQuery(queryFn, queryArgs);
   const syncTable = useInboxStore((s) => s.syncTable);
 
-  useEffect(() => {
-    if (data) {
-      const items = Array.isArray(data) ? data : [data];
-      syncTable(tableName, items as any, extra);
-    }
-  }, [data, tableName, syncTable, extra]);
+  useConvexSync(data, useCallback((d: any) => {
+    const items = Array.isArray(d) ? d : [d];
+    syncTable(tableName, items as any, extra);
+  }, [tableName, syncTable, extra]));
 
   return data;
 }

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, useRef, useMemo } from "react";
+import { useCallback, useState, useRef, useMemo, useEffect } from "react";
 import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useConvexSync } from "./useConvexSync";
 
 type Message = {
   _id: string;
@@ -61,10 +62,9 @@ export function useConversationMessages(
     setTargetMode(!!(targetMessageId || cleanedHighlightQuery));
   }
 
-  useEffect(() => {
-    if (hasTarget && !targetMode) setTargetMode(true);
-    if (!hasTarget && targetMode) setTargetMode(false);
-  }, [hasTarget, targetMode]);
+  // Derive targetMode from hasTarget (deleted the useEffect, using render-time sync)
+  if (hasTarget && !targetMode) setTargetMode(true);
+  if (!hasTarget && targetMode) setTargetMode(false);
 
   // =============================================
   // NORMAL MODE: Convex paginated subscription (background sync)
@@ -77,16 +77,16 @@ export function useConversationMessages(
     { initialNumItems: 100 }
   );
 
-  // Sync Convex -> store (only when data is available, never overwrite with empty during resubscription)
-  useEffect(() => {
-    if (!useNormalMode) return;
-    if (paginationStatus === "LoadingFirstPage") return;
-    const messages: Message[] = [...descResults].reverse();
-    useInboxStore.getState().setMessages(conversationId, messages, {
-      hasMoreAbove: paginationStatus === "CanLoadMore" || paginationStatus === "LoadingMore",
-      initialized: true,
-    });
-  }, [useNormalMode, descResults, paginationStatus, conversationId]);
+  useConvexSync(
+    useNormalMode && paginationStatus !== "LoadingFirstPage" ? descResults : undefined,
+    useCallback((results: any) => {
+      const messages: Message[] = [...results].reverse();
+      useInboxStore.getState().setMessages(conversationId, messages, {
+        hasMoreAbove: paginationStatus === "CanLoadMore" || paginationStatus === "LoadingMore",
+        initialized: true,
+      });
+    }, [conversationId, paginationStatus])
+  );
 
   // =============================================
   // METADATA: Convex subscription (background sync to store)
@@ -96,10 +96,9 @@ export function useConversationMessages(
     canQuery ? { conversation_id: convId } : "skip"
   );
 
-  useEffect(() => {
-    if (!remoteMeta) return;
-    useInboxStore.getState().setConversationMeta(conversationId, remoteMeta);
-  }, [remoteMeta, conversationId]);
+  useConvexSync(remoteMeta, useCallback((meta: any) => {
+    useInboxStore.getState().setConversationMeta(conversationId, meta);
+  }, [conversationId]));
 
   // =============================================
   // READ FROM STORE (primary source of truth - never waits on Convex)
@@ -128,6 +127,7 @@ export function useConversationMessages(
       : "skip"
   );
 
+  // eslint-disable-next-line no-restricted-syntax -- Convex query to local target state with ref guard
   useEffect(() => {
     if (aroundData && !targetInitializedRef.current) {
       targetInitializedRef.current = true;
@@ -156,6 +156,7 @@ export function useConversationMessages(
       : "skip"
   );
 
+  // eslint-disable-next-line no-restricted-syntax -- merge older messages into target local state
   useEffect(() => {
     if (olderInTarget && olderInTarget.messages?.length >= 0) {
       setTargetAroundData((prev: any) => {
@@ -176,6 +177,7 @@ export function useConversationMessages(
     }
   }, [olderInTarget]);
 
+  // eslint-disable-next-line no-restricted-syntax -- merge newer messages into target local state
   useEffect(() => {
     if (newerInTarget && newerInTarget.messages?.length >= 0) {
       setTargetAroundData((prev: any) => {
@@ -296,7 +298,6 @@ export function useConversationMessages(
   const conversation: Record<string, any> | null = useMemo(() => {
     if (!storeMeta) return null;
     if (targetMode && !targetAroundData && rawMessages.length === 0) return null;
-    // Don't expose conversation until messages are in store (avoids flash of empty state)
     if (useNormalMode && storeMessages.length === 0 && (storeMeta?.message_count ?? 0) > 0) return null;
     return {
       ...storeMeta,
@@ -305,7 +306,7 @@ export function useConversationMessages(
       compaction_count: compactionCount,
       child_conversation_map: childConversationMap,
     };
-  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData]);
+  }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, storeMessages.length, useNormalMode]);
 
   // =============================================
   // Target search (auto-load older to find target)
@@ -313,6 +314,7 @@ export function useConversationMessages(
   const [isSearchingForTarget, setIsSearchingForTarget] = useState(false);
   const searchAttempts = useRef(0);
 
+  // eslint-disable-next-line no-restricted-syntax -- reactive search triggers progressive older-message loading
   useEffect(() => {
     if (!targetMessageId || rawMessages.length === 0 || !targetMessageTimestamp) return;
     const found = rawMessages.some((m) => m._id === targetMessageId);
@@ -335,6 +337,7 @@ export function useConversationMessages(
   }, [targetMessageId, rawMessages, targetMode, targetHasMoreAbove, targetIsLoadingOlder, targetMessageTimestamp]);
 
   const highlightSearchAttempts = useRef(0);
+  // eslint-disable-next-line no-restricted-syntax -- reactive highlight search triggers progressive older-message loading
   useEffect(() => {
     if (!highlightMessageResult || rawMessages.length === 0) return;
     const found = rawMessages.some((m) => m._id === highlightMessageResult.message_id);
