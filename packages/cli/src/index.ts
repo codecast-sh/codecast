@@ -10429,6 +10429,152 @@ program
     await runWatchdog();
   });
 
+// ─── Workflow commands ────────────────────────────────────────────────────────
+
+const workflow = program
+  .command("workflow")
+  .alias("wf")
+  .description("Manage and run workflow templates (.cast files)");
+
+workflow
+  .command("run <file>")
+  .description("Run a workflow file")
+  .option("-g, --goal <text>", "Override the workflow goal")
+  .option("--dry-run", "Validate and print the workflow without executing")
+  .option("--auto-approve", "Skip human gate prompts, auto-select first option")
+  .action(async (file: string, options: any) => {
+    const { parseWorkflowFile } = await import("./workflow/parser.js");
+    const { runWorkflow } = await import("./workflow/runner.js");
+    const path = await import("path");
+    const fs = await import("fs");
+
+    const filePath = path.resolve(file);
+    if (!fs.existsSync(filePath)) {
+      console.error(`File not found: ${filePath}`);
+      process.exit(1);
+    }
+
+    const graph = parseWorkflowFile(filePath);
+    await runWorkflow(graph, {
+      goalOverride: options.goal,
+      dryRun: options.dryRun,
+      autoApprove: options.autoApprove,
+      cwd: path.dirname(filePath),
+    });
+  });
+
+workflow
+  .command("validate <file>")
+  .description("Validate a workflow file without running it")
+  .action(async (file: string) => {
+    const { parseWorkflowFile, validateWorkflow } = await import("./workflow/parser.js");
+    const path = await import("path");
+    const fs = await import("fs");
+
+    const filePath = path.resolve(file);
+    if (!fs.existsSync(filePath)) {
+      console.error(`File not found: ${filePath}`);
+      process.exit(1);
+    }
+
+    const graph = parseWorkflowFile(filePath);
+    const errors = validateWorkflow(graph);
+
+    console.log(`Workflow: ${graph.name}`);
+    if (graph.goal) console.log(`Goal: ${graph.goal}`);
+    console.log(`Nodes: ${graph.nodes.size}, Edges: ${graph.edges.length}`);
+    console.log();
+
+    for (const [id, node] of graph.nodes) {
+      const shape = node.shape !== "box" ? ` [${node.shape}]` : "";
+      console.log(`  ${id}${shape}: ${node.label}`);
+    }
+    console.log();
+    for (const edge of graph.edges) {
+      const cond = edge.condition ? ` [if: ${edge.condition}]` : "";
+      const label = edge.label ? ` "${edge.label}"` : "";
+      console.log(`  ${edge.from} → ${edge.to}${label}${cond}`);
+    }
+
+    if (errors.length > 0) {
+      console.log();
+      for (const err of errors) console.error(`  ✗ ${err}`);
+      process.exit(1);
+    } else {
+      console.log("\n  ✓ Workflow is valid");
+    }
+  });
+
+workflow
+  .command("list")
+  .description("List available workflow templates")
+  .action(async () => {
+    const fs = await import("fs");
+    const path = await import("path");
+    const os = await import("os");
+
+    const searchDirs = [
+      path.join(process.cwd(), "workflows"),
+      path.join(os.homedir(), ".cast", "workflows"),
+    ];
+
+    let found = false;
+    for (const dir of searchDirs) {
+      if (!fs.existsSync(dir)) continue;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const wfFile = path.join(dir, entry.name, "workflow.cast");
+        if (!fs.existsSync(wfFile)) continue;
+
+        try {
+          const { parseWorkflowFile } = await import("./workflow/parser.js");
+          const graph = parseWorkflowFile(wfFile);
+          console.log(`  ${entry.name.padEnd(24)} ${graph.goal || graph.name}`);
+          console.log(`  ${" ".repeat(24)} ${wfFile}`);
+          found = true;
+        } catch {
+          console.log(`  ${entry.name} (parse error)`);
+          found = true;
+        }
+      }
+    }
+
+    if (!found) console.log("No workflow templates found.\nAdd .cast files under workflows/<name>/workflow.cast");
+  });
+
+workflow
+  .command("create <name>")
+  .description("Create a new workflow template")
+  .option("-g, --goal <text>", "Workflow goal")
+  .action(async (name: string, options: any) => {
+    const fs = await import("fs");
+    const path = await import("path");
+
+    const dir = path.join(process.cwd(), "workflows", name);
+    const file = path.join(dir, "workflow.cast");
+
+    if (fs.existsSync(file)) {
+      console.error(`Workflow already exists: ${file}`);
+      process.exit(1);
+    }
+
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, `digraph ${name.replace(/[^a-zA-Z0-9]/g, "_")} {
+    graph [goal="${options.goal || name}"]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare,  label="Exit"]
+
+    main [label="Main Task", prompt="Accomplish the goal: ${options.goal || name}"]
+
+    start -> main -> exit
+}
+`);
+    console.log(`Created: ${file}`);
+  });
+
 // Check for updates in background (non-blocking)
 checkForUpdates().then(async (available) => {
   if (!available) return;

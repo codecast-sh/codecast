@@ -1,0 +1,85 @@
+digraph PlanToPolish {
+    graph [
+        goal="Iteratively plan with user, implement, polish, and validate",
+        model_stylesheet="
+            * { model: claude-sonnet-4-6; }
+            #plan { model: claude-opus-4-6; reasoning_effort: high; }
+            #review { model: claude-opus-4-6; }
+        "
+    ]
+    rankdir=LR
+
+    start  [shape=Mdiamond, label="Start"]
+    exit   [shape=Msquare,  label="Exit"]
+
+    // ── Phase 1: Plan ──────────────────────────────────────────────────────
+    plan [
+        label="Plan with User",
+        reasoning_effort="high",
+        prompt="Iterate with the user to define the goal, scope, and approach. Ask clarifying questions until you have a clear, complete picture. Think hard about edge cases, dependencies, and risks. Write a detailed plan to plan.md with: goal summary, scope, implementation steps, acceptance criteria, and any open questions resolved."
+    ]
+
+    approve [shape=hexagon, label="Approve Plan"]
+
+    // ── Phase 2: Decompose ─────────────────────────────────────────────────
+    decompose [
+        label="Decompose into Tasks",
+        prompt="Read plan.md. Break the plan into concrete, ordered, independently-completable implementation tasks. Each task should be focused enough to finish in one session. Write tasks.md as a numbered checklist with: task title, brief description, and acceptance criteria. Order by dependency."
+    ]
+
+    // ── Phase 3: Implement ─────────────────────────────────────────────────
+    implement [
+        label="Implement",
+        prompt="Read plan.md and tasks.md. Implement the next unchecked task completely. Mark it done in tasks.md when finished. Follow existing code patterns. Write tests as you go.",
+        max_visits=20
+    ]
+
+    validate [
+        label="Validate",
+        shape=parallelogram,
+        script="set -eo pipefail; cd $PWD && (command -v bun && bun run typecheck 2>&1 || npx tsc --noEmit 2>&1 || true) && (bun run lint 2>&1 || npx eslint . 2>&1 || true) && (bun test 2>&1 || npm test 2>&1 || true); echo 'Validation complete'"
+    ]
+
+    // ── Phase 4: Review & Polish ───────────────────────────────────────────
+    review [
+        label="Code Review",
+        prompt="Review all changes since the plan was approved (use git diff). Check for: correctness, edge cases missed, error handling, code quality, consistency with existing patterns, security issues, performance concerns. Write a detailed review to review.md with specific issues labeled [bug], [quality], [style], or [suggestion]."
+    ]
+
+    polish1 [
+        label="Polish: Round 1",
+        prompt="Read review.md. Address every [bug] and [quality] issue. Fix all bugs, improve error handling, add missing tests for edge cases. Be thorough — quality over speed.",
+        max_visits=3
+    ]
+
+    polish2 [
+        label="Polish: Round 2",
+        prompt="Read review.md and the current codebase state. Address [style] and [suggestion] items. Simplify complex code, ensure naming consistency, remove duplication, improve readability. Delete dead code. Make it excellent.",
+        max_visits=3
+    ]
+
+    // ── Phase 5: Final Validation ──────────────────────────────────────────
+    final_validate [
+        label="Final Validation",
+        shape=parallelogram,
+        script="set -eo pipefail; cd $PWD && (command -v bun && bun run typecheck 2>&1 || npx tsc --noEmit 2>&1) && (bun run lint 2>&1 || npx eslint . --max-warnings 0 2>&1) && (bun test 2>&1 || npm test 2>&1); echo 'All checks passed'",
+        goal_gate=true,
+        retry_target="polish2"
+    ]
+
+    // ── Edges ──────────────────────────────────────────────────────────────
+    start -> plan -> approve
+
+    approve -> decompose  [label="[A] Approve"]
+    approve -> plan       [label="[R] Revise"]
+
+    decompose -> implement -> validate
+
+    validate -> review    [condition="outcome=success"]
+    validate -> implement [condition="outcome=failure"]
+
+    review -> polish1 -> polish2 -> final_validate
+
+    final_validate -> exit   [condition="outcome=success"]
+    final_validate -> polish2 [condition="outcome=failure"]
+}
