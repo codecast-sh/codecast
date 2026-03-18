@@ -1,7 +1,8 @@
 "use client";
 import { ReactNode, useState, useEffect, useCallback, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useQuery } from "convex/react";
+import Link from "next/link";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { UserMenu } from "./UserMenu";
@@ -58,6 +59,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   usePrefetch();
 
   const serverClientState = useQuery(api.client_state.get, {});
+  const createQuickSession = useMutation(api.conversations.createQuickSession);
   useEffect(() => {
     if (serverClientState) {
       useInboxStore.getState().syncClientState(serverClientState);
@@ -121,6 +123,27 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     }
   }, [currentConvContext, directoryFilter, router, isOnInboxPage]);
 
+  const handleQuickCreateIsolated = useCallback(async () => {
+    const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
+    if (!path) {
+      openNewSession({ source: isOnInboxPage ? "inbox" : "sessions" });
+      return;
+    }
+    soundNewSession();
+    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "gemini";
+    const conversationId = await createQuickSession({
+      agent_type: agentType,
+      project_path: path,
+      git_root: currentConvContext.gitRoot || path,
+      isolated: true,
+    });
+    if (isOnInboxPage) {
+      useInboxStore.getState().setCurrentSession(conversationId as string);
+    } else {
+      router.push(`/conversation/${conversationId}?focus=1`);
+    }
+  }, [currentConvContext, directoryFilter, router, isOnInboxPage, createQuickSession, openNewSession]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "." && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
@@ -145,10 +168,14 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
           });
         }
       }
+      if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey) {
+        e.preventDefault();
+        handleQuickCreateIsolated();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hideSidebar, isZenMode, isOnInboxPage, currentConvContext, directoryFilter, openNewSession, handleQuickCreate, updateUI]);
+  }, [hideSidebar, isZenMode, isOnInboxPage, currentConvContext, directoryFilter, openNewSession, handleQuickCreate, handleQuickCreateIsolated, updateUI]);
 
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">
@@ -160,8 +187,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
         <div className="px-2 sm:px-4 py-1.5 sm:py-3 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Logo + toggle */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            <span className="hidden sm:contents"><Logo size="sm" showText={true} /></span>
-            <span className="sm:hidden"><Logo size="sm" showText={false} /></span>
+            <Link href="/"><span className="hidden sm:contents"><Logo size="md" showText={true} /></span></Link>
+            <Link href="/"><span className="sm:hidden"><Logo size="md" showText={false} /></span></Link>
             {!hideSidebar && (
               <button
                 onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}

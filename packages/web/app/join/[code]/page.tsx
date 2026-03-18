@@ -42,7 +42,7 @@ export default function JoinTeamPage() {
         invite_code: code,
         user_id: currentUser._id,
       });
-      router.push("/dashboard");
+      router.push("/inbox");
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);
@@ -82,10 +82,10 @@ export default function JoinTeamPage() {
               This invite link is invalid or has been removed.
             </p>
             <Button
-              onClick={() => router.push("/dashboard")}
+              onClick={() => router.push("/inbox")}
               className="bg-amber-600 hover:bg-amber-500 text-white"
             >
-              Go to Dashboard
+              Go to Inbox
             </Button>
           </div>
         </div>
@@ -106,10 +106,10 @@ export default function JoinTeamPage() {
               Please ask the team admin for a new invite link.
             </p>
             <Button
-              onClick={() => router.push("/dashboard")}
+              onClick={() => router.push("/inbox")}
               className="bg-amber-600 hover:bg-amber-500 text-white"
             >
-              Go to Dashboard
+              Go to Inbox
             </Button>
           </div>
         </div>

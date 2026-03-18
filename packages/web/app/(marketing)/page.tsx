@@ -205,7 +205,7 @@ export default function LandingPage() {
       return;
     }
     if (!isLoading && isAuthenticated) {
-      router.replace("/dashboard");
+      router.replace("/inbox");
     }
   }, [isAuthenticated, isLoading, router]);
 

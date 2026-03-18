@@ -19,7 +19,7 @@ function SignUpForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to");
-  const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/dashboard";
+  const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/inbox";
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
