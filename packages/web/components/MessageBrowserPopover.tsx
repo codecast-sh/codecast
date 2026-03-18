@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, createContext, useContext } from "react";
 import { createPortal } from "react-dom";
+
+export const MessageBrowserOpenContext = createContext(false);
+export function useMessageBrowserOpen() { return useContext(MessageBrowserOpenContext); }
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -180,6 +183,7 @@ export function MessageBrowserPopover({
   }, []);
 
   return (
+    <MessageBrowserOpenContext.Provider value={open}>
     <div
       ref={triggerRef}
       onMouseEnter={handleMouseEnter}
@@ -196,5 +200,6 @@ export function MessageBrowserPopover({
         />
       )}
     </div>
+    </MessageBrowserOpenContext.Provider>
   );
 }

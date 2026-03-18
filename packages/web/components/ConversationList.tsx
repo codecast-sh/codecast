@@ -17,7 +17,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { soundNewSession } from "../lib/sounds";
-import { MessageBrowserPopover } from "./MessageBrowserPopover";
+import { MessageBrowserPopover, useMessageBrowserOpen } from "./MessageBrowserPopover";
 
 function VisibilityDropdown({
   conversationId,
@@ -285,12 +285,8 @@ function getDurationColor(ms: number): string {
   return "text-orange-400 border-orange-500/50";
 }
 
-function getMessageCountColor(count: number): string {
-  if (count < 10) return "bg-sol-bg-alt/60 text-sol-text-muted0 border-sol-border/40";
-  if (count < 30) return "bg-sol-bg-alt/80 text-sol-text-muted border-sol-border/50";
-  if (count < 100) return "bg-blue-500/20 text-blue-400 border-blue-600/40";
-  if (count < 200) return "bg-blue-500/30 text-blue-400 border-blue-500/50";
-  return "bg-indigo-500/30 text-indigo-400 border-indigo-500/50";
+function getMessageCountColor(_count: number): string {
+  return "bg-transparent text-sol-text-dim/40 border-sol-border/25";
 }
 
 function TodoBadge({ todos }: { todos: Array<{ status: string; content: string; activeForm?: string }> }) {
@@ -409,6 +405,102 @@ function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; cl
   );
 }
 
+
+function ConvSubtitleSection({ conv }: { conv: Conversation }) {
+  const isBrowserOpen = useMessageBrowserOpen();
+
+  const cleanTeammate = (c: string) => {
+    if (!c?.includes('<teammate-message')) return c;
+    return c.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').trim();
+  };
+  const clean = (c: string) => cleanTeammate(c)?.replace(/<[^>]+>/g, "").replace(/^\s*Caveat:.*$/gm, "").trim() || "";
+  const commandLabel = (c: string) => {
+    const m = c.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
+    return m ? `/${m[1].replace(/^\//, "")}` : null;
+  };
+
+  const alternates = conv.message_alternates || [];
+  const processed = alternates
+    .map(m => {
+      const isCmd = m.role === "user" && isCommandMessage(m.content);
+      return { ...m, cleanContent: isCmd ? (commandLabel(m.content) || clean(m.content)) : clean(m.content), isCmd };
+    })
+    .filter(m => m.cleanContent.length > 0 && !isSystemMessage(m.cleanContent));
+
+  const hasBullets = processed.length > 0;
+
+  // When popover is open: hide subtitle, show bullets
+  if (isBrowserOpen && hasBullets) {
+    const firstMsgs = processed.slice(0, 2);
+    const lastMsgs = processed.length > 4 ? processed.slice(-2) : [];
+    const showEllipsis = processed.length > 4;
+    const renderMessage = (m: typeof processed[0], key: string) => (
+      <div key={key} className="flex items-start gap-2 min-w-0">
+        {m.role === "assistant" ? (
+          <span className="flex-shrink-0 mt-0.5">
+            <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4" />
+          </span>
+        ) : (
+          <span className="flex-shrink-0 w-4 h-4 rounded-full bg-sol-violet/60 flex items-center justify-center mt-0.5 text-[8px] font-medium text-white">
+            {(conv.author_name?.charAt(0) || "U").toUpperCase()}
+          </span>
+        )}
+        {m.isCmd ? (
+          <span className="font-mono text-sol-cyan/80 font-medium truncate min-w-0 leading-relaxed">{m.cleanContent}</span>
+        ) : (
+          <span className={`truncate min-w-0 leading-relaxed ${m.role === "user" ? "text-sky-700 dark:text-sky-300" : "text-sol-text-muted"}`}>{m.cleanContent}</span>
+        )}
+      </div>
+    );
+    return (
+      <div className="mb-2 sm:mb-3 space-y-1 sm:space-y-1.5 text-[11px] sm:text-xs overflow-hidden opacity-70">
+        {firstMsgs.map((m, idx) => renderMessage(m, `first-${idx}`))}
+        {showEllipsis && <div className="flex items-center gap-2 pl-6"><span className="text-sol-text-muted0">...</span></div>}
+        {lastMsgs.map((m, idx) => renderMessage(m, `last-${idx}`))}
+      </div>
+    );
+  }
+
+  // Default: show subtitle
+  if (conv.subtitle && conv.visibility_mode !== "minimal") {
+    return <p className="text-xs sm:text-sm text-sol-text-muted mb-1.5 sm:mb-2 line-clamp-2 whitespace-pre-line">{conv.subtitle}</p>;
+  }
+
+  // Full mode with no browser open: show bullets normally
+  if (!conv.visibility_mode || conv.visibility_mode === "full") {
+    if (!hasBullets) return null;
+    const firstMsgs = processed.slice(0, 2);
+    const lastMsgs = processed.length > 4 ? processed.slice(-2) : [];
+    const showEllipsis = processed.length > 4;
+    const renderMessage = (m: typeof processed[0], key: string) => (
+      <div key={key} className="flex items-start gap-2 min-w-0">
+        {m.role === "assistant" ? (
+          <span className="flex-shrink-0 mt-0.5">
+            <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4" />
+          </span>
+        ) : (
+          <span className="flex-shrink-0 w-4 h-4 rounded-full bg-sol-violet/60 flex items-center justify-center mt-0.5 text-[8px] font-medium text-white">
+            {(conv.author_name?.charAt(0) || "U").toUpperCase()}
+          </span>
+        )}
+        {m.isCmd ? (
+          <span className="font-mono text-sol-cyan/80 font-medium truncate min-w-0 leading-relaxed">{m.cleanContent}</span>
+        ) : (
+          <span className={`truncate min-w-0 leading-relaxed ${m.role === "user" ? "text-sky-700 dark:text-sky-300" : "text-sol-text-muted"}`}>{m.cleanContent}</span>
+        )}
+      </div>
+    );
+    return (
+      <div className="mb-2 sm:mb-3 space-y-1 sm:space-y-1.5 text-[11px] sm:text-xs overflow-hidden opacity-70">
+        {firstMsgs.map((m, idx) => renderMessage(m, `first-${idx}`))}
+        {showEllipsis && <div className="flex items-center gap-2 pl-6"><span className="text-sol-text-muted0">...</span></div>}
+        {lastMsgs.map((m, idx) => renderMessage(m, `last-${idx}`))}
+      </div>
+    );
+  }
+
+  return null;
+}
 
 type TimeGroup = {
   label: string;
@@ -1179,7 +1271,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             conversationId={conv._id}
                             isFavorite={conv.is_favorite ?? false}
                           />
-                          <span className="text-[11px] text-sol-text-dim/50">
+                          <span className="text-[11px] text-sol-text-dim/30">
                             {getRelativeTime(conv.updated_at)}
                           </span>
                         </div>
@@ -1205,72 +1297,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                         </div>
                       )}
 
-                      {/* Subtitle - shown for full/detailed/summary modes */}
-                      {conv.subtitle && conv.visibility_mode !== "minimal" && (
-                        <p className="text-xs sm:text-sm text-sol-text-muted mb-1.5 sm:mb-2 line-clamp-2 whitespace-pre-line">{conv.subtitle}</p>
-                      )}
-
-                      {(() => {
-                        // Trust backend's visibility_mode - no frontend re-computation
-                        if (conv.visibility_mode && conv.visibility_mode !== "full") return null;
-
-                        const alternates = conv.message_alternates || [];
-                        if (alternates.length === 0) return null;
-
-                        const cleanTeammate = (c: string) => {
-                          if (!c?.includes('<teammate-message')) return c;
-                          return c.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').trim();
-                        };
-                        const clean = (c: string) => cleanTeammate(c)?.replace(/<[^>]+>/g, "").replace(/^\s*Caveat:.*$/gm, "").trim() || "";
-                        const commandLabel = (c: string) => {
-                          const m = c.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
-                          return m ? `/${m[1].replace(/^\//, "")}` : null;
-                        };
-
-                        const processed = alternates
-                          .map(m => {
-                            const isCmd = m.role === "user" && isCommandMessage(m.content);
-                            return { ...m, cleanContent: isCmd ? (commandLabel(m.content) || clean(m.content)) : clean(m.content), isCmd };
-                          })
-                          .filter(m => m.cleanContent.length > 0 && !isSystemMessage(m.cleanContent));
-
-                        if (processed.length === 0) return null;
-
-                        const firstMsgs = processed.slice(0, 2);
-                        const lastMsgs = processed.length > 4 ? processed.slice(-2) : [];
-                        const showEllipsis = processed.length > 4;
-
-                        const renderMessage = (m: typeof processed[0], key: string) => (
-                          <div key={key} className="flex items-start gap-2 min-w-0">
-                            {m.role === "assistant" ? (
-                              <span className="flex-shrink-0 mt-0.5">
-                                <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4" />
-                              </span>
-                            ) : (
-                              <span className="flex-shrink-0 w-4 h-4 rounded-full bg-sol-violet/60 flex items-center justify-center mt-0.5 text-[8px] font-medium text-white">
-                                {(conv.author_name?.charAt(0) || "U").toUpperCase()}
-                              </span>
-                            )}
-                            {m.isCmd ? (
-                              <span className="font-mono text-sol-cyan/80 font-medium truncate min-w-0 leading-relaxed">{m.cleanContent}</span>
-                            ) : (
-                              <span className={`truncate min-w-0 leading-relaxed ${m.role === "user" ? "text-sky-700 dark:text-sky-300" : "text-sol-text-muted"}`}>{m.cleanContent}</span>
-                            )}
-                          </div>
-                        );
-
-                        return (
-                          <div className="mb-2 sm:mb-3 space-y-1 sm:space-y-1.5 text-[11px] sm:text-xs overflow-hidden opacity-70">
-                            {firstMsgs.map((m, idx) => renderMessage(m, `first-${idx}`))}
-                            {showEllipsis && (
-                              <div className="flex items-center gap-2 pl-6">
-                                <span className="text-sol-text-muted0">...</span>
-                              </div>
-                            )}
-                            {lastMsgs.map((m, idx) => renderMessage(m, `last-${idx}`))}
-                          </div>
-                        );
-                      })()}
+                      <ConvSubtitleSection conv={conv} />
 
 
                       <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-muted0 select-none">

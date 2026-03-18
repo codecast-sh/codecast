@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { ConversationList } from "./ConversationList";
-import { MessageBrowserPopover } from "./MessageBrowserPopover";
+import { MessageBrowserPopover, useMessageBrowserOpen } from "./MessageBrowserPopover";
 import { useEventListener } from "../hooks/useEventListener";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -309,7 +309,7 @@ function SessionTurns({ turns, onDeepDive }: { turns: Array<{ ask: string; did: 
   );
 }
 
-function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
+function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }: {
   item: any;
   compact?: boolean;
   showActor?: boolean;
@@ -319,6 +319,7 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const [deepDive, setDeepDive] = useState(false);
+  const isBrowserOpen = useMessageBrowserOpen();
   const actorName = item.actor?.name || "Unknown";
   const project = extractProject(item.project_path);
   const outcome = OUTCOME_STYLES[item.outcome_type] || OUTCOME_STYLES.unknown;
@@ -351,7 +352,6 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
   const metaParts = [duration, msgCount >= 50 ? `${formatMsgCount(msgCount)} msgs` : null].filter(Boolean);
 
   return (
-    <MessageBrowserPopover conversationId={item.conversation_id}>
     <div
       onClick={() => hasDetail && setExpanded(!expanded)}
       className={`group border-l-2 ${outcome.border} ${outcome.bg} ${compact ? "pl-2.5 py-1.5" : "pl-3 py-2"} ${isTrivial ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer" : ""} hover:bg-sol-bg-alt/30 transition-colors rounded-r`}
@@ -401,8 +401,22 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
         )}
       </div>
 
-      {/* Row 2: headline */}
-      {headline && (
+      {/* Row 2: bullets when popover open, headline otherwise */}
+      {isBrowserOpen && (changes.length > 0 || hasTurns) ? (
+        <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
+          <ul className="space-y-0">
+            {(changes.length > 0
+              ? changes.slice(0, 3)
+              : (item.turns as Array<{ ask: string; did: string[] }>).slice(0, 3).map(t => t.ask)
+            ).map((c: string, i: number) => (
+              <li key={i} className={`flex gap-1.5 text-sol-text-muted/60 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
+                <span className="text-sol-text-dim/30 select-none shrink-0">-</span>
+                <span className="truncate">{c}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : headline ? (
         <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
           <p className={`text-sol-text-muted/60 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
             {headline}
@@ -411,7 +425,7 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
             )}
           </p>
         </div>
-      )}
+      ) : null}
 
       {/* Expanded detail */}
       {expanded && (
@@ -449,6 +463,19 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
       )}
       {deepDive && <SessionNarrativeOverlay item={item} onClose={() => setDeepDive(false)} />}
     </div>
+  );
+}
+
+function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
+  item: any;
+  compact?: boolean;
+  showActor?: boolean;
+  onNavigate?: (id: string) => void;
+  projectColor?: string;
+}) {
+  return (
+    <MessageBrowserPopover conversationId={item.conversation_id}>
+      <SessionCardInner item={item} compact={compact} showActor={showActor} onNavigate={onNavigate} projectColor={projectColor} />
     </MessageBrowserPopover>
   );
 }
