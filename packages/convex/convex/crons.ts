@@ -28,4 +28,10 @@ crons.interval(
   internal.daemonLogs.checkDaemonHealth
 );
 
+crons.interval(
+  "backfill docs and tasks from sessions",
+  { hours: 6 },
+  internal.taskMining.backfillAllTeams
+);
+
 export default crons;
