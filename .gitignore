@@ -62,3 +62,4 @@ packages/web/binaries/
 .dmux/
 .wrangler/
 logs/
+packages/desktop/src-tauri/target/

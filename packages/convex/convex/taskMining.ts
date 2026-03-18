@@ -925,6 +925,31 @@ export const getTeamInsights = internalQuery({
   },
 });
 
+// Get insights for a user by actor_user_id (not team-scoped, for personal sessions)
+export const getUserInsights = internalQuery({
+  args: {
+    user_id: v.id("users"),
+    since: v.number(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("session_insights")
+      .withIndex("by_actor_generated_at", (q) =>
+        q.eq("actor_user_id", args.user_id).gt("generated_at", args.since)
+      )
+      .order("desc")
+      .take(1000);
+  },
+});
+
+// Get all users (for cron backfill)
+export const getAllUsers = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("users").collect();
+  },
+});
+
 // Keep for backward compat
 export const getRecentInsights = internalQuery({
   args: {
@@ -1491,122 +1516,137 @@ export const webGetTeamStats = query({
   },
 });
 
-// Cron-callable: backfill docs and tasks for all teams from the last 7 days
+// Cron-callable: backfill docs and tasks for all teams + personal sessions from the last 7 days
 export const backfillAllTeams = internalAction({
   args: {},
   handler: async (ctx, _args) => {
     const internalApi = internal as any;
-    const teams: any[] = await ctx.runQuery(internalApi.taskMining.getAllTeams);
     const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
     let totalDocs = 0;
     let totalTasks = 0;
 
-    for (const team of teams) {
-      const members: any[] = await ctx.runQuery(internalApi.taskMining.getTeamMembers, { team_id: team._id });
-      for (const member of members) {
-        // Mine tasks from recent insights
-        const insights: any[] = await ctx.runQuery(internalApi.taskMining.getTeamInsights, {
-          team_id: team._id,
-          since,
-        });
-        const memberInsights = insights.filter((i: any) => i.actor_user_id === member._id);
-        const conversationIds = [...new Set(memberInsights.map((i: any) => i.conversation_id))];
-        const conversations: any[] = memberInsights.length > 0
-          ? await ctx.runQuery(internalApi.taskMining.getConversationsByIds, { conversation_ids: conversationIds })
-          : [];
-        if (memberInsights.length > 0) {
-          const BATCH_SIZE = 25;
-          for (let i = 0; i < memberInsights.length; i += BATCH_SIZE) {
-            const batch = memberInsights.slice(i, i + BATCH_SIZE).map((ins: any) => {
-              const conv = conversations.find((c: any) => c._id === ins.conversation_id);
-              return {
-                _id: ins._id,
-                conversation_id: ins.conversation_id,
-                generated_at: ins.generated_at,
-                summary: ins.summary,
-                goal: ins.goal,
-                what_changed: ins.what_changed,
-                outcome_type: ins.outcome_type,
-                blockers: ins.blockers,
-                next_action: ins.next_action,
-                themes: ins.themes || [],
-                confidence: ins.confidence,
-                is_private: conv?.is_private,
-                team_visibility: conv?.team_visibility,
-              };
-            });
-            const result: any = await ctx.runMutation(internalApi.taskMining.mineTasksFromInsights, {
-              user_id: member._id,
-              team_id: team._id,
-              insights: batch,
-            });
-            totalTasks += result.tasks_created;
-          }
-        }
+    // Helper: mine tasks + docs for one user given their insights + optional team_id
+    async function mineForUser(userId: Id<"users">, teamId: Id<"teams"> | undefined, insights: any[]) {
+      if (insights.length === 0) return;
+      const conversationIds = [...new Set(insights.map((i: any) => i.conversation_id))];
+      const conversations: any[] = await ctx.runQuery(internalApi.taskMining.getConversationsByIds, {
+        conversation_ids: conversationIds,
+      });
 
-        // Mine session-summary docs from insights
-        if (memberInsights.length > 0) {
-          const sessionsForDocs: any[] = [];
-          for (const ins of memberInsights) {
-            if (ins.outcome_type === "unknown" || !ins.summary || ins.summary.length < 50) continue;
-            const conv = conversations.find((c: any) => c._id === ins.conversation_id);
-            if (!conv || (conv.message_count || 0) < 10) continue;
-            sessionsForDocs.push({
-              conversation_id: ins.conversation_id,
-              title: conv.title || ins.goal || "Untitled",
-              message_count: conv.message_count || 0,
-              project_path: conv.project_path,
-              started_at: conv.started_at,
-              is_private: conv.is_private,
-              team_visibility: conv.team_visibility,
-              insight: {
-                summary: ins.summary,
-                goal: ins.goal,
-                what_changed: ins.what_changed,
-                blockers: ins.blockers,
-                outcome_type: ins.outcome_type,
-                themes: ins.themes || [],
-              },
-            });
-          }
-          const BATCH_SIZE = 25;
-          for (let i = 0; i < sessionsForDocs.length; i += BATCH_SIZE) {
-            const result: any = await ctx.runMutation(internalApi.taskMining.mineDocsFromSessions, {
-              user_id: member._id,
-              team_id: team._id,
-              sessions: sessionsForDocs.slice(i, i + BATCH_SIZE),
+      const BATCH_SIZE = 25;
+      for (let i = 0; i < insights.length; i += BATCH_SIZE) {
+        const batch = insights.slice(i, i + BATCH_SIZE).map((ins: any) => {
+          const conv = conversations.find((c: any) => c._id === ins.conversation_id);
+          return {
+            _id: ins._id,
+            conversation_id: ins.conversation_id,
+            generated_at: ins.generated_at,
+            summary: ins.summary,
+            goal: ins.goal,
+            what_changed: ins.what_changed,
+            outcome_type: ins.outcome_type,
+            blockers: ins.blockers,
+            next_action: ins.next_action,
+            themes: ins.themes || [],
+            confidence: ins.confidence,
+            is_private: conv?.is_private,
+            team_visibility: conv?.team_visibility,
+          };
+        });
+        const result: any = await ctx.runMutation(internalApi.taskMining.mineTasksFromInsights, {
+          user_id: userId,
+          team_id: teamId,
+          insights: batch,
+        });
+        totalTasks += result.tasks_created;
+      }
+
+      const sessionsForDocs: any[] = [];
+      for (const ins of insights) {
+        if (ins.outcome_type === "unknown" || !ins.summary || ins.summary.length < 50) continue;
+        const conv = conversations.find((c: any) => c._id === ins.conversation_id);
+        if (!conv || (conv.message_count || 0) < 10) continue;
+        sessionsForDocs.push({
+          conversation_id: ins.conversation_id,
+          title: conv.title || ins.goal || "Untitled",
+          message_count: conv.message_count || 0,
+          project_path: conv.project_path,
+          started_at: conv.started_at,
+          is_private: conv.is_private,
+          team_visibility: conv.team_visibility,
+          insight: {
+            summary: ins.summary,
+            goal: ins.goal,
+            what_changed: ins.what_changed,
+            blockers: ins.blockers,
+            outcome_type: ins.outcome_type,
+            themes: ins.themes || [],
+          },
+        });
+      }
+      for (let i = 0; i < sessionsForDocs.length; i += BATCH_SIZE) {
+        const result: any = await ctx.runMutation(internalApi.taskMining.mineDocsFromSessions, {
+          user_id: userId,
+          team_id: teamId,
+          sessions: sessionsForDocs.slice(i, i + BATCH_SIZE),
+        });
+        totalDocs += result.docs_created;
+      }
+
+      // Mine raw markdown docs from recent conversations
+      const convResult: any = await ctx.runQuery(internalApi.taskMining.getRecentConversations, {
+        user_id: userId,
+        since,
+      });
+      for (const conv of convResult.conversations) {
+        let afterCreation: number | undefined;
+        for (let page = 0; page < 20; page++) {
+          const batch: any = await ctx.runQuery(internalApi.taskMining.findMarkdownWrites, {
+            conversation_id: conv._id,
+            after_creation: afterCreation,
+          });
+          if (batch.writes.length > 0) {
+            const result: any = await ctx.runMutation(internalApi.taskMining.insertExtractedDocs, {
+              user_id: userId,
+              team_id: teamId,
+              conversation_id: conv._id,
+              docs: batch.writes,
             });
             totalDocs += result.docs_created;
           }
-        }
-
-        // Mine raw markdown docs from recent conversation messages
-        const convResult: any = await ctx.runQuery(internalApi.taskMining.getRecentConversations, {
-          user_id: member._id,
-          since,
-        });
-        for (const conv of convResult.conversations) {
-          let afterCreation: number | undefined;
-          for (let page = 0; page < 20; page++) {
-            const batch: any = await ctx.runQuery(internalApi.taskMining.findMarkdownWrites, {
-              conversation_id: conv._id,
-              after_creation: afterCreation,
-            });
-            if (batch.writes.length > 0) {
-              const result: any = await ctx.runMutation(internalApi.taskMining.insertExtractedDocs, {
-                user_id: member._id,
-                team_id: team._id,
-                conversation_id: conv._id,
-                docs: batch.writes,
-              });
-              totalDocs += result.docs_created;
-            }
-            if (!batch.hasMore) break;
-            afterCreation = batch.lastCreation;
-          }
+          if (!batch.hasMore) break;
+          afterCreation = batch.lastCreation;
         }
       }
     }
+
+    // Part 1: Mine team-scoped sessions
+    const teams: any[] = await ctx.runQuery(internalApi.taskMining.getAllTeams);
+    for (const team of teams) {
+      const members: any[] = await ctx.runQuery(internalApi.taskMining.getTeamMembers, { team_id: team._id });
+      const teamInsights: any[] = await ctx.runQuery(internalApi.taskMining.getTeamInsights, {
+        team_id: team._id,
+        since,
+      });
+      for (const member of members) {
+        const memberInsights = teamInsights.filter((i: any) => i.actor_user_id === member._id);
+        await mineForUser(member._id, team._id, memberInsights);
+      }
+    }
+
+    // Part 2: Mine personal (no-team) sessions for ALL users
+    // Uses by_actor_generated_at index — finds insights with no team_id too
+    const allUsers: any[] = await ctx.runQuery(internalApi.taskMining.getAllUsers);
+    for (const user of allUsers) {
+      const allUserInsights: any[] = await ctx.runQuery(internalApi.taskMining.getUserInsights, {
+        user_id: user._id,
+        since,
+      });
+      // Only process insights that have no team_id (personal sessions)
+      const personalInsights = allUserInsights.filter((i: any) => !i.team_id);
+      await mineForUser(user._id, undefined, personalInsights);
+    }
+
     return { docs_created: totalDocs, tasks_created: totalTasks, teams_processed: teams.length };
   },
 });
