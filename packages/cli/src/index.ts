@@ -10575,6 +10575,84 @@ workflow
     console.log(`Created: ${file}`);
   });
 
+workflow
+  .command("push [file]")
+  .description("Push a workflow to the web UI")
+  .action(async (file: string | undefined, _options: any) => {
+    const path = await import("path");
+    const fs = await import("fs");
+    const { parseWorkflowFile } = await import("./workflow/parser.js");
+
+    let filePath = file;
+    if (!filePath) {
+      // Try common locations
+      const candidates = [
+        path.join(process.cwd(), "workflow.cast"),
+        path.join(process.cwd(), "workflows", path.basename(process.cwd()), "workflow.cast"),
+      ];
+      filePath = candidates.find(f => fs.existsSync(f));
+      if (!filePath) {
+        console.error("No .cast file specified and none found in current directory.");
+        process.exit(1);
+      }
+    }
+
+    const config = readConfig();
+    const siteUrl = (config?.convex_url || CONVEX_URL).replace(".cloud", ".site");
+    const apiToken = config?.auth_token;
+    if (!apiToken) {
+      console.error("Not authenticated. Run `cast login`.");
+      process.exit(1);
+    }
+
+    const graph = parseWorkflowFile(filePath);
+    const slug = graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const source = fs.readFileSync(filePath, "utf-8");
+
+    const nodes = [...graph.nodes.values()].map(n => ({
+      id: n.id,
+      label: n.label,
+      shape: n.shape,
+      type: n.type,
+      ...(n.prompt ? { prompt: n.prompt } : {}),
+      ...(n.script ? { script: n.script } : {}),
+      ...(n.reasoning_effort ? { reasoning_effort: n.reasoning_effort } : {}),
+      ...(n.model ? { model: n.model } : {}),
+      ...(n.max_visits !== undefined ? { max_visits: n.max_visits } : {}),
+      ...(n.max_retries !== undefined ? { max_retries: n.max_retries } : {}),
+      ...(n.retry_target ? { retry_target: n.retry_target } : {}),
+      ...(n.goal_gate !== undefined ? { goal_gate: n.goal_gate } : {}),
+    }));
+
+    const response = await fetch(`${siteUrl}/cli/workflows/upsert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: apiToken,
+        name: graph.name,
+        slug,
+        goal: graph.goal,
+        source,
+        nodes,
+        edges: graph.edges.map(e => ({
+          from: e.from,
+          to: e.to,
+          ...(e.label ? { label: e.label } : {}),
+          ...(e.condition ? { condition: e.condition } : {}),
+        })),
+        model_stylesheet: graph.model_stylesheet,
+      }),
+    });
+
+    const result = await response.json() as any;
+    if (result.error) {
+      console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+    console.log(`${result.updated ? "Updated" : "Created"} workflow: ${graph.name} (${slug})`);
+    console.log(`View at: https://codecast.sh/workflows`);
+  });
+
 // Check for updates in background (non-blocking)
 checkForUpdates().then(async (available) => {
   if (!available) return;

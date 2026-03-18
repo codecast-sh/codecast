@@ -45,6 +45,7 @@ const Plans = lazy(() => import("@/app/plans/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
 const Tasks = lazy(() => import("@/app/tasks/page"));
 const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
+const Workflows = lazy(() => import("@/app/workflows/page"));
 
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
@@ -124,6 +125,7 @@ export function App() {
           <Route path="plans/:id" element={<PlanDetail />} />
           <Route path="tasks" element={<Tasks />} />
           <Route path="tasks/:id" element={<TaskDetail />} />
+          <Route path="workflows" element={<Workflows />} />
 
           {/* Team */}
           <Route path="team" element={<Team />} />

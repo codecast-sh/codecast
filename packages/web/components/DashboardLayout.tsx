@@ -85,7 +85,9 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
   const isOnInboxPage = pathname === "/inbox" || (pathname?.startsWith("/inbox/") ?? false) || (isOnConversationPage && inboxSource === "inbox");
   const isOnTasksPage = pathname === "/tasks" || (pathname?.startsWith("/tasks/") ?? false);
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage;
+  const isOnWorkflowsPage = pathname === "/workflows" || (pathname?.startsWith("/workflows/") ?? false);
+  const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnPlansPage;
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < 768);
