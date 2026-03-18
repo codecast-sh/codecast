@@ -2,7 +2,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 
 export default function SharedConversationClient() {
   const params = useParams();
@@ -13,7 +13,7 @@ export default function SharedConversationClient() {
     share_token: token,
   });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (conversation?._id) {
       router.replace(`/conversation/${conversation._id}`);
     }

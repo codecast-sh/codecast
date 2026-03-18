@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export default function SettingsPage() {
   const router = useRouter();
 
-  useEffect(() => {
+  useWatchEffect(() => {
     router.replace("/settings/cli");
   }, [router]);
 

@@ -1,5 +1,7 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useDebounce } from "../hooks/useDebounce";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 
 interface SearchBarProps {
   onSearch: (term: string) => void;
@@ -8,13 +10,11 @@ interface SearchBarProps {
 
 export function SearchBar({ onSearch, placeholder = "Search conversations..." }: SearchBarProps) {
   const [value, setValue] = useState("");
+  const debouncedValue = useDebounce(value, 300);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      onSearch(value);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [value, onSearch]);
+  useWatchEffect(() => {
+    onSearch(debouncedValue);
+  }, [debouncedValue, onSearch]);
 
   return (
     <div className="relative">

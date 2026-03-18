@@ -2,7 +2,8 @@
 
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { copyToClipboard } from "../../../lib/utils";
 
 export default function CliSettingsPage() {
@@ -36,7 +37,7 @@ export default function CliSettingsPage() {
   };
 
   const [now, setNow] = useState(Date.now());
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!tokenExpiry) return;
     const remaining = tokenExpiry - Date.now();
     if (remaining <= 0) return;

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { copyToClipboard } from "../lib/utils";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 
 interface EmptyStateProps {
   title: string;
@@ -147,7 +148,7 @@ function SetupTokenCommand() {
   };
 
   const [now, setNow] = useState(Date.now());
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!tokenExpiry) return;
     const remaining = tokenExpiry - Date.now();
     if (remaining <= 0) return;

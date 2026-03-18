@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { useDebounce } from "../../hooks/useDebounce";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
@@ -69,20 +71,16 @@ export default function SearchPage() {
   const initialQuery = searchParams.get("q") || "";
   const initialUserOnly = searchParams.get("userOnly") === "true";
   const [query, setQuery] = useState(initialQuery);
-  const [debouncedQuery, setDebouncedQuery] = useState(initialQuery);
   const [userOnly, setUserOnly] = useState(initialUserOnly);
+  const debouncedQuery = useDebounce(query, 300);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedQuery(query);
-      const params = new URLSearchParams();
-      if (query) params.set("q", query);
-      if (userOnly) params.set("userOnly", "true");
-      const newUrl = `/search${params.toString() ? `?${params.toString()}` : ""}`;
-      router.replace(newUrl);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [query, userOnly, router]);
+  useWatchEffect(() => {
+    const params = new URLSearchParams();
+    if (debouncedQuery) params.set("q", debouncedQuery);
+    if (userOnly) params.set("userOnly", "true");
+    const newUrl = `/search${params.toString() ? `?${params.toString()}` : ""}`;
+    router.replace(newUrl);
+  }, [debouncedQuery, userOnly, router]);
 
   const searchResults = useQuery(
     api.conversations.searchConversations,

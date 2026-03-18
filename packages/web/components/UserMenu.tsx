@@ -1,5 +1,7 @@
 "use client";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useEventListener } from "../hooks/useEventListener";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -12,10 +14,10 @@ function UrlBarModal({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  useMountEffect(() => {
     setUrl(window.location.href);
     setTimeout(() => inputRef.current?.select(), 50);
-  }, []);
+  });
 
   const handleNavigate = useCallback(() => {
     try {
@@ -95,15 +97,11 @@ export function UserMenu() {
   const router = useRouter();
   const user = useQuery(api.users.getCurrentUser);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  useEventListener("mousedown", useCallback((e: MouseEvent) => {
+    if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      setOpen(false);
+    }
+  }, []), document);
 
   const handleLogout = async () => {
     await signOut();

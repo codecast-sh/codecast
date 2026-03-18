@@ -1,7 +1,9 @@
 "use client";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
+import { useEventListener } from "../hooks/useEventListener";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -132,21 +134,17 @@ export function NotificationBell() {
   const markAsRead = useMutation(api.notifications.markAsRead);
   const markAllAsRead = useMutation(api.notifications.markAllAsRead);
 
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+  useEventListener("mousedown", useCallback((event: MouseEvent) => {
+    if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      setIsOpen(false);
     }
+  }, []), isOpen ? document : null);
 
-    if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      if (unreadCount && unreadCount > 0) {
-        markAllAsRead();
-      }
-      return () => document.removeEventListener("mousedown", handleClickOutside);
+  useWatchEffect(() => {
+    if (isOpen && unreadCount && unreadCount > 0) {
+      markAllAsRead();
     }
-  }, [isOpen]);
+  }, [isOpen, markAllAsRead, unreadCount]);
 
   const handleNotificationClick = async (notificationId: Id<"notifications">, conversationId?: Id<"conversations">) => {
     await markAsRead({ notificationId });

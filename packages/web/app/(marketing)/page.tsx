@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
 import { Logo, LogoIcon } from "@/components/Logo";
 import { isDesktop } from "@/lib/desktop";
+import { useWatchEffect } from "@/hooks/useWatchEffect";
 
 function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" }) {
   const colors: Record<string, string> = {
@@ -57,7 +58,7 @@ function TypingEffect() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const phrase = TYPING_PHRASES[phraseIndex];
 
     if (isPaused) {
@@ -198,7 +199,7 @@ export default function LandingPage() {
   const router = useRouter();
   const [desktop, setDesktop] = useState(false);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isDesktop()) {
       setDesktop(true);
       router.replace("/login");

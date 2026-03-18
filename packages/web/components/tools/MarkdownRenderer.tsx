@@ -2,7 +2,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery } from "../ImageGallery";
 import { CodeBlock } from "../CodeBlock";
 import { MermaidDiagram } from "../MermaidDiagram";
@@ -57,7 +58,7 @@ export function CollapsibleImage({ src: rawSrc, alt }: { src?: string | Blob; al
   const [loaded, setLoaded] = useState(false);
   const gallery = useImageGallery();
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (src && gallery) gallery.register(src);
   }, [src, gallery]);
 

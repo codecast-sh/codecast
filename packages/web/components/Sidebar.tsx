@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
 import { toast } from "sonner";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -217,12 +218,12 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
 
-  useEffect(() => {
+  useMountEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(Date.now());
     }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  });
 
   const favorites = useQuery(api.conversations.listFavorites);
   const bookmarks = useQuery(api.bookmarks.listBookmarks);

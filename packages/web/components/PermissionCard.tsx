@@ -1,7 +1,8 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useEventListener } from "../hooks/useEventListener";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 
@@ -106,26 +107,22 @@ export function PermissionStack({ permissions }: { permissions: Permission[] }) 
     );
   }, [pending, updatePermissionStatus]);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
-      if (pending.length === 0) return;
+  useEventListener("keydown", useCallback((e: KeyboardEvent) => {
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+    if (pending.length === 0) return;
 
-      if (e.key === "y" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        if (pending.length === 1) handleApprove(pending[0]._id);
-        else handleApproveAll();
-      }
-      if (e.key === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        if (pending.length === 1) handleDeny(pending[0]._id);
-        else handleDenyAll();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [pending, handleApprove, handleDeny, handleApproveAll, handleDenyAll]);
+    if (e.key === "y" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (pending.length === 1) handleApprove(pending[0]._id);
+      else handleApproveAll();
+    }
+    if (e.key === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (pending.length === 1) handleDeny(pending[0]._id);
+      else handleDenyAll();
+    }
+  }, [pending, handleApprove, handleDeny, handleApproveAll, handleDenyAll]));
 
   if (pending.length === 0) return null;
 

@@ -2,7 +2,8 @@
 
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useEffect, useState, Suspense, useRef } from "react";
+import { useState, Suspense, useRef } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useSearchParams, useRouter } from "next/navigation";
 
 function CliAuthContent() {
@@ -22,7 +23,7 @@ function CliAuthContent() {
   const port = searchParams.get("port");
   const device = searchParams.get("device") || "CLI Device";
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isLoading) {
       return;
     }

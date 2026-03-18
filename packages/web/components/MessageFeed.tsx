@@ -2,7 +2,8 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { useMemo, useState, useCallback, useRef } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
@@ -207,7 +208,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const hasNextCursor = !!result?.nextCursor;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!hasNextCursor || isLoadingMore) return;
 
     const sentinel = sentinelRef.current;

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
+import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useConvexAuth } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
@@ -11,7 +12,7 @@ export default function LinkGitHubPage() {
   const router = useRouter();
   const triggeredRef = useRef(false);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isLoading || triggeredRef.current) return;
 
     if (!isAuthenticated) {

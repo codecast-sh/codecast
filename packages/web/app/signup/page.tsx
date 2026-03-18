@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Logo } from "../../components/Logo";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 function SignUpForm() {
   const [email, setEmail] = useState("");
@@ -21,7 +22,7 @@ function SignUpForm() {
   const returnTo = searchParams.get("return_to");
   const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/inbox";
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isLoading && isAuthenticated) {
       router.replace(redirectTo);
     }

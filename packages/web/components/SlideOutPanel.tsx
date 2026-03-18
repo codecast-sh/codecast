@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import { useCallback } from "react";
 import { X } from "lucide-react";
+import { useEventListener } from "../hooks/useEventListener";
 
 interface SlideOutPanelProps {
   open: boolean;
@@ -25,12 +26,7 @@ export function SlideOutPanel({
     [onClose]
   );
 
-  useEffect(() => {
-    if (open) {
-      document.addEventListener("keydown", handleKeyDown);
-      return () => document.removeEventListener("keydown", handleKeyDown);
-    }
-  }, [open, handleKeyDown]);
+  useEventListener("keydown", handleKeyDown, open ? document : null);
 
   return (
     <>

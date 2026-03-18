@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { X, Terminal } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
+import { useMountEffect } from "../hooks/useMountEffect";
 
 const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -18,7 +19,7 @@ export function CliOfflineBanner() {
 
   const user = useQuery(api.users.getCurrentUser);
 
-  useEffect(() => { setMounted(true); }, []);
+  useMountEffect(() => { setMounted(true); });
 
   const isDismissed = dismissedTs > 0 && Date.now() - dismissedTs < DISMISS_DURATION_MS;
 

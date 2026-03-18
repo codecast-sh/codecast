@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { X, Terminal, ArrowRight } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
+import { useMountEffect } from "../hooks/useMountEffect";
 
 const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000;
 
@@ -20,7 +21,7 @@ export function SetupPromptBanner() {
     user?._id ? { filter: "my", limit: 1 } : "skip"
   );
 
-  useEffect(() => { setMounted(true); }, []);
+  useMountEffect(() => { setMounted(true); });
 
   const isDismissed = dismissedTs > 0 && Date.now() - dismissedTs < DISMISS_DURATION_MS;
 

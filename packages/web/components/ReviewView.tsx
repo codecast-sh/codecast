@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useEventListener } from "../hooks/useEventListener";
 
 interface FileDiff {
   path: string;
@@ -116,10 +117,7 @@ export function ReviewView({ prId }: { prId: string }) {
     [currentFile, commentDraft, mockDiffs.length]
   );
 
-  useEffect(() => {
-    window.addEventListener("keydown", handleKeyPress);
-    return () => window.removeEventListener("keydown", handleKeyPress);
-  }, [handleKeyPress]);
+  useEventListener("keydown", handleKeyPress);
 
   const handleLineClick = (lineNumber: number | undefined) => {
     if (!lineNumber) return;

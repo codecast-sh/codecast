@@ -262,7 +262,8 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     if (freshProjects) setRecentProjects(freshProjects);
   }, [freshProjects, setRecentProjects]);
 
-  const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;
+  const currentConvContext = useInboxStore((s) => s.currentConversation);
+  const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
   const isInInbox = inboxSource === "inbox";
@@ -273,7 +274,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
 
   const visibleProjects = otherProjects.slice(0, 6);
 
-  const handleSwitch = useCallback(async (projectPath: string) => {
+  const handleSwitch = useCallback(async (projectPath: string, forceIsolated?: boolean) => {
     const trimmed = projectPath.trim();
     if (!trimmed) return;
     soundNewSession();
@@ -339,7 +340,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
         project_path: trimmed,
         git_root: trimmed,
         session_id: isInInbox ? sessionId : undefined,
-        isolated: isolated || undefined,
+        isolated: (forceIsolated ?? isolated) || undefined,
       });
 
       if (isInInbox) {
@@ -379,7 +380,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
             <span>{currentName}</span>
           </button>
         )}
-        {visibleProjects.map((p) => {
+        {visibleProjects.map((p: { path: string }) => {
           const name = p.path.split("/").filter(Boolean).pop();
           return (
             <button
@@ -409,7 +410,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       <button
         onClick={() => {
           if (!isolated && currentPath) {
-            handleSwitch(currentPath);
+            handleSwitch(currentPath, true);
           } else {
             setIsolated(!isolated);
           }
@@ -7956,12 +7957,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
       <div ref={containerRef} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col">
-        {!conversation ? (
-          <ConversationSkeleton />
-        ) : timeline.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3 text-sol-text-dim text-sm">
-            {null}
-            {conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (conversation.project_path || conversation.git_root) && (
+        {(!conversation || timeline.length === 0) ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3">
+            {conversation && (conversation.project_path || conversation.git_root) && (
               <ProjectSwitcher conversation={conversation} />
             )}
           </div>

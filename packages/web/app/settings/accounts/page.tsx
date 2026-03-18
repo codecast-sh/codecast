@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, Suspense } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
@@ -21,7 +22,7 @@ function AccountsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const urlError = searchParams.get("error");
     if (urlError) {
       setError(urlError);

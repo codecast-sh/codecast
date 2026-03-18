@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useEventListener } from "../../../hooks/useEventListener";
+import { useMountEffect } from "../../../hooks/useMountEffect";
 import { isElectron } from "../../../lib/desktop";
 
 const SHORTCUT_LABELS: Record<string, string> = {
@@ -71,11 +73,7 @@ function ShortcutRecorder({
     [recording, onChange]
   );
 
-  useEffect(() => {
-    if (!recording) return;
-    document.addEventListener("keydown", handleKeyDown, true);
-    return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [recording, handleKeyDown]);
+  useEventListener("keydown", handleKeyDown, recording ? document : null, { capture: true });
 
   return (
     <button
@@ -95,10 +93,10 @@ export default function DesktopSettingsPage() {
   const [shortcuts, setShortcuts] = useState<Record<string, string> | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
 
-  useEffect(() => {
+  useMountEffect(() => {
     if (!isElectron()) return;
     window.__CODECAST_ELECTRON__!.getShortcuts().then(setShortcuts);
-  }, []);
+  });
 
   const updateShortcut = useCallback(async (key: string, accelerator: string) => {
     if (!isElectron()) return;

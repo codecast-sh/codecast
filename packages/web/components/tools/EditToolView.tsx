@@ -1,5 +1,7 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useEventListener } from "../../hooks/useEventListener";
 import { createPortal } from "react-dom";
 import type { ToolViewProps } from "@/lib/toolRegistry";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "./MarkdownRenderer";
@@ -91,18 +93,20 @@ export function EditToolView({ input, output }: ToolViewProps) {
   const [mdOverflowing, setMdOverflowing] = useState(false);
   const MD_MAX_HEIGHT = 1500;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (mdRef.current && !mdExpanded && viewMode === 'rendered') {
       setMdOverflowing(mdRef.current.scrollHeight > MD_MAX_HEIGHT);
     }
   }, [content, mdExpanded, viewMode]);
 
-  useEffect(() => {
+  useEventListener("keydown", useCallback((e: KeyboardEvent) => {
+    if (e.key === 'Escape') setMdFullscreen(false);
+  }, []), mdFullscreen ? document : null);
+
+  useWatchEffect(() => {
     if (!mdFullscreen) return;
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMdFullscreen(false); };
-    document.addEventListener('keydown', handleKey);
     document.body.style.overflow = 'hidden';
-    return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
+    return () => { document.body.style.overflow = ''; };
   }, [mdFullscreen]);
 
   if (input?.old_string && input?.new_string) {

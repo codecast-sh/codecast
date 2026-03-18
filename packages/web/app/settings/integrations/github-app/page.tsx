@@ -4,7 +4,8 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../../components/ui/card";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 
 export default function GitHubAppPage() {
   const user = useQuery(api.users.getCurrentUser);
@@ -17,7 +18,7 @@ export default function GitHubAppPage() {
   const searchParams = useSearchParams();
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (searchParams.get("success") === "true") {
       setMessage({ type: "success", text: "GitHub App installed successfully!" });
     } else if (searchParams.get("error") === "missing_team") {

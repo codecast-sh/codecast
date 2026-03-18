@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { InboxSession } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";
 
@@ -38,7 +39,7 @@ export function SessionSwitcher({
   const listRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     selectedRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 

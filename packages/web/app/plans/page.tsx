@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useEventListener } from "../../hooks/useEventListener";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
@@ -245,12 +247,12 @@ export default function PlansPage() {
   }, [router]);
 
   const [isMobile, setIsMobile] = useState(false);
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
+  useMountEffect(() => {
+    setIsMobile(window.innerWidth < 768);
+  });
+  useEventListener("resize", useCallback(() => {
+    setIsMobile(window.innerWidth < 768);
+  }, []));
 
   if (isMobile) {
     return (

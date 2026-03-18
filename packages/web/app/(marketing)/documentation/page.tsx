@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useMountEffect } from "@/hooks/useMountEffect";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { InstallTabs } from "@/components/install-tabs";
@@ -230,7 +231,7 @@ function Sidebar({ activeId }: { activeId: string }) {
 export default function DocsPage() {
   const [activeId, setActiveId] = useState("getting-started");
 
-  useEffect(() => {
+  useMountEffect(() => {
     const allIds = TOC.flatMap((s) => [s.id, ...s.children.map((c) => c.id)]);
     const observer = new IntersectionObserver(
       (entries) => {
@@ -247,7 +248,7 @@ export default function DocsPage() {
       if (el) observer.observe(el);
     });
     return () => observer.disconnect();
-  }, []);
+  });
 
   return (
     <main className="min-h-screen w-full" style={{ backgroundColor: SOL.base3 }}>

@@ -47,12 +47,11 @@ export function ImageGalleryProvider({ children }: { children: React.ReactNode }
     setCurrentIndex(i => (i > 0 ? i - 1 : i));
   }, []);
 
-  useEventListener("keydown", (e: KeyboardEvent) => {
-    if (!isOpen) return;
+  useEventListener("keydown", useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); close(); }
     else if (e.key === "ArrowRight") { e.preventDefault(); goNext(); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); goPrev(); }
-  }, document);
+  }, [close, goNext, goPrev]), isOpen ? document : null);
 
   const ctx = useMemo(() => ({ register, open }), [register, open]);
 
