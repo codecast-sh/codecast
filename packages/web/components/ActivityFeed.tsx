@@ -391,11 +391,11 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
             {outcome.label}
           </span>
         )}
-        <span className={`font-mono text-sol-text-dim/35 tabular-nums shrink-0 whitespace-nowrap text-[10px]`}>
+        <span className="font-mono text-sol-text-dim opacity-30 tabular-nums shrink-0 whitespace-nowrap text-[10px]">
           {time}
         </span>
         {hasDetail && (
-          <span className={`text-sol-text-dim/20 text-[8px] shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}>
+          <span className={`text-sol-text-dim opacity-20 text-[8px] shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}>
             &#x25B6;
           </span>
         )}
@@ -421,7 +421,7 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
           <p className={`text-sol-text-muted/60 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
             {headline}
             {metaParts.length > 0 && (
-              <span className="text-sol-text-dim/20 font-mono text-[9px] ml-2">{metaParts.join(" / ")}</span>
+              <span className="text-sol-text-dim opacity-25 font-mono text-[9px] ml-2">{metaParts.join(" / ")}</span>
             )}
           </p>
         </div>
