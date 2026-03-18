@@ -170,6 +170,7 @@ export const mineTasksFromInsights = internalMutation({
     let tasksCreated = 0;
     let tasksDeduped = 0;
     let plansCreated = 0;
+    let plansUpdated = 0;
 
     const existingTasks = await ctx.db
       .query("tasks")
@@ -194,7 +195,18 @@ export const mineTasksFromInsights = internalMutation({
             )
           )
           .collect()
-      : [];
+      : (await Promise.all([
+          ctx.db
+            .query("plans")
+            .withIndex("by_user_status", (q) => q.eq("user_id", args.user_id).eq("status", "active"))
+            .filter((q) => q.eq(q.field("team_id"), undefined))
+            .collect(),
+          ctx.db
+            .query("plans")
+            .withIndex("by_user_status", (q) => q.eq("user_id", args.user_id).eq("status", "draft"))
+            .filter((q) => q.eq(q.field("team_id"), undefined))
+            .collect(),
+        ])).flat();
 
     function findSimilarTask(title: string) {
       let bestMatch: (typeof existingTasks)[0] | null = null;
@@ -264,9 +276,9 @@ export const mineTasksFromInsights = internalMutation({
         }
 
         if (similarPlan) {
-          // Update plan's updated_at to reflect recent session work
           if (ts > similarPlan.updated_at) {
             await ctx.db.patch(similarPlan._id, { updated_at: ts });
+            plansUpdated++;
           }
           tasksDeduped++;
           continue;
@@ -404,7 +416,7 @@ export const mineTasksFromInsights = internalMutation({
       }
     }
 
-    return { tasks_created: tasksCreated, tasks_deduped: tasksDeduped, plans_created: plansCreated };
+    return { tasks_created: tasksCreated, tasks_deduped: tasksDeduped, plans_created: plansCreated, plans_updated: plansUpdated };
   },
 });
 
