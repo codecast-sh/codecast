@@ -851,6 +851,7 @@ export default defineSchema({
       v.literal("insight"),
       v.literal("promoted"),
       v.literal("plan_mode"),
+      v.literal("imported"),
     ),
     owner_id: v.optional(v.id("users")),
     task_ids: v.optional(v.array(v.id("tasks"))),

@@ -5,6 +5,74 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { createDataContext } from "./data";
 
+// Called after generateSessionInsight saves a new insight — mines tasks + docs for that conversation
+export const mineConversationAfterInsight = internalAction({
+  args: {
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    insight_id: v.id("session_insights"),
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const internalApi = internal as any;
+
+    // Mine tasks from this single insight
+    const insight = await ctx.runQuery(internalApi.taskMining.getInsightById, { insight_id: args.insight_id });
+    if (insight) {
+      await ctx.runMutation(internalApi.taskMining.mineTasksFromInsights, {
+        user_id: args.user_id,
+        team_id: args.team_id,
+        insights: [insight],
+      });
+    }
+
+    // Mine docs from this conversation's messages
+    let afterCreation: number | undefined;
+    for (let page = 0; page < 20; page++) {
+      const batch: any = await ctx.runQuery(internalApi.taskMining.findMarkdownWrites, {
+        conversation_id: args.conversation_id,
+        after_creation: afterCreation,
+      });
+      if (batch.writes.length > 0) {
+        await ctx.runMutation(internalApi.taskMining.insertExtractedDocs, {
+          user_id: args.user_id,
+          team_id: args.team_id,
+          conversation_id: args.conversation_id,
+          docs: batch.writes,
+        });
+      }
+      if (!batch.hasMore) break;
+      afterCreation = batch.lastCreation;
+    }
+  },
+});
+
+// Retrieve a single insight by ID for targeted mining
+export const getInsightById = internalQuery({
+  args: { insight_id: v.id("session_insights") },
+  handler: async (ctx, args) => {
+    const insight = await ctx.db.get(args.insight_id);
+    if (!insight) return null;
+    const conv = await ctx.db.get(insight.conversation_id);
+    return {
+      _id: insight._id,
+      conversation_id: insight.conversation_id,
+      generated_at: insight.generated_at,
+      actor_name: insight.actor_name,
+      summary: insight.summary,
+      goal: insight.goal,
+      what_changed: insight.what_changed,
+      outcome_type: insight.outcome_type,
+      blockers: insight.blockers,
+      next_action: insight.next_action,
+      themes: insight.themes || [],
+      confidence: insight.confidence,
+      is_private: conv?.is_private,
+      team_visibility: conv?.team_visibility,
+    };
+  },
+});
+
 function generateShortId(prefix = "ct-"): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
   let id = prefix;
@@ -399,6 +467,14 @@ export const getUserTeamId = internalQuery({
     const user = await ctx.db.get(args.user_id);
     if (!user) return null;
     return user.active_team_id || null;
+  },
+});
+
+// Get all teams (for cron backfill)
+export const getAllTeams = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("teams").collect();
   },
 });
 
@@ -1377,5 +1453,73 @@ export const webGetTeamStats = query({
       docs: docCount,
       tasksByStatus: statusCounts,
     };
+  },
+});
+
+// Cron-callable: backfill docs and tasks for all teams from the last 7 days
+export const backfillAllTeams = internalAction({
+  args: {},
+  handler: async (ctx, _args) => {
+    const internalApi = internal as any;
+    const teams: any[] = await ctx.runQuery(internalApi.taskMining.getAllTeams);
+    const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let totalDocs = 0;
+    let totalTasks = 0;
+
+    for (const team of teams) {
+      const members: any[] = await ctx.runQuery(internalApi.taskMining.getTeamMembers, { team_id: team._id });
+      for (const member of members) {
+        // Mine tasks from recent insights
+        const insights: any[] = await ctx.runQuery(internalApi.taskMining.getTeamInsights, {
+          team_id: team._id,
+          since,
+        });
+        const memberInsights = insights.filter((i: any) => i.actor_user_id === member._id);
+        if (memberInsights.length > 0) {
+          const conversationIds = [...new Set(memberInsights.map((i: any) => i.conversation_id))];
+          const conversations: any[] = await ctx.runQuery(internalApi.taskMining.getConversationsByIds, { conversation_ids: conversationIds });
+          const BATCH_SIZE = 25;
+          for (let i = 0; i < memberInsights.length; i += BATCH_SIZE) {
+            const batch = memberInsights.slice(i, i + BATCH_SIZE).map((ins: any) => {
+              const conv = conversations.find((c: any) => c._id === ins.conversation_id);
+              return { ...ins, themes: ins.themes || [], is_private: conv?.is_private, team_visibility: conv?.team_visibility };
+            });
+            const result: any = await ctx.runMutation(internalApi.taskMining.mineTasksFromInsights, {
+              user_id: member._id,
+              team_id: team._id,
+              insights: batch,
+            });
+            totalTasks += result.tasks_created;
+          }
+        }
+
+        // Mine docs from recent conversation messages
+        const convResult: any = await ctx.runQuery(internalApi.taskMining.getRecentConversations, {
+          user_id: member._id,
+          since,
+        });
+        for (const conv of convResult.conversations) {
+          let afterCreation: number | undefined;
+          for (let page = 0; page < 20; page++) {
+            const batch: any = await ctx.runQuery(internalApi.taskMining.findMarkdownWrites, {
+              conversation_id: conv._id,
+              after_creation: afterCreation,
+            });
+            if (batch.writes.length > 0) {
+              const result: any = await ctx.runMutation(internalApi.taskMining.insertExtractedDocs, {
+                user_id: member._id,
+                team_id: team._id,
+                conversation_id: conv._id,
+                docs: batch.writes,
+              });
+              totalDocs += result.docs_created;
+            }
+            if (!batch.hasMore) break;
+            afterCreation = batch.lastCreation;
+          }
+        }
+      }
+    }
+    return { docs_created: totalDocs, tasks_created: totalTasks, teams_processed: teams.length };
   },
 });

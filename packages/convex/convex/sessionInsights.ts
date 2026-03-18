@@ -636,6 +636,16 @@ ${sampledMessages}`;
         },
       })) as Id<"session_insights">;
 
+      // Auto-mine tasks and docs from this conversation after insight is saved
+      if (context.conversation.actor_user_id) {
+        await ctx.scheduler.runAfter(0, internal.taskMining.mineConversationAfterInsight, {
+          user_id: context.conversation.actor_user_id,
+          team_id: context.conversation.team_id,
+          insight_id: insightId,
+          conversation_id: context.conversation._id,
+        });
+      }
+
       return { status: "ok", insight_id: insightId };
     } catch (error) {
       console.error("generateSessionInsight failed", error);
