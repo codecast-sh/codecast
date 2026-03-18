@@ -1,5 +1,7 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useEventListener } from "../hooks/useEventListener";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
@@ -83,7 +85,7 @@ export function GlobalSearch() {
 
   const userTeams = useQuery(api.teams.getUserTeams);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedQuery(query);
     }, 200);
@@ -137,24 +139,19 @@ export function GlobalSearch() {
     return date.toLocaleDateString([], { month: "short", day: "numeric" }) + ` ${timeStr}`;
   };
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "/") {
-        e.preventDefault();
-        setIsOpen(true);
-        setTimeout(() => inputRef.current?.focus(), 0);
-      }
-      if (e.key === "Escape") {
-        setIsOpen(false);
-        setQuery("");
-      }
-    };
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "/") {
+      e.preventDefault();
+      setIsOpen(true);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    }
+    if (e.key === "Escape") {
+      setIsOpen(false);
+      setQuery("");
+    }
+  }, document);
 
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  useEffect(() => {
+  useWatchEffect(() => {
     setSelectedIndex(0);
   }, [searchResults]);
 

@@ -2,7 +2,8 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useRef, useState, useMemo, useCallback } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 
 type TreeNode = {
   id: string;
@@ -132,11 +133,11 @@ export function ForkTreePanel({
 
   const [selectedIdx, setSelectedIdx] = useState(initialIdx);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (open) setSelectedIdx(initialIdx);
   }, [open, initialIdx]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     selectedRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedIdx]);
 
@@ -148,7 +149,7 @@ export function ForkTreePanel({
     [flatNodes, onSwitchToConversation]
   );
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open) return;
     const handleClick = (e: MouseEvent) => {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {

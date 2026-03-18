@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useMemo, useRef } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import {
   ChevronRight,
@@ -358,7 +361,7 @@ function FileSidebar({
 
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
+  useWatchEffect(() => {
     setExpandedDirs(allDirPaths);
   }, [allDirPaths]);
 
@@ -704,84 +707,80 @@ export function FileDiffLayout({
     updateUI({ file_diff_view_mode: viewMode === "split" ? "unified" : "split" });
   };
 
-  useEffect(() => {
-    const checkMobile = () => {
-      const mobile = window.innerWidth < MOBILE_BREAKPOINT;
-      setIsMobile(mobile);
-      if (mobile) setSidebarOpen(false);
-    };
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-    return () => window.removeEventListener("resize", checkMobile);
-  }, []);
+  useMountEffect(() => {
+    const mobile = window.innerWidth < MOBILE_BREAKPOINT;
+    setIsMobile(mobile);
+    if (mobile) setSidebarOpen(false);
+  });
 
-  useEffect(() => {
+  useEventListener("resize", () => {
+    const mobile = window.innerWidth < MOBILE_BREAKPOINT;
+    setIsMobile(mobile);
+    if (mobile) setSidebarOpen(false);
+  });
+
+  useWatchEffect(() => {
     if (strippedFiles.length > 0 && !selectedFile) {
       setSelectedFile(strippedFiles[0].filename);
       setCurrentFileIndex(0);
     }
   }, [strippedFiles, selectedFile]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const index = strippedFiles.findIndex((f) => f.filename === selectedFile);
     if (index >= 0) {
       setCurrentFileIndex(index);
     }
   }, [selectedFile, strippedFiles]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (selectedFileRef.current) {
       selectedFileRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }, [currentFileIndex]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      const isInput =
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable;
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    const isInput =
+      target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable;
 
-      if (isInput) return;
+    if (isInput) return;
 
-      switch (e.key) {
-        case "j":
-        case "]":
-          e.preventDefault();
-          if (currentFileIndex < strippedFiles.length - 1) {
-            const nextFile = strippedFiles[currentFileIndex + 1];
-            setSelectedFile(nextFile.filename);
-            setCurrentFileIndex(currentFileIndex + 1);
-          }
-          break;
-        case "k":
-        case "[":
-          e.preventDefault();
-          if (currentFileIndex > 0) {
-            const prevFile = strippedFiles[currentFileIndex - 1];
-            setSelectedFile(prevFile.filename);
-            setCurrentFileIndex(currentFileIndex - 1);
-          }
-          break;
-        case "b":
-          e.preventDefault();
-          setSidebarOpen((prev) => !prev);
-          break;
-        case "v":
-          e.preventDefault();
-          toggleViewMode();
-          break;
-        case "?":
-          e.preventDefault();
-          setShowHelp((prev) => !prev);
-          break;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentFileIndex, strippedFiles, toggleViewMode]);
+    switch (e.key) {
+      case "j":
+      case "]":
+        e.preventDefault();
+        if (currentFileIndex < strippedFiles.length - 1) {
+          const nextFile = strippedFiles[currentFileIndex + 1];
+          setSelectedFile(nextFile.filename);
+          setCurrentFileIndex(currentFileIndex + 1);
+        }
+        break;
+      case "k":
+      case "[":
+        e.preventDefault();
+        if (currentFileIndex > 0) {
+          const prevFile = strippedFiles[currentFileIndex - 1];
+          setSelectedFile(prevFile.filename);
+          setCurrentFileIndex(currentFileIndex - 1);
+        }
+        break;
+      case "b":
+        e.preventDefault();
+        setSidebarOpen((prev) => !prev);
+        break;
+      case "v":
+        e.preventDefault();
+        toggleViewMode();
+        break;
+      case "?":
+        e.preventDefault();
+        setShowHelp((prev) => !prev);
+        break;
+    }
+  });
 
   const handleLayoutChange = (newLayout: Layout) => {
     updateLayout("file_diff", { tree: newLayout["file-tree"] || 25, content: newLayout["diff-content"] || 75 });

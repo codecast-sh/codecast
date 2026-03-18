@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, memo, useMemo } from "react";
+import { useState, useCallback, useRef, memo, useMemo } from "react";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useEventListener } from "../../hooks/useEventListener";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Panel, Group, Separator } from "react-resizable-panels";
@@ -87,14 +90,14 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   const isStale = (Date.now() - (conversation?.updated_at || 0)) > 5 * 60 * 1000;
   const looksAbandoned = isIdle && lastRoleIsUser && isStale;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isIdle && (resumeState === "sent" || resumeState === "resuming")) {
       setResumeState("idle");
       forceRestartAttemptedRef.current = false;
     }
   }, [isIdle, resumeState]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (resumeState !== "sent") return;
     const timeout = setTimeout(async () => {
       if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
@@ -887,12 +890,10 @@ export function QueuePageClient() {
   const router = useRouter();
 
   // Redirect old /inbox?s=XXX URLs to /conversation/XXX
-  useEffect(() => {
+  useMountEffect(() => {
     const sessionId = searchParams.get("s");
-    if (sessionId) {
-      router.replace(`/conversation/${sessionId}`);
-    }
-  }, [searchParams, router]);
+    if (sessionId) router.replace(`/conversation/${sessionId}`);
+  });
 
   const [isMac] = useState(() => typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC"));
   const [showAll, setShowAll] = useState(false);
@@ -951,7 +952,7 @@ export function QueuePageClient() {
 
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s");
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!paramSessionId || paramSessionId === lastAppliedParamId.current) return;
     if (Object.keys(sessions).length === 0 && activeSessions === undefined) return;
     lastAppliedParamId.current = paramSessionId;
@@ -965,7 +966,7 @@ export function QueuePageClient() {
   }, [paramSessionId, sessions, setCurrentSession, activeSessions]);
 
   // Once we have the conversation data, inject it into the queue
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!pendingInjectId) return;
     if (sessions[pendingInjectId]) {
       setCurrentSession(pendingInjectId);
@@ -1007,7 +1008,7 @@ export function QueuePageClient() {
   // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
   const pendingScrollToMessageId = useInboxStore((s) => s.pendingScrollToMessageId);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!pendingNavigateId) return;
     const scrollTarget = pendingScrollToMessageId;
     useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, showMySessions: false });
@@ -1027,9 +1028,7 @@ export function QueuePageClient() {
   }, [stashSession]);
 
   const prevSessionRef = useRef(currentSessionId);
-  useEffect(() => {
-    prevSessionRef.current = currentSessionId;
-  }, [currentSessionId]);
+  prevSessionRef.current = currentSessionId;
 
   const handleDismissCurrent = useCallback(() => {
     if (currentSessionId) handleDismiss(currentSessionId);
@@ -1062,7 +1061,7 @@ export function QueuePageClient() {
     ? undefined
     : rawCurrentSession;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (currentSession) {
       setCurrentConversation({
         conversationId: currentSession._id,
@@ -1076,7 +1075,7 @@ export function QueuePageClient() {
   }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru]);
 
   // Sync URL when current session changes (but not before initial param is resolved)
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!paramProcessedRef.current) return;
     if (isPopstateRef.current) {
       isPopstateRef.current = false;
@@ -1093,25 +1092,20 @@ export function QueuePageClient() {
   }, [currentSession?._id, viewingDismissedId]);
 
   // Handle browser back/forward
-  useEffect(() => {
-    const onPopstate = (e: PopStateEvent) => {
-      const url = new URL(window.location.href);
-      const id = e.state?.inboxId
-        || url.searchParams.get("s")
-        || url.pathname.match(/^\/conversation\/([a-z0-9]{32})$/)?.[1];
-      if (!id) return;
-      if (sessions[id]) {
-        isPopstateRef.current = true;
-        setCurrentSession(id);
-        if (showMySessions) setShowMySessions(false);
-      }
-    };
-    window.addEventListener("popstate", onPopstate);
-    return () => window.removeEventListener("popstate", onPopstate);
-  }, [sessions, setCurrentSession, showMySessions, setShowMySessions]);
+  useEventListener("popstate", (e: PopStateEvent) => {
+    const url = new URL(window.location.href);
+    const id = e.state?.inboxId
+      || url.searchParams.get("s")
+      || url.pathname.match(/^\/conversation\/([a-z0-9]{32})$/)?.[1];
+    if (!id) return;
+    if (sessions[id]) {
+      isPopstateRef.current = true;
+      setCurrentSession(id);
+      if (showMySessions) setShowMySessions(false);
+    }
+  });
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+  useEventListener("keydown", (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (e.key === "?" && !e.ctrlKey && !e.altKey && !e.metaKey && tag !== "INPUT" && tag !== "TEXTAREA" && !(e.target as HTMLElement)?.isContentEditable) {
         e.preventDefault();
@@ -1167,11 +1161,7 @@ export function QueuePageClient() {
         handlePinCurrent();
         return;
       }
-    };
-
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [navigateDown, navigateUp, handleDismissCurrent, handleDeferCurrent, handlePinCurrent, toggleShortcuts, sortedSessions, setCurrentSession]);
+  }, undefined, { capture: true });
 
   const prefetchIds: string[] = [];
   const seen = new Set<string>();
@@ -1199,12 +1189,8 @@ export function QueuePageClient() {
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const [isMobileInbox, setIsMobileInbox] = useState(false);
 
-  useEffect(() => {
-    const check = () => setIsMobileInbox(window.innerWidth < 768);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
+  useMountEffect(() => { setIsMobileInbox(window.innerWidth < 768); });
+  useEventListener("resize", () => setIsMobileInbox(window.innerWidth < 768));
 
   const inboxContent = (
     <>

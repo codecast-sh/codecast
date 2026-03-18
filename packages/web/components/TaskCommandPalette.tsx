@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem } from "../store/inboxStore";
@@ -77,7 +78,7 @@ export function TaskCommandPalette({
   const webUpdate = useMutation(api.tasks.webUpdate);
   const updateTask = useInboxStore((s) => s.updateTask);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (open) {
       setMode(initialMode);
       setSearch("");
@@ -155,7 +156,7 @@ export function TaskCommandPalette({
 
   const items = getFilteredItems();
 
-  useEffect(() => {
+  useWatchEffect(() => {
     setHighlightIndex(0);
   }, [search, mode]);
 
@@ -240,7 +241,7 @@ export function TaskCommandPalette({
     [mode, initialMode, items, highlightIndex, selectItem, onClose, search]
   );
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = listRef.current;
     if (!el) return;
     const highlighted = el.children[highlightIndex] as HTMLElement;

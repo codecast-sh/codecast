@@ -2,7 +2,9 @@
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useEventListener } from "../../../hooks/useEventListener";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
@@ -98,7 +100,7 @@ function OwnerView({
   const { conversation, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, loadOlder, loadNewer, jumpToStart, jumpToEnd, isSearchingForTarget } = useConversationMessages(id, targetMessageId, highlightQuery);
   const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (conversation) {
       setCurrentConversation({
         conversationId: conversation._id,
@@ -123,7 +125,7 @@ function OwnerView({
 
   const [optimisticShare, setOptimisticShare] = useState<{ isPrivate?: boolean; teamVisibility?: string | null } | null>(null);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (optimisticShare && conversation) {
       const serverVis = conversation.team_visibility || conversation.effective_team_visibility;
       const serverMatches =
@@ -159,21 +161,16 @@ function OwnerView({
     return `${window.location.origin}/conversation/${id}`;
   };
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "d" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-        const target = e.target as HTMLElement;
-        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-          return;
-        }
-        e.preventDefault();
-        toggleDiffPanel();
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "d" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+        return;
       }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleDiffPanel]);
+      e.preventDefault();
+      toggleDiffPanel();
+    }
+  });
 
   const shareControls = conversation && isOwner ? (
     <SharePopover
@@ -402,7 +399,7 @@ export default function ConversationPage() {
   const resetForkData = useInboxStore((s) => s.resetForkNav);
   const redirectedRef = useRef(false);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     resetForkNav();
     resetForkData();
     const hash = window.location.hash;
@@ -455,7 +452,7 @@ export default function ConversationPage() {
     return null;
   }, [isUUID, sessionLookup, publicData, resolvedConvexId, id]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (redirectId && !redirectedRef.current) {
       redirectedRef.current = true;
       useInboxStore.setState({ pendingNavigateId: redirectId });

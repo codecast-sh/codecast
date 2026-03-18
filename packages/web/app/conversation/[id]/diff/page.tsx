@@ -2,7 +2,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 import { AuthGuard } from "../../../../components/AuthGuard";
 import { DashboardLayout } from "../../../../components/DashboardLayout";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -21,11 +21,11 @@ export default function ConversationDiffPage() {
   const { conversation } = useConversationMessages(id);
   const { selectChange, setDiffPanelOpen } = useDiffViewerStore();
 
-  useEffect(() => {
+  useWatchEffect(() => {
     setDiffPanelOpen(true);
   }, [setDiffPanelOpen]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (changeParam) {
       const changeIndex = parseInt(changeParam, 10) - 1;
       if (!isNaN(changeIndex) && changeIndex >= 0) {

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, useMemo, Fragment } from "react";
+import { useState, useCallback, useRef, useMemo, Fragment } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
@@ -104,13 +105,13 @@ function TaskRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const [editValue, setEditValue] = useState(task.title);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isFocused && rowRef.current) {
       rowRef.current.scrollIntoView({ block: "nearest" });
     }
   }, [isFocused]);
 
-  useEffect(() => { setEditValue(task.title); }, [task.title]);
+  useWatchEffect(() => { setEditValue(task.title); }, [task.title]);
 
   const commitEdit = useCallback(() => {
     const trimmed = editValue.trim();
@@ -614,8 +615,7 @@ export default function TasksPage() {
     []
   );
 
-  // Keyboard shortcuts
-  useEffect(() => {
+  useWatchEffect(() => {
     if (showCreate || cmdOpen || editingTaskId) return;
     if (showHelp) {
       const helpHandler = (e: KeyboardEvent) => {
@@ -633,7 +633,6 @@ export default function TasksPage() {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
 
-      // Cmd+K: command palette (stopImmediatePropagation to override global palette)
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -643,7 +642,6 @@ export default function TasksPage() {
 
       const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
 
-      // j/k: navigate
       if (e.key === "j" && !e.metaKey && !e.ctrlKey) {
         stop();
         setFocusIndex((i) => Math.min(i + 1, flatTasks.length - 1));
@@ -655,21 +653,18 @@ export default function TasksPage() {
         return;
       }
 
-      // x: toggle selection on focused task
       if (e.key === "x" && !e.metaKey && !e.ctrlKey) {
         stop();
         if (focusedTask) toggleSelect(focusedTask._id);
         return;
       }
 
-      // Enter: open task detail
       if (e.key === "Enter") {
         stop();
         if (focusedTask) router.push(`/tasks/${focusedTask._id}`);
         return;
       }
 
-      // Escape: close preview, then clear selection
       if (e.key === "Escape") {
         if (previewTaskId) {
           stop();
@@ -683,56 +678,48 @@ export default function TasksPage() {
         }
       }
 
-      // s: change status
       if (e.key === "s" && !e.metaKey && !e.ctrlKey) {
         stop();
         openCmdPalette("status");
         return;
       }
 
-      // p: set priority
       if (e.key === "p" && !e.metaKey && !e.ctrlKey) {
         stop();
         openCmdPalette("priority");
         return;
       }
 
-      // l: labels
       if (e.key === "l" && !e.metaKey && !e.ctrlKey) {
         stop();
         openCmdPalette("labels");
         return;
       }
 
-      // c: create task
       if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
         stop();
         setShowCreate(true);
         return;
       }
 
-      // e: edit title inline
       if (e.key === "e" && !e.metaKey && !e.ctrlKey) {
         stop();
         if (focusedTask) setEditingTaskId(focusedTask._id);
         return;
       }
 
-      // d: drop/delete task
       if (e.key === "d" && !e.metaKey && !e.ctrlKey) {
         stop();
         openCmdPalette("root");
         return;
       }
 
-      // Cmd+A: select all
       if (e.key === "a" && (e.metaKey || e.ctrlKey)) {
         stop();
         setSelectedIds(new Set(flatTasks.map((t) => t._id)));
         return;
       }
 
-      // Space: toggle preview panel (like Linear peek)
       if (e.key === " " && !e.metaKey && !e.ctrlKey) {
         stop();
         if (focusedTask) {
@@ -741,7 +728,6 @@ export default function TasksPage() {
         return;
       }
 
-      // Home/End
       if (e.key === "Home") {
         stop();
         setFocusIndex(0);
@@ -753,14 +739,12 @@ export default function TasksPage() {
         return;
       }
 
-      // ?: show keyboard shortcuts help
       if (e.key === "?" && !e.metaKey && !e.ctrlKey) {
         stop();
         setShowHelp((h) => !h);
         return;
       }
 
-      // Filter shortcuts: 1=Active, 2=Draft, 3=Open, 4=In Progress, 5=Done
       const filterKeys: Record<string, string> = { "1": "", "2": "draft", "3": "open", "4": "in_progress", "5": "done" };
       if (filterKeys[e.key] !== undefined && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
         stop();
@@ -774,15 +758,13 @@ export default function TasksPage() {
     return () => window.removeEventListener("keydown", handler, true);
   }, [showCreate, showHelp, cmdOpen, editingTaskId, flatTasks, focusedTask, focusIndex, selectedIds, previewTaskId, openCmdPalette, toggleSelect, setTaskFilter, router]);
 
-  // Keep focus in bounds when tasks change
-  useEffect(() => {
+  useWatchEffect(() => {
     if (focusIndex >= flatTasks.length && flatTasks.length > 0) {
       setFocusIndex(flatTasks.length - 1);
     }
   }, [flatTasks.length, focusIndex]);
 
-  // Update preview when focus moves (if preview is open)
-  useEffect(() => {
+  useWatchEffect(() => {
     if (previewTaskId && focusedTask && previewTaskId !== focusedTask._id) {
       setPreviewTaskId(focusedTask._id);
     }

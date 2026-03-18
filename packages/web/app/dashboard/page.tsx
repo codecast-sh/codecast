@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useSearchParams, useRouter } from "next/navigation";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -65,28 +67,28 @@ export default function DashboardPage() {
     router.replace(`/dashboard?${params.toString()}`, { scroll: false });
   }, [searchParams, router]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const memberParam = searchParams.get("member");
     if (memberParam !== memberFilter) {
       setMemberFilter(memberParam);
     }
   }, [searchParams]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const dirParam = searchParams.get("dir");
     if (dirParam !== directoryFilter) {
       setDirectoryFilter(dirParam);
     }
   }, [searchParams]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const newFilter = filterParam === "team" ? "team" : "my";
     if (newFilter !== filter) {
       setFilter(newFilter);
     }
   }, [filterParam]);
 
-  useEffect(() => {
+  useMountEffect(() => {
     reportWebVitals((metric) => {
       console.log(`[Dashboard Vitals] ${metric.name}:`, metric.value);
     });
@@ -101,7 +103,7 @@ export default function DashboardPage() {
         console.log(`[Dashboard] Mount to unmount: ${measures[0].duration.toFixed(2)}ms`);
       }
     };
-  }, []);
+  });
 
   return (
     <AuthGuard>

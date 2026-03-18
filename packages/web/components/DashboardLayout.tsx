@@ -1,5 +1,9 @@
 "use client";
-import { ReactNode, useState, useEffect, useCallback, useRef } from "react";
+import { ReactNode, useState, useCallback, useRef } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useEventListener } from "../hooks/useEventListener";
+import { useConvexSync } from "../hooks/useConvexSync";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
@@ -60,19 +64,17 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
   const serverClientState = useQuery(api.client_state.get, {});
   const createQuickSession = useMutation(api.conversations.createQuickSession);
-  useEffect(() => {
-    if (serverClientState) {
-      useInboxStore.getState().syncClientState(serverClientState);
-    }
-  }, [serverClientState]);
+  useConvexSync(serverClientState, (data) => {
+    useInboxStore.getState().syncClientState(data);
+  });
 
-  useEffect(() => {
+  useMountEffect(() => {
     setDesktopClass(desktopHeaderClass());
     const timer = setTimeout(() => setDesktopClass(desktopHeaderClass()), 500);
     return () => clearTimeout(timer);
-  }, []);
+  });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const header = headerRef.current;
     if (!header) return;
     return setupDesktopDrag(header);
@@ -86,12 +88,13 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const isOnTasksPage = pathname === "/tasks" || (pathname?.startsWith("/tasks/") ?? false);
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage;
 
-  useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 768);
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-    return () => window.removeEventListener("resize", checkMobile);
-  }, []);
+  useMountEffect(() => {
+    setIsMobile(window.innerWidth < 768);
+  });
+
+  useEventListener("resize", () => {
+    setIsMobile(window.innerWidth < 768);
+  });
 
   const handleLayoutChange = (newLayout: { [key: string]: number }) => {
     updateLayout("dashboard", { sidebar: newLayout.sidebar || 25, main: newLayout.main || 75 });
@@ -144,38 +147,34 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     }
   }, [currentConvContext, directoryFilter, router, isOnInboxPage, createQuickSession, openNewSession]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "." && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-        e.preventDefault();
-        updateUI({ zen_mode: !isZenMode });
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "." && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      updateUI({ zen_mode: !isZenMode });
+    }
+    if (e.key === "1" && e.metaKey && e.shiftKey && e.altKey) {
+      e.preventDefault();
+      router.push("/inbox");
+    }
+    if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      const store = useInboxStore.getState();
+      if (store.showMySessions) {
+        store.setShowMySessions(false);
       }
-      if (e.key === "1" && e.metaKey && e.shiftKey && e.altKey) {
-        e.preventDefault();
-        router.push("/inbox");
+      if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
+        handleQuickCreate();
+      } else {
+        openNewSession({
+          source: isOnInboxPage ? "inbox" : "sessions",
+        });
       }
-      if (e.key === "n" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-        e.preventDefault();
-        const store = useInboxStore.getState();
-        if (store.showMySessions) {
-          store.setShowMySessions(false);
-        }
-        if (directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot) {
-          handleQuickCreate();
-        } else {
-          openNewSession({
-            source: isOnInboxPage ? "inbox" : "sessions",
-          });
-        }
-      }
-      if (e.key.toLowerCase() === "n" && e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey) {
-        e.preventDefault();
-        handleQuickCreateIsolated();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hideSidebar, isZenMode, isOnInboxPage, currentConvContext, directoryFilter, openNewSession, handleQuickCreate, handleQuickCreateIsolated, updateUI]);
+    }
+    if (e.key.toLowerCase() === "n" && e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey) {
+      e.preventDefault();
+      handleQuickCreateIsolated();
+    }
+  });
 
   return (
     <div className="h-screen bg-sol-bg flex flex-col overflow-hidden">

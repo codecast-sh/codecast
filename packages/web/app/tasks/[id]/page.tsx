@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, Fragment } from "react";
+import { useState, useCallback, useRef, Fragment } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -108,7 +109,7 @@ function Dropdown({
   const current = options.find((o) => o.key === value) || options[0];
   const Icon = current.icon;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
@@ -117,7 +118,7 @@ function Dropdown({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") { setOpen(false); return; }
@@ -443,8 +444,7 @@ export default function TaskDetailPage() {
     setCmdOpen(true);
   }, []);
 
-  // Keyboard shortcuts
-  useEffect(() => {
+  useWatchEffect(() => {
     if (cmdOpen) return;
     if (showHelp) {
       const helpHandler = (e: KeyboardEvent) => {

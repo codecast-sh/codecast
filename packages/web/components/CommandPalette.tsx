@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter, usePathname } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -101,7 +102,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       .map(([path]) => path);
   }, [recentConversations]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -117,7 +118,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [open, standalone]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -131,13 +132,13 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [standalone]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!open && !standalone) {
       setQuery("");
     }
   }, [open, standalone]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!standalone || !isElectron()) return;
     const unsub = window.__CODECAST_ELECTRON__!.onPaletteShow(() => {
       setQuery("");

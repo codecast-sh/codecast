@@ -1,5 +1,6 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -43,7 +44,7 @@ export function CommentPanel({ conversationId, messageId, onClose }: CommentPane
     return username.toLowerCase().includes(mentionQuery.toLowerCase());
   }) || [];
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (showMentions && filteredMembers.length > 0) {
       setSelectedMentionIndex(0);
     }

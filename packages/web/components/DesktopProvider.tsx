@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -26,7 +27,7 @@ export function DesktopProvider() {
   const [updateReady, setUpdateReady] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isDesktop()) return;
     const pending = Object.values(sessions).filter((s) => s.has_pending || s.is_idle).length;
     updateBadge(pending);
@@ -38,7 +39,7 @@ export function DesktopProvider() {
 
   const permissionRequestedRef = useRef(false);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!notifications) return;
     const isPalette = typeof window !== "undefined" && window.location.pathname === "/palette";
     if (isPalette) return;
@@ -65,7 +66,7 @@ export function DesktopProvider() {
 
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isDesktop() || initRef.current) return;
     initRef.current = true;
 

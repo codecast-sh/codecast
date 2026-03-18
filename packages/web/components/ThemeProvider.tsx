@@ -1,7 +1,9 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
+import { createContext, useContext, useState, ReactNode, useCallback } from "react";
 import { useInboxStore } from "../store/inboxStore";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 
 type Theme = "dark" | "light";
 
@@ -24,9 +26,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const serverTheme = useInboxStore((s) => s.clientState.ui?.theme);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
 
-  useEffect(() => { setMounted(true); }, []);
+  useMountEffect(() => { setMounted(true); });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!mounted || !serverTheme || serverTheme === theme) return;
     const stored = localStorage.getItem("codecast-theme");
     if (!stored) {
@@ -36,7 +38,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [serverTheme, mounted]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (mounted) {
       localStorage.setItem("codecast-theme", theme);
       document.documentElement.classList.remove("dark", "light");

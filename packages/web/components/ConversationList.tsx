@@ -2,7 +2,10 @@
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
-import { useEffect, useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useConvexSync } from "../hooks/useConvexSync";
 import { cleanTitle, isSystemMessage, isCommandMessage } from "../lib/conversationProcessor";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
@@ -37,16 +40,15 @@ function VisibilityDropdown({
   const effectiveTeamVisibility = optimisticState?.teamVisibility !== undefined ? optimisticState.teamVisibility : teamVisibility;
   const effectiveMode = effectivePrivate ? "private" : (effectiveTeamVisibility || visibilityMode || "summary");
 
-  useEffect(() => {
+  useWatchEffect(() => {
+    if (!isOpen) return;
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsOpen(false);
       }
     }
-    if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen]);
 
   const handleSetPrivate = async () => {
@@ -505,9 +507,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const router = useRouter();
   const context = useInboxStore((s) => s.newSession.context);
 
-  useEffect(() => {
-    if (freshProjects) setRecentProjects(freshProjects);
-  }, [freshProjects, setRecentProjects]);
+  useConvexSync(freshProjects, setRecentProjects);
 
   const filteredProjects = useMemo(() => {
     if (!recentProjects || recentProjects.length === 0) return [];
@@ -516,7 +516,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
     return recentProjects.filter((p: { path: string }) => p.path.toLowerCase().includes(lower));
   }, [recentProjects, projectPath]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isOpen && context.projectPath) {
       setProjectPath(context.projectPath);
     } else if (isOpen && !context.projectPath && recentProjects?.length) {
@@ -528,7 +528,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
     }
   }, [isOpen, context, recentProjects]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isOpen) return;
     function handleEsc(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -767,14 +767,14 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
   const hasTeammates = teamMembers && teamMembers.length > 1;
   const hasTeam = !!effectiveTeamId;
 
-  useEffect(() => {
+  useMountEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(Date.now());
     }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!hasMore || isLoadingMore) return;
 
     const scrollContainer = document.querySelector("[data-main-scroll]") as HTMLElement | null;
@@ -859,7 +859,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
     [flatConversations, focusedIndex, router, onNavigate]
   );
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (focusedIndex === -1 && flatConversations.length > 0 && document.activeElement === listRef.current) {
       setFocusedIndex(0);
     }

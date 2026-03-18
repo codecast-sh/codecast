@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useRef, useMemo } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { ConversationView, ConversationData, ConversationViewHandle } from "./ConversationView";
 import { useDiffViewerStore } from "../store/diffViewerStore";
@@ -85,64 +88,57 @@ export function ConversationDiffLayout({
     diffPanelOpen,
   } = useDiffViewerStore();
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (conversation?.messages) {
       const extractedChanges = extractFileChanges(conversation.messages as any);
       setChanges(extractedChanges);
     }
   }, [conversation?.messages, setChanges]);
 
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    };
+  useMountEffect(() => {
+    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+  });
 
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-    return () => window.removeEventListener("resize", checkMobile);
-  }, []);
+  useEventListener("resize", () => {
+    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+  });
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
-      if (isInput) return;
+    if (isInput) return;
 
-      switch (e.key) {
-        case "[":
-          e.preventDefault();
-          prevChange();
-          break;
-        case "]":
-          e.preventDefault();
-          nextChange();
-          break;
-        case "c":
-          if (e.metaKey || e.ctrlKey) return;
-          e.preventDefault();
-          toggleDiffMode();
-          break;
-        case "f":
-          if (e.metaKey || e.ctrlKey) return;
-          e.preventDefault();
-          toggleFileTree();
-          break;
-        case "Escape":
-          if (conversation?.status === "active") return;
-          e.preventDefault();
-          clearSelection();
-          break;
-        case "?":
-          e.preventDefault();
-          setShowHelp((prev) => !prev);
-          break;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [nextChange, prevChange, toggleDiffMode, toggleFileTree, clearSelection]);
+    switch (e.key) {
+      case "[":
+        e.preventDefault();
+        prevChange();
+        break;
+      case "]":
+        e.preventDefault();
+        nextChange();
+        break;
+      case "c":
+        if (e.metaKey || e.ctrlKey) return;
+        e.preventDefault();
+        toggleDiffMode();
+        break;
+      case "f":
+        if (e.metaKey || e.ctrlKey) return;
+        e.preventDefault();
+        toggleFileTree();
+        break;
+      case "Escape":
+        if (conversation?.status === "active") return;
+        e.preventDefault();
+        clearSelection();
+        break;
+      case "?":
+        e.preventDefault();
+        setShowHelp((prev) => !prev);
+        break;
+    }
+  });
 
   const handleLayoutChange = (newLayout: Layout) => {
     updateLayout("conversation_diff", { content: newLayout["content-panel"] || 40, diff: newLayout["diff-panel"] || 60 });
