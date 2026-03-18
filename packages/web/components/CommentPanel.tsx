@@ -1,4 +1,3 @@
-"use client";
 import { useState, useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useQuery, useMutation } from "convex/react";

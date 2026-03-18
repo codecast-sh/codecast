@@ -7,7 +7,7 @@
     },
     "build": {
       "cache": false,
-      "outputs": ["dist/**", ".next/**"]
+      "outputs": ["dist/**"]
     },
     "lint": {},
     "typecheck": {}

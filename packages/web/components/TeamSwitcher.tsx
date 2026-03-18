@@ -1,5 +1,3 @@
-"use client";
-
 import { useQuery, useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";

@@ -1,4 +1,3 @@
-"use client";
 import { useState, useRef, useCallback } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";

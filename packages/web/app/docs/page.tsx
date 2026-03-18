@@ -1,5 +1,3 @@
-"use client";
-
 import { useRouter } from "next/navigation";
 import { useInboxStore, DocItem } from "../../store/inboxStore";
 import { useSyncDocs } from "../../hooks/useSyncDocs";

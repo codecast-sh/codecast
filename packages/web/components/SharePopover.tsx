@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { copyToClipboard } from "../lib/utils";

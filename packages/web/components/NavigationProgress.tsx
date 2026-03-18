@@ -1,5 +1,3 @@
-"use client";
-
 import { usePathname, useSearchParams } from "next/navigation";
 import NProgress from "nprogress";
 import { useWatchEffect } from "../hooks/useWatchEffect";

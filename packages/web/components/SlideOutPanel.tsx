@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback } from "react";
 import { X } from "lucide-react";
 import { useEventListener } from "../hooks/useEventListener";

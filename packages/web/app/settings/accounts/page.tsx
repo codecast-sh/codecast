@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, Suspense } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";

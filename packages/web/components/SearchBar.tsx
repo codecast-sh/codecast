@@ -1,4 +1,3 @@
-"use client";
 import { useState } from "react";
 import { useDebounce } from "../hooks/useDebounce";
 import { useWatchEffect } from "../hooks/useWatchEffect";

@@ -1,5 +1,3 @@
-"use client";
-
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";

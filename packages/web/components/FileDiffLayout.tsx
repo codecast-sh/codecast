@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useMemo, useRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";

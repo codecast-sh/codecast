@@ -1,5 +1,3 @@
-"use client";
-
 import { createContext, useContext, useState, ReactNode, useCallback } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";

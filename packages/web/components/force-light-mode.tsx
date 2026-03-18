@@ -1,5 +1,3 @@
-"use client";
-
 import { useMountEffect } from "../hooks/useMountEffect";
 
 export function ForceLightMode() {

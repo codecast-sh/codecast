@@ -1,5 +1,3 @@
-"use client";
-
 import { copyToClipboard } from "../lib/utils";
 
 export function CopyInstallButton() {

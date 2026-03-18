@@ -1,5 +1,3 @@
-"use client";
-
 import { useSlideOutStore } from "../store/slideOutStore";
 import { PlanSlideOut } from "./PlanSlideOut";
 import { TaskSlideOut } from "./TaskSlideOut";

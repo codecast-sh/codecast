@@ -1,4 +1,3 @@
-"use client";
 import { useState, useRef, useMemo, useCallback } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { toast } from "sonner";

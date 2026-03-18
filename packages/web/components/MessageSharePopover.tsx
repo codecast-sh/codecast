@@ -1,5 +1,3 @@
-"use client";
-
 interface MessageSharePopoverProps {
   messageId: string;
   onStartShareSelection: (messageId: string) => void;

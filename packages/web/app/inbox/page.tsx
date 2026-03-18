@@ -1,5 +1,3 @@
-"use client";
-
 import { Component, ReactNode } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { QueuePageClient } from "./QueuePageClient";

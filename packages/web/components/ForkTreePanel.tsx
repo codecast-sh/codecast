@@ -1,5 +1,3 @@
-"use client";
-
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRef, useState, useMemo, useCallback } from "react";

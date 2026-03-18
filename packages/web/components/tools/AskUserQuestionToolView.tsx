@@ -1,4 +1,3 @@
-"use client";
 import { Check, CircleDot, MessageSquare } from "lucide-react";
 import type { ToolViewProps } from "@/lib/toolRegistry";
 

@@ -1,4 +1,3 @@
-"use client";
 import { createContext, useContext, useState, useCallback, useRef, useMemo } from "react";
 import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";

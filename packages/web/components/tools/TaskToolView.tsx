@@ -1,4 +1,3 @@
-"use client";
 import { useState } from "react";
 import { Rocket, ChevronDown, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";

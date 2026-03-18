@@ -1,5 +1,3 @@
-"use client";
-
 import { useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { InboxSession } from "../store/inboxStore";

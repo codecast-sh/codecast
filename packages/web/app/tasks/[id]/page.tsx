@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useCallback, useRef, Fragment } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";

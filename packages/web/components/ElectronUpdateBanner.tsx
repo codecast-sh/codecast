@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isElectron, getAppVersion } from "../lib/desktop";

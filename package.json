@@ -8,7 +8,7 @@
   "scripts": {
     "start": "cd packages/web && bun run start",
     "dev": "turbo run dev",
-    "build": "turbo run build --filter='!@codecast/desktop' --filter='!@codecast/electron' --filter='!mobile'",
+    "build": "turbo run build --filter='!@codecast/electron' --filter='!mobile'",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "convex:dev": "cd packages/convex && convex dev",

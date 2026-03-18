@@ -1,4 +1,3 @@
-"use client";
 import { useState, useRef, useCallback } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";

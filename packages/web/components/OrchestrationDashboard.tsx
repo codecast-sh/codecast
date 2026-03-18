@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";

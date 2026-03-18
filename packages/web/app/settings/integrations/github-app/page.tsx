@@ -1,5 +1,3 @@
-"use client";
-
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../../components/ui/card";
@@ -35,7 +33,7 @@ export default function GitHubAppPage() {
     }
 
     const state = btoa(JSON.stringify({ team_id: user.team_id, user_id: user._id }));
-    const appSlug = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG || "codecast-sh";
+    const appSlug = import.meta.env.VITE_GITHUB_APP_SLUG || "codecast-sh";
     const installUrl = `https://github.com/apps/${appSlug}/installations/new?state=${state}`;
     window.location.href = installUrl;
   };
