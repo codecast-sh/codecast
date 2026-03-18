@@ -8,7 +8,6 @@ import { ConversationList } from "./ConversationList";
 import { MessageBrowserPopover } from "./MessageBrowserPopover";
 import { useEventListener } from "../hooks/useEventListener";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useEventListener } from "../hooks/useEventListener";
 
 function getRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -198,21 +197,22 @@ function SessionTimeline({ timeline }: { timeline: any[] }) {
   );
 }
 
+
 function SessionNarrativeOverlay({ item, onClose }: { item: any; onClose: () => void }) {
   const turns = item.turns || [];
   const router = useRouter();
   useEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); });
   return (
     <div
-      className="fixed inset-0 z-[10000] flex items-start justify-center bg-sol-bg/80 backdrop-blur-sm"
+      className="fixed inset-0 z-[10000] flex items-start justify-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="relative mt-12 mb-12 w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-xl bg-sol-bg border border-sol-border/20 shadow-2xl"
+        className="relative mt-12 mb-12 w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-xl bg-sol-bg-alt border border-sol-border/30 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-sol-bg/95 backdrop-blur border-b border-sol-border/10">
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-sol-bg-alt/95 backdrop-blur border-b border-sol-border/10">
           <div className="min-w-0">
             <p className="text-[13px] font-semibold text-sol-text truncate">{item.title}</p>
             <p className="text-[11px] text-sol-text-muted/50 mt-0.5 truncate">{item.headline}</p>
@@ -234,16 +234,11 @@ function SessionNarrativeOverlay({ item, onClose }: { item: any; onClose: () => 
         <div className="px-6 py-5 space-y-6">
           {turns.map((turn: any, i: number) => (
             <div key={i} className="relative">
-              <div className="flex items-start gap-3">
-                <div className="shrink-0 mt-0.5">
-                  <span className="text-[8px] font-bold uppercase tracking-widest text-sol-yellow/40 select-none">ask</span>
-                </div>
-                <p className="text-[14px] text-sol-yellow/90 font-medium leading-relaxed">
-                  {turn.ask}
-                </p>
-              </div>
+              <p className="text-[14px] text-sol-blue font-medium leading-relaxed">
+                {turn.ask}
+              </p>
               {turn.did.length > 0 && (
-                <ul className="mt-2 ml-[36px] space-y-1.5">
+                <ul className="mt-2 space-y-1.5">
                   {turn.did.map((d: string, j: number) => (
                     <li key={j} className="flex gap-2 text-[12px] text-sol-text-muted/70 leading-relaxed">
                       <span className="text-sol-text-dim/25 select-none shrink-0 mt-0.5">—</span>
@@ -253,7 +248,7 @@ function SessionNarrativeOverlay({ item, onClose }: { item: any; onClose: () => 
                 </ul>
               )}
               {i < turns.length - 1 && (
-                <div className="mt-6 ml-[36px] h-px bg-sol-border/8" />
+                <div className="mt-6 h-px bg-sol-border/8" />
               )}
             </div>
           ))}
@@ -287,14 +282,11 @@ function SessionTurns({ turns, onDeepDive }: { turns: Array<{ ask: string; did: 
     <div className="space-y-2">
       {turns.map((turn, i) => (
         <div key={i}>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-[9px] text-sol-yellow/50 font-semibold uppercase tracking-wider shrink-0 select-none">ask</span>
-            <span className="text-[11px] text-sol-yellow/80 font-medium leading-snug">
-              {turn.ask}
-            </span>
-          </div>
+          <span className="text-[11px] text-sol-blue/80 font-medium leading-snug">
+            {turn.ask}
+          </span>
           {turn.did.length > 0 && (
-            <ul className="mt-0.5 ml-[30px] space-y-px">
+            <ul className="mt-0.5 space-y-px">
               {turn.did.map((d, j) => (
                 <li key={j} className="flex gap-1.5 text-[10px] text-sol-text-muted/55 leading-snug">
                   <span className="text-sol-text-dim/25 select-none shrink-0">-</span>
