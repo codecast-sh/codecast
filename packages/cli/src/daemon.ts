@@ -1295,8 +1295,16 @@ async function executeRemoteCommand(
           if (!fs.existsSync(dir)) return;
           try {
             for (const f of fs.readdirSync(dir)) {
-              if (f.endsWith(".md") || f.endsWith(".json") || f.endsWith(".toml")) {
-                files.push({ path: path.join(dir, f), type, label: f.replace(/\.md$/, ""), tool });
+              const fullPath = path.join(dir, f);
+              const stat = fs.statSync(fullPath);
+              if (stat.isDirectory()) {
+                // Skills are directories containing SKILL.md
+                const skillFile = path.join(fullPath, "SKILL.md");
+                if (fs.existsSync(skillFile)) {
+                  files.push({ path: skillFile, type, label: f, tool });
+                }
+              } else if (f.endsWith(".md") || f.endsWith(".json") || f.endsWith(".toml")) {
+                files.push({ path: fullPath, type, label: f.replace(/\.(md|json|toml)$/, ""), tool });
               }
             }
           } catch {}

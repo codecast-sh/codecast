@@ -65,8 +65,10 @@ function groupFiles(files: ConfigFile[]): Section[] {
       f.type !== "skill"
   );
   const agents = files.filter((f) => f.type === "agent");
-  const commands = files.filter((f) => f.type === "command" || f.type === "prompt");
-  const skills = files.filter((f) => f.type === "skill");
+  const claudeCommands = files.filter((f) => f.type === "command" && f.tool === "claude");
+  const codexPrompts = files.filter((f) => (f.type === "command" || f.type === "prompt") && f.tool === "codex");
+  const claudeSkills = files.filter((f) => f.type === "skill" && f.tool === "claude");
+  const codexSkills = files.filter((f) => f.type === "skill" && f.tool === "codex");
 
   // Group project files by project name
   const projectFiles = files.filter((f) => f.type.startsWith("project_"));
@@ -100,20 +102,35 @@ function groupFiles(files: ConfigFile[]): Section[] {
     },
     {
       key: "commands",
-      label: "Commands & Prompts",
-      tool: "both",
-      files: commands,
+      label: "Commands",
+      tool: "claude",
+      files: claudeCommands,
       canCreate: true,
       createDir: "~/.claude/commands",
     },
     {
+      key: "commands",
+      label: "Prompts",
+      tool: "codex",
+      files: codexPrompts,
+      canCreate: true,
+      createDir: "~/.codex/prompts",
+    },
+    {
       key: "skills",
       label: "Skills",
-      tool: "both",
-      files: skills,
+      tool: "claude",
+      files: claudeSkills,
       canCreate: true,
       createDir: "~/.claude/skills",
     },
+    ...(codexSkills.length > 0 ? [{
+      key: "skills" as SectionKey,
+      label: "Skills (Codex)",
+      tool: "codex" as const,
+      files: codexSkills,
+      canCreate: false,
+    }] : []),
   ];
 
   for (const [proj, pfiles] of projectMap) {
