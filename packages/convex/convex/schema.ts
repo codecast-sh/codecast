@@ -1270,14 +1270,4 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"]),
 
-  orchestration_events: defineTable({
-    plan_id: v.id("plans"),
-    event_type: v.string(),
-    task_id: v.optional(v.string()),
-    agent_session: v.optional(v.string()),
-    details: v.optional(v.string()),
-    timestamp: v.number(),
-  })
-    .index("by_plan_id", ["plan_id"])
-    .index("by_plan_timestamp", ["plan_id", "timestamp"]),
 });
