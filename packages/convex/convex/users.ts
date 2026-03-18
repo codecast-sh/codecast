@@ -1663,3 +1663,44 @@ export const updateAgentPermissionModes = mutation({
   },
 });
 
+export const sendConfigCommand = mutation({
+  args: {
+    command: v.union(
+      v.literal("config_list"),
+      v.literal("config_read"),
+      v.literal("config_write"),
+      v.literal("config_create"),
+      v.literal("config_delete")
+    ),
+    args_json: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: args.command,
+      args: args.args_json,
+      created_at: Date.now(),
+    });
+    return { command_id: commandId };
+  },
+});
+
+export const getCommandResult = query({
+  args: {
+    command_id: v.id("daemon_commands"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const cmd = await ctx.db.get(args.command_id);
+    if (!cmd || cmd.user_id !== userId) return null;
+    return {
+      executed_at: cmd.executed_at,
+      result: cmd.result,
+      error: cmd.error,
+    };
+  },
+});
+

@@ -5611,7 +5611,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
-  const scrollAnchorRef = useRef<{ messageId: string; pixelOffset: number } | null>(null);
+  const scrollAnchorRef = useRef<{ savedScrollTop: number; savedScrollHeight: number } | null>(null);
   const prevTimelineLengthRef = useRef<number>(0);
   const isNearBottomRef = useRef(true);
   const scrollToBottomFnRef = useRef<() => void>(() => {});
@@ -6790,20 +6790,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       // Load older messages when near top (within 300px)
       if (scrollTop < 300 && hasMoreAbove && !isLoadingOlder && !isLoadingNewer && !paginationCooldownRef.current && onLoadOlder) {
-        // Save anchor: find first visible message to restore position after load
-        const items = virtualizer.getVirtualItems();
-        for (const item of items) {
-          if (item.end > scrollTop) {
-            const tItem = timeline[item.index];
-            if (tItem?.type === 'message') {
-              scrollAnchorRef.current = {
-                messageId: tItem.data._id,
-                pixelOffset: item.start - scrollTop,
-              };
-              break;
-            }
-          }
-        }
+        // Save scrollHeight + scrollTop so we can restore position after new items are prepended
+        scrollAnchorRef.current = {
+          savedScrollTop: scrollTop,
+          savedScrollHeight: scrollHeight,
+        };
         isPaginatingRef.current = true;
         onLoadOlder();
       }
@@ -6856,25 +6847,21 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     scrollProgressRef.current.style.height = `${progress * 100}%`;
   }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize]);
 
-  // Restore scroll position after loading older messages using anchor
+  // Restore scroll position after loading older messages.
+  // When new items are prepended, scrollHeight grows by the size of the new content.
+  // Adding that delta to the saved scrollTop keeps the viewport anchored to the same spot.
   useWatchEffect(() => {
     if (!scrollAnchorRef.current) return;
-    const { messageId, pixelOffset } = scrollAnchorRef.current;
-    const newIndex = timeline.findIndex(item =>
-      item.type === 'message' && (item.data as Message)._id === messageId
-    );
-    if (newIndex < 0) return;
-
-    paginationCooldownRef.current = true;
-    virtualizer.scrollToIndex(newIndex, { align: 'start' });
+    const scrollContainer = containerRef.current;
+    if (!scrollContainer) return;
+    const { savedScrollTop, savedScrollHeight } = scrollAnchorRef.current;
+    const delta = scrollContainer.scrollHeight - savedScrollHeight;
     scrollAnchorRef.current = null;
+    if (delta <= 0) return;
+    paginationCooldownRef.current = true;
+    scrollContainer.scrollTop = savedScrollTop + delta;
     requestAnimationFrame(() => {
-      const scrollContainer = containerRef.current;
-      if (!scrollContainer) return;
-      scrollContainer.scrollTop -= pixelOffset;
-      requestAnimationFrame(() => {
-        paginationCooldownRef.current = false;
-      });
+      paginationCooldownRef.current = false;
     });
   }, [timeline, virtualizer]);
 

@@ -854,10 +854,6 @@ export const getAllMessages = query({
     const forkChildrenDetails = await Promise.all(
       forkChildren.map(async (fork) => {
         const forkUser = await ctx.db.get(fork.user_id);
-        const forkMessages = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", fork._id))
-          .collect();
         return {
           _id: fork._id,
           title: fork.title || "New Session",
@@ -866,7 +862,7 @@ export const getAllMessages = query({
           username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
           parent_message_uuid: fork.parent_message_uuid,
           agent_type: fork.agent_type,
-          message_count: forkMessages.length,
+          message_count: fork.message_count,
         };
       })
     );
@@ -1171,7 +1167,7 @@ export const getConversationWithMeta = query({
       const allParentMessages = await ctx.db
         .query("messages")
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
-        .collect();
+        .take(500);
       for (const msg of allParentMessages) {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {
@@ -1221,10 +1217,6 @@ export const getConversationWithMeta = query({
     const forkChildrenDetails = await Promise.all(
       forkChildren.map(async (fork) => {
         const forkUser = await ctx.db.get(fork.user_id);
-        const forkMessages = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", fork._id))
-          .collect();
         return {
           _id: fork._id,
           title: fork.title || "New Session",
@@ -1233,7 +1225,7 @@ export const getConversationWithMeta = query({
           username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
           parent_message_uuid: fork.parent_message_uuid,
           agent_type: fork.agent_type,
-          message_count: forkMessages.length,
+          message_count: fork.message_count,
         };
       })
     );

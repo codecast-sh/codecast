@@ -17,6 +17,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { soundNewSession } from "../lib/sounds";
+import { MessageBrowserPopover } from "./MessageBrowserPopover";
 
 function VisibilityDropdown({
   conversationId,
@@ -1100,8 +1101,8 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
               const isOthersRestrictedView = (conv.visibility_mode === "detailed" || conv.visibility_mode === "summary") && !conv.is_own;
 
               return (
+                <MessageBrowserPopover key={conv._id} conversationId={conv._id}>
                 <Link
-                  key={conv._id}
                   href={isOthersRestrictedView ? "#" : `/conversation/${conv._id}`}
                   className={`group block relative ${isOthersRestrictedView ? "cursor-default" : ""}`}
                   role="listitem"
@@ -1370,6 +1371,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                   </div>
                 </div>
               </Link>
+              </MessageBrowserPopover>
               );
             })}
           </div>

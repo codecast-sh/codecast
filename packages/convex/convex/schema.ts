@@ -84,7 +84,12 @@ export default defineSchema({
       v.literal("resume_session"),
       v.literal("kill_session"),
       v.literal("send_keys"),
-      v.literal("rewind")
+      v.literal("rewind"),
+      v.literal("config_list"),
+      v.literal("config_read"),
+      v.literal("config_write"),
+      v.literal("config_create"),
+      v.literal("config_delete")
     ),
     args: v.optional(v.string()),
     created_at: v.number(),

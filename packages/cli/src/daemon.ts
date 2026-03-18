@@ -1279,6 +1279,186 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "config_list": {
+        const home = process.env.HOME || "";
+        const claudeDir = path.join(home, ".claude");
+        const codexDir = path.join(home, ".codex");
+
+        type ConfigFile = { path: string; type: string; label: string; tool: string };
+        const files: ConfigFile[] = [];
+
+        const addFile = (filePath: string, type: string, label: string, tool: string) => {
+          if (fs.existsSync(filePath)) files.push({ path: filePath, type, label, tool });
+        };
+
+        const addDir = (dir: string, type: string, tool: string) => {
+          if (!fs.existsSync(dir)) return;
+          try {
+            for (const f of fs.readdirSync(dir)) {
+              if (f.endsWith(".md") || f.endsWith(".json") || f.endsWith(".toml")) {
+                files.push({ path: path.join(dir, f), type, label: f.replace(/\.md$/, ""), tool });
+              }
+            }
+          } catch {}
+        };
+
+        // Claude global files
+        addFile(path.join(claudeDir, "CLAUDE.md"), "instructions", "Global CLAUDE.md", "claude");
+        addFile(path.join(claudeDir, "settings.json"), "settings", "settings.json", "claude");
+        addFile(path.join(claudeDir, "settings.local.json"), "settings", "settings.local.json", "claude");
+        addFile(path.join(claudeDir, "keybindings.json"), "keybindings", "keybindings.json", "claude");
+        addDir(path.join(claudeDir, "agents"), "agent", "claude");
+        addDir(path.join(claudeDir, "commands"), "command", "claude");
+        addDir(path.join(claudeDir, "skills"), "skill", "claude");
+        addDir(path.join(claudeDir, "prompts"), "prompt", "claude");
+
+        // Codex global files
+        addFile(path.join(codexDir, "AGENTS.md"), "instructions", "Global AGENTS.md", "codex");
+        addFile(path.join(codexDir, "AGENTS.override.md"), "instructions", "AGENTS.override.md", "codex");
+        addFile(path.join(codexDir, "config.toml"), "settings", "config.toml", "codex");
+        addDir(path.join(codexDir, "prompts"), "command", "codex");
+        addDir(path.join(codexDir, "skills"), "skill", "codex");
+        if (fs.existsSync(path.join(codexDir, "rules"))) {
+          for (const f of fs.readdirSync(path.join(codexDir, "rules"))) {
+            files.push({ path: path.join(codexDir, "rules", f), type: "rules", label: f, tool: "codex" });
+          }
+        }
+
+        // Per-project files from known project paths
+        const args_parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const projectPaths: string[] = args_parsed.project_paths || [];
+        for (const pp of projectPaths) {
+          const p = validatePath(pp);
+          if (!p) continue;
+          const name = path.basename(p);
+          addFile(path.join(p, "CLAUDE.md"), "project_instructions", `${name}/CLAUDE.md`, "claude");
+          addFile(path.join(p, "AGENTS.md"), "project_instructions", `${name}/AGENTS.md`, "codex");
+          addFile(path.join(p, ".claude", "settings.json"), "project_settings", `${name}/.claude/settings.json`, "claude");
+          addFile(path.join(p, ".claude", "settings.local.json"), "project_settings", `${name}/.claude/settings.local.json`, "claude");
+          addFile(path.join(p, ".mcp.json"), "mcp", `${name}/.mcp.json`, "claude");
+          addFile(path.join(p, ".codex", "config.toml"), "project_settings", `${name}/.codex/config.toml`, "codex");
+          addDir(path.join(p, ".claude", "agents"), "project_agent", "claude");
+          addDir(path.join(p, ".claude", "skills"), "project_skill", "claude");
+          addDir(path.join(p, ".claude", "commands"), "project_command", "claude");
+        }
+
+        result = JSON.stringify(files);
+        break;
+      }
+      case "config_read": {
+        const { file_path: readPath } = commandArgs ? JSON.parse(commandArgs) : {};
+        if (!readPath || typeof readPath !== "string") {
+          error = "Missing file_path";
+          break;
+        }
+        const home = process.env.HOME || "";
+        const allowed = [path.join(home, ".claude"), path.join(home, ".codex")];
+        const resolved = path.resolve(readPath);
+        const isAllowed = allowed.some((a) => resolved.startsWith(a + path.sep) || resolved === a) ||
+          readPath.endsWith("/CLAUDE.md") || readPath.endsWith("/AGENTS.md") ||
+          readPath.endsWith("/.mcp.json") || readPath.endsWith("/settings.json") ||
+          readPath.endsWith("/settings.local.json") || readPath.endsWith("/config.toml") ||
+          readPath.includes("/.claude/") || readPath.includes("/.codex/");
+        if (!isAllowed) {
+          error = "Path not allowed";
+          break;
+        }
+        if (!fs.existsSync(resolved)) {
+          result = JSON.stringify({ content: null, exists: false });
+        } else {
+          const content = fs.readFileSync(resolved, "utf-8");
+          result = JSON.stringify({ content, exists: true });
+        }
+        break;
+      }
+      case "config_write": {
+        const { file_path: writePath, content: writeContent } = commandArgs ? JSON.parse(commandArgs) : {};
+        if (!writePath || typeof writePath !== "string" || typeof writeContent !== "string") {
+          error = "Missing file_path or content";
+          break;
+        }
+        const home = process.env.HOME || "";
+        const allowed = [path.join(home, ".claude"), path.join(home, ".codex")];
+        const resolved = path.resolve(writePath);
+        const isAllowed = allowed.some((a) => resolved.startsWith(a + path.sep)) ||
+          writePath.endsWith("/CLAUDE.md") || writePath.endsWith("/AGENTS.md") ||
+          writePath.endsWith("/.mcp.json") || writePath.endsWith("/settings.json") ||
+          writePath.endsWith("/settings.local.json") || writePath.endsWith("/config.toml") ||
+          writePath.includes("/.claude/") || writePath.includes("/.codex/");
+        if (!isAllowed) {
+          error = "Path not allowed";
+          break;
+        }
+        fs.mkdirSync(path.dirname(resolved), { recursive: true });
+        fs.writeFileSync(resolved, writeContent, "utf-8");
+        result = JSON.stringify({ success: true });
+        log(`[CONFIG] Wrote ${resolved}`);
+        break;
+      }
+      case "config_create": {
+        const { dir_path, filename, content: createContent = "" } = commandArgs ? JSON.parse(commandArgs) : {};
+        if (!dir_path || !filename) {
+          error = "Missing dir_path or filename";
+          break;
+        }
+        const home = process.env.HOME || "";
+        const allowedDirs = [
+          path.join(home, ".claude", "agents"),
+          path.join(home, ".claude", "commands"),
+          path.join(home, ".claude", "skills"),
+          path.join(home, ".claude", "prompts"),
+          path.join(home, ".codex", "prompts"),
+          path.join(home, ".codex", "skills"),
+        ];
+        const resolvedDir = path.resolve(dir_path);
+        if (!allowedDirs.some((a) => resolvedDir === a || resolvedDir.startsWith(a + path.sep))) {
+          error = "Dir not allowed";
+          break;
+        }
+        if (!/^[a-zA-Z0-9_-]+\.(md|json|toml)$/.test(filename)) {
+          error = "Invalid filename";
+          break;
+        }
+        const newPath = path.join(resolvedDir, filename);
+        if (fs.existsSync(newPath)) {
+          error = "File already exists";
+          break;
+        }
+        fs.mkdirSync(resolvedDir, { recursive: true });
+        fs.writeFileSync(newPath, createContent, "utf-8");
+        result = JSON.stringify({ success: true, path: newPath });
+        log(`[CONFIG] Created ${newPath}`);
+        break;
+      }
+      case "config_delete": {
+        const { file_path: deletePath } = commandArgs ? JSON.parse(commandArgs) : {};
+        if (!deletePath || typeof deletePath !== "string") {
+          error = "Missing file_path";
+          break;
+        }
+        const home = process.env.HOME || "";
+        const allowedDirs = [
+          path.join(home, ".claude", "agents"),
+          path.join(home, ".claude", "commands"),
+          path.join(home, ".claude", "skills"),
+          path.join(home, ".claude", "prompts"),
+          path.join(home, ".codex", "prompts"),
+          path.join(home, ".codex", "skills"),
+        ];
+        const resolved = path.resolve(deletePath);
+        if (!allowedDirs.some((a) => resolved.startsWith(a + path.sep))) {
+          error = "Only files in agents/commands/skills/prompts dirs can be deleted";
+          break;
+        }
+        if (!fs.existsSync(resolved)) {
+          error = "File not found";
+          break;
+        }
+        fs.unlinkSync(resolved);
+        result = JSON.stringify({ success: true });
+        log(`[CONFIG] Deleted ${resolved}`);
+        break;
+      }
       default:
         error = `Unknown command: ${command}`;
     }
@@ -5398,6 +5578,73 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
   }
 }
 
+async function backfillPlanModeFromJSONL(syncService: SyncService): Promise<void> {
+  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
+  if (!fs.existsSync(claudeProjectsDir)) return;
+
+  let synced = 0;
+  const projectDirs = fs.readdirSync(claudeProjectsDir, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => d.name);
+
+  for (const dir of projectDirs) {
+    const dirPath = path.join(claudeProjectsDir, dir);
+    let sessionFiles: string[];
+    try {
+      sessionFiles = fs.readdirSync(dirPath).filter(f => f.endsWith(".jsonl") && !f.includes("sessions-index"));
+    } catch { continue; }
+
+    const decodedPath = decodeProjectDirName(dir);
+
+    for (const file of sessionFiles) {
+      const filePath = path.join(dirPath, file);
+      const sessionId = file.replace(".jsonl", "");
+      if (planModeSynced.has(sessionId)) continue;
+
+      try {
+        const content = fs.readFileSync(filePath, "utf-8");
+        if (!content.includes("ExitPlanMode")) continue;
+
+        let planContent: string | undefined;
+        for (const line of content.split("\n")) {
+          if (!line.includes("ExitPlanMode")) continue;
+          try {
+            const entry = JSON.parse(line);
+            const msg = entry.message || entry;
+            const blocks = Array.isArray(msg.content) ? msg.content : [];
+            for (const block of blocks) {
+              if (block.type === "tool_use" && block.name === "ExitPlanMode" && block.input?.plan) {
+                planContent = block.input.plan;
+                break;
+              }
+            }
+          } catch { continue; }
+          if (planContent) break;
+        }
+
+        if (!planContent) continue;
+
+        const projPath = decodedPath && fs.existsSync(decodedPath) ? decodedPath : undefined;
+        const planShortId = await syncService.syncPlanFromPlanMode({
+          sessionId,
+          planContent,
+          projectPath: projPath,
+        });
+
+        planModeSynced.add(sessionId);
+        if (planShortId) planModePlanMap.set(sessionId, planShortId);
+        savePlanModeCache();
+        synced++;
+        log(`Backfilled plan_mode plan ${planShortId || "doc-only"} for session ${sessionId.slice(0, 8)}`);
+      } catch (err) {
+        // Skip individual failures silently
+      }
+    }
+  }
+
+  if (synced > 0) log(`Backfilled ${synced} plan_mode plan(s) from JSONL history`);
+}
+
 async function waitForConfig(): Promise<{ config: Config; convexUrl: string }> {
   const checkInterval = 30000;
 
@@ -6418,6 +6665,11 @@ async function main(): Promise<void> {
   // Repair any project paths that were stored incorrectly (one-time on startup)
   repairProjectPaths(syncService).catch(err => {
     log(`Failed to repair project paths: ${err instanceof Error ? err.message : String(err)}`);
+  });
+
+  // Backfill plan_mode plans from JSONL files that the daemon missed (e.g., sessions completed before daemon started)
+  backfillPlanModeFromJSONL(syncService).catch(err => {
+    log(`Failed to backfill plan_mode from JSONL: ${err instanceof Error ? err.message : String(err)}`);
   });
 
   setInterval(() => {
