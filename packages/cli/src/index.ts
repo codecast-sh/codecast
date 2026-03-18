@@ -28,6 +28,8 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
 } from "./jsonlGenerator.js";
 import Anthropic from "@anthropic-ai/sdk";
+import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
+import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 
 const program = new Command();
@@ -8371,7 +8373,17 @@ plan
 
 // --- Plan Orchestration ---
 
+let _agentRuntime: AgentRuntime | null = null;
+function getAgentRuntime(): AgentRuntime {
+  if (!_agentRuntime) _agentRuntime = detectRuntime();
+  return _agentRuntime;
+}
+
+const activeHandles = new Map<string, AgentHandle>();
+
 function captureAgentOutput(sessionName: string, lines = 500): string {
+  const handle = activeHandles.get(sessionName);
+  if (handle) return getAgentRuntime().getOutput(handle, lines).text;
   const sr = spawnSync("tmux", ["capture-pane", "-p", "-J", "-t", `${sessionName}:0.0`, "-S", `-${lines}`], {
     encoding: "utf-8",
     stdio: ["pipe", "pipe", "pipe"],
@@ -8379,115 +8391,12 @@ function captureAgentOutput(sessionName: string, lines = 500): string {
   return sr.status === 0 ? (sr.stdout || "") : "";
 }
 
-function parseAgentMarkers(output: string): { status: "blocked" | "needs_context" | "done_with_concerns" | null; detail: string } {
-  const lines = output.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].trim();
-    const blockedMatch = line.match(/^(?:\*\*)?(?:Status:\s*)?BLOCKED(?:\*\*)?[:\s]+(.+)/i);
-    if (blockedMatch) return { status: "blocked", detail: blockedMatch[1].trim() };
-    const needsMatch = line.match(/^(?:\*\*)?(?:Status:\s*)?NEEDS_CONTEXT(?:\*\*)?[:\s]+(.+)/i);
-    if (needsMatch) return { status: "needs_context", detail: needsMatch[1].trim() };
-    const concernsMatch = line.match(/^(?:\*\*)?(?:Status:\s*)?DONE_WITH_CONCERNS(?:\*\*)?[:\s]+(.+)/i);
-    if (concernsMatch) return { status: "done_with_concerns", detail: concernsMatch[1].trim() };
-  }
-  return { status: null, detail: "" };
+function parseAgentMarkers(output: string) {
+  return _parseAgentMarkers(output);
 }
 
 function buildImplementerPrompt(plan: any, task: any): string {
-  const acceptance = task.acceptance_criteria?.length
-    ? task.acceptance_criteria.map((ac: string) => `- ${ac}`).join("\n")
-    : "None specified";
-
-  const steps = task.steps?.length
-    ? task.steps.map((s: any, i: number) => `${i + 1}. ${s.done ? "[x]" : "[ ]"} ${s.title}${s.verification ? ` (verify: ${s.verification})` : ""}`).join("\n")
-    : "";
-
-  const doneTasks = (plan.tasks || []).filter((t: any) => t.status === "done");
-  const doneContext = doneTasks.length
-    ? `\nAlready completed:\n${doneTasks.map((t: any) => `- ${t.title}`).join("\n")}`
-    : "";
-
-  const planContext = [
-    `Plan: ${plan.title} (${plan.short_id})`,
-    plan.goal ? `Goal: ${plan.goal}` : "",
-    `Task: ${task.title} (${task.short_id})`,
-    task.description ? `\n${task.description}` : "",
-    doneContext,
-  ].filter(Boolean).join("\n");
-
-  return `You are implementing a specific task from a plan. Follow structured development methodology.
-
-## First step
-
-Bind yourself to this task so your session is tracked:
-\`\`\`bash
-cast task start ${task.short_id}
-\`\`\`
-
-## Context
-${planContext}
-
-## Acceptance Criteria
-${acceptance}
-${steps ? `\n## Steps\n${steps}\n` : ""}
-## Development Protocol
-
-1. **Understand first**: Read acceptance criteria and relevant code. If unclear, report NEEDS_CONTEXT.
-2. **Worktree**: If available, work in your worktree branch. Commit on the branch -- autopilot handles merging to main.
-3. **Test-driven**: Write failing test -> implement minimal code -> verify -> commit.
-4. **Small commits**: One logical change per commit. Conventional commits format.
-5. **Verify everything**: Run tests, check build. Evidence before claims.
-6. **Self-review**: Before reporting done, review your changes. Check for AI slop, missing edge cases, dead code.
-
-## Verification Protocol
-
-Before marking any task as done, you MUST complete this checklist:
-
-1. **Typecheck**: Run \`npx tsc --noEmit\` in the relevant package directory. If it fails, fix the errors before proceeding.
-2. **Tests**: Run tests related to your changed files. If a test suite exists (jest, vitest, etc.), run it. Include the test output in your completion message.
-3. **Screenshot**: If the change is user-facing (UI, visual), take a screenshot as evidence using the browser or simulator tools.
-4. **Build**: If you modified build-relevant files, verify the build still succeeds.
-5. **Diff review**: Run \`git diff\` and review every changed line. Remove dead code, unnecessary comments, and AI slop.
-
-Only proceed to reporting after ALL applicable checks pass. Include verification evidence in your completion message.
-
-## Escalation Protocol
-
-When you encounter problems, use these structured markers in your output so the orchestrator can detect and act on them:
-
-- **BLOCKED: <reason>** -- You cannot complete the task due to a hard blocker (missing dependency, broken upstream, access issue). The orchestrator will pause the task and flag it for intervention.
-- **NEEDS_CONTEXT: <what you need>** -- You need information that isn't available in the codebase or task description (clarification on spec, access to an API key, design decision). The orchestrator will escalate to the user.
-- **DONE_WITH_CONCERNS: <concern>** -- You completed the task but have quality or correctness worries (untested edge case, potential regression, tech debt introduced). The orchestrator will mark it for review.
-
-Always use the exact marker format above (uppercase, colon, space, description) so automated parsing can detect it.
-
-## Reporting
-
-When done:
-\`\`\`bash
-cast task done ${task.short_id} -m "what you implemented and how you verified it"
-\`\`\`
-
-If done with concerns:
-\`\`\`bash
-cast task done ${task.short_id} --concerns "description of concerns"
-\`\`\`
-
-If blocked:
-\`\`\`bash
-cast task comment ${task.short_id} "description of blocker" -t blocker
-\`\`\`
-
-Your final message MUST include one of these status markers on its own line:
-- **Status: DONE** -- Task completed, all verifications passed.
-- **Status: DONE_WITH_CONCERNS** -- Task completed but has concerns (explain after the marker).
-- **Status: BLOCKED** -- Cannot complete (explain the blocker after the marker).
-- **Status: NEEDS_CONTEXT** -- Need more information (explain what's needed after the marker).
-
-Also include:
-- What you implemented and files changed
-- Verification evidence (typecheck output, test results, screenshots)
-- Any concerns or follow-up needed`;
+  return _buildImplementerPrompt(plan, task);
 }
 
 plan
@@ -8545,23 +8454,19 @@ plan
         continue;
       }
 
-      const agentScript = path.join(os.homedir(), ".claude", "scripts", "agent-spawn.sh");
       try {
-        const spawnResult = spawnSync(agentScript, [
-          "implementor", sessionName, getRealCwd(), prompt,
-        ], {
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-          env: { ...process.env, AGENT_RESOURCE_INDEX: String(i) },
+        const runtime = getAgentRuntime();
+        const handle = runtime.spawn({
+          sessionName,
+          prompt,
+          model: "opus",
+          workingDir: getRealCwd(),
+          resourceIndex: i,
+          taskShortId: task.short_id,
         });
-
-        if (spawnResult.status === 0) {
-          console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
-          console.log(fmt.muted(`    tmux: ${sessionName} | watch: tmux attach -t ${sessionName}`));
-          try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
-        } else {
-          console.error(`  ${c.red}failed${c.reset} ${task.short_id}: ${(spawnResult.stderr || spawnResult.stdout || "").trim()}`);
-        }
+        activeHandles.set(sessionName, handle);
+        console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title} ${c.dim}(${runtime.name})${c.reset}`);
+        try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
       } catch (err: any) {
         console.error(`  ${c.red}error${c.reset} spawning ${task.short_id}: ${err.message}`);
       }
@@ -8572,7 +8477,7 @@ plan
       return;
     }
 
-    console.log(fmt.muted(`\n  Monitor: agent-list.sh | Status: agent-status.sh impl-<task-id>`));
+    console.log(fmt.muted(`\n  Monitor: cast plan agents ${planId}`));
 
     try {
       const taskIds = toSpawn.map((t: any) => t.short_id).join(", ");
@@ -8586,8 +8491,9 @@ plan
         console.log(fmt.muted(`  --- ${ts} ---`));
         for (const task of toSpawn) {
           const sn = `impl-${task.short_id}`;
-          const tmuxAlive = spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
-          if (!tmuxAlive) {
+          const h = activeHandles.get(sn);
+          const alive = h ? getAgentRuntime().isAlive(h) : spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+          if (!alive) {
             const lastOutput = captureAgentOutput(sn);
             const markers = parseAgentMarkers(lastOutput);
             if (markers.status === "done_with_concerns") {
@@ -8842,7 +8748,7 @@ plan
     const intervalMs = (parseInt(options.interval, 10) || 2) * 60_000;
     const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;
     const reschedule = options.reschedule !== false;
-    const agentScript = path.join(os.homedir(), ".claude", "scripts", "agent-spawn.sh");
+    const runtime = getAgentRuntime();
     const startTime = Date.now();
 
     const scheduleResume = (reason: string) => {
@@ -8906,13 +8812,13 @@ plan
       for (const [shortId, info] of activeAgents) {
         const sn = `impl-${shortId}`;
         const task = allTasks.find((t: any) => t.short_id === shortId);
-        const tmuxAlive = spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+        const handle = activeHandles.get(sn);
+        const agentAlive = handle ? runtime.isAlive(handle) : spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
 
-        // Primary detection: task marked done in Convex (agent called `cast task done`)
         if (task?.status === "done") {
           console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
           totalCompleted++;
-          if (tmuxAlive) spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+          if (agentAlive && handle) runtime.kill(handle);
 
           // Optional verification before merge
           if (options.verify) {
@@ -8945,7 +8851,7 @@ plan
             }
           }
           activeAgents.delete(shortId);
-        } else if (!tmuxAlive) {
+        } else if (!agentAlive) {
           // Agent died -- parse output for structured markers, then fall back to auto-retry
           const lastOutput = captureAgentOutput(sn);
           const markers = parseAgentMarkers(lastOutput);
@@ -8985,16 +8891,17 @@ plan
           }
           activeAgents.delete(shortId);
         } else {
-          // tmux alive -- check for structured markers or timeout
+          // Agent alive -- check for structured markers or timeout
           const lastOutput = captureAgentOutput(sn);
           const markers = parseAgentMarkers(lastOutput);
+          const killAgent = () => { if (handle) runtime.kill(handle); activeHandles.delete(sn); };
           if (markers.status === "blocked") {
             console.log(`  ${c.red}block${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
             try {
               await cliPost("/cli/work/update", { short_id: shortId, execution_status: "blocked" });
               await cliPost("/cli/work/comment", { short_id: shortId, text: `BLOCKED: ${markers.detail}`, comment_type: "blocker" });
             } catch {}
-            spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+            killAgent();
             activeAgents.delete(shortId);
           } else if (markers.status === "needs_context") {
             console.log(`  ${c.yellow}needs${c.reset} ${c.cyan}${shortId}${c.reset} ${info.task.title}: ${markers.detail}`);
@@ -9002,15 +8909,14 @@ plan
               await cliPost("/cli/work/update", { short_id: shortId, execution_status: "needs_context" });
               await cliPost("/cli/work/comment", { short_id: shortId, text: `NEEDS_CONTEXT: ${markers.detail}`, comment_type: "blocker" });
             } catch {}
-            spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+            killAgent();
             activeAgents.delete(shortId);
           } else {
-            // Check for timeout (default 30 min per task)
             const elapsed = Date.now() - info.spawnedAt;
             const taskTimeout = 30 * 60_000;
             if (elapsed > taskTimeout) {
               console.log(`  ${c.red}timeout${c.reset} ${c.cyan}${shortId}${c.reset} exceeded ${Math.round(taskTimeout / 60_000)}m`);
-              spawnSync("tmux", ["kill-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] });
+              killAgent();
               const retryCount = task?.retry_count || 0;
               try {
                 await cliPost("/cli/work/update", { short_id: shortId, status: "open", retry_count: retryCount + 1 });
@@ -9065,19 +8971,22 @@ plan
         const prompt = buildImplementerPrompt(plan, task);
         const resourceIdx = [...activeAgents.values()].length + i;
 
-        const sr = spawnSync(agentScript, ["implementor", sessionName, getRealCwd(), prompt], {
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-          env: { ...process.env, AGENT_RESOURCE_INDEX: String(resourceIdx % 4) },
-        });
-
-        if (sr.status === 0) {
+        try {
+          const handle = runtime.spawn({
+            sessionName,
+            prompt,
+            model: "opus",
+            workingDir: getRealCwd(),
+            resourceIndex: resourceIdx % 4,
+            taskShortId: task.short_id,
+          });
+          activeHandles.set(sessionName, handle);
           activeAgents.set(task.short_id, { task, spawnedAt: Date.now() });
           totalSpawned++;
           console.log(`  ${c.green}spawn${c.reset} ${c.cyan}${task.short_id}${c.reset} ${task.title}`);
           try { await cliPost("/cli/work/update", { short_id: task.short_id, status: "in_progress" }); } catch {}
-        } else {
-          console.error(`  ${c.red}fail${c.reset}  ${task.short_id}: ${(sr.stderr || "").trim().slice(0, 100)}`);
+        } catch (err: any) {
+          console.error(`  ${c.red}fail${c.reset}  ${task.short_id}: ${err.message}`);
         }
       }
 
@@ -9429,11 +9338,15 @@ plan
     const inProgress = tasks.filter((t: any) => t.status === "in_progress");
     let killed = 0;
 
+    const killRuntime = getAgentRuntime();
     for (const t of inProgress) {
       const sessionName = `impl-${t.short_id}`;
-      const check = spawnSync("tmux", ["has-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] });
-      if (check.status === 0) {
-        spawnSync("tmux", ["kill-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] });
+      const handle = activeHandles.get(sessionName);
+      const isAlive = handle ? killRuntime.isAlive(handle) : spawnSync("tmux", ["has-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+      if (isAlive) {
+        if (handle) killRuntime.kill(handle);
+        else spawnSync("tmux", ["kill-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] });
+        activeHandles.delete(sessionName);
         console.log(`  ${c.red}killed${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
         killed++;
       }
@@ -9565,44 +9478,45 @@ plan
 
     const totalRounds = parseInt(options.rounds, 10) || 3;
     const cwd = getRealCwd();
-    const agentScript = path.join(os.homedir(), ".claude", "scripts", "agent-spawn.sh");
+    const driveRuntime = getAgentRuntime();
 
     console.log(`\n  ${c.bold}Drive${c.reset} for ${c.cyan}${planId}${c.reset} - ${totalRounds} rounds\n`);
 
     for (let round = 1; round <= totalRounds; round++) {
       console.log(`  ${c.bold}Round ${round}/${totalRounds}${c.reset}`);
 
-      // Update drive state
       try {
         await cliPost("/cli/plans/drive-state", { short_id: planId, current_round: round, total_rounds: totalRounds });
       } catch {}
 
-      // Critic pass - spawn critic agent
       console.log(`  ${c.dim}critic...${c.reset}`);
       const criticSession = `critic-${planId}-r${round}`;
-      const scope = options.scope ? `Focus on: ${options.scope}` : "";
-      const criticPrompt = `Review plan ${planId} (${plan.title}). Round ${round}/${totalRounds}. ${scope}\nFind bugs, UX issues, missing features, code quality problems. Output FINDINGS list.`;
+      const scope = options.scope || cwd;
+      const criticPrompt = buildCriticPrompt(plan, scope, round);
 
-      const criticResult = spawnSync(agentScript, ["critic", criticSession, cwd, criticPrompt], {
-        encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], timeout: 300_000,
-      });
-
-      if (criticResult.status !== 0) {
+      let criticHandle: AgentHandle;
+      try {
+        criticHandle = driveRuntime.spawn({
+          sessionName: criticSession,
+          prompt: criticPrompt,
+          model: "sonnet",
+          workingDir: cwd,
+          taskShortId: `critic-r${round}`,
+        });
+      } catch {
         console.log(`  ${c.yellow}critic skipped${c.reset} (spawn failed)`);
         continue;
       }
 
-      // Wait for critic to finish (check tmux periodically)
       let criticDone = false;
       for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 5000));
-        const alive = spawnSync("tmux", ["has-session", "-t", criticSession], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
-        if (!alive) { criticDone = true; break; }
+        if (!driveRuntime.isAlive(criticHandle)) { criticDone = true; break; }
       }
 
       if (!criticDone) {
         console.log(`  ${c.yellow}critic timed out${c.reset}`);
-        spawnSync("tmux", ["kill-session", "-t", criticSession], { stdio: ["pipe", "pipe", "pipe"] });
+        driveRuntime.kill(criticHandle);
       }
 
       // Record findings (agent should have output to task system)
