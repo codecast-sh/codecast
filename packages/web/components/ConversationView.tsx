@@ -1,7 +1,11 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
+import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useEventListener } from "../hooks/useEventListener";
+import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useConvexSync } from "../hooks/useConvexSync";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -258,9 +262,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
 
   const recentProjects = freshProjects ?? cachedProjects;
 
-  useEffect(() => {
-    if (freshProjects) setRecentProjects(freshProjects);
-  }, [freshProjects, setRecentProjects]);
+  useConvexSync(freshProjects, setRecentProjects);
 
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
@@ -410,6 +412,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       <button
         onClick={() => {
           if (!isolated && currentPath) {
+            setIsolated(true);
             handleSwitch(currentPath, true);
           } else {
             setIsolated(!isolated);
@@ -1383,7 +1386,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const [mdOverflowing, setMdOverflowing] = useState(false);
   const MD_COLLAPSED_HEIGHT = 600;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (mdContainerRef.current && !mdExpanded && viewMode === 'rendered') {
       requestAnimationFrame(() => {
         if (mdContainerRef.current) {
@@ -1393,7 +1396,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     }
   }, [content, mdExpanded, viewMode, expanded]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!mdFullscreen) return;
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMdFullscreen(false); };
     document.addEventListener('keydown', handleKey);
@@ -1401,7 +1404,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [mdFullscreen]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!codeFullscreen) return;
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setCodeFullscreen(false); };
     document.addEventListener('keydown', handleKey);
@@ -2656,7 +2659,7 @@ function ImageBlock({ image }: { image: ImageData }) {
       ? `data:${image.media_type};base64,${image.data}`
       : undefined;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (src && gallery) gallery.register(src);
   }, [src, gallery]);
 
@@ -3173,7 +3176,7 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
 
   const effectivelyCollapsed = collapsed && !isExpanded;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (effectivelyCollapsed && contentRef.current) {
       const el = contentRef.current;
       setIsTruncated(el.scrollHeight > el.clientHeight);
@@ -3182,13 +3185,13 @@ function UserPrompt({ content, timestamp, messageId, conversationId, collapsed, 
     }
   }, [effectivelyCollapsed, content]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!effectivelyCollapsed && contentRef.current && !contentExpanded) {
       setIsOverflowing(contentRef.current.scrollHeight > USER_CONTENT_MAX_HEIGHT);
     }
   }, [content, effectivelyCollapsed, contentExpanded]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!fullscreen) return;
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
     document.addEventListener('keydown', handleKey);
@@ -3642,7 +3645,7 @@ function AssistantBlock({
     return map;
   }, [toolResults]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!contentRef.current || collapsed) return;
     const el = contentRef.current;
     const check = () => setIsOverflowing(el.scrollHeight > CONTENT_MAX_HEIGHT);
@@ -3652,7 +3655,7 @@ function AssistantBlock({
     return () => obs.disconnect();
   }, [content, collapsed]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!fullscreen) return;
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
     document.addEventListener('keydown', handleKey);
@@ -4174,13 +4177,13 @@ function PlanBlock({ content, timestamp, collapsed, messageId, conversationId, o
   );
   const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (contentRef.current && !isExpanded) {
       setIsOverflowing(contentRef.current.scrollHeight > PLAN_MAX_HEIGHT);
     }
   }, [content, isExpanded]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!fullscreen) return;
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setFullscreen(false); };
     document.addEventListener('keydown', handleKey);
@@ -4528,7 +4531,7 @@ function CyclingShortcutHint() {
   const [index, setIndex] = useState(0);
   const [animating, setAnimating] = useState(false);
 
-  useEffect(() => {
+  useMountEffect(() => {
     const interval = setInterval(() => {
       setAnimating(true);
       setTimeout(() => {
@@ -4537,7 +4540,7 @@ function CyclingShortcutHint() {
       }, 200);
     }, 180000);
     return () => clearInterval(interval);
-  }, []);
+  });
 
   const { keys, label } = CYCLING_SHORTCUTS[index];
   return (
@@ -4576,7 +4579,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   const forks = selectedMsg?.message_uuid && forkPointMap ? forkPointMap[selectedMsg.message_uuid] || [] : [];
   const hasBranches = forks.length > 0;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!hasBranches) { setBranchIdx(-1); return; }
     const uuid = selectedMsg?.message_uuid;
     if (!uuid || !activeBranches) { setBranchIdx(-1); return; }
@@ -4586,16 +4589,16 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
     setBranchIdx(idx >= 0 ? idx : -1);
   }, [selectedIdx, hasBranches, selectedMsg?.message_uuid, activeBranches, forks]);
 
-  useEffect(() => {
+  useMountEffect(() => {
     return () => { if (escTimerRef.current) clearTimeout(escTimerRef.current); };
-  }, []);
+  });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = listRef.current?.children[selectedIdx] as HTMLElement | undefined;
     el?.scrollIntoView({ block: "nearest" });
   }, [selectedIdx]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -4780,7 +4783,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     canQueryServer ? { conversation_id: conversationId as Id<"conversations"> } : "skip"
   );
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (pendingMessageId) return;
     if (!existingPending) {
       if (!isWaitingForResponse) setShowStuckBanner(false);
@@ -4797,7 +4800,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   }, [existingPending, pendingMessageId, isWaitingForResponse]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!sentAt || !pendingMessageId) return;
     if (messageStatus?.status === "delivered") {
       if (sentContentRef.current) {
@@ -4841,7 +4844,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [lightboxImageIndex, setLightboxImageIndex] = useState<number | null>(null);
   const dismissLightbox = useCallback(() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }, []);
-  useEffect(() => { onLightboxChange?.(lightboxImageIndex !== null); }, [lightboxImageIndex, onLightboxChange]);
+  useWatchEffect(() => { onLightboxChange?.(lightboxImageIndex !== null); }, [lightboxImageIndex, onLightboxChange]);
   const lightboxSwipe = useSwipeToDismiss(dismissLightbox);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -4858,11 +4861,11 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     throw new Error("Session not yet created on server");
   }, []);
 
-  useEffect(() => {
+  useMountEffect(() => {
     return () => { if (escapeTimerRef.current) clearTimeout(escapeTimerRef.current); };
-  }, []);
+  });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (onPopulateInput) {
       onPopulateInput.current = (text: string) => {
         setMessage(text);
@@ -4883,7 +4886,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   }, [conversationId, resumeSessionMutation, isResuming]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isResuming && (isConversationLive || isThinking)) {
       setIsResuming(false);
       setShowStuckBanner(false);
@@ -4905,7 +4908,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     return () => clearTimeout(timeout);
   }, [isResuming, isConversationLive, isThinking, conversationId, restartSessionMutation]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!showStuckBanner || !sessionId || isResuming || autoResumeTriggeredRef.current) return;
     if (!existingPending && !pendingMessageId) return;
     autoResumeTriggeredRef.current = true;
@@ -4925,7 +4928,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (convIdRef.current !== conversationId) {
       if (draftTimerRef.current) {
         clearTimeout(draftTimerRef.current);
@@ -4942,7 +4945,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   }, [conversationId]);
 
-  useEffect(() => () => {
+  useMountEffect(() => () => {
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     const msg = messageRef.current;
     const id = convIdRef.current;
@@ -4952,7 +4955,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         draft_message: msg,
       });
     }
-  }, []);
+  });
 
   const handleMessageChange = useCallback((val: string) => {
     setMessage(val);
@@ -4975,7 +4978,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const isSelectionEditedRef = useRef(false);
   const prevSelectionRef = useRef<string | null>(null);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const wasActive = prevSelectionRef.current !== null;
     const isActive = !!(selectedMessageContent && selectedMessageUuid);
     prevSelectionRef.current = selectedMessageUuid || null;
@@ -5005,12 +5008,12 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   };
 
-  useEffect(() => {
+  useWatchEffect(() => {
     resetTextareaHeight();
   }, [message]);
 
   const mountConvIdRef = useRef(conversationId);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (textareaRef.current) {
       const isIdTransition = mountConvIdRef.current !== conversationId;
       mountConvIdRef.current = conversationId;
@@ -5070,7 +5073,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     }
   }, [generateUploadUrl, updateDraft, message]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (onDropFiles) {
       onDropFiles.current = (files: File[]) => {
         files.forEach(f => { if (f.type.startsWith("image/")) uploadImage(f); });
@@ -5687,7 +5690,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     clearTimeout(optimisticTimerRef.current);
     optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
   }, [conversation, isOwner, sendKeys, optimisticMode, managedSession?.permission_mode]);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (optimisticMode && managedSession?.permission_mode === optimisticMode) {
       setOptimisticMode(null);
       clearTimeout(optimisticTimerRef.current);
@@ -5697,7 +5700,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const forkSelectedIndex = useForkNavigationStore((s) => s.selectedIndex);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!conversation || !isOwner || conversation.status !== "active") return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !e.shiftKey) return;
@@ -5733,7 +5736,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [conversation?.fork_children, optimisticForkChildren]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!conversation?.fork_children) return;
     const serverIds = new Set(conversation.fork_children.map(f => f._id));
     pruneOptimisticForks(serverIds);
@@ -5844,7 +5847,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const effectiveConversationId = firstActiveForkId || conversation?._id;
 
   const prevConvIdRef = useRef<string | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const id = conversation?._id ?? null;
     if (id && id !== prevConvIdRef.current) {
       if (prevConvIdRef.current !== null) {
@@ -5918,7 +5921,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   // Preload branch from URL param
   const urlBranchPreloaded = useRef(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (urlBranchPreloaded.current || !conversation?.fork_children) return;
     const url = new URL(window.location.href);
     const branchId = url.searchParams.get('branch');
@@ -6124,7 +6127,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     });
   }, []);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const currentIds = new Set(timeline.map(item => {
       if (item.type === 'message') return (item.data as Message)._id;
       if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
@@ -6161,7 +6164,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const hasScrolledToHighlight = useRef(false);
 
   // Find all messages matching search query
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!highlightQuery || messages.length === 0) {
       setHighlightedMessageId(null);
       setAllMatchingMessageIds([]);
@@ -6206,7 +6209,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [allMatchingMessageIds, currentMatchIndex]);
 
   // Highlight all text occurrences of search query in the DOM
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!highlightQuery || !containerRef.current) return;
 
     const terms = parseSearchTerms(highlightQuery);
@@ -6510,7 +6513,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [forkSwitchBranch, forkClearBranch, inboxMessages]);
 
   // Clear loading state when fork messages arrive
-  useEffect(() => {
+  useWatchEffect(() => {
     if (loadingBranchId && inboxMessages[loadingBranchId]) {
       setLoadingBranchId(null);
     }
@@ -6541,7 +6544,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
 
   // t key for tree panel (when not in selection mode)
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isOwner) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 't') return;
@@ -6557,49 +6560,45 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => window.removeEventListener('keydown', handler);
   }, [isOwner, forkSelectionIdx, toggleTreePanel, conversation?.fork_children, conversation?.forked_from]);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.code === 'KeyL' && e.shiftKey && e.metaKey && !e.altKey && !e.ctrlKey) {
-        e.preventDefault();
-        copyToClipboard(window.location.href).then(() => toast.success("Link copied!"));
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, []);
+  useEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.code === 'KeyL' && e.shiftKey && e.metaKey && !e.altKey && !e.ctrlKey) {
+      e.preventDefault();
+      copyToClipboard(window.location.href).then(() => toast.success("Link copied!"));
+    }
+  });
 
-  useEffect(() => {
+  useMountEffect(() => {
     const el = headerRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => setHeaderHeight(el.offsetHeight));
     setHeaderHeight(el.offsetHeight);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  });
 
   const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
   const [deskClass, setDeskClass] = useState("");
-  useEffect(() => {
+  useMountEffect(() => {
     setDeskClass(desktopHeaderClass());
-  }, []);
+  });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = headerRef.current;
     if (!el) return;
     return setupDesktopDrag(el);
   }, [deskClass]);
 
-  useEffect(() => {
+  useMountEffect(() => {
     const el = messageInputRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => setMessageInputHeight(el.offsetHeight));
     setMessageInputHeight(el.offsetHeight);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  });
 
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = containerRef.current;
     if (!el) {
       if (stickyUserMsgIndices.length === 0 && !fallbackStickyContent) {
@@ -6740,7 +6739,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }), [timeline, virtualizer]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const scrollContainer = containerRef.current;
     if (!scrollContainer) return;
 
@@ -6836,7 +6835,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     };
   }, [hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, collapsed]);
 
-  useEffect(() => {
+  const totalSize = virtualizer.getTotalSize();
+  useWatchEffect(() => {
     if (!scrollProgressRef.current) return;
     const totalMessages = conversation?.message_count || messages.length;
     const isPaginated = totalMessages > 150;
@@ -6856,10 +6856,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       progress = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 1;
     }
     scrollProgressRef.current.style.height = `${progress * 100}%`;
-  });
+  }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize]);
 
   // Restore scroll position after loading older messages using anchor
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!scrollAnchorRef.current) return;
     const { messageId, pixelOffset } = scrollAnchorRef.current;
     const newIndex = timeline.findIndex(item =>
@@ -6883,7 +6883,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [initialScrollDone, setInitialScrollDone] = useState(false);
 
   // New messages auto-scroll (only after initial scroll is done)
-  useEffect(() => {
+  useWatchEffect(() => {
     const hasNewMessages = timeline.length > prevTimelineLengthRef.current;
     prevTimelineLengthRef.current = timeline.length;
 
@@ -6909,7 +6909,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [timeline.length, virtualizer, highlightQuery, targetMessageId, hasMoreBelow, initialScrollDone]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (isWaitingForResponse && containerRef.current && isNearBottomRef.current && !userScrolledRef.current) {
       virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
       requestAnimationFrame(() => {
@@ -6941,7 +6941,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // Detect user scroll-up via wheel events (fires synchronously, no race condition
   // with the async scroll event). This ensures userScrolledRef is set before any
   // re-render or auto-correct effect can run.
-  useEffect(() => {
+  useWatchEffect(() => {
     const sc = containerRef.current;
     if (!sc) return;
     const onWheel = (e: WheelEvent) => {
@@ -6954,8 +6954,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // Auto-pin: observe scroll container size changes and pin to bottom.
   // Uses ResizeObserver instead of rAF loop to avoid fighting with the
   // virtualizer's item measurement or triggering spurious pagination.
-  const totalSize = virtualizer.getTotalSize();
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!initialScrollDone) return;
     if (window.location.hash || highlightQuery) return;
     const sc = containerRef.current;
@@ -6975,7 +6974,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         cooldownTimer = setTimeout(() => { paginationCooldownRef.current = false; }, 300);
       }
     });
-    // Observe the virtualizer's inner container (first child) for size changes
     if (sc.firstElementChild) {
       observer.observe(sc.firstElementChild);
     }
@@ -6984,7 +6982,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [initialScrollDone, highlightQuery]);
 
   // Scroll after jump to start/end
-  useEffect(() => {
+  useWatchEffect(() => {
     if (jumpDirectionRef.current && timeline.length > 0) {
       const dir = jumpDirectionRef.current;
       jumpDirectionRef.current = null;
@@ -7021,17 +7019,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [timeline, virtualizer, targetMessageId]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     scrollToHash();
   }, [timeline.length, virtualizer, targetMessageId]);
 
-  useEffect(() => {
-    window.addEventListener("hashchange", scrollToHash);
-    return () => window.removeEventListener("hashchange", scrollToHash);
-  }, [scrollToHash]);
+  useEventListener("hashchange", () => scrollToHash());
 
   // Scroll to highlighted message from search
-  useEffect(() => {
+  useWatchEffect(() => {
     if (highlightedMessageId && timeline.length > 0 && !hasScrolledToHighlight.current) {
       const itemIndex = timeline.findIndex(item => {
         if (item.type === 'message') {
@@ -7047,7 +7042,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [highlightedMessageId, timeline, virtualizer]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!targetMessageId || timeline.length === 0 || hasScrolledToTarget.current) {
       return;
     }
@@ -7106,16 +7101,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [targetMessageId, timeline, virtualizer]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "c") {
-        e.preventDefault();
-        setCollapsed((c) => !c);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "c") {
+      e.preventDefault();
+      setCollapsed((c) => !c);
+    }
+  });
 
   const title = cleanTitle(conversation?.title || "New Session");
   const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
@@ -7136,16 +7127,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return undefined;
   }, [conversation?.messages]);
   const [now, setNow] = useState(Date.now());
-  useEffect(() => {
+  useMountEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(id);
-  }, []);
+  });
   const isSessionConnected = !!conversation && conversation.status === "active" && (now - lastActivityAt) < 5 * 60 * 1000;
   const isWorking = isSessionConnected && (now - lastActivityAt) < 45 * 1000 && lastMessageRole === "assistant";
   const isConversationLive = isWorking;
   const isSessionDisconnected = !!conversation && conversation.status === "active" && managedSession !== undefined && managedSession.managed === false && !isSessionConnected;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (conversation) {
       document.title = `codecast | ${truncatedTitle}`;
     }
