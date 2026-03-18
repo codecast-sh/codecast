@@ -1554,19 +1554,46 @@ function createWorktree(repoRoot: string, name: string): WorktreeResult | null {
     };
   }
 
-  try {
-    fs.mkdirSync(worktreeDir, { recursive: true });
-    execSync(`git worktree add -b ${branchName} ${worktreePath}`, {
-      cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-    });
-  } catch (err) {
+  fs.mkdirSync(worktreeDir, { recursive: true });
+
+  // Retry loop to handle concurrent git lock contention
+  let created = false;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) {
+      try { execSync(`sleep ${(200 + attempt * 300) / 1000}`, { stdio: "ignore" }); } catch {}
+    }
     try {
-      execSync(`git worktree add ${worktreePath} ${branchName}`, {
+      execSync(`git worktree add -b ${branchName} ${worktreePath}`, {
         cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
       });
-    } catch {
-      log(`[WORKTREE] Failed to create worktree: ${err}`);
-      return null;
+      created = true;
+      break;
+    } catch (err) {
+      // Branch already exists — try without -b
+      try {
+        execSync(`git worktree add ${worktreePath} ${branchName}`, {
+          cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
+        });
+        created = true;
+        break;
+      } catch (err2) {
+        lastErr = err2;
+      }
+    }
+  }
+
+  if (!created) {
+    log(`[WORKTREE] Failed to create worktree: ${lastErr}`);
+    return null;
+  }
+
+  // Remove large build artifact directories that bloat the worktree
+  const LARGE_ARTIFACT_DIRS = ["packages/desktop/src-tauri/target"];
+  for (const dir of LARGE_ARTIFACT_DIRS) {
+    const fullPath = path.join(worktreePath, dir);
+    if (fs.existsSync(fullPath)) {
+      try { execSync(`/bin/rm -rf ${JSON.stringify(fullPath)}`, { stdio: "ignore" }); } catch {}
     }
   }
 
