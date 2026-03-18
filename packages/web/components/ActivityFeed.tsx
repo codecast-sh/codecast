@@ -401,39 +401,13 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
         )}
       </div>
 
-      {/* Row 2: bullets when popover open, headline otherwise */}
-      {isBrowserOpen && (changes.length > 0 || hasTurns) ? (
-        <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
-          <ul className="space-y-0">
-            {(changes.length > 0
-              ? changes.slice(0, 3)
-              : (item.turns as Array<{ ask: string; did: string[] }>).slice(0, 3).map(t => t.ask)
-            ).map((c: string, i: number) => (
-              <li key={i} className={`flex gap-1.5 text-sol-text-muted/60 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
-                <span className="text-sol-text-dim/30 select-none shrink-0">-</span>
-                <span className="truncate">{c}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : headline ? (
-        <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
-          <p className={`text-sol-text-muted/60 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
-            {headline}
-            {metaParts.length > 0 && (
-              <span className="text-sol-text-dim opacity-25 font-mono text-[9px] ml-2">{metaParts.join(" / ")}</span>
-            )}
-          </p>
-        </div>
-      ) : null}
-
-      {/* Expanded detail */}
-      {expanded && (
+      {/* Row 2: expanded detail / hover bullets / headline */}
+      {expanded ? (
         <div className={`mt-1.5 space-y-1.5 ${showActor ? "ml-[26px]" : ""} text-[11px]`} onClick={(e) => e.stopPropagation()}>
           {item.outcome_type === "blocked" && item.blockers && (
             <div>
               <span className="text-sol-red/60 font-medium">Blocked: </span>
-              <span className="text-sol-text-muted/70">{item.blockers}</span>
+              <span className="text-sol-text-muted0">{item.blockers}</span>
             </div>
           )}
           {hasTurns ? (
@@ -441,8 +415,8 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
           ) : changes.length > 0 ? (
             <ul className="space-y-0.5">
               {changes.map((c: string, i: number) => (
-                <li key={i} className="flex gap-1.5 text-sol-text-muted/60 leading-snug">
-                  <span className="text-sol-text-dim/30 select-none shrink-0">-</span>
+                <li key={i} className="flex gap-1.5 text-sol-text-muted0 leading-snug">
+                  <span className="text-sol-text-dim opacity-30 select-none shrink-0">-</span>
                   <span>{highlightCode(c)}</span>
                 </li>
               ))}
@@ -453,14 +427,37 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
           {item.next_action && (isActive || item.outcome_type === "progress") && (
             <div>
               <span className="text-sol-cyan/50 font-medium">Next: </span>
-              <span className="text-sol-text-muted/60">{item.next_action}</span>
+              <span className="text-sol-text-muted0">{item.next_action}</span>
             </div>
           )}
           {item.git_branch && item.git_branch !== "main" && item.git_branch !== "master" && (
-            <div className="font-mono text-sol-text-dim/20 text-[9px]">{item.git_branch}</div>
+            <div className="font-mono text-sol-text-dim opacity-20 text-[9px]">{item.git_branch}</div>
           )}
         </div>
-      )}
+      ) : isBrowserOpen && (changes.length > 0 || hasTurns) ? (
+        <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
+          <ul className="space-y-0">
+            {(changes.length > 0
+              ? changes.slice(0, 3)
+              : (item.turns as Array<{ ask: string; did: string[] }>).slice(0, 3).map(t => t.ask)
+            ).map((c: string, i: number) => (
+              <li key={i} className={`flex gap-1.5 text-sol-text-muted0 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
+                <span className="text-sol-text-dim opacity-30 select-none shrink-0">-</span>
+                <span className="truncate">{c}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : headline ? (
+        <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
+          <p className={`text-sol-base0/50 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
+            {headline}
+            {metaParts.length > 0 && (
+              <span className="text-sol-text-dim opacity-25 font-mono text-[9px] ml-2">{metaParts.join(" / ")}</span>
+            )}
+          </p>
+        </div>
+      ) : null}
       {deepDive && <SessionNarrativeOverlay item={item} onClose={() => setDeepDive(false)} />}
     </div>
   );

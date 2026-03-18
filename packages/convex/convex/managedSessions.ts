@@ -232,15 +232,37 @@ export const isSessionManaged = query({
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
       .first();
 
+    const STALE_THRESHOLD = 60 * 1000;
+    const now = Date.now();
+
     if (!session) {
       return { managed: false };
     }
 
-    const STALE_THRESHOLD = 60 * 1000;
-    const isStale = Date.now() - session.last_heartbeat > STALE_THRESHOLD;
+    const isStale = now - session.last_heartbeat > STALE_THRESHOLD;
+
+    // Check if any child sessions (subagents) are still active
+    let has_active_children = false;
+    if (isStale) {
+      const children = await ctx.db
+        .query("conversations")
+        .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", args.conversation_id))
+        .collect();
+      for (const child of children) {
+        const childSession = await ctx.db
+          .query("managed_sessions")
+          .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", child._id))
+          .first();
+        if (childSession && now - childSession.last_heartbeat < STALE_THRESHOLD) {
+          has_active_children = true;
+          break;
+        }
+      }
+    }
 
     return {
-      managed: !isStale,
+      managed: !isStale || has_active_children,
+      has_active_children,
       session_id: session.session_id,
       pid: session.pid,
       last_heartbeat: session.last_heartbeat,
