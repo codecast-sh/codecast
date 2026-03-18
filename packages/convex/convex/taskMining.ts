@@ -271,6 +271,12 @@ export const mineTasksFromInsights = internalMutation({
             comment_type: "note" as any,
             created_at: ts,
           });
+          // Also refresh any matching plan's updated_at so stale plans stay fresh
+          const matchedPlan = findSimilarPlan(title);
+          if (matchedPlan && ts > matchedPlan.updated_at) {
+            await ctx.db.patch(matchedPlan._id, { updated_at: ts });
+            plansUpdated++;
+          }
           tasksDeduped++;
           continue;
         }
