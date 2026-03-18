@@ -264,6 +264,10 @@ export const mineTasksFromInsights = internalMutation({
         }
 
         if (similarPlan) {
+          // Update plan's updated_at to reflect recent session work
+          if (ts > similarPlan.updated_at) {
+            await ctx.db.patch(similarPlan._id, { updated_at: ts });
+          }
           tasksDeduped++;
           continue;
         }
