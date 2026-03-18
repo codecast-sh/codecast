@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "child_process";
-import { existsSync, writeFileSync, unlinkSync, openSync } from "fs";
+import { existsSync, writeFileSync, unlinkSync, openSync, readFileSync, readdirSync, statSync, mkdirSync, copyFileSync, renameSync, rmSync } from "fs";
+import { join, dirname } from "path";
 
 export interface AgentHandle {
   id: string;
@@ -41,29 +42,74 @@ export interface ExecResult {
   stderr: string;
 }
 
+export interface FileStats {
+  size: number;
+  isFile: boolean;
+  isDirectory: boolean;
+  modifiedAt: number;
+  createdAt: number;
+}
+
+export interface DirEntry {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+}
+
 export interface Sandbox {
   name: string;
-  execCommand(command: string, opts?: { cwd?: string; timeout?: number }): ExecResult;
+  workingDir: string;
+
+  // Core execution
+  execCommand(command: string, opts?: { cwd?: string; timeout?: number; env?: Record<string, string> }): ExecResult;
+  spawnAgent(opts: SpawnOpts): AgentHandle;
+
+  // File operations
   readFile(path: string): string;
   writeFile(path: string, content: string): void;
+  deleteFile(path: string): void;
+  moveFile(src: string, dst: string): void;
+  copyFile(src: string, dst: string): void;
   fileExists(path: string): boolean;
-  spawnAgent(opts: SpawnOpts): AgentHandle;
+  fileStats(path: string): FileStats | null;
+
+  // Directory operations
+  listDirectory(path: string): DirEntry[];
+  createDirectory(path: string, recursive?: boolean): void;
+  deleteDirectory(path: string, recursive?: boolean): void;
+
+  // Search operations
+  grep(pattern: string, path: string, opts?: { glob?: string; maxResults?: number }): string[];
+  glob(pattern: string, opts?: { cwd?: string }): string[];
+
+  // Git operations
+  gitExec(args: string[], opts?: { cwd?: string }): ExecResult;
+  gitDiff(base?: string): string;
+  gitCommit(message: string, trailers?: Record<string, string>): ExecResult;
+
+  // Environment
+  getWorkingDir(): string;
+  setWorkingDir(path: string): void;
+  getEnv(key: string): string | undefined;
 }
 
 export class LocalSandbox implements Sandbox {
   name = "local";
+  workingDir: string;
   private runtime: AgentRuntime;
 
-  constructor(runtime?: AgentRuntime) {
+  constructor(runtime?: AgentRuntime, workingDir?: string) {
     this.runtime = runtime || detectRuntime();
+    this.workingDir = workingDir || process.cwd();
   }
 
-  execCommand(command: string, opts?: { cwd?: string; timeout?: number }): ExecResult {
+  execCommand(command: string, opts?: { cwd?: string; timeout?: number; env?: Record<string, string> }): ExecResult {
     const result = spawnSync("sh", ["-c", command], {
       encoding: "utf-8",
-      cwd: opts?.cwd,
+      cwd: opts?.cwd || this.workingDir,
       timeout: opts?.timeout || 60_000,
       stdio: ["pipe", "pipe", "pipe"],
+      env: opts?.env ? { ...process.env, ...opts.env } : undefined,
     });
     return {
       exitCode: result.status ?? 1,
@@ -73,17 +119,120 @@ export class LocalSandbox implements Sandbox {
   }
 
   readFile(path: string): string {
-    const { readFileSync } = require("fs");
     return readFileSync(path, "utf-8");
   }
 
   writeFile(path: string, content: string): void {
-    const { writeFileSync } = require("fs");
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(path, content, "utf-8");
+  }
+
+  deleteFile(path: string): void {
+    if (existsSync(path)) rmSync(path);
+  }
+
+  moveFile(src: string, dst: string): void {
+    const dir = dirname(dst);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    renameSync(src, dst);
+  }
+
+  copyFile(src: string, dst: string): void {
+    const dir = dirname(dst);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    copyFileSync(src, dst);
   }
 
   fileExists(path: string): boolean {
     return existsSync(path);
+  }
+
+  fileStats(path: string): FileStats | null {
+    if (!existsSync(path)) return null;
+    const s = statSync(path);
+    return {
+      size: s.size,
+      isFile: s.isFile(),
+      isDirectory: s.isDirectory(),
+      modifiedAt: s.mtimeMs,
+      createdAt: s.birthtimeMs,
+    };
+  }
+
+  listDirectory(path: string): DirEntry[] {
+    if (!existsSync(path)) return [];
+    return readdirSync(path, { withFileTypes: true }).map(d => ({
+      name: d.name,
+      isFile: d.isFile(),
+      isDirectory: d.isDirectory(),
+    }));
+  }
+
+  createDirectory(path: string, recursive = true): void {
+    mkdirSync(path, { recursive });
+  }
+
+  deleteDirectory(path: string, recursive = false): void {
+    rmSync(path, { recursive, force: recursive });
+  }
+
+  grep(pattern: string, path: string, opts?: { glob?: string; maxResults?: number }): string[] {
+    const args = ["-r", "-l", "--color=never"];
+    if (opts?.glob) args.push("--include", opts.glob);
+    args.push(pattern, path);
+    const result = spawnSync("grep", args, {
+      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], timeout: 30_000,
+    });
+    if (result.status !== 0 && result.status !== 1) return [];
+    const lines = (result.stdout || "").trim().split("\n").filter(Boolean);
+    return opts?.maxResults ? lines.slice(0, opts.maxResults) : lines;
+  }
+
+  glob(pattern: string, opts?: { cwd?: string }): string[] {
+    const cwd = opts?.cwd || this.workingDir;
+    const result = spawnSync("find", [cwd, "-path", `*${pattern}*`, "-type", "f"], {
+      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], timeout: 10_000,
+    });
+    if (result.status !== 0) return [];
+    return (result.stdout || "").trim().split("\n").filter(Boolean);
+  }
+
+  gitExec(args: string[], opts?: { cwd?: string }): ExecResult {
+    const result = spawnSync("git", args, {
+      encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
+      cwd: opts?.cwd || this.workingDir,
+    });
+    return {
+      exitCode: result.status ?? 1,
+      stdout: result.stdout || "",
+      stderr: result.stderr || "",
+    };
+  }
+
+  gitDiff(base = "HEAD"): string {
+    return this.gitExec(["diff", base]).stdout;
+  }
+
+  gitCommit(message: string, trailers?: Record<string, string>): ExecResult {
+    let fullMessage = message;
+    if (trailers && Object.keys(trailers).length > 0) {
+      fullMessage += "\n\n" + Object.entries(trailers).map(([k, v]) => `${k}: ${v}`).join("\n");
+    }
+    this.gitExec(["add", "-A"]);
+    return this.gitExec(["commit", "-m", fullMessage]);
+  }
+
+  getWorkingDir(): string {
+    return this.workingDir;
+  }
+
+  setWorkingDir(path: string): void {
+    this.workingDir = path;
+  }
+
+  getEnv(key: string): string | undefined {
+    return process.env[key];
   }
 
   spawnAgent(opts: SpawnOpts): AgentHandle {

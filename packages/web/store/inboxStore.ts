@@ -76,6 +76,7 @@ export type InboxSession = {
   active_task?: TaskRef;
   worktree_name?: string | null;
   worktree_branch?: string | null;
+  _isolatedMode?: boolean;
 };
 
 export type Message = {

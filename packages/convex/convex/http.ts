@@ -2858,6 +2858,15 @@ cliRoute("/cli/orchestration/emit", async (ctx, body) => {
 cliRoute("/cli/orchestration/events", async (ctx, body) => {
   return await ctx.runQuery(api.orchestrationEvents.listByPlan, body);
 });
+cliRoute("/cli/progress/append", async (ctx, body) => {
+  return await ctx.runMutation(api.progressEvents.append, body);
+});
+cliRoute("/cli/progress/replay", async (ctx, body) => {
+  return await ctx.runQuery(api.progressEvents.replay, body);
+});
+cliRoute("/cli/progress/latest", async (ctx, body) => {
+  return await ctx.runQuery(api.progressEvents.latest, body);
+});
 
 // Docs
 cliRoute("/cli/docs/create", async (ctx, body) => {

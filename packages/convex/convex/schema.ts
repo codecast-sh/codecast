@@ -902,14 +902,29 @@ export default defineSchema({
       }),
     ),
     model_stylesheet: v.optional(v.string()),
+    fidelity: v.optional(v.union(
+      v.literal("full"),
+      v.literal("compact"),
+      v.literal("summary_high"),
+      v.literal("summary_medium"),
+      v.literal("summary_low"),
+      v.literal("truncate"),
+    )),
     retro: v.optional(v.object({
       smoothness: v.string(),
       headline: v.string(),
-      learnings: v.array(v.string()),
-      friction_points: v.array(v.string()),
-      open_items: v.array(v.string()),
+      learnings: v.array(v.any()),
+      friction_points: v.array(v.any()),
+      open_items: v.array(v.any()),
       generated_at: v.number(),
     })),
+    join_policy: v.optional(v.union(
+      v.literal("wait_all"),
+      v.literal("first_success"),
+      v.literal("k_of_n"),
+      v.literal("quorum"),
+    )),
+    join_k: v.optional(v.number()),
     orchestration_metadata: v.optional(
       v.object({
         wave_count: v.optional(v.number()),
@@ -977,6 +992,11 @@ export default defineSchema({
 
     model: v.optional(v.string()),
     verify_with: v.optional(v.string()),
+    max_visits: v.optional(v.number()),
+    retry_target: v.optional(v.string()),
+    thread_id: v.optional(v.string()),
+    fidelity: v.optional(v.string()),
+    condition: v.optional(v.string()),
 
     // Dependencies
     blocked_by: v.optional(v.array(v.string())),
@@ -1088,6 +1108,21 @@ export default defineSchema({
   })
     .index("by_plan_id", ["plan_id", "created_at"])
     .index("by_plan_short_id", ["plan_short_id", "created_at"])
+    .index("by_user_id", ["user_id", "created_at"]),
+
+  progress_events: defineTable({
+    user_id: v.id("users"),
+    plan_id: v.optional(v.id("plans")),
+    plan_short_id: v.optional(v.string()),
+    task_short_id: v.optional(v.string()),
+    event_type: v.string(),
+    detail: v.optional(v.string()),
+    metadata: v.optional(v.any()),
+    sequence: v.number(),
+    created_at: v.number(),
+  })
+    .index("by_plan_short_id", ["plan_short_id", "sequence"])
+    .index("by_plan_id", ["plan_id", "sequence"])
     .index("by_user_id", ["user_id", "created_at"]),
 
   task_comments: defineTable({

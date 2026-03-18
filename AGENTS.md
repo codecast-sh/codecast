@@ -103,6 +103,10 @@ Five patterns replace everything else:
 
 5. **Conditional mount over guarded effect.** Instead of `useEffect(() => { if (!ready) return; init() }, [ready])`, render the component only when `ready` is true.
 
+## State Management
+
+All UI state in `packages/web` belongs in `inboxStore` (Zustand global store at `packages/web/store/inboxStore.ts`), not in local component state (`useState`). Before reaching for `useState`, check if the state belongs in `inboxStore` and add it there instead. Local state is only acceptable for purely transient, component-scoped UI concerns (e.g., a controlled input's in-flight value before commit).
+
 ## Debugging Lessons
 
 ### Convex Auth Issues

@@ -29,7 +29,7 @@ import {
 } from "./jsonlGenerator.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
-import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel } from "./agents/index.js";
+import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 
 const program = new Command();
@@ -7704,6 +7704,66 @@ async function emitOrchEvent(planShortId: string, eventType: string, taskShortId
       metadata,
     });
   } catch {}
+  try {
+    await cliPost("/cli/progress/append", {
+      plan_short_id: planShortId,
+      task_short_id: taskShortId,
+      event_type: eventType,
+      detail,
+      metadata,
+    });
+  } catch {}
+  appendLocalProgress(planShortId, { event_type: eventType, task_short_id: taskShortId, detail, metadata });
+}
+
+function eventTypeColor(eventType: string): string {
+  if (eventType.includes("completed") || eventType.includes("succeeded") || eventType.includes("done")) return c.green;
+  if (eventType.includes("failed") || eventType.includes("blocked") || eventType.includes("timeout")) return c.red;
+  if (eventType.includes("spawned") || eventType.includes("started")) return c.blue;
+  if (eventType.includes("needs") || eventType.includes("retry") || eventType.includes("concern")) return c.yellow;
+  return c.dim;
+}
+
+function evaluateCondition(task: any, outcomes: Map<string, string>): boolean {
+  if (!task.condition) return true;
+  const cond = task.condition.trim();
+  const outcomeMatch = cond.match(/^outcome\s*=\s*(\w+)$/);
+  if (outcomeMatch) {
+    const expected = outcomeMatch[1];
+    if (!task.blocked_by?.length) return true;
+    return task.blocked_by.some((dep: string) => outcomes.get(dep) === expected);
+  }
+  const statusMatch = cond.match(/^status\s*=\s*(\w+)$/);
+  if (statusMatch) {
+    const expected = statusMatch[1];
+    if (!task.blocked_by?.length) return true;
+    return task.blocked_by.some((dep: string) => {
+      const outcome = outcomes.get(dep);
+      return outcome === expected || (expected === "success" && outcome === "done");
+    });
+  }
+  const allMatch = cond.match(/^all\s*=\s*(\w+)$/);
+  if (allMatch) {
+    const expected = allMatch[1];
+    if (!task.blocked_by?.length) return true;
+    return task.blocked_by.every((dep: string) => {
+      const outcome = outcomes.get(dep);
+      return outcome === expected || (expected === "success" && outcome === "done");
+    });
+  }
+  return true;
+}
+
+function appendLocalProgress(planShortId: string, event: Record<string, any>) {
+  try {
+    const dir = path.join(getRealCwd(), ".codecast");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const progressFile = path.join(dir, `progress-${planShortId}.jsonl`);
+    const liveFile = path.join(dir, `live-${planShortId}.json`);
+    const entry = { ...event, timestamp: Date.now() };
+    fs.appendFileSync(progressFile, JSON.stringify(entry) + "\n");
+    fs.writeFileSync(liveFile, JSON.stringify(entry, null, 2));
+  } catch {}
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -8889,10 +8949,10 @@ plan
           if (task.verify_with) {
             const verifyTask = allTasks.find((t: any) => t.short_id === task.verify_with);
             if (verifyTask && verifyTask.status !== "done" && verifyTask.status !== "dropped" && !activeAgents.has(verifyTask.short_id)) {
-              const verifyRetries = verifyTask.retry_count || 0;
-              const verifyMaxRetries = verifyTask.max_retries || 3;
-              if (verifyRetries < verifyMaxRetries) {
-                console.log(`  ${c.dim}verify${c.reset} ${c.cyan}${shortId}${c.reset} -> spawning ${c.cyan}${verifyTask.short_id}${c.reset}`);
+              const visitCount = verifyTask.retry_count || 0;
+              const maxVisits = verifyTask.max_visits || verifyTask.max_retries || 3;
+              if (visitCount < maxVisits) {
+                console.log(`  ${c.dim}verify${c.reset} ${c.cyan}${shortId}${c.reset} -> spawning ${c.cyan}${verifyTask.short_id}${c.reset} (visit ${visitCount + 1}/${maxVisits})`);
                 const vSessionName = `impl-${verifyTask.short_id}`;
                 const vPrompt = buildImplementerPrompt(plan, verifyTask);
                 const vModel = resolveTaskModel(plan, verifyTask, "sonnet");
@@ -8903,11 +8963,31 @@ plan
                   });
                   activeHandles.set(vSessionName, vHandle);
                   activeAgents.set(verifyTask.short_id, { task: verifyTask, spawnedAt: Date.now() });
-                  try { await cliPost("/cli/work/update", { short_id: verifyTask.short_id, status: "in_progress" }); } catch {}
+                  try { await cliPost("/cli/work/update", { short_id: verifyTask.short_id, status: "in_progress", retry_count: visitCount + 1 }); } catch {}
+                  await emitOrchEvent(planId, "verification_spawned", verifyTask.short_id, `Visit ${visitCount + 1}/${maxVisits}`);
                 } catch {}
+              } else {
+                console.log(`  ${c.yellow}verify-max${c.reset} ${c.cyan}${verifyTask.short_id}${c.reset} max visits (${maxVisits}) reached`);
+                const retryTarget = verifyTask.retry_target || task.short_id;
+                if (retryTarget && retryTarget !== verifyTask.short_id) {
+                  console.log(`  ${c.dim}retry-target${c.reset} resetting ${c.cyan}${retryTarget}${c.reset} for re-implementation`);
+                  try { await cliPost("/cli/work/update", { short_id: retryTarget, status: "open" }); } catch {}
+                }
               }
             }
           }
+
+          // Git checkpoint after task completion
+          try {
+            const cwd = getRealCwd();
+            const hasChanges = spawnSync("git", ["status", "--porcelain"], { encoding: "utf-8", cwd, stdio: ["pipe", "pipe", "pipe"] });
+            if (hasChanges.stdout?.trim()) {
+              spawnSync("git", ["add", "-A"], { cwd, stdio: ["pipe", "pipe", "pipe"] });
+              const commitMsg = `checkpoint(${planId}): ${shortId} completed\n\nCodecast-Plan: ${planId}\nCodecast-Task: ${shortId}\nCodecast-Wave: ${waveCount}\nCodecast-Status: done`;
+              spawnSync("git", ["commit", "-m", commitMsg], { encoding: "utf-8", cwd, stdio: ["pipe", "pipe", "pipe"] });
+              await emitOrchEvent(planId, "checkpoint_committed" as any, shortId, `Wave ${waveCount}`);
+            }
+          } catch {}
 
           // Optional verification before merge
           if (options.verify) {
@@ -9019,24 +9099,54 @@ plan
         }
       }
 
-      // Check completion (dropped tasks don't block completion)
+      // Check completion using join policy (dropped tasks don't block completion)
       const dropped = allTasks.filter((t: any) => t.status === "dropped").length;
       const actionable = total - dropped;
-      if (done >= actionable && actionable > 0 && activeAgents.size === 0) {
-        console.log(`\n  ${c.green}${c.bold}All ${actionable} tasks done!${c.reset}${dropped ? ` (${dropped} dropped)` : ""}`);
+      const joinPolicy = plan.join_policy || "wait_all";
+      const joinK = plan.join_k || Math.ceil(actionable / 2);
+      let planDone = false;
+
+      if (activeAgents.size === 0 && actionable > 0) {
+        switch (joinPolicy) {
+          case "wait_all":
+            planDone = done >= actionable;
+            break;
+          case "first_success":
+            planDone = done >= 1;
+            break;
+          case "k_of_n":
+            planDone = done >= joinK;
+            break;
+          case "quorum":
+            planDone = done > actionable / 2;
+            break;
+          default:
+            planDone = done >= actionable;
+        }
+      }
+
+      if (planDone) {
+        const policyLabel = joinPolicy !== "wait_all" ? ` (${joinPolicy}${joinPolicy === "k_of_n" ? `: ${joinK}/${actionable}` : ""})` : "";
+        console.log(`\n  ${c.green}${c.bold}Plan complete!${c.reset} ${done}/${actionable} done${policyLabel}${dropped ? `, ${dropped} dropped` : ""}`);
         try { await cliPost("/cli/plans/status", { short_id: planId, status: "done" }); } catch {}
-        try { await cliPost("/cli/plans/log", { short_id: planId, entry: `Autopilot completed: ${done} done, ${dropped} dropped` }); } catch {}
-        await emitOrchEvent(planId, "plan_completed", undefined, `${done} done, ${dropped} dropped`, { totalSpawned, totalCompleted, totalMerged, totalFailed });
+        try { await cliPost("/cli/plans/log", { short_id: planId, entry: `Autopilot completed (${joinPolicy}): ${done} done, ${dropped} dropped` }); } catch {}
+        await emitOrchEvent(planId, "plan_completed", undefined, `${done} done, ${dropped} dropped`, { totalSpawned, totalCompleted, totalMerged, totalFailed, joinPolicy });
         return false;
       }
 
       // Find ready tasks (dropped dependencies count as resolved)
       const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").flatMap((t: any) => [t._id, t.short_id]));
+      const taskOutcomes = new Map<string, string>();
+      for (const t of allTasks) {
+        if (t.status === "done") taskOutcomes.set(t.short_id, t.execution_status || "done");
+        else if (t.status === "dropped") taskOutcomes.set(t.short_id, "dropped");
+      }
       const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "draft");
       const readyTasks = openTasks.filter((t: any) => {
         if (activeAgents.has(t.short_id)) return false;
-        if (!t.blocked_by || t.blocked_by.length === 0) return true;
-        return t.blocked_by.every((d: string) => resolvedIds.has(d));
+        if (!t.blocked_by || t.blocked_by.length === 0) return evaluateCondition(t, taskOutcomes);
+        if (!t.blocked_by.every((d: string) => resolvedIds.has(d))) return false;
+        return evaluateCondition(t, taskOutcomes);
       });
 
       const slots = maxAgents - activeAgents.size;
@@ -9633,60 +9743,30 @@ plan
 
 plan
   .command("retro")
-  .description("Generate a retrospective for a completed plan")
+  .description("Generate a typed retrospective for a completed plan")
   .argument("<plan_id>", "Plan short ID")
-  .action(async (planId: string) => {
+  .option("--from-progress", "Feed progress.jsonl events into the retro")
+  .action(async (planId: string, options: any) => {
     const plan = await cliPost("/cli/plans/get", { short_id: planId });
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
     const tasks = plan.tasks || [];
-    const done = tasks.filter((t: any) => t.status === "done");
-    const failed = tasks.filter((t: any) => t.status === "dropped");
-    const blocked = tasks.filter((t: any) => t.execution_status === "blocked" || t.execution_status === "needs_context");
-    const withConcerns = tasks.filter((t: any) => t.execution_status === "done_with_concerns");
+    let progressLog = plan.progress_log;
 
-    const totalTime = tasks.reduce((sum: number, t: any) => sum + (t.actual_minutes || 0), 0);
-    const retryCount = tasks.reduce((sum: number, t: any) => sum + (t.retry_count || 0), 0);
+    if (options.fromProgress) {
+      try {
+        const progressFile = path.join(getRealCwd(), ".codecast", `progress-${planId}.jsonl`);
+        if (fs.existsSync(progressFile)) {
+          const lines = fs.readFileSync(progressFile, "utf-8").trim().split("\n").filter(Boolean);
+          const events = lines.map((l: string) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+          progressLog = events.map((e: any) => ({ timestamp: e.timestamp, entry: `${e.event_type}${e.detail ? `: ${e.detail}` : ""}` }));
+        }
+      } catch {}
+    }
 
-    const taskSummaries = tasks.map((t: any) => {
-      const parts = [`- [${t.status}] ${t.title} (${t.short_id})`];
-      if (t.execution_concerns) parts.push(`  concern: ${t.execution_concerns}`);
-      if (t.retry_count) parts.push(`  retries: ${t.retry_count}`);
-      return parts.join("\n");
-    }).join("\n");
+    const prompt = buildRetroPrompt(plan, tasks, progressLog);
 
-    const driveRounds = plan.drive_state?.rounds?.map((r: any) =>
-      `Round ${r.round}: ${r.findings.length} findings, ${r.fixed.length} fixed${r.deferred?.length ? `, ${r.deferred.length} deferred` : ""}`
-    ).join("\n") || "No drive rounds";
-
-    const prompt = `Generate a structured retrospective for this plan. Return ONLY valid JSON.
-
-Plan: ${plan.title} (${planId})
-Goal: ${plan.goal || "N/A"}
-Status: ${plan.status}
-Stats: ${done.length} done, ${failed.length} dropped, ${blocked.length} blocked, ${withConcerns.length} with concerns
-Total retries: ${retryCount}
-Time: ${totalTime ? `${totalTime}m` : "not tracked"}
-
-Tasks:
-${taskSummaries}
-
-Drive rounds:
-${driveRounds}
-
-Activity log (last 10):
-${(plan.progress_log || []).slice(-10).map((e: any) => `- ${e.entry}`).join("\n")}
-
-Return JSON with this shape:
-{
-  "smoothness": "effortless|smooth|bumpy|struggled|failed",
-  "headline": "One sentence summary of the plan execution",
-  "learnings": ["What worked well or what we learned (2-4 items)"],
-  "friction_points": ["What caused delays, retries, or issues (2-4 items)"],
-  "open_items": ["Tech debt, follow-ups, or investigations needed (0-3 items)"]
-}`;
-
-    console.log(`\n  ${c.bold}Generating retro${c.reset} for ${c.cyan}${planId}${c.reset}...\n`);
+    console.log(`\n  ${c.bold}Generating typed retro${c.reset} for ${c.cyan}${planId}${c.reset}...\n`);
 
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -9698,7 +9778,7 @@ Return JSON with this shape:
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 500,
+          max_tokens: 1000,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -9715,28 +9795,40 @@ Return JSON with this shape:
       const cleaned = raw.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
       const retro = JSON.parse(cleaned);
 
-      const smoothnessEmoji: Record<string, string> = {
+      const smoothnessIndicator: Record<string, string> = {
         effortless: "++", smooth: "+", bumpy: "~", struggled: "-", failed: "--",
       };
 
-      console.log(`  ${c.bold}Smoothness:${c.reset} ${retro.smoothness} ${smoothnessEmoji[retro.smoothness] || ""}`);
+      console.log(`  ${c.bold}Smoothness:${c.reset} ${retro.smoothness} ${smoothnessIndicator[retro.smoothness] || ""}`);
       console.log(`  ${c.bold}Summary:${c.reset} ${retro.headline}\n`);
 
       if (retro.learnings?.length) {
         console.log(`  ${c.bold}Learnings:${c.reset}`);
-        retro.learnings.forEach((l: string) => console.log(`    - ${l}`));
+        for (const l of retro.learnings) {
+          const cat = typeof l === "string" ? "" : ` ${c.dim}[${l.category}]${c.reset}`;
+          const text = typeof l === "string" ? l : l.text;
+          console.log(`    - ${text}${cat}`);
+        }
         console.log();
       }
 
       if (retro.friction_points?.length) {
         console.log(`  ${c.bold}Friction:${c.reset}`);
-        retro.friction_points.forEach((f: string) => console.log(`    - ${f}`));
+        for (const f of retro.friction_points) {
+          const kind = typeof f === "string" ? "" : ` ${c.dim}[${f.kind}/${f.severity}]${c.reset}`;
+          const text = typeof f === "string" ? f : f.text;
+          console.log(`    - ${text}${kind}`);
+        }
         console.log();
       }
 
       if (retro.open_items?.length) {
         console.log(`  ${c.bold}Open items:${c.reset}`);
-        retro.open_items.forEach((o: string) => console.log(`    - ${o}`));
+        for (const o of retro.open_items) {
+          const kind = typeof o === "string" ? "" : ` ${c.dim}[${o.kind}/${o.priority}]${c.reset}`;
+          const text = typeof o === "string" ? o : o.text;
+          console.log(`    - ${text}${kind}`);
+        }
         console.log();
       }
 
@@ -9749,6 +9841,8 @@ Return JSON with this shape:
       } catch {
         console.log(fmt.muted("  (Could not save retro to backend)"));
       }
+
+      await emitOrchEvent(planId, "retro_generated", undefined, retro.headline, { smoothness: retro.smoothness });
 
       try {
         await cliPost("/cli/plans/log", {
@@ -9764,9 +9858,11 @@ Return JSON with this shape:
 
 plan
   .command("eval")
-  .description("Evaluate a plan's execution metrics")
+  .description("Evaluate a plan's execution metrics with detailed grading")
   .argument("<plan_id>", "Plan short ID")
-  .action(async (planId: string) => {
+  .option("--compare <plan_ids>", "Compare against other plan evaluations (comma-separated)")
+  .option("--json", "Output as JSON")
+  .action(async (planId: string, options: any) => {
     const plan = await cliPost("/cli/plans/get", { short_id: planId });
     if (!plan) { console.error("Plan not found"); process.exit(1); }
 
@@ -9782,9 +9878,10 @@ plan
     const totalTime = tasks.reduce((sum: number, t: any) => sum + (t.actual_minutes || 0), 0);
 
     const waves = tasks.reduce((max: number, t: any) => Math.max(max, t.wave_number || 0), 0);
+    const actionable = tasks.length - dropped.length;
 
-    const completionRate = tasks.length > 0 ? ((done.length / (tasks.length - dropped.length)) * 100).toFixed(1) : "0";
-    const retryRate = totalAttempts > 0 ? ((totalRetries / totalAttempts) * 100).toFixed(1) : "0";
+    const completionRate = actionable > 0 ? ((done.length / actionable) * 100) : 0;
+    const retryRate = totalAttempts > 0 ? ((totalRetries / totalAttempts) * 100) : 0;
 
     const driveRounds = plan.drive_state?.rounds?.length || 0;
     const totalFindings = plan.drive_state?.rounds?.reduce(
@@ -9794,16 +9891,70 @@ plan
       (sum: number, r: any) => sum + (r.fixed?.length || 0), 0
     ) || 0;
 
+    // Progress event stats
+    let eventStats: Record<string, number> = {};
+    let mergeConflictRate = 0;
+    try {
+      const progressFile = path.join(getRealCwd(), ".codecast", `progress-${planId}.jsonl`);
+      if (fs.existsSync(progressFile)) {
+        const lines = fs.readFileSync(progressFile, "utf-8").trim().split("\n").filter(Boolean);
+        for (const line of lines) {
+          try {
+            const e = JSON.parse(line);
+            eventStats[e.event_type] = (eventStats[e.event_type] || 0) + 1;
+          } catch {}
+        }
+        const mergeAttempts = (eventStats["merge_succeeded"] || 0) + (eventStats["merge_failed"] || 0);
+        mergeConflictRate = mergeAttempts > 0 ? ((eventStats["merge_failed"] || 0) / mergeAttempts) * 100 : 0;
+      }
+    } catch {}
+
+    // Detailed scoring rubric
+    const completionScore = (done.length / Math.max(1, actionable)) * 30;
+    const reliabilityScore = (1 - Math.min(1, totalRetries / Math.max(1, tasks.length))) * 20;
+    const blockerScore = blocked.length === 0 && needsCtx.length === 0 ? 15 : Math.max(0, 15 - (blocked.length + needsCtx.length) * 3);
+    const concernScore = withConcerns.length === 0 ? 10 : Math.max(0, 10 - withConcerns.length * 2);
+    const mergeScore = mergeConflictRate === 0 ? 10 : Math.max(0, 10 - mergeConflictRate / 10);
+    const retroScore = plan.retro ? 5 : 0;
+    const driveScore = driveRounds > 0 ? Math.min(5, driveRounds * 2) : 0;
+    const verificationScore = tasks.some((t: any) => t.verify_with) ? 5 : 0;
+
+    const score = Math.round(completionScore + reliabilityScore + blockerScore + concernScore + mergeScore + retroScore + driveScore + verificationScore);
+
+    const evalResult = {
+      plan_id: planId,
+      title: plan.title,
+      score,
+      breakdown: {
+        completion: { score: Math.round(completionScore), max: 30, rate: completionRate.toFixed(1) + "%" },
+        reliability: { score: Math.round(reliabilityScore), max: 20, retry_rate: retryRate.toFixed(1) + "%" },
+        blockers: { score: Math.round(blockerScore), max: 15, count: blocked.length + needsCtx.length },
+        concerns: { score: Math.round(concernScore), max: 10, count: withConcerns.length },
+        merge: { score: Math.round(mergeScore), max: 10, conflict_rate: mergeConflictRate.toFixed(1) + "%" },
+        retro: { score: retroScore, max: 5, has_retro: !!plan.retro },
+        drive: { score: driveScore, max: 5, rounds: driveRounds },
+        verification: { score: verificationScore, max: 5, has_gates: tasks.some((t: any) => t.verify_with) },
+      },
+      stats: { tasks: tasks.length, done: done.length, dropped: dropped.length, blocked: blocked.length, retries: totalRetries, waves, time_minutes: totalTime },
+      event_counts: eventStats,
+    };
+
+    if (options.json) {
+      console.log(JSON.stringify(evalResult, null, 2));
+      return;
+    }
+
     console.log(`\n  ${c.bold}Plan Evaluation: ${plan.title}${c.reset} ${c.dim}(${planId})${c.reset}\n`);
     console.log(`  ${c.bold}Completion${c.reset}`);
-    console.log(`    Tasks:         ${done.length}/${tasks.length} done (${completionRate}%)`);
+    console.log(`    Tasks:         ${done.length}/${tasks.length} done (${completionRate.toFixed(1)}%)`);
     console.log(`    Dropped:       ${dropped.length}`);
     console.log(`    Blocked:       ${blocked.length}`);
     console.log(`    Needs context: ${needsCtx.length}`);
     console.log(`    With concerns: ${withConcerns.length}`);
 
     console.log(`\n  ${c.bold}Reliability${c.reset}`);
-    console.log(`    Retry rate:    ${retryRate}% (${totalRetries} retries / ${totalAttempts || tasks.length} attempts)`);
+    console.log(`    Retry rate:    ${retryRate.toFixed(1)}% (${totalRetries} retries / ${totalAttempts || tasks.length} attempts)`);
+    console.log(`    Merge conflicts: ${mergeConflictRate.toFixed(1)}%`);
     console.log(`    Waves:         ${waves || "N/A"}`);
     console.log(`    Time:          ${totalTime ? `${totalTime}m` : "not tracked"}`);
 
@@ -9820,14 +9971,41 @@ plan
       console.log(`    Headline:      ${plan.retro.headline}`);
     }
 
-    const score = Math.round(
-      (done.length / Math.max(1, tasks.length - dropped.length)) * 40 +
-      (1 - Math.min(1, totalRetries / Math.max(1, tasks.length))) * 30 +
-      (blocked.length === 0 && needsCtx.length === 0 ? 20 : Math.max(0, 20 - (blocked.length + needsCtx.length) * 5)) +
-      (plan.retro ? 10 : 0)
-    );
+    if (Object.keys(eventStats).length > 0) {
+      console.log(`\n  ${c.bold}Event Summary${c.reset}`);
+      for (const [type, count] of Object.entries(eventStats).sort((a, b) => b[1] - a[1]).slice(0, 8)) {
+        console.log(`    ${type}: ${count}`);
+      }
+    }
+
+    console.log(`\n  ${c.bold}Score Breakdown${c.reset}`);
+    for (const [name, b] of Object.entries(evalResult.breakdown)) {
+      const { score: s, max } = b as any;
+      const bar = `${c.green}${"█".repeat(Math.round(s / max * 10))}${c.dim}${"░".repeat(10 - Math.round(s / max * 10))}${c.reset}`;
+      console.log(`    ${name.padEnd(14)} ${bar} ${s}/${max}`);
+    }
 
     console.log(`\n  ${c.bold}Score: ${score}/100${c.reset}`);
+
+    // Compare with other plans
+    if (options.compare) {
+      const compareIds = options.compare.split(",").map((s: string) => s.trim());
+      console.log(`\n  ${c.bold}Comparison${c.reset}`);
+      for (const cid of compareIds) {
+        try {
+          const cplan = await cliPost("/cli/plans/get", { short_id: cid });
+          if (cplan) {
+            const ctasks = cplan.tasks || [];
+            const cdone = ctasks.filter((t: any) => t.status === "done").length;
+            const cdropped = ctasks.filter((t: any) => t.status === "dropped").length;
+            const cactionable = ctasks.length - cdropped;
+            const crate = cactionable > 0 ? ((cdone / cactionable) * 100).toFixed(1) : "0";
+            console.log(`    ${c.cyan}${cid}${c.reset} ${cplan.title}: ${cdone}/${ctasks.length} (${crate}%)`);
+          }
+        } catch {}
+      }
+    }
+
     console.log();
 
     try {
@@ -9836,6 +10014,90 @@ plan
         entry: `Eval: ${score}/100 (${completionRate}% completion, ${retryRate}% retry, ${blocked.length} blocked)`,
       });
     } catch {}
+  });
+
+plan
+  .command("replay")
+  .description("Replay progress events for a plan (from local .jsonl or Convex)")
+  .argument("<plan_id>", "Plan short ID")
+  .option("--local", "Read from local .codecast/progress-<id>.jsonl")
+  .option("--from <n>", "Start from sequence number")
+  .option("--follow", "Follow mode: watch for new events")
+  .option("--json", "Output raw JSON")
+  .action(async (planId: string, options: any) => {
+    if (options.local) {
+      const progressFile = path.join(getRealCwd(), ".codecast", `progress-${planId}.jsonl`);
+      if (!fs.existsSync(progressFile)) {
+        console.error(`No local progress file: ${progressFile}`);
+        process.exit(1);
+      }
+      const lines = fs.readFileSync(progressFile, "utf-8").trim().split("\n").filter(Boolean);
+      const from = options.from ? parseInt(options.from, 10) : 0;
+
+      console.log(`\n  ${c.bold}Replay${c.reset} ${c.cyan}${planId}${c.reset} (local, ${lines.length} events)\n`);
+
+      for (let i = from; i < lines.length; i++) {
+        try {
+          const event = JSON.parse(lines[i]);
+          if (options.json) {
+            console.log(JSON.stringify(event));
+          } else {
+            const ts = new Date(event.timestamp).toLocaleTimeString();
+            const task = event.task_short_id ? ` ${c.cyan}${event.task_short_id}${c.reset}` : "";
+            const detail = event.detail ? ` ${event.detail}` : "";
+            console.log(`  ${c.dim}${ts}${c.reset} ${eventTypeColor(event.event_type)}${event.event_type}${c.reset}${task}${detail}`);
+          }
+        } catch {}
+      }
+
+      if (options.follow) {
+        console.log(fmt.muted("\n  Following..."));
+        let lastSize = lines.length;
+        const check = () => {
+          try {
+            const newLines = fs.readFileSync(progressFile, "utf-8").trim().split("\n").filter(Boolean);
+            for (let i = lastSize; i < newLines.length; i++) {
+              const event = JSON.parse(newLines[i]);
+              const ts = new Date(event.timestamp).toLocaleTimeString();
+              const task = event.task_short_id ? ` ${c.cyan}${event.task_short_id}${c.reset}` : "";
+              console.log(`  ${c.dim}${ts}${c.reset} ${eventTypeColor(event.event_type)}${event.event_type}${c.reset}${task}`);
+            }
+            lastSize = newLines.length;
+          } catch {}
+        };
+        setInterval(check, 2000);
+        process.on("SIGINT", () => process.exit(0));
+        await new Promise(() => {});
+      }
+    } else {
+      try {
+        const events = await cliPost("/cli/progress/replay", {
+          plan_short_id: planId,
+          from_sequence: options.from ? parseInt(options.from, 10) : undefined,
+        });
+        if (!events?.length) {
+          console.log(fmt.muted("No progress events found."));
+          return;
+        }
+
+        console.log(`\n  ${c.bold}Replay${c.reset} ${c.cyan}${planId}${c.reset} (${events.length} events)\n`);
+
+        for (const event of events) {
+          if (options.json) {
+            console.log(JSON.stringify(event));
+          } else {
+            const ts = new Date(event.created_at).toLocaleTimeString();
+            const task = event.task_short_id ? ` ${c.cyan}${event.task_short_id}${c.reset}` : "";
+            const detail = event.detail ? ` ${event.detail}` : "";
+            console.log(`  ${c.dim}#${event.sequence} ${ts}${c.reset} ${eventTypeColor(event.event_type)}${event.event_type}${c.reset}${task}${detail}`);
+          }
+        }
+      } catch (err: any) {
+        console.error(`Error: ${err.message}`);
+        process.exit(1);
+      }
+    }
+    console.log();
   });
 
 plan

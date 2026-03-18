@@ -68,6 +68,9 @@ export const create = mutation({
     conversation_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     model_stylesheet: v.optional(v.string()),
+    fidelity: v.optional(v.string()),
+    join_policy: v.optional(v.string()),
+    join_k: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -112,6 +115,9 @@ export const create = mutation({
       session_ids: [],
       created_from_conversation_id,
       model_stylesheet: args.model_stylesheet,
+      fidelity: args.fidelity as any,
+      join_policy: args.join_policy as any,
+      join_k: args.join_k,
     });
 
     return { id, short_id };
@@ -931,6 +937,10 @@ export const webCreate = mutation({
     status: v.optional(v.string()),
     source: v.optional(v.string()),
     project_id: v.optional(v.string()),
+    model_stylesheet: v.optional(v.string()),
+    fidelity: v.optional(v.string()),
+    join_policy: v.optional(v.string()),
+    join_k: v.optional(v.number()),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
     team_id: v.optional(v.id("teams")),
   },
@@ -966,6 +976,10 @@ export const webCreate = mutation({
       discoveries: [],
       context_pointers: [],
       session_ids: [],
+      model_stylesheet: args.model_stylesheet,
+      fidelity: args.fidelity as any,
+      join_policy: args.join_policy as any,
+      join_k: args.join_k,
     });
 
     return { id, short_id };
@@ -1324,9 +1338,9 @@ export const saveRetro = mutation({
     short_id: v.string(),
     smoothness: v.string(),
     headline: v.string(),
-    learnings: v.array(v.string()),
-    friction_points: v.array(v.string()),
-    open_items: v.array(v.string()),
+    learnings: v.any(),
+    friction_points: v.any(),
+    open_items: v.any(),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1339,13 +1353,16 @@ export const saveRetro = mutation({
     if (!plan) throw new Error("Plan not found");
     if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
+    const normalizeArray = (arr: any[]) =>
+      arr.map((item: any) => typeof item === "string" ? { text: item } : item);
+
     await ctx.db.patch(plan._id, {
       retro: {
         smoothness: args.smoothness,
         headline: args.headline,
-        learnings: args.learnings,
-        friction_points: args.friction_points,
-        open_items: args.open_items,
+        learnings: normalizeArray(args.learnings),
+        friction_points: normalizeArray(args.friction_points),
+        open_items: normalizeArray(args.open_items),
         generated_at: Date.now(),
       },
       updated_at: Date.now(),

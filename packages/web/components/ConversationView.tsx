@@ -255,10 +255,10 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
+  const isolated = useInboxStore((s) => s.sessions[conversation._id]?._isolatedMode ?? false);
   const createQuickSession = useMutation(api.conversations.createQuickSession);
   const killSession = useMutation(api.conversations.killSession);
   const router = useRouter();
-  const [isolated, setIsolated] = useState(false);
 
   const recentProjects = freshProjects ?? cachedProjects;
 
@@ -411,11 +411,11 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
 
       <button
         onClick={() => {
-          if (!isolated && currentPath) {
-            setIsolated(true);
+          const sessionId = storeSession?._id || conversation._id;
+          const turningOn = !isolated;
+          useInboxStore.getState().patchSession(sessionId, { _isolatedMode: turningOn });
+          if (turningOn && currentPath) {
             handleSwitch(currentPath, true);
-          } else {
-            setIsolated(!isolated);
           }
         }}
         className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"

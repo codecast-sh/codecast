@@ -42,6 +42,7 @@ import type * as pendingMessages from "../pendingMessages.js";
 import type * as permissions from "../permissions.js";
 import type * as plans from "../plans.js";
 import type * as privacy from "../privacy.js";
+import type * as progressEvents from "../progressEvents.js";
 import type * as projects from "../projects.js";
 import type * as publicComments from "../publicComments.js";
 import type * as pull_requests from "../pull_requests.js";
@@ -99,6 +100,7 @@ declare const fullApi: ApiFromModules<{
   permissions: typeof permissions;
   plans: typeof plans;
   privacy: typeof privacy;
+  progressEvents: typeof progressEvents;
   projects: typeof projects;
   publicComments: typeof publicComments;
   pull_requests: typeof pull_requests;

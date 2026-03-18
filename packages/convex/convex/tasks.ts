@@ -70,6 +70,11 @@ export const create = mutation({
     max_retries: v.optional(v.number()),
     model: v.optional(v.string()),
     verify_with: v.optional(v.string()),
+    max_visits: v.optional(v.number()),
+    retry_target: v.optional(v.string()),
+    thread_id: v.optional(v.string()),
+    fidelity: v.optional(v.string()),
+    condition: v.optional(v.string()),
     project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -135,6 +140,11 @@ export const create = mutation({
       max_retries: args.max_retries ?? 3,
       model: args.model,
       verify_with: args.verify_with,
+      max_visits: args.max_visits,
+      retry_target: args.retry_target,
+      thread_id: args.thread_id,
+      fidelity: args.fidelity,
+      condition: args.condition,
     } as any);
 
     if (plan_id) {
