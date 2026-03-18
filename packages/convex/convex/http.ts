@@ -2885,4 +2885,12 @@ cliRoute("/cli/docs/search", async (ctx, body) => {
   return await ctx.runQuery(api.docs.search, body);
 });
 
+// Workflows
+cliRoute("/cli/workflows/upsert", async (ctx, body) => {
+  return await ctx.runMutation(api.workflows.upsert, body);
+});
+cliRoute("/cli/workflows/list", async (ctx, body) => {
+  return await ctx.runMutation(api.workflows.list, body);
+});
+
 export default http;

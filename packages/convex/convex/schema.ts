@@ -1218,6 +1218,42 @@ export default defineSchema({
       filterFields: ["user_id"],
     }),
 
+  workflows: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    name: v.string(),
+    slug: v.string(),
+    goal: v.optional(v.string()),
+    source: v.optional(v.string()),
+    nodes: v.array(v.object({
+      id: v.string(),
+      label: v.string(),
+      shape: v.string(),
+      type: v.string(),
+      prompt: v.optional(v.string()),
+      script: v.optional(v.string()),
+      reasoning_effort: v.optional(v.string()),
+      model: v.optional(v.string()),
+      max_visits: v.optional(v.number()),
+      max_retries: v.optional(v.number()),
+      retry_target: v.optional(v.string()),
+      goal_gate: v.optional(v.boolean()),
+    })),
+    edges: v.array(v.object({
+      from: v.string(),
+      to: v.string(),
+      label: v.optional(v.string()),
+      condition: v.optional(v.string()),
+    })),
+    model_stylesheet: v.optional(v.string()),
+    is_private: v.optional(v.boolean()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_team_id", ["team_id"])
+    .index("by_user_slug", ["user_id", "slug"]),
+
   client_state: defineTable({
     user_id: v.id("users"),
     current_conversation_id: v.optional(v.string()),

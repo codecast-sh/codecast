@@ -58,6 +58,7 @@ import type * as teamActivity from "../teamActivity.js";
 import type * as teams from "../teams.js";
 import type * as titleGeneration from "../titleGeneration.js";
 import type * as users from "../users.js";
+import type * as workflows from "../workflows.js";
 
 import type {
   ApiFromModules,
@@ -116,6 +117,7 @@ declare const fullApi: ApiFromModules<{
   teams: typeof teams;
   titleGeneration: typeof titleGeneration;
   users: typeof users;
+  workflows: typeof workflows;
 }>;
 
 /**
