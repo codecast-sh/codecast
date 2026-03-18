@@ -1540,9 +1540,12 @@ export const backfillAllTeams = internalAction({
     const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
     let totalDocs = 0;
     let totalTasks = 0;
+    let totalInsights = 0;
+    let totalPlansUpdated = 0;
 
     // Helper: mine tasks + docs for one user given their insights + optional team_id
     async function mineForUser(userId: Id<"users">, teamId: Id<"teams"> | undefined, insights: any[]) {
+      totalInsights += insights.length;
       if (insights.length === 0) return;
       const conversationIds = [...new Set(insights.map((i: any) => i.conversation_id))];
       const conversations: any[] = await ctx.runQuery(internalApi.taskMining.getConversationsByIds, {
@@ -1575,6 +1578,7 @@ export const backfillAllTeams = internalAction({
           insights: batch,
         });
         totalTasks += result.tasks_created;
+        totalPlansUpdated += result.plans_updated || 0;
       }
 
       const sessionsForDocs: any[] = [];
@@ -1663,6 +1667,6 @@ export const backfillAllTeams = internalAction({
       await mineForUser(user._id, undefined, personalInsights);
     }
 
-    return { docs_created: totalDocs, tasks_created: totalTasks, teams_processed: teams.length };
+    return { docs_created: totalDocs, tasks_created: totalTasks, teams_processed: teams.length, insights_processed: totalInsights, plans_updated: totalPlansUpdated };
   },
 });
