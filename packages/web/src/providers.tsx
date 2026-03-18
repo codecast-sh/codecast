@@ -13,7 +13,7 @@ function PrefsMigration() {
   return null;
 }
 
-const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL || "https://placeholder.convex.cloud", {
+const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL || "https://convex.codecast.sh", {
   unsavedChangesWarning: false,
 });
 
