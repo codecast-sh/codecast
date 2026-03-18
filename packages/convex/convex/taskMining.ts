@@ -138,6 +138,7 @@ function titleSimilarity(a: string, b: string): number {
 }
 
 const DEDUP_SIMILARITY_THRESHOLD = 0.5;
+const PLAN_REFRESH_SIMILARITY_THRESHOLD = 0.25;
 
 // Every insight should produce at least one task. We extract:
 // 1. The goal itself (shipped = done feature, progress = in_progress task, blocked = blocked bug)
@@ -221,12 +222,17 @@ export const mineTasksFromInsights = internalMutation({
       return bestScore >= DEDUP_SIMILARITY_THRESHOLD ? bestMatch : null;
     }
 
-    function findSimilarPlan(title: string) {
+    function findSimilarPlan(title: string, summary?: string) {
+      let bestMatch: (typeof existingPlans)[0] | null = null;
+      let bestScore = 0;
       for (const plan of existingPlans) {
-        if (titleSimilarity(title, plan.title) >= DEDUP_SIMILARITY_THRESHOLD) return plan;
-        if (plan.goal && titleSimilarity(title, plan.goal) >= DEDUP_SIMILARITY_THRESHOLD) return plan;
+        let score = titleSimilarity(title, plan.title);
+        if (plan.goal) score = Math.max(score, titleSimilarity(title, plan.goal));
+        // Also check insight summary against plan title for broader matching
+        if (summary) score = Math.max(score, titleSimilarity(summary.slice(0, 150), plan.title));
+        if (score > bestScore) { bestScore = score; bestMatch = plan; }
       }
-      return null;
+      return bestScore >= PLAN_REFRESH_SIMILARITY_THRESHOLD ? bestMatch : null;
     }
 
     const newTaskIds: Id<"tasks">[] = [];
@@ -254,13 +260,23 @@ export const mineTasksFromInsights = internalMutation({
         .filter((q) => q.eq(q.field("created_from_insight"), insight._id))
         .first();
       if (alreadyMined) {
-        // Refresh the plan this task belongs to (insight → task → plan)
         const ts = insight.generated_at || Date.now();
         if (alreadyMined.plan_id) {
+          // Fast path: follow task → plan link directly
           const plan = await ctx.db.get(alreadyMined.plan_id);
           if (plan && ts > plan.updated_at) {
             await ctx.db.patch(plan._id, { updated_at: ts });
             plansUpdated++;
+          }
+        } else {
+          // Fallback: match by title/summary similarity (covers promoted plans with no task links)
+          const title = insight.goal || insight.summary?.slice(0, 200);
+          if (title) {
+            const matchedPlan = findSimilarPlan(title, insight.summary);
+            if (matchedPlan && ts > matchedPlan.updated_at) {
+              await ctx.db.patch(matchedPlan._id, { updated_at: ts });
+              plansUpdated++;
+            }
           }
         }
         continue;
@@ -282,8 +298,9 @@ export const mineTasksFromInsights = internalMutation({
             comment_type: "note" as any,
             created_at: ts,
           });
-          // Also refresh any matching plan's updated_at so stale plans stay fresh
-          const matchedPlan = findSimilarPlan(title);
+          const matchedPlan = similarTask.plan_id
+            ? await ctx.db.get(similarTask.plan_id)
+            : findSimilarPlan(title, insight.summary);
           if (matchedPlan && ts > matchedPlan.updated_at) {
             await ctx.db.patch(matchedPlan._id, { updated_at: ts });
             plansUpdated++;

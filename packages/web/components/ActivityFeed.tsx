@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { ConversationList } from "./ConversationList";
+import { MessageBrowserPopover } from "./MessageBrowserPopover";
+import { useEventListener } from "../hooks/useEventListener";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useEventListener } from "../hooks/useEventListener";
 
@@ -13,7 +15,6 @@ function getRelativeTime(timestamp: number): string {
   const diffMs = now - timestamp;
   const diffMinutes = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
 
   if (diffMinutes < 1) return "just now";
   if (diffMinutes < 60) return `${diffMinutes}m ago`;
@@ -165,7 +166,7 @@ function formatRelativeTime(timeStr: string, firstTimeStr: string): string {
   return rem > 0 ? `+${h}h${rem}m` : `+${h}h`;
 }
 
-function SessionTimeline({ timeline, startedAt }: { timeline: any[]; startedAt?: number }) {
+function SessionTimeline({ timeline }: { timeline: any[] }) {
   if (!timeline?.length) return null;
   const firstTime = timeline[0]?.t || "00:00";
 
@@ -210,6 +211,7 @@ function SessionNarrativeOverlay({ item, onClose }: { item: any; onClose: () => 
         className="relative mt-12 mb-12 w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-xl bg-sol-bg border border-sol-border/20 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Header */}
         <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-sol-bg/95 backdrop-blur border-b border-sol-border/10">
           <div className="min-w-0">
             <p className="text-[13px] font-semibold text-sol-text truncate">{item.title}</p>
@@ -227,12 +229,18 @@ function SessionNarrativeOverlay({ item, onClose }: { item: any; onClose: () => 
             </button>
           </div>
         </div>
+
+        {/* Turns narrative */}
         <div className="px-6 py-5 space-y-6">
           {turns.map((turn: any, i: number) => (
             <div key={i} className="relative">
               <div className="flex items-start gap-3">
-                <span className="text-[8px] font-bold uppercase tracking-widest text-sol-yellow/40 select-none shrink-0 mt-1">ask</span>
-                <p className="text-[14px] text-sol-yellow/90 font-medium leading-relaxed">{turn.ask}</p>
+                <div className="shrink-0 mt-0.5">
+                  <span className="text-[8px] font-bold uppercase tracking-widest text-sol-yellow/40 select-none">ask</span>
+                </div>
+                <p className="text-[14px] text-sol-yellow/90 font-medium leading-relaxed">
+                  {turn.ask}
+                </p>
               </div>
               {turn.did.length > 0 && (
                 <ul className="mt-2 ml-[36px] space-y-1.5">
@@ -244,9 +252,13 @@ function SessionNarrativeOverlay({ item, onClose }: { item: any; onClose: () => 
                   ))}
                 </ul>
               )}
-              {i < turns.length - 1 && <div className="mt-6 ml-[36px] h-px bg-sol-border/8" />}
+              {i < turns.length - 1 && (
+                <div className="mt-6 ml-[36px] h-px bg-sol-border/8" />
+              )}
             </div>
           ))}
+
+          {/* Footer: blockers, next action */}
           {(item.blockers || item.next_action) && (
             <div className="pt-2 border-t border-sol-border/10 space-y-1.5">
               {item.blockers && (
@@ -347,6 +359,7 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
   const metaParts = [duration, msgCount >= 50 ? `${formatMsgCount(msgCount)} msgs` : null].filter(Boolean);
 
   return (
+    <MessageBrowserPopover conversationId={item.conversation_id}>
     <div
       onClick={() => hasDetail && setExpanded(!expanded)}
       className={`group border-l-2 ${outcome.border} ${outcome.bg} ${compact ? "pl-2.5 py-1.5" : "pl-3 py-2"} ${isTrivial ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer" : ""} hover:bg-sol-bg-alt/30 transition-colors rounded-r`}
@@ -429,7 +442,7 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
               ))}
             </ul>
           ) : hasTimeline ? (
-            <SessionTimeline timeline={item.timeline} startedAt={item.started_at} />
+            <SessionTimeline timeline={item.timeline} />
           ) : null}
           {item.next_action && (isActive || item.outcome_type === "progress") && (
             <div>
@@ -444,6 +457,7 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
       )}
       {deepDive && <SessionNarrativeOverlay item={item} onClose={() => setDeepDive(false)} />}
     </div>
+    </MessageBrowserPopover>
   );
 }
 

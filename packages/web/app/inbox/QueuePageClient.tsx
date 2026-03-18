@@ -17,6 +17,7 @@ import { useSessionSwitcher } from "../../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
 import { cleanTitle } from "../../lib/conversationProcessor";
+import { MessageBrowserPopover } from "../../components/MessageBrowserPopover";
 import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { TaskStatusBadge } from "../../components/TaskStatusBadge";
@@ -296,6 +297,7 @@ function SessionCard({
   }, [session._id, displayTitle, generateUploadUrl, sendMessage]);
 
   return (
+    <MessageBrowserPopover conversationId={session._id}>
     <div
       onDragEnter={handleFileDragEnter}
       onDragOver={handleFileDragOver}
@@ -515,6 +517,7 @@ function SessionCard({
         </TooltipProvider>
       )}
     </div>
+    </MessageBrowserPopover>
   );
 }
 

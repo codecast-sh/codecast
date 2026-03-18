@@ -6848,9 +6848,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize]);
 
   // Restore scroll position after loading older messages.
-  // When new items are prepended, scrollHeight grows by the size of the new content.
-  // Adding that delta to the saved scrollTop keeps the viewport anchored to the same spot.
-  useWatchEffect(() => {
+  // useLayoutEffect runs after DOM mutations but before paint, so the user never sees
+  // the intermediate state. scrollHeight delta = exact size of prepended content.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
     if (!scrollAnchorRef.current) return;
     const scrollContainer = containerRef.current;
     if (!scrollContainer) return;
@@ -6863,7 +6864,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     requestAnimationFrame(() => {
       paginationCooldownRef.current = false;
     });
-  }, [timeline, virtualizer]);
+  }, [timeline.length]);
 
   const [initialScrollDone, setInitialScrollDone] = useState(false);
 
