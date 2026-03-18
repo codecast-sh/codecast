@@ -1,4 +1,3 @@
-"use client";
 import { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";

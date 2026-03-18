@@ -1,4 +1,3 @@
-"use client";
 import { useState } from "react";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 

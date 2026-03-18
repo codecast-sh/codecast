@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";

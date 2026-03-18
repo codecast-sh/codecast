@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";

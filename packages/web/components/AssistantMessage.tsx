@@ -1,5 +1,3 @@
-"use client";
-
 interface AssistantMessageProps {
   content: string;
   timestamp: number;

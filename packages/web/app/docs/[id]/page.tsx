@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail } from "../../../store/inboxStore";

@@ -1,5 +1,3 @@
-"use client";
-
 import { useBatchReview } from "./BatchReviewContext";
 
 interface BatchProgressBarProps {

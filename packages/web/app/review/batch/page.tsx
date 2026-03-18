@@ -1,5 +1,3 @@
-"use client";
-
 import { useSearchParams } from "next/navigation";
 import { BatchReviewProvider } from "../../../components/BatchReviewContext";
 import { BatchReviewView } from "../../../components/BatchReviewView";

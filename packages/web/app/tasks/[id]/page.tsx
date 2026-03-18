@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useCallback, useRef, useEffect, Fragment } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation } from "convex/react";

@@ -1,4 +1,3 @@
-"use client";
 import { useState } from "react";
 import { MessageSquare, Radio, StopCircle, ChevronDown, ChevronRight } from "lucide-react";
 import type { ToolViewProps } from "@/lib/toolRegistry";

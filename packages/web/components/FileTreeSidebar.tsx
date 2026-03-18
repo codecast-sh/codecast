@@ -1,5 +1,3 @@
-"use client";
-
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { ChevronRight, ChevronDown } from "lucide-react";
 import { useState } from "react";

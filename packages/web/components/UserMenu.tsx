@@ -1,4 +1,3 @@
-"use client";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useQuery } from "convex/react";

@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import {

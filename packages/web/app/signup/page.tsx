@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useAuthActions } from "@convex-dev/auth/react";

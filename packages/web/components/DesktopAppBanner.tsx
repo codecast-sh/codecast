@@ -1,5 +1,3 @@
-"use client";
-
 import { X, Monitor, ArrowRight } from "lucide-react";
 import { isDesktop } from "../lib/desktop";
 import { useInboxStore } from "../store/inboxStore";

@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";

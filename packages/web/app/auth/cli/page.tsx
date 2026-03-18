@@ -1,5 +1,3 @@
-"use client";
-
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useEffect, useState, Suspense, useRef } from "react";

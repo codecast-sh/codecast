@@ -1,4 +1,3 @@
-"use client";
 import { Check, Circle, Loader2, Lock } from "lucide-react";
 import type { ToolViewProps } from "@/lib/toolRegistry";
 

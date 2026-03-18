@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
 

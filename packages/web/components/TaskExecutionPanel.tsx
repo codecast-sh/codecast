@@ -1,5 +1,3 @@
-"use client";
-
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { RetryTaskButton } from "./RetryTaskButton";
 import { Clock, RotateCw, User, AlertTriangle } from "lucide-react";

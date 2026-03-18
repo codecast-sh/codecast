@@ -1,4 +1,3 @@
-"use client";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";

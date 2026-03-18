@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo } from 'react';
 import { parseDiff, Diff, Hunk, tokenize } from 'react-diff-view';
 import { createTwoFilesPatch } from 'diff';

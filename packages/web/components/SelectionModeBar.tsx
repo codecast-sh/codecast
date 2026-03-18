@@ -1,5 +1,3 @@
-"use client";
-
 export function SelectionModeBar({ onExit }: { onExit: () => void }) {
   return (
     <div className="sticky bottom-0 z-50 flex justify-center pb-2 pointer-events-none">

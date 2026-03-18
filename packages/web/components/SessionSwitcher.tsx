@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef } from "react";
 import { InboxSession } from "../store/inboxStore";
 import { cleanTitle } from "../lib/conversationProcessor";

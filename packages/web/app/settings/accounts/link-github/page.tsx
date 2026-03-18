@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useConvexAuth } from "convex/react";

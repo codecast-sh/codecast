@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { ConversationView, ConversationData, ConversationViewHandle } from "./ConversationView";
