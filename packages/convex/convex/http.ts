@@ -2893,4 +2893,10 @@ cliRoute("/cli/workflows/list", async (ctx, body) => {
   return await ctx.runMutation(api.workflows.list, body);
 });
 
+// Workflow Runs
+cliRoute("/cli/workflow-runs/get", async (ctx, body) => ctx.runMutation(api.workflow_runs.getForDaemon, body));
+cliRoute("/cli/workflow-runs/progress", async (ctx, body) => ctx.runMutation(api.workflow_runs.updateProgress, body));
+cliRoute("/cli/workflow-runs/gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.pauseAtGate, body));
+cliRoute("/cli/workflow-runs/poll-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.pollGateResponse, body));
+
 export default http;
