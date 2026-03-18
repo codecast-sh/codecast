@@ -5611,7 +5611,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [allMatchingMessageIds, setAllMatchingMessageIds] = useState<string[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
-  const scrollAnchorRef = useRef<{ savedScrollTop: number; savedScrollHeight: number } | null>(null);
+  const scrollAnchorRef = useRef<number | null>(null); // savedScrollHeight before a loadOlder
   const prevTimelineLengthRef = useRef<number>(0);
   const isNearBottomRef = useRef(true);
   const scrollToBottomFnRef = useRef<() => void>(() => {});
@@ -6790,11 +6790,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       // Load older messages when near top (within 300px)
       if (scrollTop < 300 && hasMoreAbove && !isLoadingOlder && !isLoadingNewer && !paginationCooldownRef.current && onLoadOlder) {
-        // Save scrollHeight + scrollTop so we can restore position after new items are prepended
-        scrollAnchorRef.current = {
-          savedScrollTop: scrollTop,
-          savedScrollHeight: scrollHeight,
-        };
+        // Save scrollHeight so we can compute the prepended height delta later
+        scrollAnchorRef.current = scrollHeight;
         isPaginatingRef.current = true;
         onLoadOlder();
       }
@@ -6852,15 +6849,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // the intermediate state. scrollHeight delta = exact size of prepended content.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
-    if (!scrollAnchorRef.current) return;
+    if (scrollAnchorRef.current === null) return;
     const scrollContainer = containerRef.current;
     if (!scrollContainer) return;
-    const { savedScrollTop, savedScrollHeight } = scrollAnchorRef.current;
-    const delta = scrollContainer.scrollHeight - savedScrollHeight;
+    const delta = scrollContainer.scrollHeight - scrollAnchorRef.current;
     scrollAnchorRef.current = null;
     if (delta <= 0) return;
     paginationCooldownRef.current = true;
-    scrollContainer.scrollTop = savedScrollTop + delta;
+    scrollContainer.scrollTop += delta; // += keeps current position, doesn't reset it
     requestAnimationFrame(() => {
       paginationCooldownRef.current = false;
     });
