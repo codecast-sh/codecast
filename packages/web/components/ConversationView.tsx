@@ -254,7 +254,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
-  const isolated = useInboxStore((s) => s.sessions[conversation._id]?._isolatedMode ?? false);
+  const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
   const createQuickSession = useMutation(api.conversations.createQuickSession);
   const killSession = useMutation(api.conversations.killSession);
   const router = useRouter();
@@ -410,9 +410,8 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
 
       <button
         onClick={() => {
-          const sessionId = storeSession?._id || conversation._id;
           const turningOn = !isolated;
-          useInboxStore.getState().patchSession(sessionId, { _isolatedMode: turningOn });
+          useInboxStore.getState().setIsolatedWorktreeMode(turningOn);
           if (turningOn && currentPath) {
             handleSwitch(currentPath, true);
           }

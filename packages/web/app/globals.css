@@ -3,6 +3,9 @@
 @tailwind utilities;
 
 :root {
+  --font-mono: "JetBrains Mono", monospace;
+  --font-serif: "Fraunces", serif;
+
   /* Default to Light - Solarized Light */
   --sol-bg: #FBF5E2;
   --sol-bg-alt: #eee8d5;

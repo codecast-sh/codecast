@@ -17,6 +17,7 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
+    allowedHosts: ["local.codecast.sh", "local.1.codecast.sh", "local.2.codecast.sh"],
   },
   build: {
     rollupOptions: {

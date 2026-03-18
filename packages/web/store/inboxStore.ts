@@ -76,7 +76,6 @@ export type InboxSession = {
   active_task?: TaskRef;
   worktree_name?: string | null;
   worktree_branch?: string | null;
-  _isolatedMode?: boolean;
 };
 
 export type Message = {
@@ -290,6 +289,8 @@ interface InboxStoreState {
   drafts: Record<string, Record<string, any>>;
 
   currentConversation: CurrentConversationContext;
+  isolatedWorktreeMode: boolean;
+  setIsolatedWorktreeMode: (val: boolean) => void;
 
   // -- New session modal --
   newSession: { isOpen: boolean; context: SessionContext };
@@ -451,6 +452,7 @@ export const useInboxStore = create<InboxStoreState>(
   drafts: {},
 
   currentConversation: {},
+  isolatedWorktreeMode: false,
 
   newSession: { isOpen: false, context: {} },
 
@@ -952,6 +954,10 @@ export const useInboxStore = create<InboxStoreState>(
 
   setCurrentConversation: (ctx: CurrentConversationContext) => {
     set({ currentConversation: ctx });
+  },
+
+  setIsolatedWorktreeMode: (val: boolean) => {
+    set({ isolatedWorktreeMode: val });
   },
 
   clearCurrentConversation: () => {
