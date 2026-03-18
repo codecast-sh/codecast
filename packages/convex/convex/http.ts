@@ -2793,6 +2793,10 @@ cliRoute("/cli/work/mine", async (ctx, body) => {
   return await ctx.runAction(internal.taskMining.backfillDocsFromMessages, { user_id: body.user_id });
 });
 
+cliRoute("/cli/work/mine-all", async (_ctx, _body) => {
+  return await _ctx.runAction(internal.taskMining.backfillAllTeams, {});
+});
+
 // Plans
 cliRoute("/cli/plans/create", async (ctx, body) => {
   return await ctx.runMutation(api.plans.create, body);
@@ -2844,6 +2848,9 @@ cliRoute("/cli/plans/escalation", async (ctx, body) => {
 });
 cliRoute("/cli/plans/recalc", async (ctx, body) => {
   return await ctx.runMutation(api.plans.recalcPlanProgress, body);
+});
+cliRoute("/cli/plans/save-retro", async (ctx, body) => {
+  return await ctx.runMutation(api.plans.saveRetro, body);
 });
 
 // Docs

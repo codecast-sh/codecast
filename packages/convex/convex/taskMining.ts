@@ -58,7 +58,6 @@ export const getInsightById = internalQuery({
       _id: insight._id,
       conversation_id: insight.conversation_id,
       generated_at: insight.generated_at,
-      actor_name: insight.actor_name,
       summary: insight.summary,
       goal: insight.goal,
       what_changed: insight.what_changed,
@@ -1482,7 +1481,21 @@ export const backfillAllTeams = internalAction({
           for (let i = 0; i < memberInsights.length; i += BATCH_SIZE) {
             const batch = memberInsights.slice(i, i + BATCH_SIZE).map((ins: any) => {
               const conv = conversations.find((c: any) => c._id === ins.conversation_id);
-              return { ...ins, themes: ins.themes || [], is_private: conv?.is_private, team_visibility: conv?.team_visibility };
+              return {
+                _id: ins._id,
+                conversation_id: ins.conversation_id,
+                generated_at: ins.generated_at,
+                summary: ins.summary,
+                goal: ins.goal,
+                what_changed: ins.what_changed,
+                outcome_type: ins.outcome_type,
+                blockers: ins.blockers,
+                next_action: ins.next_action,
+                themes: ins.themes || [],
+                confidence: ins.confidence,
+                is_private: conv?.is_private,
+                team_visibility: conv?.team_visibility,
+              };
             });
             const result: any = await ctx.runMutation(internalApi.taskMining.mineTasksFromInsights, {
               user_id: member._id,
