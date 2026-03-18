@@ -27,8 +27,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    if (mounted && serverTheme && serverTheme !== theme) {
+    if (!mounted || !serverTheme || serverTheme === theme) return;
+    const stored = localStorage.getItem("codecast-theme");
+    if (!stored) {
       setTheme(serverTheme);
+    } else if (stored !== serverTheme) {
+      updateClientUI({ theme: stored as Theme });
     }
   }, [serverTheme, mounted]);
 

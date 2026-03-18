@@ -495,18 +495,25 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const [showDropdown, setShowDropdown] = useState(false);
   const [dropdownIndex, setDropdownIndex] = useState(-1);
   const createQuickSession = useMutation(api.conversations.createQuickSession);
-  const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
+  const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
+  const cachedProjects = useInboxStore((s) => s.recentProjects);
+  const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
+  const recentProjects = freshProjects ?? (cachedProjects.length > 0 ? cachedProjects : null);
   const modalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const context = useInboxStore((s) => s.newSession.context);
 
+  useEffect(() => {
+    if (freshProjects) setRecentProjects(freshProjects);
+  }, [freshProjects, setRecentProjects]);
+
   const filteredProjects = useMemo(() => {
     if (!recentProjects || recentProjects.length === 0) return [];
     if (!projectPath) return recentProjects;
     const lower = projectPath.toLowerCase();
-    return recentProjects.filter((p) => p.path.toLowerCase().includes(lower));
+    return recentProjects.filter((p: { path: string }) => p.path.toLowerCase().includes(lower));
   }, [recentProjects, projectPath]);
 
   useEffect(() => {

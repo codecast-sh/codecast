@@ -374,6 +374,10 @@ interface InboxStoreState {
   updateClientLayout: (key: keyof ClientLayouts, value: any) => void;
   updateClientDismissed: (key: keyof ClientDismissed, value: any) => void;
 
+  // -- Recent projects cache --
+  recentProjects: Array<{ path: string; count: number; lastActive: number }>;
+  setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
+
   // -- Task / Doc / Plan state --
   tasks: Record<string, TaskItem>;
   docs: Record<string, DocItem>;
@@ -459,6 +463,8 @@ export const useInboxStore = create<InboxStoreState>(
 
   activeBranches: {},
   optimisticForkChildren: [],
+  recentProjects: [],
+  setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => set({ recentProjects: projects }),
 
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
@@ -990,6 +996,12 @@ export const useInboxStore = create<InboxStoreState>(
     };
 
     const updates: Partial<InboxStoreState> = {};
+    // Re-key sessions and fix _id so lookups by currentSession._id work correctly
+    if (state.sessions[sessionId]) {
+      updates.sessions = { ...state.sessions };
+      (updates.sessions as any)[convexId] = { ...(state.sessions[sessionId] as any), _id: convexId };
+      delete (updates.sessions as any)[sessionId];
+    }
     const m = rekey(state.messages); if (m) updates.messages = m as any;
     const p = rekey(state.pagination); if (p) updates.pagination = p as any;
     const d = rekey(state.drafts); if (d) updates.drafts = d as any;
@@ -1000,6 +1012,7 @@ export const useInboxStore = create<InboxStoreState>(
       delete (updates.conversations as any)[sessionId];
     }
 
+    if (state.currentSessionId === sessionId) updates.currentSessionId = convexId;
     if (Object.keys(updates).length > 0) set(updates);
   },
 

@@ -1226,7 +1226,7 @@ export function QueuePageClient() {
         />
       ) : currentSession ? (
         <InboxConversation
-          key={scrollTarget?.sessionId === currentSession._id ? `${currentSession._id}-${scrollTarget.messageId}` : currentSession._id}
+          key={scrollTarget?.sessionId === currentSession._id ? `${currentSession._id}-${scrollTarget.messageId}` : (currentSession.session_id || currentSession._id)}
           sessionId={currentSession._id}
           isIdle={currentSession.is_idle}
           onSendAndAdvance={handleSendAndAdvance}

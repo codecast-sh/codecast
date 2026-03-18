@@ -243,7 +243,9 @@ export interface ConversationViewHandle {
 }
 
 function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
-  const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
+  const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 8 });
+  const cachedProjects = useInboxStore((s) => s.recentProjects);
+  const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
   const storeSession = useInboxStore((s) =>
     s.sessions[conversation._id]
   );
@@ -252,6 +254,13 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const createQuickSession = useMutation(api.conversations.createQuickSession);
   const killSession = useMutation(api.conversations.killSession);
   const router = useRouter();
+  const [isolated, setIsolated] = useState(false);
+
+  const recentProjects = freshProjects ?? cachedProjects;
+
+  useEffect(() => {
+    if (freshProjects) setRecentProjects(freshProjects);
+  }, [freshProjects, setRecentProjects]);
 
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
@@ -259,8 +268,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const isInInbox = inboxSource === "inbox";
 
   const otherProjects = useMemo(() => {
-    if (!recentProjects) return [];
-    return recentProjects.filter((p) => p.path !== currentPath);
+    return recentProjects.filter((p: { path: string }) => p.path !== currentPath);
   }, [recentProjects, currentPath]);
 
   const visibleProjects = otherProjects.slice(0, 6);
@@ -331,6 +339,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
         project_path: trimmed,
         git_root: trimmed,
         session_id: isInInbox ? sessionId : undefined,
+        isolated: isolated || undefined,
       });
 
       if (isInInbox) {
@@ -345,7 +354,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create session");
     }
-  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, router, isInInbox]);
+  }, [storeSession, conversation._id, killSession, createQuickSession, currentAgent, router, isInInbox, isolated]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -358,6 +367,18 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
         </div>
 
       <div className="flex flex-wrap justify-center gap-1.5">
+        {isolated && currentPath && (
+          <button
+            onClick={() => handleSwitch(currentPath)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-sol-cyan/40 bg-sol-cyan/5 text-sol-cyan transition-all"
+            title={currentPath}
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+            </svg>
+            <span>{currentName}</span>
+          </button>
+        )}
         {visibleProjects.map((p) => {
           const name = p.path.split("/").filter(Boolean).pop();
           return (
@@ -384,6 +405,17 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
           <span>other</span>
         </button>
       </div>
+
+      <button
+        onClick={() => setIsolated(!isolated)}
+        className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+        title="Create session in an isolated git worktree"
+      >
+        <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${isolated ? "bg-sol-cyan/30" : "bg-sol-bg-alt"}`}>
+          <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
+        </span>
+        <span className={isolated ? "text-sol-cyan" : ""}>isolated worktree</span>
+      </button>
 
     </div>
     </TooltipProvider>
@@ -6538,6 +6570,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => ro.disconnect();
   }, []);
 
+  const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
   const [deskClass, setDeskClass] = useState("");
   useEffect(() => {
     setDeskClass(desktopHeaderClass());
@@ -7452,11 +7485,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           </div>
         </div>
       )}
-      <header ref={headerRef} className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${deskClass} ${isImageLightboxActive ? "invisible" : ""}`}>
+      <header ref={headerRef} className={`border-b border-black/10 bg-sol-bg-alt shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded || isZenMode ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""}`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && useInboxStore.getState().clientState.ui?.zen_mode && (
           <div className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
-        <div className="max-w-4xl mx-auto px-4 sm:px-5 md:px-6 py-0.5 sm:py-1">
+        <div className="px-2 py-0.5 sm:py-1">
           <div className="flex items-center gap-2 min-w-0 select-none">
             <Link
               href={backHref}

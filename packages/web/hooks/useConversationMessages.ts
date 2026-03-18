@@ -296,6 +296,8 @@ export function useConversationMessages(
   const conversation: Record<string, any> | null = useMemo(() => {
     if (!storeMeta) return null;
     if (targetMode && !targetAroundData && rawMessages.length === 0) return null;
+    // Don't expose conversation until messages are in store (avoids flash of empty state)
+    if (useNormalMode && storeMessages.length === 0 && (storeMeta?.message_count ?? 0) > 0) return null;
     return {
       ...storeMeta,
       messages: rawMessages,
