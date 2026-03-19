@@ -1465,6 +1465,13 @@ export const webGetTaskDetail = query({
       image: taskUser.image || taskUser.github_avatar_url,
     } : null;
 
+    // Get assignee info
+    let assignee_info = null;
+    if (task.assignee) {
+      const assigneeUser = await ctx.db.get(task.assignee as any);
+      if (assigneeUser) assignee_info = { name: (assigneeUser as any).name || (assigneeUser as any).email || "Unknown", image: (assigneeUser as any).image || (assigneeUser as any).github_avatar_url };
+    }
+
     // Get audit history
     const history = await ctx.db
       .query("task_history")
@@ -1492,6 +1499,7 @@ export const webGetTaskDetail = query({
 
     return {
       ...task,
+      assignee_info,
       comments,
       linked_conversations: linkedConversations,
       related_docs: relatedDocs,
