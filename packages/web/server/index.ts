@@ -3,7 +3,11 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { readFile } from "fs/promises";
 import { join } from "path";
+import { createRequire } from "module";
 import { botMetaMiddleware } from "./bot-meta";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json");
 
 const app = new Hono();
 
@@ -22,7 +26,14 @@ const DESKTOP_DOWNLOAD_URL = "https://codecast.sh/download/mac";
 const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.4-arm64.dmg";
 const MAC_DMG_VERSION = "1.1.4";
 
-app.get("/api/health", (c) => c.json({ ok: true }));
+app.get("/api/health", (c) =>
+  c.json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    version: pkg.version,
+  })
+);
 
 app.get("/api/desktop/version", (c) =>
   c.json({ version: LATEST_DESKTOP_VERSION, downloadUrl: DESKTOP_DOWNLOAD_URL })
