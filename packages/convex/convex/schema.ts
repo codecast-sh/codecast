@@ -981,7 +981,7 @@ export default defineSchema({
       v.literal("chore")
     ),
     status: v.union(
-      v.literal("draft"),
+      v.literal("backlog"),
       v.literal("open"),
       v.literal("in_progress"),
       v.literal("in_review"),

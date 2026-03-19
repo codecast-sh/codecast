@@ -15,7 +15,7 @@ async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
     total++;
     if (task.status === "done") done++;
     else if (task.status === "in_progress" || task.status === "in_review") in_progress++;
-    else if (task.status === "open" || task.status === "draft") open++;
+    else if (task.status === "open" || task.status === "backlog") open++;
 
     const es = (task as any).execution_status;
     if (es === "done") exec_done++;

@@ -1025,6 +1025,7 @@ export const getTeamDigest = query({
         actor: {
           _id: representative.actor_user_id,
           name: actor?.name || actor?.email || "Unknown",
+          image: actor?.image || actor?.github_avatar_url,
         },
         project_path: conv?.project_path,
         git_branch: conv?.git_branch,
@@ -1054,6 +1055,7 @@ export const getTeamDigest = query({
         actor: {
           _id: insight.actor_user_id,
           name: actor?.name || actor?.email || "Unknown",
+          image: actor?.image || actor?.github_avatar_url,
         },
         project_path: conv?.project_path,
         git_branch: conv?.git_branch,
@@ -1079,6 +1081,7 @@ export const getTeamDigest = query({
           actor: {
             _id: p.actor_user_id,
             name: actor?.name || actor?.email || "Unknown",
+          image: actor?.image || actor?.github_avatar_url,
           },
           sessions: p.sessions,
           outcomes: {
@@ -1367,6 +1370,7 @@ export const getActivityDigest = query({
         actor: {
           _id: insight.actor_user_id,
           name: actor?.name || actor?.email || "Unknown",
+          image: actor?.image || actor?.github_avatar_url,
         },
         project_path: conv?.project_path,
         git_branch: conv?.git_branch,
@@ -1433,6 +1437,7 @@ export const getActivityDigest = query({
           actor: {
             _id: p.actor_user_id,
             name: actor?.name || actor?.email || "Unknown",
+          image: actor?.image || actor?.github_avatar_url,
           },
           sessions: p.sessions,
           outcomes: { shipped: p.shipped, progress: p.progress, blocked: p.blocked, unknown: p.unknown },

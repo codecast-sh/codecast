@@ -18,7 +18,7 @@ async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: 
       total++;
       if (t.status === "done") done++;
       else if (t.status === "in_progress" || t.status === "in_review") in_progress++;
-      else if (t.status === "open" || t.status === "draft") open++;
+      else if (t.status === "open" || t.status === "backlog") open++;
     }
   }
 
@@ -828,13 +828,15 @@ export const webList = query({
     const liveSessions = managedSessions.filter(
       (s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id
     );
-    const activeTaskMap = new Map<string, { session_id: string; title?: string }>();
+    const activeTaskMap = new Map<string, { session_id: string; title?: string; agent_status?: string; agent_type?: string }>();
     for (const s of liveSessions) {
       const conv = await ctx.db.get(s.conversation_id!);
       if (conv && conv.active_task_id) {
         activeTaskMap.set(conv.active_task_id.toString(), {
           session_id: conv.session_id,
           title: conv.title || undefined,
+          agent_status: s.agent_status || undefined,
+          agent_type: conv.agent_type || undefined,
         });
       }
     }
@@ -988,6 +990,72 @@ export const webAddComment = mutation({
     });
 
     return { success: true };
+  },
+});
+
+export const assignToAgent = mutation({
+  args: {
+    short_id: v.string(),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("gemini")),
+  },
+  handler: async (ctx, { short_id, agent_type }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const task = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", short_id))
+      .first();
+    if (!task) throw new Error("Task not found");
+    if (task.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+
+    const now = Date.now();
+    const sessionId = crypto.randomUUID();
+
+    const conversationId = await ctx.db.insert("conversations", {
+      user_id: userId,
+      agent_type,
+      session_id: sessionId,
+      started_at: now,
+      updated_at: now,
+      message_count: 0,
+      status: "active",
+      active_task_id: task._id,
+      title: task.title.slice(0, 80),
+    } as any);
+    await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) } as any);
+
+    // Update task assignee
+    await ctx.db.patch(task._id, { assignee: "agent", updated_at: now } as any);
+
+    // Build minimal task prompt
+    const lines = [`You have been assigned the following task:\n\n**${task.title}**`];
+    if ((task as any).description) lines.push(`\n${(task as any).description}`);
+    if ((task as any).acceptance_criteria?.length) {
+      lines.push("\n**Acceptance criteria:**");
+      (task as any).acceptance_criteria.forEach((c: string) => lines.push(`- ${c}`));
+    }
+    lines.push(`\nTask ID: ${task.short_id} · Priority: ${(task as any).priority || "medium"}`);
+
+    await ctx.db.insert("pending_messages", {
+      conversation_id: conversationId,
+      from_user_id: userId,
+      content: lines.join("\n"),
+      status: "pending",
+      created_at: now,
+      retry_count: 0,
+    } as any);
+    await ctx.db.patch(conversationId, { has_pending_messages: true } as any);
+
+    const daemonAgentType = agent_type === "claude_code" ? "claude" : agent_type === "codex" ? "codex" : "gemini";
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "start_session",
+      args: JSON.stringify({ agent_type: daemonAgentType, conversation_id: conversationId }),
+      created_at: now,
+    } as any);
+
+    return { conversationId, sessionId };
   },
 });
 

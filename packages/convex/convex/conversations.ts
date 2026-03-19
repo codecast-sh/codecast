@@ -5274,7 +5274,7 @@ export const listIdleSessions = query({
 
     const results = [];
     for (const conv of conversations) {
-      if (conv.is_subagent || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
+      if (conv.is_subagent || conv.is_workflow_sub || (conv.parent_conversation_id && !conv.parent_message_uuid)) continue;
       if (conv.status === "completed" && conv.message_count === 0) continue;
 
       const title = conv.title?.trim() || "";
@@ -5391,6 +5391,7 @@ export const listIdleSessions = query({
         active_task,
         worktree_name: conv.worktree_name,
         worktree_branch: conv.worktree_branch,
+        workflow_run_id: conv.workflow_run_id || null,
       });
     }
 
