@@ -47,6 +47,34 @@ export const create = mutation({
       });
     }
 
+    // Create primary conversation — the single inbox entry for this run
+    const primaryConvId = await ctx.db.insert("conversations", {
+      user_id: userId,
+      agent_type: "claude_code",
+      session_id: `wf-${runId}`,
+      title: workflow.name,
+      project_path: args.project_path,
+      started_at: now,
+      updated_at: now,
+      message_count: 0,
+      is_private: false,
+      status: "active",
+      workflow_run_id: runId,
+      is_workflow_primary: true,
+    });
+
+    await ctx.db.patch(runId, { primary_conversation_id: primaryConvId });
+
+    await ctx.db.insert("messages", {
+      conversation_id: primaryConvId,
+      role: "assistant",
+      content: JSON.stringify({ __wf: "started", goal: args.goal_override || workflow.goal || "", workflow_name: workflow.name }),
+      subtype: "workflow_event",
+      timestamp: now,
+    });
+
+    await ctx.db.patch(primaryConvId, { message_count: 1, last_message_role: "assistant" });
+
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "run_workflow",
@@ -215,6 +243,31 @@ export const updateProgress = mutation({
       }
     }
 
+    // Post progress message to primary conversation
+    if (run.primary_conversation_id && args.node_id !== "start") {
+      const primaryConv = await ctx.db.get(run.primary_conversation_id);
+      if (primaryConv) {
+        const wfType = args.node_status === "running" ? "node_start"
+          : args.node_status === "completed" ? "node_done"
+          : "node_failed";
+        await ctx.db.insert("messages", {
+          conversation_id: run.primary_conversation_id,
+          role: "assistant",
+          content: JSON.stringify({ __wf: wfType, node_id: args.node_id, session_id: args.session_id }),
+          subtype: "workflow_event",
+          timestamp: now,
+        });
+        const newCount = (primaryConv.message_count || 0) + 1;
+        await ctx.db.patch(run.primary_conversation_id, {
+          message_count: newCount,
+          updated_at: now,
+          last_message_role: "assistant",
+          // Mark completed when workflow finishes
+          ...(args.run_status === "completed" || args.run_status === "failed" ? { status: "completed" as const } : {}),
+        });
+      }
+    }
+
     return { ok: true };
   },
 });
@@ -267,6 +320,25 @@ export const pauseAtGate = mutation({
 
     if ((run as any).task_id) {
       await ctx.db.patch((run as any).task_id, { status: "in_review" as any, updated_at: now });
+    }
+
+    // Post gate message to primary conversation
+    if (run.primary_conversation_id) {
+      const primaryConv = await ctx.db.get(run.primary_conversation_id);
+      if (primaryConv) {
+        await ctx.db.insert("messages", {
+          conversation_id: run.primary_conversation_id,
+          role: "assistant",
+          content: JSON.stringify({ __wf: "gate", prompt: args.prompt, choices: args.choices, run_id: args.run_id }),
+          subtype: "workflow_event",
+          timestamp: now,
+        });
+        await ctx.db.patch(run.primary_conversation_id, {
+          message_count: (primaryConv.message_count || 0) + 1,
+          updated_at: now,
+          last_message_role: "assistant",
+        });
+      }
     }
 
     return { ok: true };

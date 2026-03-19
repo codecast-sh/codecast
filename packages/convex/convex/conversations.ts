@@ -5392,6 +5392,7 @@ export const listIdleSessions = query({
         worktree_name: conv.worktree_name,
         worktree_branch: conv.worktree_branch,
         workflow_run_id: conv.workflow_run_id || null,
+        is_workflow_primary: conv.is_workflow_primary || false,
       });
     }
 
@@ -6078,6 +6079,41 @@ export const restartSession = mutation({
         session_id: conv.session_id,
         conversation_id: args.conversation_id,
         project_path: conv.project_path,
+      }),
+      created_at: now + 1,
+    });
+  },
+});
+
+export const repairSession = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    if (!conv.session_id) throw new Error("No session to repair");
+
+    const now = Date.now();
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "kill_session",
+      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      created_at: now,
+    });
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "resume_session",
+      args: JSON.stringify({
+        session_id: conv.session_id,
+        conversation_id: args.conversation_id,
+        project_path: conv.project_path,
+        force_reconstitute: true,
       }),
       created_at: now + 1,
     });
