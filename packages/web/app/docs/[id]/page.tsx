@@ -1,11 +1,15 @@
-import { useCallback } from "react";
+import { useCallback, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail } from "../../../store/inboxStore";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
-import Markdown from "react-markdown";
+import { useMutation, useQuery } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { Badge } from "../../../components/ui/badge";
+import { DocEditor } from "../../../components/editor/DocEditor";
+import type { MentionItem } from "../../../components/editor/MentionList";
+import "../../../components/editor/editor.css";
 import {
   ArrowLeft,
   Pin,
@@ -22,8 +26,14 @@ import {
   ArrowUp,
   ArrowDown,
   Minus,
+  Edit3,
+  Eye,
+  Save,
+  Tag,
 } from "lucide-react";
 import Link from "next/link";
+
+const api = _api as any;
 
 const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   plan: { label: "Plan", color: "text-sol-blue", bg: "bg-sol-blue/10 border-sol-blue/30" },
@@ -61,12 +71,85 @@ function formatDate(ts: number) {
   });
 }
 
+function DocTypeSelector({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const type = DOC_TYPE_CONFIG[value] || DOC_TYPE_CONFIG.note;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className={`text-xs px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${type.color} ${type.bg} hover:opacity-80`}
+      >
+        {type.label}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute top-full left-0 mt-1 bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1 z-50 min-w-[130px]">
+            {Object.entries(DOC_TYPE_CONFIG).map(([key, cfg]) => (
+              <button
+                key={key}
+                onClick={() => {
+                  onChange(key);
+                  setOpen(false);
+                }}
+                className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                  key === value
+                    ? "bg-sol-bg-highlight text-sol-text"
+                    : "text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                <span className={cfg.color}>{cfg.label}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function InlineTitle({
+  value,
+  onChange,
+  onBlur,
+  editable,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onBlur?: () => void;
+  editable: boolean;
+}) {
+  if (!editable) {
+    return (
+      <h1 className="text-xl font-semibold text-sol-text leading-tight">{value}</h1>
+    );
+  }
+
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      className="text-xl font-semibold text-sol-text leading-tight bg-transparent border-none outline-none w-full placeholder:text-sol-text-dim"
+      placeholder="Untitled"
+    />
+  );
+}
+
 export default function DocDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
 
-  // Sync doc detail from Convex into the store
   useSyncDocDetail(id);
 
   const detail = useInboxStore((s) => s.docDetails[id]) as DocDetail | undefined;
@@ -74,6 +157,48 @@ export default function DocDetailPage() {
   const data = detail || (listItem as DocDetail | undefined);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const archiveDoc = useInboxStore((s) => s.archiveDoc);
+
+  const webUpdate = useMutation(api.docs.webUpdate);
+  const mentionResults = useQuery(api.docs.mentionSearch, { query: "", limit: 20 });
+
+  const [isEditing, setIsEditing] = useState(true);
+  const [editTitle, setEditTitle] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "idle">("idle");
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const handleContentUpdate = useCallback(
+    (markdown: string) => {
+      if (!data) return;
+      setSaveStatus("saving");
+      webUpdate({ id: data._id as any, content: markdown })
+        .then(() => {
+          setSaveStatus("saved");
+          if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
+        })
+        .catch(() => setSaveStatus("idle"));
+    },
+    [data, webUpdate]
+  );
+
+  const handleTitleBlur = useCallback(() => {
+    if (!data || editTitle === null || editTitle === data.title) return;
+    webUpdate({ id: data._id as any, title: editTitle });
+  }, [data, editTitle, webUpdate]);
+
+  const handleMentionQuery = useCallback(
+    async (query: string): Promise<MentionItem[]> => {
+      if (!mentionResults) return [];
+      const q = query.toLowerCase();
+      if (!q) return mentionResults;
+      return mentionResults.filter(
+        (r: MentionItem) =>
+          r.label.toLowerCase().includes(q) ||
+          (r.sublabel && r.sublabel.toLowerCase().includes(q))
+      );
+    },
+    [mentionResults]
+  );
 
   const handlePin = useCallback(async () => {
     if (!data) return;
@@ -85,6 +210,14 @@ export default function DocDetailPage() {
     await archiveDoc(data._id);
     router.push("/docs");
   }, [data, archiveDoc, router]);
+
+  const handleTypeChange = useCallback(
+    (newType: string) => {
+      if (!data) return;
+      webUpdate({ id: data._id as any, doc_type: newType });
+    },
+    [data, webUpdate]
+  );
 
   if (!data) {
     return (
@@ -101,43 +234,48 @@ export default function DocDetailPage() {
   const doc = data;
   const conversation = data.conversation;
   const relatedTasks = data.related_tasks || [];
-  const type = DOC_TYPE_CONFIG[doc.doc_type] || DOC_TYPE_CONFIG.note;
+  const displayTitle = editTitle ?? (doc as any).display_title ?? doc.title;
 
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="py-2">
-          {/* Back link */}
-          <Link
-            href="/docs"
-            className="inline-flex items-center gap-1.5 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors mb-6"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Documents
-          </Link>
-
-          {/* Header */}
-          <div className="flex items-start justify-between mb-4">
-            <div className="flex items-start gap-3 min-w-0 flex-1">
-              <Badge
-                variant="outline"
-                className={`text-xs flex-shrink-0 mt-1 ${type.color} border ${type.bg}`}
-              >
-                {type.label}
-              </Badge>
-              <div>
-                <h1 className="text-xl font-semibold text-sol-text leading-tight">
-                  {(doc as any).display_title || doc.title}
-                </h1>
-                {(doc as any).plan_name && (
-                  <span className="text-xs text-sol-text-dim">{(doc as any).plan_name}</span>
-                )}
-              </div>
-              {doc.pinned && (
-                <Pin className="w-4 h-4 text-sol-yellow flex-shrink-0 mt-1.5" />
+        <div className="py-2 max-w-4xl mx-auto">
+          {/* Top bar */}
+          <div className="flex items-center justify-between mb-5">
+            <Link
+              href="/docs"
+              className="inline-flex items-center gap-1.5 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Documents
+            </Link>
+            <div className="flex items-center gap-2">
+              {saveStatus === "saving" && (
+                <span className="text-xs text-sol-text-dim animate-pulse">Saving...</span>
               )}
-            </div>
-            <div className="flex items-center gap-1.5 flex-shrink-0 ml-4">
+              {saveStatus === "saved" && (
+                <span className="text-xs text-sol-green flex items-center gap-1">
+                  <Save className="w-3 h-3" /> Saved
+                </span>
+              )}
+              <button
+                onClick={() => setIsEditing(!isEditing)}
+                className={`p-1.5 rounded-md text-xs flex items-center gap-1.5 transition-colors ${
+                  isEditing
+                    ? "bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30"
+                    : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt border border-sol-border/30"
+                }`}
+              >
+                {isEditing ? (
+                  <>
+                    <Edit3 className="w-3.5 h-3.5" /> Editing
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-3.5 h-3.5" /> Viewing
+                  </>
+                )}
+              </button>
               <button
                 onClick={handlePin}
                 className="p-2 rounded-lg text-sol-text-dim hover:text-sol-yellow hover:bg-sol-bg-alt transition-colors"
@@ -155,8 +293,25 @@ export default function DocDetailPage() {
             </div>
           </div>
 
-          {/* Metadata bar */}
-          <div className="flex items-center gap-4 text-xs text-sol-text-dim mb-4 flex-wrap">
+          {/* Doc type + title */}
+          <div className="mb-3">
+            <div className="flex items-center gap-2 mb-2">
+              <DocTypeSelector
+                value={doc.doc_type}
+                onChange={handleTypeChange}
+              />
+              {doc.pinned && <Pin className="w-3.5 h-3.5 text-sol-yellow" />}
+            </div>
+            <InlineTitle
+              value={displayTitle}
+              onChange={(v) => { setEditTitle(v); }}
+              onBlur={handleTitleBlur}
+              editable={isEditing}
+            />
+          </div>
+
+          {/* Metadata */}
+          <div className="flex items-center gap-4 text-xs text-sol-text-dim mb-5 flex-wrap">
             {(doc as any).author_image && (
               <span className="flex items-center gap-1.5">
                 <img
@@ -169,18 +324,17 @@ export default function DocDetailPage() {
             )}
             <span className="flex items-center gap-1">
               <Clock className="w-3 h-3" />
-              Created {formatDate(doc.created_at)}
+              {formatDate(doc.created_at)}
             </span>
             {doc.updated_at !== doc.created_at && (
-              <span className="flex items-center gap-1">
-                Updated {formatDate(doc.updated_at)}
-              </span>
+              <span>Updated {formatDate(doc.updated_at)}</span>
             )}
           </div>
 
           {/* Labels */}
           {doc.labels && doc.labels.length > 0 && (
-            <div className="flex gap-1.5 mb-6">
+            <div className="flex gap-1.5 mb-5 items-center">
+              <Tag className="w-3 h-3 text-sol-text-dim" />
               {doc.labels.map((l: string) => (
                 <Badge
                   key={l}
@@ -193,16 +347,23 @@ export default function DocDetailPage() {
             </div>
           )}
 
-          {/* Content */}
-          <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/30 p-6 mb-8 prose prose-invert prose-sm max-w-none overflow-hidden
-            prose-headings:text-sol-text prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-2
-            prose-p:text-sol-text-muted prose-p:leading-relaxed
-            prose-li:text-sol-text-muted prose-li:marker:text-sol-text-dim
-            prose-code:text-sol-cyan prose-code:bg-sol-bg-highlight prose-code:px-1 prose-code:rounded prose-code:text-xs
-            prose-strong:text-sol-text prose-a:text-sol-cyan
-            [&_pre]:overflow-x-auto [&_pre]:max-w-full">
-            <Markdown>{doc.content}</Markdown>
+          {/* Editor */}
+          <div className="border border-sol-border/20 rounded-lg bg-sol-bg-alt/20 p-6 mb-1">
+            <DocEditor
+              key={doc._id}
+              content={doc.content}
+              onUpdate={handleContentUpdate}
+              onMentionQuery={handleMentionQuery}
+              editable={isEditing}
+            />
           </div>
+          {isEditing && (
+            <div className="flex items-center gap-4 text-[10px] text-sol-text-dim mb-8 px-1">
+              <span>/ commands</span>
+              <span>@ mention</span>
+              <span className="opacity-60">Markdown supported</span>
+            </div>
+          )}
 
           {/* Plan */}
           {(doc as any).active_plan && (
@@ -215,8 +376,15 @@ export default function DocDetailPage() {
                 className="flex items-center gap-2.5 px-4 py-3 border border-sol-border/30 rounded-lg hover:bg-sol-bg-alt/50 transition-colors group"
               >
                 <CircleDot className="w-4 h-4 text-sol-cyan flex-shrink-0" />
-                <span className="text-sm font-medium text-sol-text group-hover:text-sol-cyan transition-colors">{(doc as any).active_plan.title}</span>
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto">{(doc as any).active_plan.status}</Badge>
+                <span className="text-sm font-medium text-sol-text group-hover:text-sol-cyan transition-colors">
+                  {(doc as any).active_plan.title}
+                </span>
+                <Badge
+                  variant="outline"
+                  className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto"
+                >
+                  {(doc as any).active_plan.status}
+                </Badge>
               </Link>
             </div>
           )}
@@ -228,7 +396,9 @@ export default function DocDetailPage() {
                 Sessions
               </h2>
               <div className="border border-sol-border/30 rounded-lg divide-y divide-sol-border/20 overflow-hidden">
-                {((doc as any).related_conversations || (conversation ? [conversation] : [])).map((conv: any) => (
+                {((doc as any).related_conversations ||
+                  (conversation ? [conversation] : [])
+                ).map((conv: any) => (
                   <Link
                     key={conv._id || conv.session_id}
                     href={`/conversation/${conv.session_id || conv.short_id}`}
@@ -246,9 +416,6 @@ export default function DocDetailPage() {
                     <span className="text-xs text-sol-text-dim tabular-nums flex-shrink-0">
                       {conv.message_count && `${conv.message_count} msgs`}
                     </span>
-                    <span className="text-xs text-sol-text-dim flex-shrink-0">
-                      {conv.started_at && new Date(conv.started_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                    </span>
                     <ExternalLink className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 flex-shrink-0" />
                   </Link>
                 ))}
@@ -265,7 +432,8 @@ export default function DocDetailPage() {
               <div className="border border-sol-border/30 rounded-lg divide-y divide-sol-border/20 overflow-hidden">
                 {relatedTasks.map((task: any) => {
                   const status = STATUS_CONFIG[task.status] || STATUS_CONFIG.open;
-                  const priority = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG.medium;
+                  const priority =
+                    PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG.medium;
                   const StatusIcon = status.icon;
                   const PriorityIcon = priority.icon;
                   return (
@@ -274,7 +442,9 @@ export default function DocDetailPage() {
                       href={`/tasks/${task._id}`}
                       className="flex items-center gap-3 px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors"
                     >
-                      <StatusIcon className={`w-4 h-4 flex-shrink-0 ${status.color}`} />
+                      <StatusIcon
+                        className={`w-4 h-4 flex-shrink-0 ${status.color}`}
+                      />
                       <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0">
                         {task.short_id}
                       </span>
@@ -287,7 +457,9 @@ export default function DocDetailPage() {
                       >
                         {status.label}
                       </Badge>
-                      <PriorityIcon className={`w-3.5 h-3.5 flex-shrink-0 ${priority.color}`} />
+                      <PriorityIcon
+                        className={`w-3.5 h-3.5 flex-shrink-0 ${priority.color}`}
+                      />
                     </Link>
                   );
                 })}

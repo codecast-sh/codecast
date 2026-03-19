@@ -1,6 +1,8 @@
 import { useRouter } from "next/navigation";
 import { useInboxStore, DocItem } from "../../store/inboxStore";
 import { useSyncDocs } from "../../hooks/useSyncDocs";
+import { useMutation } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { Badge } from "../../components/ui/badge";
@@ -10,7 +12,10 @@ import {
   Pin,
   FolderGit2,
   Layers,
+  Plus,
 } from "lucide-react";
+
+const api = _api as any;
 
 const DOC_TYPE_CONFIG: Record<string, { label: string; color: string }> = {
   plan: { label: "Plan", color: "text-sol-blue" },
@@ -139,8 +144,14 @@ export default function DocsPage() {
   const setDocFilter = useInboxStore((s) => s.setDocFilter);
   const docs = useInboxStore((s) => s.docs);
   const projectPaths = useInboxStore((s) => s.docProjectPaths);
+  const createDoc = useMutation(api.docs.webCreate);
 
   useSyncDocs(docFilter.type || undefined, docFilter.query || undefined, docFilter.project || undefined, docFilter.scope || undefined);
+
+  const handleNewDoc = async () => {
+    const result = await createDoc({ title: "Untitled", content: "" });
+    if (result?.id) router.push(`/docs/${result.id}`);
+  };
 
   const docsList = Object.values(docs);
 
@@ -164,6 +175,13 @@ export default function DocsPage() {
           <div className="px-6 py-4 border-b border-sol-border/30">
             <div className="flex items-center justify-between mb-3">
               <h1 className="text-lg font-semibold text-sol-text tracking-tight">Documents</h1>
+              <button
+                onClick={handleNewDoc}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                New
+              </button>
             </div>
             <div className="flex items-center gap-3 flex-wrap">
               <div className="relative flex-1 max-w-md">
