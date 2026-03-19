@@ -8627,6 +8627,31 @@ plan
   });
 
 plan
+  .command("set-workflow")
+  .description("Bind a workflow to a plan")
+  .argument("<plan_id>", "Plan short ID")
+  .argument("<workflow_slug>", "Workflow slug")
+  .action(async (planId: string, workflowSlug: string) => {
+    const plan = await cliPost("/cli/plans/get", { short_id: planId });
+    if (!plan) {
+      console.error(`Plan ${planId} not found`);
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/workflows/list", {});
+    const workflows = result.workflows || [];
+    const workflow = workflows.find((w: any) => w.slug === workflowSlug);
+    if (!workflow) {
+      console.error(`Workflow "${workflowSlug}" not found`);
+      if (workflows.length > 0) {
+        console.log(fmt.muted(`  Available: ${workflows.map((w: any) => w.slug).join(", ")}`));
+      }
+      process.exit(1);
+    }
+    await cliPost("/cli/plans/update", { short_id: planId, workflow_id: workflow._id });
+    console.log(`${c.green}ok${c.reset} Bound workflow ${c.cyan}${workflowSlug}${c.reset} to plan ${c.cyan}${planId}${c.reset}`);
+  });
+
+plan
   .command("decide")
   .description("Log a decision on a plan")
   .argument("<plan_id>", "Plan short ID")

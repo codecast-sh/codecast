@@ -286,6 +286,7 @@ export const update = mutation({
     }))),
     doc_id: v.optional(v.string()),
     model_stylesheet: v.optional(v.string()),
+    workflow_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -307,6 +308,7 @@ export const update = mutation({
     if (args.context_pointers) updates.context_pointers = args.context_pointers;
     if (args.doc_id) updates.doc_id = args.doc_id as Id<"docs">;
     if (args.model_stylesheet !== undefined) updates.model_stylesheet = args.model_stylesheet;
+    if (args.workflow_id) updates.workflow_id = args.workflow_id as Id<"workflows">;
 
     if (args.task_ids) {
       const taskDocIds = args.task_ids.map(id => id as Id<"tasks">);

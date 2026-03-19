@@ -32,6 +32,7 @@ import {
   Layers,
   Search,
   RotateCw,
+  Play,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import { PlanBoardView } from "./PlanBoardView";
@@ -991,6 +992,36 @@ function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: any[] }
   );
 }
 
+function StartWorkflowButton({ workflowId, planId }: { workflowId: string; planId: string }) {
+  const createRun = useMutation(api.workflow_runs.create);
+  const [pending, setPending] = useState(false);
+
+  const handleClick = useCallback(async () => {
+    setPending(true);
+    try {
+      await createRun({ workflow_id: workflowId, plan_id: planId });
+      toast.success("Workflow started");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to start workflow");
+    } finally {
+      setPending(false);
+    }
+  }, [createRun, workflowId, planId]);
+
+  return (
+    <div className="mb-5">
+      <button
+        onClick={handleClick}
+        disabled={pending}
+        className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded border border-sol-cyan/30 text-sol-cyan hover:bg-sol-cyan/10 transition-colors disabled:opacity-50"
+      >
+        <Play className="w-3.5 h-3.5" />
+        {pending ? "Starting..." : "Run workflow"}
+      </button>
+    </div>
+  );
+}
+
 type PlanTab = "overview" | "orchestration" | "board" | "graph";
 
 export function PlanDetailPanel({ planId }: { planId: string }) {
@@ -1063,6 +1094,10 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
 
       {plan.progress && plan.progress.total > 0 && (
         <PlanProgressBar progress={plan.progress} />
+      )}
+
+      {(plan as any).workflow_id && !(plan as any).workflow_run_id && (
+        <StartWorkflowButton workflowId={(plan as any).workflow_id} planId={plan._id} />
       )}
 
       {(plan as any).workflow_run_id && (
