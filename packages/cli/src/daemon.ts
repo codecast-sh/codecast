@@ -1808,7 +1808,7 @@ function getGitInfo(projectPath: string): GitInfo | undefined {
   const diffStaged = execGit("diff --cached");
   const root = execGit("rev-parse --show-toplevel");
 
-  const worktreeMatch = projectPath.match(/\.codecast\/worktrees\/([^/]+)/);
+  const worktreeMatch = projectPath.match(/(?:\.codecast\/worktrees|\.conductor)\/([^/]+)/);
   const worktreeName = worktreeMatch ? worktreeMatch[1] : undefined;
 
   return {
@@ -6840,6 +6840,32 @@ async function main(): Promise<void> {
   setInterval(() => {
     pollDaemonCommands().catch(() => {});
   }, 10_000);
+
+  // Auto-dispatch: detect active plans with bound workflows that haven't started
+  const notifiedPlanWorkflows = new Set<string>();
+  async function checkPlanAutoDispatch() {
+    if (!config.auth_token) return;
+    const siteUrl = (config.convex_url || "").replace(".cloud", ".site");
+    try {
+      const resp = await fetch(`${siteUrl}/cli/plans/list`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: config.auth_token, status: "active" }),
+      });
+      const data = await resp.json() as any;
+      const plans = Array.isArray(data) ? data : (data?.plans || []);
+      for (const plan of plans) {
+        if (plan.workflow_id && !plan.workflow_run_id && !notifiedPlanWorkflows.has(plan.short_id)) {
+          notifiedPlanWorkflows.add(plan.short_id);
+          log(`[AUTO-DISPATCH] Plan ${plan.short_id} has workflow ready — start from web UI or: cast workflow run --plan ${plan.short_id}`);
+        }
+      }
+    } catch {}
+  }
+
+  setInterval(() => {
+    checkPlanAutoDispatch().catch(() => {});
+  }, 60_000);
 
   // Send initial heartbeat
   sendHeartbeat().catch(() => {});

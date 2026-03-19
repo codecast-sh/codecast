@@ -13537,7 +13537,7 @@ function getGitInfo(projectPath) {
   const diff = execGit("diff");
   const diffStaged = execGit("diff --cached");
   const root = execGit("rev-parse --show-toplevel");
-  const worktreeMatch = projectPath.match(/\.codecast\/worktrees\/([^/]+)/);
+  const worktreeMatch = projectPath.match(/(?:\.codecast\/worktrees|\.conductor)\/([^/]+)/);
   const worktreeName = worktreeMatch ? worktreeMatch[1] : undefined;
   return {
     commitHash,
