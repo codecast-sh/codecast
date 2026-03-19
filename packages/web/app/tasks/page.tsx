@@ -194,7 +194,7 @@ function TaskRow({
           ? "bg-sol-bg-alt text-sol-text-dim hover:bg-sol-bg-highlight"
           : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25";
         const statusLabel = isBlocked ? "blocked" : isIdle ? "idle"
-          : agent_type === "codex" ? "codex" : agent_type === "gemini" ? "gemini" : "live";
+          : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : agent_type === "gemini" ? "gemini" : "live";
         return (
           <Link
             href={`/conversation/${session_id}`}
@@ -211,10 +211,10 @@ function TaskRow({
         <Link
           href={`/plans/${(task as any).plan._id}`}
           onClick={(e) => e.stopPropagation()}
-          className="text-[10px] px-1.5 py-0 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 flex-shrink-0 hover:bg-sol-cyan/20 transition-colors"
-          title={`Plan: ${(task as any).plan.title}`}
+          className="text-[10px] px-1.5 py-0 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 flex-shrink-0 hover:bg-sol-cyan/20 transition-colors max-w-[120px] truncate"
+          title={(task as any).plan.title}
         >
-          {(task as any).plan.short_id}
+          {(task as any).plan.title}
         </Link>
       )}
       {task.source === "insight" && (
@@ -771,7 +771,7 @@ function KanbanCard({
               ? "bg-sol-bg-alt text-sol-text-dim"
               : "bg-emerald-500/15 text-emerald-400";
             const statusLabel = isBlocked ? "blocked" : isIdle ? "idle"
-              : agent_type === "codex" ? "codex" : agent_type === "gemini" ? "gemini" : "live";
+              : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : agent_type === "gemini" ? "gemini" : "live";
             return (
               <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] ${badgeClass}`}>
                 <span className={`w-1 h-1 rounded-full ${dotClass}`} />

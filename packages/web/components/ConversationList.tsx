@@ -763,7 +763,7 @@ function createConversationAriaLabel(conv: Conversation): string {
 
 export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [mode, setMode] = useState<"session" | "workflow">("session");
-  const [agentType, setAgentType] = useState<"claude" | "codex" | "gemini">("claude");
+  const [agentType, setAgentType] = useState<"claude" | "codex" | "cursor" | "gemini">("claude");
   const [projectPath, setProjectPath] = useState("");
   const [isolated, setIsolated] = useState(false);
   const [worktreeName, setWorktreeName] = useState("");
@@ -801,8 +801,8 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
       setProjectPath(recentProjects[0].path);
     }
     if (isOpen && context.agentType) {
-      const mapped = context.agentType === "claude_code" ? "claude" : context.agentType === "codex" ? "codex" : "gemini";
-      setAgentType(mapped as "claude" | "codex" | "gemini");
+      const mapped = context.agentType === "claude_code" ? "claude" : context.agentType === "codex" ? "codex" : context.agentType === "cursor" ? "cursor" : "gemini";
+      setAgentType(mapped as "claude" | "codex" | "cursor" | "gemini");
     }
   }, [isOpen, context, recentProjects]);
 
@@ -838,7 +838,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
         toast.success("Workflow run started");
         onClose();
       } else {
-        const convexAgentType = agentType === "claude" ? "claude_code" as const : agentType === "codex" ? "codex" as const : "gemini" as const;
+        const convexAgentType = agentType === "claude" ? "claude_code" as const : agentType === "codex" ? "codex" as const : agentType === "cursor" ? "cursor" as const : "gemini" as const;
         const conversationId = await createQuickSession({
           agent_type: convexAgentType,
           project_path: projectPath || undefined,
@@ -913,7 +913,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
             </>
           ) : (
           <div className="flex gap-2">
-            {(["claude", "codex", "gemini"] as const).map((type) => (
+            {(["claude", "codex", "cursor", "gemini"] as const).map((type) => (
               <button
                 key={type}
                 onClick={() => setAgentType(type)}
@@ -923,13 +923,15 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
                       ? "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/50"
                       : type === "codex"
                         ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50"
-                        : "bg-blue-500/20 text-blue-400 border-blue-500/50"
+                        : type === "cursor"
+                          ? "bg-purple-500/20 text-purple-400 border-purple-500/50"
+                          : "bg-blue-500/20 text-blue-400 border-blue-500/50"
                     : "bg-sol-bg-alt/60 text-sol-text-muted border-sol-border/40 hover:border-sol-border"
                 }`}
               >
                 <div className="flex items-center justify-center gap-1.5">
                   <AgentIcon agentType={type === "claude" ? "claude_code" : type} className="w-4 h-4" />
-                  {type === "claude" ? "Claude" : type === "codex" ? "Codex" : "Gemini"}
+                  {type === "claude" ? "Claude" : type === "codex" ? "Codex" : type === "cursor" ? "Cursor" : "Gemini"}
                 </div>
               </button>
             ))}

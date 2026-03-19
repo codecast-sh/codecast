@@ -996,7 +996,7 @@ export const webAddComment = mutation({
 export const assignToAgent = mutation({
   args: {
     short_id: v.string(),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("gemini")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini")),
   },
   handler: async (ctx, { short_id, agent_type }) => {
     const userId = await getAuthUserId(ctx);

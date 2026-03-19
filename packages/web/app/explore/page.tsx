@@ -202,6 +202,22 @@ export default function ExplorePage() {
                 <OpenAIIcon className="w-3 h-3" />
                 Codex
               </Button>
+              <Button
+                variant={agentType === "cursor" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setAgentType("cursor")}
+                className="gap-1"
+              >
+                Cursor
+              </Button>
+              <Button
+                variant={agentType === "gemini" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setAgentType("gemini")}
+                className="gap-1"
+              >
+                Gemini
+              </Button>
             </div>
           </div>
         </div>

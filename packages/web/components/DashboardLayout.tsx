@@ -139,7 +139,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       return;
     }
     soundNewSession();
-    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "gemini";
+    const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const conversationId = await createQuickSession({
       agent_type: agentType,
       project_path: path,

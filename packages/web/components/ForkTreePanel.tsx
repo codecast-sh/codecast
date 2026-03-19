@@ -19,7 +19,7 @@ type TreeNode = {
 const agentColors: Record<string, string> = {
   claude_code: "text-amber-400",
   codex: "text-emerald-400",
-  cursor: "text-blue-400",
+  cursor: "text-purple-400",
   gemini: "text-blue-400",
 };
 

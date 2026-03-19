@@ -167,6 +167,7 @@ export function TaskCommandPalette({
       const agentOpts = [
         { key: "agent:claude_code", label: "Claude Code", type: "agent" as const, image: undefined },
         { key: "agent:codex", label: "Codex", type: "agent" as const, image: undefined },
+        { key: "agent:cursor", label: "Cursor", type: "agent" as const, image: undefined },
         { key: "agent:gemini", label: "Gemini", type: "agent" as const, image: undefined },
       ];
       const memberOpts = (teamMembers || []).filter(Boolean).map((m: any) => ({
@@ -219,7 +220,7 @@ export function TaskCommandPalette({
         const item = items[index] as any;
         if (item) {
           if (item.key.startsWith("agent:")) {
-            const agentType = item.key.replace("agent:", "") as "claude_code" | "codex" | "gemini";
+            const agentType = item.key.replace("agent:", "") as "claude_code" | "codex" | "cursor" | "gemini";
             for (const task of targetTasks) {
               assignToAgent({ short_id: task.short_id, agent_type: agentType }).catch(() => {});
             }
@@ -450,6 +451,7 @@ export function TaskCommandPalette({
             (items as any[]).map((item, i) => {
               const agentColor =
                 item.key === "agent:codex" ? "text-blue-400" :
+                item.key === "agent:cursor" ? "text-purple-400" :
                 item.key === "agent:gemini" ? "text-amber-400" :
                 "text-sol-violet";
               return (

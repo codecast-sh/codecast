@@ -6128,7 +6128,7 @@ export const switchSessionProject = mutation({
 export const switchSessionAgent = mutation({
   args: {
     conversation_id: v.id("conversations"),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("gemini")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
