@@ -801,12 +801,12 @@ export const mentionSearch = query({
       if (q) {
         tasks = await ctx.db
           .query("tasks")
-          .withSearchIndex("search_title", (s) => s.search("title", args.query).eq("user_id", userId))
+          .withSearchIndex("search_tasks", (s: any) => s.search("title", args.query).eq("user_id", userId))
           .take(limit);
       } else {
         tasks = await ctx.db
           .query("tasks")
-          .withIndex("by_user_id", (t) => t.eq("user_id", userId))
+          .withIndex("by_user_id", (t: any) => t.eq("user_id", userId))
           .order("desc")
           .take(limit);
       }
@@ -849,20 +849,15 @@ export const mentionSearch = query({
     }
 
     if (types.includes("plan")) {
-      let plans;
-      if (q) {
-        plans = await ctx.db
-          .query("plans")
-          .withSearchIndex("search_plans", (s) => s.search("title", args.query))
-          .take(limit);
-      } else {
-        plans = await ctx.db
-          .query("plans")
-          .withIndex("by_user_id", (p) => p.eq("user_id", userId))
-          .order("desc")
-          .take(limit);
-      }
-      for (const plan of plans) {
+      const plans = await ctx.db
+        .query("plans")
+        .withIndex("by_user_id", (p: any) => p.eq("user_id", userId))
+        .order("desc")
+        .take(limit * 3);
+      const filtered = q
+        ? plans.filter((p: any) => p.title?.toLowerCase().includes(q))
+        : plans;
+      for (const plan of filtered.slice(0, limit)) {
         if (results.length >= limit * 2) break;
         results.push({
           id: String(plan._id),
@@ -875,20 +870,15 @@ export const mentionSearch = query({
     }
 
     if (types.includes("session")) {
-      let sessions;
-      if (q) {
-        sessions = await ctx.db
-          .query("conversations")
-          .withSearchIndex("search_title", (s) => s.search("title", args.query))
-          .take(limit);
-      } else {
-        sessions = await ctx.db
-          .query("conversations")
-          .withIndex("by_user_updated", (c) => c.eq("user_id", userId))
-          .order("desc")
-          .take(limit);
-      }
-      for (const sess of sessions) {
+      const sessions = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
+        .order("desc")
+        .take(limit * 3);
+      const filtered = q
+        ? sessions.filter((s: any) => s.title?.toLowerCase().includes(q))
+        : sessions;
+      for (const sess of filtered.slice(0, limit)) {
         if (results.length >= limit * 2) break;
         results.push({
           id: String(sess._id),
