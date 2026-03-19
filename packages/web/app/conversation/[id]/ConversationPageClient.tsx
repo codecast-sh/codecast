@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useEventListener } from "../../../hooks/useEventListener";
 import { DashboardLayout } from "../../../components/DashboardLayout";
@@ -17,6 +17,7 @@ import { useSharedConversationMessages } from "../../../hooks/useSharedConversat
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useForkNavigationStore } from "../../../store/forkNavigationStore";
+import { QueuePageClient } from "../../inbox/QueuePageClient";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONVEX_ID_REGEX = /^[a-z0-9]{32}$/;
@@ -396,7 +397,6 @@ export default function ConversationPage() {
 
   const resetForkNav = useForkNavigationStore((s) => s.reset);
   const resetForkData = useInboxStore((s) => s.resetForkNav);
-  const redirectedRef = useRef(false);
 
   useWatchEffect(() => {
     resetForkNav();
@@ -451,20 +451,12 @@ export default function ConversationPage() {
     return null;
   }, [isUUID, sessionLookup, publicData, resolvedConvexId, id]);
 
-  useWatchEffect(() => {
-    if (redirectId && !redirectedRef.current) {
-      redirectedRef.current = true;
-      useInboxStore.setState({ pendingNavigateId: redirectId });
-      router.replace("/inbox");
-    }
-  }, [redirectId, router]);
-
   if (!isUUID && !isValidConvexId) {
     return <NotFoundView />;
   }
 
   if (redirectId) {
-    return <ConversationLoadingSkeleton />;
+    return <QueuePageClient initialSessionId={redirectId} />;
   }
 
   if (isUUID) {

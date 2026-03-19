@@ -20,6 +20,7 @@ import { cleanTitle } from "../../lib/conversationProcessor";
 import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { TaskStatusBadge } from "../../components/TaskStatusBadge";
+import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { toast } from "sonner";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
@@ -151,8 +152,10 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
     />
   );
 
+  const activePlanId = (conversation as any)?.active_plan_id;
+
   return (
-    <div className="relative h-full">
+    <div className="relative h-full flex flex-col">
       {(resumeState === "resuming" || resumeState === "sent") && (
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-orange/90 text-sol-bg text-xs backdrop-blur-sm">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-bg animate-pulse" />
@@ -186,26 +189,31 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           </button>
         </div>
       )}
-      <ConversationDiffLayout
-        conversation={conversation as ConversationData}
-        embedded
-        headerExtra={shareControls}
-        hasMoreAbove={hasMoreAbove}
-        hasMoreBelow={hasMoreBelow}
-        isLoadingOlder={isLoadingOlder}
-        isLoadingNewer={isLoadingNewer}
-        onLoadOlder={loadOlder}
-        onLoadNewer={loadNewer}
-        onJumpToStart={jumpToStart}
-        onJumpToEnd={jumpToEnd}
-        isOwner={true}
-        onSendAndAdvance={onSendAndAdvance}
-        autoFocusInput
-        backHref="/inbox"
-        onBack={onBack}
-        fallbackStickyContent={cleanUserMessage(lastUserMessage)}
-        targetMessageId={targetMessageId}
-      />
+      {activePlanId && (
+        <PlanContextPanel planId={activePlanId} />
+      )}
+      <div className={activePlanId ? "flex-1 min-h-0" : "h-full"}>
+        <ConversationDiffLayout
+          conversation={conversation as ConversationData}
+          embedded
+          headerExtra={shareControls}
+          hasMoreAbove={hasMoreAbove}
+          hasMoreBelow={hasMoreBelow}
+          isLoadingOlder={isLoadingOlder}
+          isLoadingNewer={isLoadingNewer}
+          onLoadOlder={loadOlder}
+          onLoadNewer={loadNewer}
+          onJumpToStart={jumpToStart}
+          onJumpToEnd={jumpToEnd}
+          isOwner={true}
+          onSendAndAdvance={onSendAndAdvance}
+          autoFocusInput
+          backHref="/inbox"
+          onBack={onBack}
+          fallbackStickyContent={cleanUserMessage(lastUserMessage)}
+          targetMessageId={targetMessageId}
+        />
+      </div>
     </div>
   );
 });
@@ -883,7 +891,7 @@ function InboxSessionPanel({
   );
 }
 
-export function QueuePageClient() {
+export function QueuePageClient({ initialSessionId }: { initialSessionId?: string } = {}) {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -932,7 +940,7 @@ export function QueuePageClient() {
 
   const isPopstateRef = useRef(false);
   const lastAppliedParamId = useRef<string | null>(null);
-  const paramProcessedRef = useRef(!searchParams.get("s"));
+  const paramProcessedRef = useRef(!searchParams.get("s") && !initialSessionId);
 
   const injectSession = useInboxStore((s) => s.injectSession);
 
@@ -948,8 +956,8 @@ export function QueuePageClient() {
     shouldQueryDirect ? { conversation_id: pendingInjectId as Id<"conversations">, limit: 1 } : "skip"
   );
 
-  // Select session from URL param -- only when the param actually changes
-  const paramSessionId = searchParams.get("s");
+  // Select session from URL param or initialSessionId -- only when the param actually changes
+  const paramSessionId = searchParams.get("s") || initialSessionId || null;
   useWatchEffect(() => {
     if (!paramSessionId || paramSessionId === lastAppliedParamId.current) return;
     if (Object.keys(sessions).length === 0 && activeSessions === undefined) return;

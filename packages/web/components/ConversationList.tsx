@@ -407,7 +407,7 @@ function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; cl
 }
 
 
-function ConvSubtitleSection({ conv }: { conv: Conversation }) {
+function ConvSubtitleSection({ conv, expanded }: { conv: Conversation; expanded?: boolean }) {
   const cleanTeammate = (c: string) => {
     if (!c?.includes('<teammate-message')) return c;
     return c.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').trim();
@@ -430,15 +430,15 @@ function ConvSubtitleSection({ conv }: { conv: Conversation }) {
 
   // Default: show subtitle
   if (conv.subtitle && conv.visibility_mode !== "minimal") {
-    return <p className="text-xs sm:text-sm text-sol-text-muted mb-1.5 sm:mb-2 line-clamp-2 whitespace-pre-line">{conv.subtitle}</p>;
+    return <p className={`text-xs sm:text-sm text-sol-text-secondary mb-1.5 sm:mb-2 ${expanded ? "" : "line-clamp-2"} whitespace-pre-line`}>{conv.subtitle}</p>;
   }
 
   // Full mode with no browser open: show bullets normally
   if (!conv.visibility_mode || conv.visibility_mode === "full") {
     if (!hasBullets) return null;
-    const firstMsgs = processed.slice(0, 2);
-    const lastMsgs = processed.length > 4 ? processed.slice(-2) : [];
-    const showEllipsis = processed.length > 4;
+    const firstMsgs = expanded ? processed : processed.slice(0, 2);
+    const lastMsgs = !expanded && processed.length > 4 ? processed.slice(-2) : [];
+    const showEllipsis = !expanded && processed.length > 4;
     const renderMessage = (m: typeof processed[0], key: string) => (
       <div key={key} className="flex items-start gap-2 min-w-0">
         {m.role === "assistant" ? (
@@ -458,7 +458,7 @@ function ConvSubtitleSection({ conv }: { conv: Conversation }) {
       </div>
     );
     return (
-      <div className="mb-2 sm:mb-3 space-y-1 sm:space-y-1.5 text-[11px] sm:text-xs overflow-hidden opacity-70">
+      <div className="mb-2 sm:mb-3 space-y-1 sm:space-y-1.5 text-[11px] sm:text-xs overflow-hidden opacity-85">
         {firstMsgs.map((m, idx) => renderMessage(m, `first-${idx}`))}
         {showEllipsis && <div className="flex items-center gap-2 pl-6"><span className="text-sol-text-muted0">...</span></div>}
         {lastMsgs.map((m, idx) => renderMessage(m, `last-${idx}`))}
@@ -497,6 +497,220 @@ function getRelativeTime(timestamp: number): string {
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   }
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
+  conv: Conversation;
+  filter: "my" | "team";
+  isFocused: boolean;
+  onNavigate?: (id: string) => void;
+  hasTeam: boolean;
+}) {
+  const router = useRouter();
+  const [expanded, setExpanded] = useState(false);
+
+  const isOthersRestrictedView = (conv.visibility_mode === "detailed" || conv.visibility_mode === "summary") && !conv.is_own;
+  const hasExpandableContent = !!(conv.subtitle || (conv.message_alternates && conv.message_alternates.length > 2));
+
+  return (
+    <Link
+      href={isOthersRestrictedView ? "#" : `/conversation/${conv._id}`}
+      className={`group block relative ${isOthersRestrictedView ? "cursor-default" : ""}`}
+      role="listitem"
+      aria-label={createConversationAriaLabel(conv)}
+      aria-current={isFocused ? "true" : undefined}
+      onClick={isOthersRestrictedView ? (e) => e.preventDefault() : onNavigate ? (e) => { e.preventDefault(); onNavigate(conv._id); } : undefined}
+      data-flip-key={conv._id}
+    >
+      <div className={`relative border rounded-lg sm:rounded-xl transition-all duration-200 dark:shadow-none ${
+        conv.is_subagent
+          ? !conv.is_active
+            ? "p-2 sm:p-2.5 bg-sol-bg-alt/20 dark:bg-sol-bg-alt/10 border-sol-border/20 opacity-40 hover:opacity-60"
+            : "p-2 sm:p-2.5 bg-sol-bg-alt/30 dark:bg-sol-bg-alt/20 border-violet-500/20 hover:border-violet-500/40 opacity-60 hover:opacity-80"
+          : isOthersRestrictedView
+            ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt border-sol-border/30 opacity-70"
+            : filter === "team" && conv.is_own && !conv.is_private
+              ? isFocused
+                ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-[#fcfffc] dark:bg-[#0d1f15] ring-2 ring-sol-yellow border-2 border-emerald-400/40 hover:border-emerald-400/60 hover:shadow-md"
+                : "p-2.5 sm:p-3 md:p-4 shadow-sm bg-[#fcfffc] dark:bg-[#0d1f15] border-2 border-emerald-400/35 hover:border-emerald-400/50 hover:shadow-md"
+              : isFocused
+                ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
+                : "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
+      }`}>
+        <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-3 mb-1">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4 shrink-0" />
+                <span className={`font-medium text-sm sm:text-base transition-colors ${
+                  isOthersRestrictedView ? "text-sol-text-muted" : "text-sol-text"
+                }`}>
+                  {cleanTitle(conv.title || "Untitled")}
+                </span>
+                {conv.is_active && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50 shrink-0 select-none">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
+                    <span className="text-[10px] text-sol-green font-semibold">LIVE</span>
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0 select-none" onClick={(e) => e.stopPropagation()}>
+                {filter === "team" && hasTeam && conv.is_own && (
+                  <VisibilityDropdown
+                    conversationId={conv._id}
+                    isPrivate={conv.is_private ?? false}
+                    visibilityMode={conv.visibility_mode}
+                    teamVisibility={(conv as any).team_visibility}
+                  />
+                )}
+                {filter === "team" && hasTeam && !conv.is_own && conv.visibility_mode && (
+                  <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                    conv.visibility_mode === "full" ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30" :
+                    conv.visibility_mode === "summary" ? "bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/30" :
+                    "bg-sol-base02/50 text-sol-text-muted border border-sol-border/40"
+                  }`}>
+                    {(conv.visibility_mode === "full" || conv.visibility_mode === "summary") && (
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+                      </svg>
+                    )}
+                    {conv.visibility_mode === "full" ? "Full" :
+                     conv.visibility_mode === "summary" ? "Summary" :
+                     conv.visibility_mode === "minimal" ? "Activity" :
+                     conv.visibility_mode}
+                  </span>
+                )}
+                <FavoriteButton conversationId={conv._id} isFavorite={conv.is_favorite ?? false} />
+                <span className="text-[11px] text-sol-text-dim/60">{getRelativeTime(conv.updated_at)}</span>
+              </div>
+            </div>
+
+            {conv.parent_conversation_id && (
+              <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-sol-text-dim">
+                <svg className="w-3 h-3 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                <span>sub of</span>
+                <button
+                  className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[200px] transition-colors text-left"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    router.push(`/conversation/${conv.parent_conversation_id}`);
+                  }}
+                >
+                  {conv.parent_title || "parent session"}
+                </button>
+              </div>
+            )}
+
+            <ConvSubtitleSection conv={conv} expanded={expanded} />
+
+            <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-dim select-none">
+              {(filter === "team" || !conv.is_own) && (
+                <span className="flex items-center gap-1.5 font-medium">
+                  {conv.author_avatar ? (
+                    <img src={conv.author_avatar} alt={conv.author_name} className="w-4 h-4 rounded-full" />
+                  ) : (
+                    <span className="w-4 h-4 rounded-full bg-sol-base02 flex items-center justify-center text-[8px] text-sol-text-muted">
+                      {conv.author_name?.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                  {conv.is_own ? (
+                    <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300 font-semibold text-xs border border-blue-500/30">You</span>
+                  ) : conv.author_name}
+                </span>
+              )}
+              {(conv.project_path || conv.git_root) && (
+                <span className="inline-flex items-center gap-1 text-sol-text-dim" title={conv.project_path || conv.git_root || ""}>
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                  </svg>
+                  <span className="truncate max-w-[100px]">{(conv.git_root || conv.project_path || "").split("/").pop()}</span>
+                </span>
+              )}
+              {filter === "team" && !conv.is_own && conv.is_private === false && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30 text-[10px] font-medium">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  Shared
+                </span>
+              )}
+              {conv.duration_ms > 60000 && (
+                <span className={`hidden sm:inline-flex items-center gap-1 ${getDurationColor(conv.duration_ms).split(' ')[0]}`}>
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {formatDuration(conv.duration_ms)}
+                </span>
+              )}
+              {(conv.message_count ?? 0) > 0 && (
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${getMessageCountColor(conv.message_count ?? 0)}`}>
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                  <span className="text-[10px] font-semibold">{conv.message_count}</span>
+                </span>
+              )}
+              {conv.latest_todos && conv.latest_todos.todos.length > 0 && (
+                <TodoBadge todos={conv.latest_todos.todos} />
+              )}
+              {((conv.fork_count ?? 0) > 0 || conv.forked_from) && (
+                <span
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/30"
+                  title={conv.forked_from ? "This is a fork" : `${conv.fork_count} fork${conv.fork_count === 1 ? '' : 's'}`}
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+                  </svg>
+                  {conv.forked_from ? "fork" : conv.fork_count}
+                </span>
+              )}
+              {conv.subagent_types && conv.subagent_types.length > 0 && conv.subagent_types.map((type) => (
+                <span key={type} className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-cyan/20 text-sol-cyan border border-sol-cyan/40 text-[10px] font-mono">
+                  {type}
+                </span>
+              ))}
+              {(conv.is_subagent || conv.title?.startsWith("Session agent-")) && (
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                  !conv.is_active
+                    ? "bg-sol-bg-alt/50 text-sol-text-dim border border-sol-border/30 line-through"
+                    : "bg-violet-900/40 text-violet-300 border border-violet-600/50"
+                }`}>
+                  {!conv.is_active ? "Terminated" : "Subagent"}
+                </span>
+              )}
+              {conv.workflow_run_id && !conv.is_workflow_sub && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 text-[10px] font-medium">
+                  Workflow
+                </span>
+              )}
+              {conv.parent_conversation_id && !conv.is_subagent && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-blue/20 text-sol-blue border border-sol-blue/40 text-[10px] font-medium">
+                  Plan
+                </span>
+              )}
+              {(conv as any).active_plan && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] font-medium max-w-[120px] truncate" title={(conv as any).active_plan.title}>
+                  {(conv as any).active_plan.title}
+                </span>
+              )}
+              {hasExpandableContent && (
+                <button
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setExpanded(!expanded); }}
+                  className="text-[10px] text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors ml-auto"
+                >
+                  {expanded ? "↑ less" : "↓ more"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
 }
 
 function groupByTime(conversations: Conversation[]): TimeGroup[] {
@@ -1191,7 +1405,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                       <div className="flex items-start justify-between gap-3 mb-1">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
                           <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4 shrink-0" />
-                          <span className={`font-medium text-sm sm:text-base transition-colors truncate ${
+                          <span className={`font-medium text-sm sm:text-base transition-colors ${
                             isOthersRestrictedView
                               ? "text-sol-text-muted"
                               : "text-sol-text"
@@ -1238,7 +1452,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                             conversationId={conv._id}
                             isFavorite={conv.is_favorite ?? false}
                           />
-                          <span className="text-[11px] text-sol-text-dim/30">
+                          <span className="text-[11px] text-sol-text-dim/60">
                             {getRelativeTime(conv.updated_at)}
                           </span>
                         </div>
@@ -1267,7 +1481,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                       <ConvSubtitleSection conv={conv} />
 
 
-                      <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-muted0 select-none">
+                      <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-dim select-none">
                         {(filter === "team" || !conv.is_own) && (
                           <span className="flex items-center gap-1.5 font-medium">
                             {conv.author_avatar ? (

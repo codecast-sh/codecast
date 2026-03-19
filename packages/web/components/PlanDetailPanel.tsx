@@ -102,6 +102,65 @@ const OUTCOME_STYLES: Record<string, { border: string; label: string; badge: str
   unknown: { border: "border-l-sol-text-dim/15", label: "", badge: "" },
 };
 
+function PlanProgressBar({ progress }: { progress: { total: number; done: number; in_progress: number; open: number } }) {
+  const { total, done, in_progress, open } = progress;
+  const donePct = (done / total) * 100;
+  const ipPct = (in_progress / total) * 100;
+  const pctComplete = Math.round(donePct);
+  const isComplete = done === total;
+
+  return (
+    <div className="mb-6 px-4 py-3.5 bg-sol-bg-alt/40 rounded-xl border border-sol-border/25">
+      <div className="flex items-center justify-between mb-2.5">
+        <div className="flex items-center gap-2">
+          {isComplete ? (
+            <CheckCircle2 className="w-3.5 h-3.5 text-sol-green" />
+          ) : in_progress > 0 ? (
+            <CircleDot className="w-3.5 h-3.5 text-sol-yellow animate-pulse" />
+          ) : (
+            <Circle className="w-3.5 h-3.5 text-sol-text-dim" />
+          )}
+          <span className="text-xs font-semibold text-sol-text">
+            {isComplete ? "Complete" : in_progress > 0 ? "In Progress" : "Planned"}
+          </span>
+        </div>
+        <span className={`text-xs font-mono font-bold tabular-nums ${isComplete ? "text-sol-green" : "text-sol-text-dim"}`}>
+          {pctComplete}%
+        </span>
+      </div>
+      <div className="h-2.5 bg-sol-border/40 rounded-full overflow-hidden mb-3">
+        <div className="h-full flex transition-all duration-500">
+          <div
+            className={`h-full transition-all duration-700 ${isComplete ? "bg-sol-green" : "bg-sol-green/80"}`}
+            style={{ width: `${donePct}%` }}
+          />
+          <div
+            className="h-full bg-sol-yellow/60 transition-all duration-500"
+            style={{ width: `${ipPct}%` }}
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-sol-green/80" />
+          <span className="text-[11px] text-sol-text-dim tabular-nums">{done} done</span>
+        </div>
+        {in_progress > 0 && (
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-sol-yellow/60" />
+            <span className="text-[11px] text-sol-text-dim tabular-nums">{in_progress} active</span>
+          </div>
+        )}
+        <div className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-sol-border/50" />
+          <span className="text-[11px] text-sol-text-dim tabular-nums">{open} open</span>
+        </div>
+        <span className="text-[11px] text-sol-text-dim tabular-nums ml-auto">{done}/{total} tasks</span>
+      </div>
+    </div>
+  );
+}
+
 function DriveRoundIndicator({ driveState }: { driveState: { current_round: number; total_rounds: number; rounds: any[] } }) {
   const { current_round, total_rounds, rounds } = driveState;
   if (total_rounds === 0) return null;
@@ -1002,19 +1061,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
       {plan.doc_content && <CollapsibleDoc content={plan.doc_content} />}
 
       {plan.progress && plan.progress.total > 0 && (
-        <div className="mb-6 p-3 bg-sol-bg-alt/30 rounded-lg border border-sol-border/20">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-2 bg-sol-border/30 rounded-full overflow-hidden">
-              <div className="h-full flex">
-                <div className="bg-sol-green transition-all" style={{ width: `${(plan.progress.done / plan.progress.total) * 100}%` }} />
-                <div className="bg-sol-yellow transition-all" style={{ width: `${(plan.progress.in_progress / plan.progress.total) * 100}%` }} />
-              </div>
-            </div>
-            <span className="text-xs text-sol-text-dim tabular-nums whitespace-nowrap">
-              {plan.progress.done} done, {plan.progress.in_progress} in progress, {plan.progress.open} open
-            </span>
-          </div>
-        </div>
+        <PlanProgressBar progress={plan.progress} />
       )}
 
       {hasTasks && (

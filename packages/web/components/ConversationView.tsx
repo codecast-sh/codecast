@@ -149,6 +149,7 @@ export type ConversationData = {
   is_favorite?: boolean;
   workflow_run_id?: string | null;
   draft_message?: string;
+  subtitle?: string | null;
   compaction_count?: number;
   loaded_start_index?: number;
   agent_name_map?: Record<string, string>;
@@ -8191,10 +8192,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </button>
           </div>
           {(isScrollable || hasMoreAbove || hasMoreBelow) && (
-            <div className="hidden sm:block w-2 self-stretch bg-sol-border/20 rounded-full overflow-hidden">
+            <div className="hidden sm:block w-2 self-stretch bg-sol-base02 rounded-full overflow-hidden">
               <div
                 ref={scrollProgressRef}
-                className="w-full bg-sol-green rounded-full"
+                className="w-full bg-sol-green/80 rounded-full"
                 style={{ height: '0%', transition: 'height 0.15s ease-out' }}
               />
             </div>

@@ -70,7 +70,7 @@ function extractProject(projectPath: string | undefined): string | undefined {
   return name;
 }
 
-function avatarColor(name: string): string {
+function avatarColor(name: string, id?: string): string {
   const colors = [
     "bg-sol-yellow/20 text-sol-yellow",
     "bg-sol-cyan/20 text-sol-cyan",
@@ -80,8 +80,9 @@ function avatarColor(name: string): string {
     "bg-sol-red/20 text-sol-red",
     "bg-sol-orange/20 text-sol-orange",
   ];
+  const key = id ?? name;
   let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
   return colors[Math.abs(hash) % colors.length];
 }
 
@@ -90,11 +91,11 @@ function formatMsgCount(n: number): string {
   return String(n);
 }
 
-const OUTCOME_STYLES: Record<string, { border: string; bg: string; label: string; badge: string }> = {
-  shipped: { border: "border-l-sol-green/60", bg: "", label: "shipped", badge: "bg-sol-green/10 text-sol-green/70 ring-1 ring-sol-green/15" },
-  progress: { border: "border-l-sol-yellow/40", bg: "", label: "progress", badge: "bg-sol-yellow/8 text-sol-yellow/60 ring-1 ring-sol-yellow/12" },
-  blocked: { border: "border-l-sol-red/50", bg: "bg-sol-red/[0.03]", label: "blocked", badge: "bg-sol-red/12 text-sol-red/70 ring-1 ring-sol-red/20" },
-  unknown: { border: "border-l-sol-text-dim/15", bg: "", label: "", badge: "" },
+const OUTCOME_STYLES: Record<string, { border: string; bg: string; label: string; badge: string; accent: string }> = {
+  shipped: { border: "border-l-sol-green/60", bg: "", label: "shipped", badge: "bg-sol-green/20 text-sol-green/80", accent: "bg-sol-green/50" },
+  progress: { border: "border-l-sol-yellow/40", bg: "", label: "progress", badge: "bg-sol-yellow/15 text-sol-yellow/70", accent: "bg-sol-yellow/40" },
+  blocked: { border: "border-l-sol-red/50", bg: "bg-sol-red/[0.03]", label: "blocked", badge: "bg-sol-red/20 text-sol-red/80", accent: "bg-sol-red/50" },
+  unknown: { border: "border-l-sol-text-dim/15", bg: "", label: "", badge: "", accent: "bg-sol-text-dim/15" },
 };
 
 const PROJECT_PALETTE = [
@@ -287,8 +288,8 @@ function SessionTurns({ turns, onDeepDive }: { turns: Array<{ ask: string; did: 
           {turn.did.length > 0 && (
             <ul className="mt-0.5 space-y-px">
               {turn.did.map((d, j) => (
-                <li key={j} className="flex gap-1.5 text-[10px] text-sol-text-muted/55 leading-snug">
-                  <span className="text-sol-text-dim/25 select-none shrink-0">-</span>
+                <li key={j} className="flex gap-1.5 text-[10px] text-sol-text-muted/75 leading-snug">
+                  <span className="text-sol-text-dim/50 select-none shrink-0">-</span>
                   <span>{highlightCode(d)}</span>
                 </li>
               ))}
@@ -319,6 +320,7 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
   const [expanded, setExpanded] = useState(false);
   const [deepDive, setDeepDive] = useState(false);
   const actorName = item.actor?.name || "Unknown";
+  const actorId = item.actor?._id;
   const project = extractProject(item.project_path);
   const outcome = OUTCOME_STYLES[item.outcome_type] || OUTCOME_STYLES.unknown;
   const isActive = item.status === "active";
@@ -352,12 +354,13 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
   return (
     <div
       onClick={() => hasDetail && setExpanded(!expanded)}
-      className={`group border-l-2 ${outcome.border} ${outcome.bg} ${compact ? "pl-2.5 py-1.5" : "pl-3 py-2"} ${isTrivial ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer" : ""} hover:bg-sol-bg-alt/30 transition-colors rounded-r`}
+      className={`group relative border border-sol-border/30 bg-white dark:bg-sol-bg-alt rounded-xl shadow-sm ${compact ? "pl-4 pr-2.5 py-2" : "pl-5 pr-3 py-2.5"} ${isTrivial ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer" : ""} hover:border-sol-yellow/30 hover:shadow-md transition-all`}
     >
+      <div className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-l-xl ${outcome.accent}`} />
       {/* Row 1: actor + title + project + time */}
       <div className="flex items-center gap-1.5 min-w-0">
         {showActor && (
-          <span className={`shrink-0 ${avatarColor(actorName)} rounded-full w-[18px] h-[18px] text-[9px] flex items-center justify-center font-bold`}>
+          <span className={`shrink-0 ${avatarColor(actorName, actorId)} rounded-full w-[18px] h-[18px] text-[9px] flex items-center justify-center font-bold`}>
             {actorName[0].toUpperCase()}
           </span>
         )}
@@ -368,7 +371,7 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
         )}
         <span
           onClick={(e) => { e.stopPropagation(); handleNav(); }}
-          className={`font-semibold text-sol-text truncate cursor-pointer hover:text-sol-yellow transition-colors ${compact ? "text-[12px]" : "text-[13px]"}`}
+          className={`font-semibold text-sol-text cursor-pointer hover:text-sol-yellow transition-colors ${compact ? "text-xs" : "text-sm"}`}
         >
           {displayTitle}
         </span>
@@ -413,8 +416,8 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
           ) : changes.length > 0 ? (
             <ul className="space-y-0.5">
               {changes.map((c: string, i: number) => (
-                <li key={i} className="flex gap-1.5 text-sol-text-muted0 leading-snug">
-                  <span className="text-sol-text-dim opacity-30 select-none shrink-0">-</span>
+                <li key={i} className="flex gap-1.5 text-sol-text-muted leading-snug">
+                  <span className="text-sol-text-dim opacity-50 select-none shrink-0">-</span>
                   <span>{highlightCode(c)}</span>
                 </li>
               ))}
@@ -434,7 +437,7 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
         </div>
       ) : headline ? (
         <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
-          <p className={`text-sol-base0/50 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
+          <p className={`text-sol-base0/70 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
             {headline}
             {metaParts.length > 0 && (
               <span className="text-sol-text-dim opacity-25 font-mono text-[9px] ml-2">{metaParts.join(" / ")}</span>
@@ -671,7 +674,7 @@ function PeopleRow({ people, onSelect, selectedId }: { people: any[]; onSelect: 
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
           >
-            <span className={`w-5 h-5 text-[10px] rounded-full flex items-center justify-center font-semibold shrink-0 ${avatarColor(person.actor.name)}`}>
+            <span className={`w-5 h-5 text-[10px] rounded-full flex items-center justify-center font-semibold shrink-0 ${avatarColor(person.actor.name, person.actor._id)}`}>
               {initial}
             </span>
             <span className="font-medium">{person.actor.name.split(" ")[0]}</span>
@@ -696,7 +699,7 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
   const [windowHours, setWindowHours] = useState<WindowHours>(168);
   const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(undefined);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"feed" | "raw">("feed");
+  const [viewMode, setViewMode] = useState<"feed" | "raw">("raw");
 
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
 

@@ -39,17 +39,18 @@ const AVATAR_COLORS = [
   "bg-sol-orange/20 text-sol-orange",
 ];
 
-function avatarColor(name: string): string {
+function avatarColor(name: string, id?: string): string {
+  const key = id ?? name;
   let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
-function ActorAvatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
+function ActorAvatar({ name, id, size = "md" }: { name: string; id?: string; size?: "sm" | "md" }) {
   const initial = (name || "?")[0].toUpperCase();
   const cls = size === "md" ? "w-7 h-7 text-xs" : "w-5 h-5 text-[10px]";
   return (
-    <span className={`${cls} rounded-full flex items-center justify-center font-semibold shrink-0 ${avatarColor(name)}`}>
+    <span className={`${cls} rounded-full flex items-center justify-center font-semibold shrink-0 ${avatarColor(name, id)}`}>
       {initial}
     </span>
   );
@@ -93,6 +94,7 @@ function getTimeGroup(timestamp: number): string {
 function SessionCard({ item }: { item: any }) {
   const [expanded, setExpanded] = useState(false);
   const actorName = item.actor?.name || "Unknown";
+  const actorId = item.actor?._id;
   const isBlocked = item.outcome_type === "blocked";
   const isShipped = item.outcome_type === "shipped";
 
@@ -102,7 +104,7 @@ function SessionCard({ item }: { item: any }) {
     }`}>
       <div className="pl-3 pr-2 py-3">
         <div className="flex items-center gap-2 mb-2">
-          <ActorAvatar name={actorName} />
+          <ActorAvatar name={actorName} id={actorId} />
           <span className="text-[11px] font-medium text-sol-text">{actorName}</span>
           <OutcomeBadge type={item.outcome_type} />
           {item.project_path && (
@@ -193,7 +195,7 @@ function PeopleRow({ people, onSelect, selectedId }: { people: any[]; onSelect: 
                 : "border-sol-border/30 bg-sol-bg hover:border-sol-border/50 text-sol-text-muted hover:text-sol-text"
             }`}
           >
-            <ActorAvatar name={person.actor.name} size="sm" />
+            <ActorAvatar name={person.actor.name} id={person.actor._id} size="sm" />
             <span className="text-[11px] font-medium">{person.actor.name.split(" ")[0]}</span>
             <span className="text-[10px] opacity-50">{person.sessions}</span>
           </button>
