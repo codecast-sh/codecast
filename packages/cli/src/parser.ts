@@ -19,6 +19,7 @@ export interface ClaudeSessionEntry {
     role: "user" | "assistant";
     content: string | ContentBlock[];
     model?: string;
+    stop_reason?: string | null;
   };
   summary?: string;
   operation?: "enqueue" | "remove";
@@ -55,6 +56,7 @@ export interface ParsedMessage {
   toolResults?: ToolResult[];
   images?: ImageBlock[];
   subtype?: string;
+  stopReason?: string;
 }
 
 export function parseSessionLine(line: string): ClaudeSessionEntry | null {
@@ -165,6 +167,9 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
     }
 
     if (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0) {
+      const stopReason = typeof entry.message === "object" && entry.message.stop_reason
+        ? entry.message.stop_reason
+        : undefined;
       messages.push({
         uuid: entry.uuid,
         role,
@@ -174,6 +179,7 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         toolResults: toolResults.length > 0 ? toolResults : undefined,
         images: images.length > 0 ? images : undefined,
+        stopReason,
       });
     }
   }

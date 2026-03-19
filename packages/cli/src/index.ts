@@ -4128,9 +4128,9 @@ program
     const query = queryWords.join(" ");
     const limit = parseInt(options.limit);
     const projectPath = options.global ? undefined : getRealCwd();
-    const exactSessionId = queryWords.length === 1 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(queryWords[0])
-      ? queryWords[0]
-      : null;
+    const isExactUuid = queryWords.length === 1 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(queryWords[0]);
+    const isAgentSessionId = queryWords.length === 1 && /^agent-[0-9a-f]+$/i.test(queryWords[0]);
+    const exactSessionId = (isExactUuid || isAgentSessionId) ? queryWords[0] : null;
 
     if (exactSessionId) {
       try {
@@ -4693,7 +4693,30 @@ function openInNewTab(cmd: string, cwd?: string | null): void {
 }
 
 function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
-  const args = ["--resume", sessionId];
+  let resumeId = sessionId;
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!UUID_RE.test(sessionId)) {
+    const newUuid = crypto.randomUUID();
+    const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+    const projectDir = path.join(os.homedir(), ".claude", "projects", projectSlug);
+    const oldPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const newPath = path.join(projectDir, `${newUuid}.jsonl`);
+    if (fs.existsSync(oldPath)) {
+      const raw = fs.readFileSync(oldPath, "utf-8");
+      const rewritten = raw.replace(
+        new RegExp(`"sessionId"\\s*:\\s*"${sessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, "g"),
+        `"sessionId":"${newUuid}"`
+      );
+      fs.writeFileSync(newPath, rewritten);
+      console.log(`Converted subagent session ${sessionId} -> ${newUuid}`);
+      resumeId = newUuid;
+    } else {
+      console.error(`Session file not found: ${oldPath}`);
+      console.error(`Non-UUID session IDs (subagent sessions) require a local JSONL file to resume.`);
+      process.exit(1);
+    }
+  }
+  const args = ["--resume", resumeId];
 
   if (extraArgs) {
     const parsedArgs = extraArgs.split(/\s+/).filter((a) => a.length > 0);
