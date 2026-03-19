@@ -1,0 +1,20 @@
+digraph autopilot {
+  graph [goal="$plan_goal"]
+
+  start [shape=Mdiamond]
+  dispatch [label="Dispatch ready tasks", shape=parallelogram,
+    script="cast plan orchestrate $plan_id --max 3"]
+  monitor [label="Wait for agents", shape=parallelogram,
+    script="sleep 120 && cast plan status $plan_id --json"]
+  review [label="Review wave results", shape=hexagon]
+  check [label="More tasks?", shape=diamond]
+  exit [shape=Msquare]
+
+  start -> dispatch
+  dispatch -> monitor
+  monitor -> review
+  review -> check [label="[A] Approve wave"]
+  review -> dispatch [label="[R] Send back"]
+  check -> dispatch [condition="context.ready_tasks > 0"]
+  check -> exit [condition="context.ready_tasks = 0"]
+}

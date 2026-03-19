@@ -952,6 +952,11 @@ export default defineSchema({
         }),
       ),
     ),
+
+    // Workflow binding
+    workflow_id: v.optional(v.id("workflows")),
+    workflow_run_id: v.optional(v.id("workflow_runs")),
+
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -1073,6 +1078,10 @@ export default defineSchema({
     last_heartbeat: v.optional(v.number()),
     progress_pct: v.optional(v.number()),
 
+    // Workflow binding
+    workflow_run_id: v.optional(v.id("workflow_runs")),
+    workflow_node_id: v.optional(v.string()),
+
     created_at: v.number(),
     updated_at: v.number(),
     closed_at: v.optional(v.number()),
@@ -1084,6 +1093,7 @@ export default defineSchema({
     .index("by_parent_id", ["parent_id"])
     .index("by_short_id", ["short_id"])
     .index("by_team_id", ["team_id"])
+    .index("by_workflow_run", ["workflow_run_id"])
     .searchIndex("search_tasks", {
       searchField: "title",
       filterFields: ["user_id", "project_id", "status"],
@@ -1242,6 +1252,7 @@ export default defineSchema({
       max_retries: v.optional(v.number()),
       retry_target: v.optional(v.string()),
       goal_gate: v.optional(v.boolean()),
+      backend: v.optional(v.string()),
     })),
     edges: v.array(v.object({
       from: v.string(),
@@ -1261,6 +1272,8 @@ export default defineSchema({
   workflow_runs: defineTable({
     user_id: v.id("users"),
     workflow_id: v.id("workflows"),
+    task_id: v.optional(v.id("tasks")),
+    plan_id: v.optional(v.id("plans")),
     status: v.union(v.literal("pending"), v.literal("running"), v.literal("paused"), v.literal("completed"), v.literal("failed")),
     current_node_id: v.optional(v.string()),
     node_statuses: v.array(v.object({

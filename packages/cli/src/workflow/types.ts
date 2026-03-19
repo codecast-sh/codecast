@@ -20,6 +20,8 @@ export type NodeType =
   | "parallel_fanout"
   | "parallel_fanin";
 
+export type AgentBackend = "builtin" | "claude" | "codex" | "tmux";
+
 export interface WorkflowNode {
   id: string;
   label: string;
@@ -29,7 +31,7 @@ export interface WorkflowNode {
   prompt?: string;
   reasoning_effort?: string;
   model?: string;
-  backend?: string;
+  backend?: AgentBackend;
   temperature?: number;
   // Command nodes
   script?: string;

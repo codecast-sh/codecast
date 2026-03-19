@@ -1,0 +1,19 @@
+digraph feature {
+  graph [goal="$task_title"]
+  rankdir=LR
+
+  start [shape=Mdiamond]
+  implement [label="Implement", backend=claude,
+    prompt="Implement this task.\n\nTitle: $task_title\nDescription: $task_description\n\nAcceptance criteria:\n$acceptance_criteria\n\nWhen done, run: cast task done $task_id -m \"summary of what you implemented\""]
+  verify [label="Verify", shape=parallelogram,
+    script="npx tsc --noEmit 2>&1 | tail -20"]
+  review [label="Review", shape=hexagon]
+  exit [shape=Msquare]
+
+  start -> implement
+  implement -> verify
+  verify -> review [condition="outcome = success"]
+  verify -> implement [condition="outcome = failure", label="[R] Fix"]
+  review -> exit [label="[A] Approve"]
+  review -> implement [label="[R] Revise"]
+}

@@ -6,6 +6,8 @@ import { verifyApiToken } from "./apiTokens";
 export const create = mutation({
   args: {
     workflow_id: v.id("workflows"),
+    task_id: v.optional(v.id("tasks")),
+    plan_id: v.optional(v.id("plans")),
     goal_override: v.optional(v.string()),
     project_path: v.optional(v.string()),
   },
@@ -20,6 +22,8 @@ export const create = mutation({
     const runId = await ctx.db.insert("workflow_runs", {
       user_id: userId,
       workflow_id: args.workflow_id,
+      task_id: args.task_id,
+      plan_id: args.plan_id,
       status: "pending",
       node_statuses: [],
       goal_override: args.goal_override,
@@ -27,6 +31,21 @@ export const create = mutation({
       created_at: now,
       updated_at: now,
     });
+
+    if (args.task_id) {
+      await ctx.db.patch(args.task_id, {
+        workflow_run_id: runId,
+        status: "in_progress" as any,
+        updated_at: now,
+      });
+    }
+
+    if (args.plan_id) {
+      await ctx.db.patch(args.plan_id, {
+        workflow_run_id: runId,
+        updated_at: now,
+      });
+    }
 
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
@@ -167,6 +186,35 @@ export const updateProgress = mutation({
       }
     }
 
+    // Sync status to bound task/plan
+    if (args.run_status) {
+      const taskId = (run as any).task_id;
+      const planId = (run as any).plan_id;
+
+      if (taskId) {
+        const taskUpdates: Record<string, any> = { updated_at: now };
+        if (args.run_status === "completed") {
+          taskUpdates.status = "in_review";
+        } else if (args.run_status === "failed") {
+          taskUpdates.execution_status = "blocked";
+          if (args.fail_reason) taskUpdates.execution_concerns = args.fail_reason;
+        }
+        if (Object.keys(taskUpdates).length > 1) {
+          await ctx.db.patch(taskId, taskUpdates);
+        }
+      }
+
+      if (planId) {
+        const planUpdates: Record<string, any> = { updated_at: now };
+        if (args.run_status === "completed") {
+          const progressLog = ((await ctx.db.get(planId)) as any)?.progress_log || [];
+          progressLog.push({ timestamp: now, entry: "Workflow run completed" });
+          planUpdates.progress_log = progressLog;
+        }
+        await ctx.db.patch(planId, planUpdates);
+      }
+    }
+
     return { ok: true };
   },
 });
@@ -207,14 +255,19 @@ export const pauseAtGate = mutation({
     const run = await ctx.db.get(args.run_id);
     if (!run || run.user_id !== auth.userId) return { error: "Not found" };
 
+    const now = Date.now();
     await ctx.db.patch(args.run_id, {
       status: "paused",
       current_node_id: args.node_id,
       gate_prompt: args.prompt,
       gate_choices: args.choices,
       gate_response: undefined,
-      updated_at: Date.now(),
+      updated_at: now,
     });
+
+    if ((run as any).task_id) {
+      await ctx.db.patch((run as any).task_id, { status: "in_review" as any, updated_at: now });
+    }
 
     return { ok: true };
   },

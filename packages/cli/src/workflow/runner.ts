@@ -203,6 +203,89 @@ async function executeAgent(
   }
 }
 
+async function executeCliAgent(
+  node: WorkflowNode,
+  graph: WorkflowGraph,
+  context: Record<string, string>,
+  cwd: string,
+  options: RunOptions
+): Promise<NodeOutcome> {
+  const { detectRuntime } = await import("../agents/runtime.js");
+  const prompt = buildNodePrompt(node, graph, context);
+  const model = resolveModel(node, graph) || "opus";
+  const backend = node.backend || "claude";
+
+  console.log(`${c.dim}  backend: ${backend}, model: ${model}${c.reset}`);
+
+  const runtime = detectRuntime();
+  const sessionName = `wf-${node.id}-${Date.now().toString(36).slice(-4)}`;
+
+  const handle = runtime.spawn({
+    sessionName,
+    prompt,
+    model,
+    workingDir: cwd,
+    taskShortId: context["task_id"] || undefined,
+  });
+
+  console.log(`  ${c.green}spawned${c.reset} ${c.dim}${sessionName}${c.reset}`);
+
+  if (options.runId) {
+    await reportProgress(options, {
+      current_node_id: node.id,
+      node_id: node.id,
+      node_status: "running",
+      session_id: sessionName,
+    });
+  }
+
+  const timeout = options.agentTimeout || 1800_000;
+  const startMs = Date.now();
+  const pollInterval = 10_000;
+
+  while (Date.now() - startMs < timeout) {
+    await new Promise(r => setTimeout(r, pollInterval));
+
+    if (!runtime.isAlive(handle)) {
+      const output = runtime.getOutput(handle, 500);
+      context[`${node.id}.output`] = output.text.slice(0, 4000);
+      context[`${node.id}.session_id`] = sessionName;
+
+      if (output.markers.status === "blocked") {
+        console.log(`  ${c.red}blocked${c.reset}: ${output.markers.detail}`);
+        return "failure";
+      }
+      if (output.markers.status === "needs_context") {
+        console.log(`  ${c.yellow}needs_context${c.reset}: ${output.markers.detail}`);
+        return "failure";
+      }
+      if (output.markers.status === "done_with_concerns") {
+        console.log(`  ${c.yellow}done*${c.reset}: ${output.markers.detail}`);
+        context[`${node.id}.concerns`] = output.markers.detail;
+        return "success";
+      }
+
+      const text = output.text.toLowerCase();
+      if (text.includes("cast task done") || text.includes("task done") || text.includes("status: done")) {
+        console.log(`  ${c.green}done${c.reset}`);
+        return "success";
+      }
+
+      console.log(`  ${c.dim}agent exited${c.reset}`);
+      return "success";
+    }
+
+    const elapsed = Math.round((Date.now() - startMs) / 60_000);
+    if (elapsed > 0 && elapsed % 5 === 0) {
+      console.log(`${c.dim}  ... ${elapsed}m elapsed${c.reset}`);
+    }
+  }
+
+  console.log(`  ${c.red}timeout${c.reset} after ${Math.round(timeout / 60_000)}m`);
+  runtime.kill(handle);
+  return "failure";
+}
+
 async function executeHumanGate(
   node: WorkflowNode,
   graph: WorkflowGraph,
@@ -389,6 +472,8 @@ export interface RunOptions {
   runId?: string;
   convexSiteUrl?: string;
   apiToken?: string;
+  taskId?: string;
+  planId?: string;
 }
 
 // ─── Goal gate check (runs when exit node is reached) ────
@@ -482,10 +567,56 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
 
   const startNode = [...graph.nodes.values()].find(n => n.type === "start")!;
 
+  const initialContext: Record<string, string> = {};
+  initialContext["project_path"] = cwd;
+
+  if (options.taskId) {
+    initialContext["task_id"] = options.taskId;
+    if (options.apiToken && options.convexSiteUrl) {
+      try {
+        const resp = await fetch(`${options.convexSiteUrl}/cli/work/get`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: options.apiToken, short_id: options.taskId }),
+        });
+        const task = await resp.json() as any;
+        if (task && !task.error) {
+          initialContext["task_title"] = task.title || "";
+          initialContext["task_description"] = task.description || "";
+          initialContext["acceptance_criteria"] = (task.acceptance_criteria || []).join("\n- ");
+        }
+      } catch {}
+    }
+  }
+
+  if (options.planId) {
+    initialContext["plan_id"] = options.planId;
+    if (options.apiToken && options.convexSiteUrl) {
+      try {
+        const resp = await fetch(`${options.convexSiteUrl}/cli/plans/get`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: options.apiToken, short_id: options.planId }),
+        });
+        const plan = await resp.json() as any;
+        if (plan && !plan.error) {
+          initialContext["plan_title"] = plan.title || "";
+          initialContext["plan_goal"] = plan.goal || "";
+          initialContext["plan_acceptance_criteria"] = (plan.acceptance_criteria || []).join("\n- ");
+        }
+      } catch {}
+    }
+  }
+
+  // Expand $variables in the graph goal
+  if (graph.goal) {
+    graph.goal = graph.goal.replace(/\$(\w+)/g, (_, key) => initialContext[key] || `$${key}`);
+  }
+
   const state: WorkflowRunState = {
     currentNodeId: startNode.id,
     visitCounts: {},
-    context: {},
+    context: initialContext,
     completed: [],
     failed: false,
   };
@@ -549,7 +680,12 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     } else if (current.type === "human") {
       outcome = await executeHumanGate(current, graph, state.context);
     } else if (current.type === "agent" || current.type === "prompt") {
-      outcome = await executeAgent(current, graph, state.context, cwd, options);
+      const backend = current.backend || "builtin";
+      if (backend !== "builtin") {
+        outcome = await executeCliAgent(current, graph, state.context, cwd, options);
+      } else {
+        outcome = await executeAgent(current, graph, state.context, cwd, options);
+      }
     } else {
       outcome = "success";
     }

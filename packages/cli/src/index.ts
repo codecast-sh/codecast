@@ -10531,6 +10531,8 @@ workflow
   .option("-g, --goal <text>", "Override the workflow goal")
   .option("--dry-run", "Validate and print the workflow without executing")
   .option("--auto-approve", "Skip human gate prompts, auto-select first option")
+  .option("--task <short_id>", "Bind workflow to a task (injects task context)")
+  .option("--plan <short_id>", "Bind workflow to a plan (injects plan context)")
   .action(async (file: string, options: any) => {
     const { parseWorkflowFile } = await import("./workflow/parser.js");
     const { runWorkflow } = await import("./workflow/runner.js");
@@ -10544,12 +10546,29 @@ workflow
     }
 
     const graph = parseWorkflowFile(filePath);
-    await runWorkflow(graph, {
+
+    const runOpts: any = {
       goalOverride: options.goal,
       dryRun: options.dryRun,
       autoApprove: options.autoApprove,
       cwd: path.dirname(filePath),
-    });
+    };
+
+    if (options.task) {
+      const task = await cliPost("/cli/work/get", { short_id: options.task });
+      if (!task) { console.error(`Task not found: ${options.task}`); process.exit(1); }
+      runOpts.taskId = task.short_id;
+      if (!runOpts.goalOverride) runOpts.goalOverride = task.title;
+    }
+
+    if (options.plan) {
+      const plan = await cliPost("/cli/plans/get", { short_id: options.plan });
+      if (!plan) { console.error(`Plan not found: ${options.plan}`); process.exit(1); }
+      runOpts.planId = plan.short_id;
+      if (!runOpts.goalOverride) runOpts.goalOverride = plan.goal || plan.title;
+    }
+
+    await runWorkflow(graph, runOpts);
   });
 
 workflow
@@ -10643,9 +10662,11 @@ workflow
     const path = await import("path");
     const os = await import("os");
 
+    const builtinDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "workflows");
     const searchDirs = [
       path.join(process.cwd(), "workflows"),
       path.join(os.homedir(), ".cast", "workflows"),
+      builtinDir,
     ];
 
     let found = false;
