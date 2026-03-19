@@ -7860,7 +7860,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 const STATUS_ICONS: Record<string, string> = {
-  draft: "○",
+  backlog: "○",
   open: "◎",
   in_progress: "◉",
   in_review: "◈",
@@ -8627,7 +8627,7 @@ plan
 
     const plan = result;
     const allTasks = plan.tasks || [];
-    const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "draft");
+    const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "backlog");
 
     if (openTasks.length === 0) {
       console.log(fmt.muted("No open tasks to orchestrate."));
@@ -8991,7 +8991,7 @@ plan
       if (!plan) { console.error("Plan not found"); process.exit(1); }
       const allTasks = plan.tasks || [];
       const resolvedIds = new Set(allTasks.filter((t: any) => t.status === "done" || t.status === "dropped").flatMap((t: any) => [t._id, t.short_id]));
-      const open = allTasks.filter((t: any) => t.status === "open" || t.status === "draft");
+      const open = allTasks.filter((t: any) => t.status === "open" || t.status === "backlog");
       const ready = open.filter((t: any) => {
         if (!t.blocked_by || t.blocked_by.length === 0) return true;
         return t.blocked_by.every((d: string) => resolvedIds.has(d));
@@ -9230,7 +9230,7 @@ plan
         if (t.status === "done") taskOutcomes.set(t.short_id, t.execution_status || "done");
         else if (t.status === "dropped") taskOutcomes.set(t.short_id, "dropped");
       }
-      const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "draft");
+      const openTasks = allTasks.filter((t: any) => t.status === "open" || t.status === "backlog");
       const readyTasks = openTasks.filter((t: any) => {
         if (activeAgents.has(t.short_id)) return false;
         if (!t.blocked_by || t.blocked_by.length === 0) return evaluateCondition(t, taskOutcomes);
@@ -9333,7 +9333,7 @@ plan
     const tasks = plan.tasks || [];
     const done = tasks.filter((t: any) => t.status === "done");
     const inProgress = tasks.filter((t: any) => t.status === "in_progress");
-    const open = tasks.filter((t: any) => t.status === "open" || t.status === "draft");
+    const open = tasks.filter((t: any) => t.status === "open" || t.status === "backlog");
     const dropped = tasks.filter((t: any) => t.status === "dropped");
 
     const resolvedIds = new Set([...done, ...dropped].flatMap((t: any) => [t._id, t.short_id]));
@@ -9474,7 +9474,7 @@ plan
       tasks.filter((t: any) => t.status === "done" || t.status === "dropped")
         .flatMap((t: any) => [t._id, t.short_id])
     );
-    const open = tasks.filter((t: any) => t.status === "open" || t.status === "draft");
+    const open = tasks.filter((t: any) => t.status === "open" || t.status === "backlog");
     const inProgress = tasks.filter((t: any) => t.status === "in_progress");
 
     const ready = open.filter((t: any) => {

@@ -10897,7 +10897,7 @@ async function handlePermissionRequest(syncService2, conversationId, sessionId, 
 import * as fs10 from "fs";
 import * as path10 from "path";
 import * as os from "os";
-var VERSION = "1.0.82";
+var VERSION = "1.0.84";
 var LATEST_URL = "https://dl.codecast.sh/latest.json";
 var UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 var CONFIG_DIR3 = process.env.HOME + "/.codecast";
@@ -12152,27 +12152,41 @@ function sendLogImmediate(level, message, metadata) {
   }).catch(() => {
   });
 }
-var IDLE_TIMEOUT_MS = 2 * 60000;
 var IDLE_COOLDOWN_MS = 5 * 60000;
+var IDLE_DEBOUNCE_MS = 5000;
 var idleTimers = new Map;
-var lastIdleNotification = new Map;
 var lastIdleNotifiedSize = new Map;
 var lastErrorNotification = new Map;
 var lastWorkingStatusSent = new Map;
 var WORKING_STATUS_THROTTLE_MS = 1e4;
+var lastSentAgentStatus = new Map;
 var lastHookStatus = new Map;
 var pendingInteractivePrompts = new Map;
 var AGENT_STATUS_DIR = path13.join(process.env.HOME || "", ".codecast", "agent-status");
-function sendAgentStatus(syncService2, conversationId, sessionId, status, clientTs, permissionMode) {
-  if (status === "working" && !permissionMode) {
+function sendAgentStatus(syncService2, conversationId, sessionId, status, clientTs, permissionMode, idleMessage) {
+  const prevStatus = lastSentAgentStatus.get(sessionId);
+  const isTransition = prevStatus !== status;
+  if (status === "working" && !permissionMode && !isTransition) {
     const last = lastWorkingStatusSent.get(sessionId) ?? 0;
     if (Date.now() - last < WORKING_STATUS_THROTTLE_MS)
       return;
-    lastWorkingStatusSent.set(sessionId, Date.now());
   }
+  if (status === "working")
+    lastWorkingStatusSent.set(sessionId, Date.now());
+  lastSentAgentStatus.set(sessionId, status);
   syncService2.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => {
     log(`[sendAgentStatus] error: ${err?.message || err}`);
   });
+  if (isTransition && status === "idle" && idleMessage) {
+    syncService2.createSessionNotification({
+      conversation_id: conversationId,
+      type: "session_idle",
+      title: "Claude done",
+      message: idleMessage
+    }).catch(() => {
+    });
+    log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
+  }
 }
 function truncateForNotification(text, maxLen = 200) {
   let result = text.replace(/```[\s\S]*?```/g, "[code]").replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
@@ -12522,11 +12536,15 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         });
         setTimeout(() => {
           log("Restarting daemon per remote command...");
-          const spawned = spawnReplacement();
-          if (spawned) {
-            skipRespawn = true;
+          if (isManagedByLaunchd()) {
+            log("Launchd will restart daemon after exit");
           } else {
-            log("spawnReplacement failed, letting exit handler respawn");
+            const spawned = spawnReplacement();
+            if (spawned) {
+              skipRespawn = true;
+            } else {
+              log("spawnReplacement failed, letting exit handler respawn");
+            }
           }
           setTimeout(() => process.exit(0), 500);
         }, 1000);
@@ -12552,11 +12570,15 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
             logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
             await flushRemoteLogs();
             log("Update successful, restarting...");
-            const spawned = spawnReplacement();
-            if (spawned) {
-              skipRespawn = true;
+            if (isManagedByLaunchd()) {
+              log("Launchd will restart daemon after update");
             } else {
-              log("spawnReplacement failed, letting exit handler respawn");
+              const spawned = spawnReplacement();
+              if (spawned) {
+                skipRespawn = true;
+              } else {
+                log("spawnReplacement failed, letting exit handler respawn");
+              }
             }
             setTimeout(() => process.exit(0), 500);
           } else {
@@ -14296,31 +14318,15 @@ ${snippet}
         } else if (hasPendingToolCalls) {
           idleTimers.delete(sessionId);
         } else {
-          const capturedFilePath = filePath;
           const capturedSize = stats.size;
-          if (capturedSize === lastIdleNotifiedSize.get(sessionId)) {
-          } else {
+          const capturedConvId = conversationId;
+          if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
+            lastIdleNotifiedSize.set(sessionId, capturedSize);
             idleTimers.set(sessionId, setTimeout(() => {
               idleTimers.delete(sessionId);
-              try {
-                const currentStats = fs14.statSync(capturedFilePath);
-                if (currentStats.size !== capturedSize)
-                  return;
-              } catch {
-                return;
-              }
-              lastIdleNotifiedSize.set(sessionId, capturedSize);
-              sendAgentStatus(syncService2, conversationId, sessionId, "idle");
               const preview = truncateForNotification(lastAssistantMessage.content);
-              syncService2.createSessionNotification({
-                conversation_id: conversationId,
-                type: "session_idle",
-                title: "Claude done",
-                message: preview
-              }).catch(() => {
-              });
-              log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
-            }, IDLE_TIMEOUT_MS));
+              sendAgentStatus(syncService2, capturedConvId, sessionId, "idle", undefined, undefined, preview);
+            }, IDLE_DEBOUNCE_MS));
           }
         }
       }
@@ -17085,6 +17091,9 @@ function isAgentProcess(pid) {
   }
 }
 var skipRespawn = false;
+function isManagedByLaunchd() {
+  return !!process.env.XPC_SERVICE_NAME;
+}
 function spawnReplacement() {
   try {
     const child = spawn(process.execPath, process.argv.slice(1), {
@@ -17125,6 +17134,7 @@ function clearCrashCount() {
   }
 }
 function acquireLock() {
+  const underLaunchd = isManagedByLaunchd();
   if (fs14.existsSync(PID_FILE)) {
     try {
       const existingPid = parseInt(fs14.readFileSync(PID_FILE, "utf-8").trim(), 10);
@@ -17137,18 +17147,20 @@ function acquireLock() {
     } catch {
     }
   }
-  try {
-    const pgrepOut = execSync2(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
-    const pids = pgrepOut.trim().split(`
+  if (!underLaunchd) {
+    try {
+      const pgrepOut = execSync2(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
+      const pids = pgrepOut.trim().split(`
 `).map(Number).filter((p) => p && p !== process.pid && isProcessRunning(p));
-    for (const zombiePid of pids) {
-      log(`Killing zombie daemon process ${zombiePid}`);
-      try {
-        process.kill(zombiePid, "SIGKILL");
-      } catch {
+      for (const zombiePid of pids) {
+        log(`Killing zombie daemon process ${zombiePid}`);
+        try {
+          process.kill(zombiePid, "SIGKILL");
+        } catch {
+        }
       }
+    } catch {
     }
-  } catch {
   }
   fs14.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
   try {
@@ -17456,7 +17468,9 @@ async function checkForForcedUpdate(syncService2) {
       if (success) {
         logLifecycle("forced_update_complete", `Binary replaced from v${currentVersion}, target>=${minVersion}`);
         await flushRemoteLogs();
-        spawnReplacement();
+        if (!isManagedByLaunchd()) {
+          spawnReplacement();
+        }
         await new Promise((resolve4) => setTimeout(resolve4, 500));
         process.exit(0);
       } else {
@@ -17488,14 +17502,18 @@ function checkDiskVersionMismatch() {
       log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, restarting`);
       logLifecycle("version_mismatch_restart", `${daemonVersion} -> ${diskVersion}`);
       flushRemoteLogs().then(() => {
-        const spawned = spawnReplacement();
-        if (spawned)
-          skipRespawn = true;
+        if (!isManagedByLaunchd()) {
+          const spawned = spawnReplacement();
+          if (spawned)
+            skipRespawn = true;
+        }
         setTimeout(() => process.exit(0), 500);
       }).catch(() => {
-        const spawned = spawnReplacement();
-        if (spawned)
-          skipRespawn = true;
+        if (!isManagedByLaunchd()) {
+          const spawned = spawnReplacement();
+          if (spawned)
+            skipRespawn = true;
+        }
         setTimeout(() => process.exit(0), 500);
       });
     }
@@ -17742,7 +17760,7 @@ async function main() {
     console.error(`Daemon already running (PID: ${existingPid}). Exiting.`);
     process.exit(0);
   }
-  const underLaunchd = !!process.env.XPC_SERVICE_NAME;
+  const underLaunchd = isManagedByLaunchd();
   process.on("exit", (code2) => {
     persistLogQueue();
     if (skipRespawn || underLaunchd)

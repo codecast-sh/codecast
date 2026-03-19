@@ -302,11 +302,13 @@ function sendLogImmediate(level: LogLevel, message: string, metadata?: RemoteLog
 }
 
 const IDLE_COOLDOWN_MS = 5 * 60_000;
+const IDLE_DEBOUNCE_MS = 5_000;
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lastIdleNotifiedSize = new Map<string, number>();
 const lastErrorNotification = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
+const lastSentAgentStatus = new Map<string, AgentStatus>();
 
 type AgentStatus = "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped";
 type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
@@ -322,13 +324,26 @@ function sendAgentStatus(
   status: AgentStatus,
   clientTs?: number,
   permissionMode?: PermissionMode,
+  idleMessage?: string,
 ): void {
-  if (status === "working" && !permissionMode) {
+  const prevStatus = lastSentAgentStatus.get(sessionId);
+  const isTransition = prevStatus !== status;
+  if (status === "working" && !permissionMode && !isTransition) {
     const last = lastWorkingStatusSent.get(sessionId) ?? 0;
     if (Date.now() - last < WORKING_STATUS_THROTTLE_MS) return;
-    lastWorkingStatusSent.set(sessionId, Date.now());
   }
+  if (status === "working") lastWorkingStatusSent.set(sessionId, Date.now());
+  lastSentAgentStatus.set(sessionId, status);
   syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
+  if (isTransition && status === "idle" && idleMessage) {
+    syncService.createSessionNotification({
+      conversation_id: conversationId,
+      type: "session_idle",
+      title: "Claude done",
+      message: idleMessage,
+    }).catch(() => {});
+    log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
+  }
 }
 
 function truncateForNotification(text: string, maxLen = 200): string {
@@ -2663,19 +2678,15 @@ async function processSessionFile(
           idleTimers.delete(sessionId);
         } else {
           const capturedSize = stats.size;
+          const capturedConvId = conversationId;
 
           if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
-            idleTimers.delete(sessionId);
             lastIdleNotifiedSize.set(sessionId, capturedSize);
-            sendAgentStatus(syncService, conversationId, sessionId, "idle");
-            const preview = truncateForNotification(lastAssistantMessage.content);
-            syncService.createSessionNotification({
-              conversation_id: conversationId,
-              type: "session_idle",
-              title: "Claude done",
-              message: preview,
-            }).catch(() => {});
-            log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
+            idleTimers.set(sessionId, setTimeout(() => {
+              idleTimers.delete(sessionId);
+              const preview = truncateForNotification(lastAssistantMessage.content);
+              sendAgentStatus(syncService, capturedConvId, sessionId, "idle", undefined, undefined, preview);
+            }, IDLE_DEBOUNCE_MS));
           }
         }
       }
