@@ -10,11 +10,11 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type TaskStatus = "draft" | "open" | "in_progress" | "in_review" | "done" | "dropped";
+type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type ExecutionStatus = "done" | "done_with_concerns" | "blocked" | "needs_context";
 
 const TASK_STATUS: Record<TaskStatus, { icon: LucideIcon; label: string; color: string; bg: string; border: string }> = {
-  draft: { icon: CircleDotDashed, label: "Draft", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
+  backlog: { icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim", bg: "bg-sol-text-dim/10", border: "border-sol-text-dim/30" },
   open: { icon: Circle, label: "Open", color: "text-sol-blue", bg: "bg-sol-blue/10", border: "border-sol-blue/30" },
   in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow", bg: "bg-sol-yellow/10", border: "border-sol-yellow/30" },
   in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet", bg: "bg-sol-violet/10", border: "border-sol-violet/30" },

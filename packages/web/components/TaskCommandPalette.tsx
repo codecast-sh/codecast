@@ -4,6 +4,7 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem } from "../store/inboxStore";
 import { toast } from "sonner";
+import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import {
   Circle,
   CircleDot,
@@ -34,7 +35,7 @@ type CommandMode =
   | "assign";
 
 const STATUS_OPTIONS = [
-  { key: "draft", icon: CircleDotDashed, label: "Draft", color: "text-neutral-500", shortcut: "1" },
+  { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-neutral-500", shortcut: "1" },
   { key: "open", icon: Circle, label: "Open", color: "text-blue-400", shortcut: "2" },
   { key: "in_progress", icon: CircleDot, label: "In Progress", color: "text-yellow-400", shortcut: "3" },
   { key: "in_review", icon: CircleDot, label: "In Review", color: "text-violet-400", shortcut: "4" },
@@ -50,10 +51,6 @@ const PRIORITY_OPTIONS = [
   { key: "none", icon: Minus, label: "None", color: "text-neutral-600", shortcut: "5" },
 ];
 
-const LABEL_PRESETS = [
-  "bug", "feature", "improvement", "refactor", "docs", "infra",
-  "design", "perf", "security", "testing", "urgent", "blocked",
-];
 
 interface TaskCommandPaletteProps {
   open: boolean;
@@ -79,6 +76,7 @@ export function TaskCommandPalette({
   const listRef = useRef<HTMLDivElement>(null);
 
   const webUpdate = useMutation(api.tasks.webUpdate);
+  const assignToAgent = useMutation(api.tasks.assignToAgent);
   const updateTask = useInboxStore((s) => s.updateTask);
 
   useWatchEffect(() => {
@@ -148,25 +146,36 @@ export function TaskCommandPalette({
       return PRIORITY_OPTIONS.filter((i) => i.label.toLowerCase().includes(q));
     }
     if (mode === "labels") {
-      const all = [...new Set([...LABEL_PRESETS, ...currentLabels])];
-      return all
+      const all = [...new Set([...DEFAULT_LABELS, ...currentLabels])];
+      const matched = all
         .filter((l) => l.toLowerCase().includes(q))
         .map((l, i) => ({
           key: l,
           label: l,
           active: currentLabels.includes(l),
           shortcut: i < 9 ? String(i + 1) : undefined,
+          color: getLabelColor(l),
+          isCreate: false,
         }));
+      const canCreate = q && !matched.some((l) => l.key.toLowerCase() === q);
+      if (canCreate) {
+        matched.unshift({ key: q, label: `Create "${q}"`, active: false, shortcut: undefined, color: getLabelColor(q), isCreate: true });
+      }
+      return matched;
     }
     if (mode === "assign") {
-      const agentOpt = { key: "agent", label: "Claude Agent", type: "agent" as const, image: undefined };
+      const agentOpts = [
+        { key: "agent:claude_code", label: "Claude Code", type: "agent" as const, image: undefined },
+        { key: "agent:codex", label: "Codex", type: "agent" as const, image: undefined },
+        { key: "agent:gemini", label: "Gemini", type: "agent" as const, image: undefined },
+      ];
       const memberOpts = (teamMembers || []).filter(Boolean).map((m: any) => ({
         key: m._id,
         label: currentUser && m._id === currentUser._id ? `${m.name} (you)` : m.name,
         type: "user" as const,
         image: m.image || m.github_avatar_url,
       }));
-      const allAssignees = [agentOpt, ...memberOpts];
+      const allAssignees = [...agentOpts, ...memberOpts];
       return allAssignees.filter((o) => o.label.toLowerCase().includes(q));
     }
     return [];
@@ -209,8 +218,17 @@ export function TaskCommandPalette({
       } else if (mode === "assign") {
         const item = items[index] as any;
         if (item) {
-          applyUpdate({ assignee: item.key });
-          toast.success(`Assigned to ${item.label.replace(" (you)", "")}`);
+          if (item.key.startsWith("agent:")) {
+            const agentType = item.key.replace("agent:", "") as "claude_code" | "codex" | "gemini";
+            for (const task of targetTasks) {
+              assignToAgent({ short_id: task.short_id, agent_type: agentType }).catch(() => {});
+            }
+            toast.success(`Starting session with ${item.label}…`);
+            onClose();
+          } else {
+            applyUpdate({ assignee: item.key });
+            toast.success(`Assigned to ${item.label.replace(" (you)", "")}`);
+          }
         }
       }
     },
@@ -417,7 +435,7 @@ export function TaskCommandPalette({
                     : "text-sol-text-muted hover:bg-sol-bg-alt/50"
                 }`}
               >
-                <Tag className="w-4 h-4 flex-shrink-0" />
+                <span className={`w-3 h-3 rounded-full flex-shrink-0 ${item.color?.dot || "bg-neutral-400"}`} />
                 <span className="flex-1 text-left">{item.label}</span>
                 {item.active && <Check className="w-4 h-4 text-sol-cyan flex-shrink-0" />}
                 {item.shortcut && (
@@ -429,29 +447,38 @@ export function TaskCommandPalette({
             ))}
 
           {mode === "assign" &&
-            (items as any[]).map((item, i) => (
-              <button
-                key={item.key}
-                onClick={() => selectItem(i)}
-                onMouseEnter={() => setHighlightIndex(i)}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
-                  i === highlightIndex
-                    ? "bg-sol-bg-highlight text-sol-text"
-                    : "text-sol-text-muted hover:bg-sol-bg-alt/50"
-                }`}
-              >
-                {item.type === "agent" ? (
-                  <Bot className="w-4 h-4 flex-shrink-0 text-sol-violet" />
-                ) : item.image ? (
-                  <img src={item.image} alt={item.label} className="w-4 h-4 rounded-full flex-shrink-0" />
-                ) : (
-                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
-                    {item.label.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                  </div>
-                )}
-                <span className="flex-1 text-left">{item.label}</span>
-              </button>
-            ))}
+            (items as any[]).map((item, i) => {
+              const agentColor =
+                item.key === "agent:codex" ? "text-blue-400" :
+                item.key === "agent:gemini" ? "text-amber-400" :
+                "text-sol-violet";
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => selectItem(i)}
+                  onMouseEnter={() => setHighlightIndex(i)}
+                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+                    i === highlightIndex
+                      ? "bg-sol-bg-highlight text-sol-text"
+                      : "text-sol-text-muted hover:bg-sol-bg-alt/50"
+                  }`}
+                >
+                  {item.type === "agent" ? (
+                    <Bot className={`w-4 h-4 flex-shrink-0 ${agentColor}`} />
+                  ) : item.image ? (
+                    <img src={item.image} alt={item.label} className="w-4 h-4 rounded-full flex-shrink-0" />
+                  ) : (
+                    <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                      {item.label.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <span className="flex-1 text-left">{item.label}</span>
+                  {item.type === "agent" && (
+                    <span className="text-[10px] text-sol-text-dim font-mono">start session</span>
+                  )}
+                </button>
+              );
+            })}
         </div>
 
         {/* Footer hints */}

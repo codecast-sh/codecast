@@ -40,7 +40,11 @@ export function AssigneeSelect({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const agentOption: AssigneeOption = { id: "agent", name: "Claude Agent", type: "agent" };
+  const agentOptions: AssigneeOption[] = [
+    { id: "agent:claude_code", name: "Claude Code", type: "agent" },
+    { id: "agent:codex", name: "Codex", type: "agent" },
+    { id: "agent:gemini", name: "Gemini", type: "agent" },
+  ];
 
   const memberOptions: AssigneeOption[] = (teamMembers || [])
     .filter(Boolean)
@@ -51,7 +55,7 @@ export function AssigneeSelect({
       type: "user" as const,
     }));
 
-  const allOptions: AssigneeOption[] = [agentOption, ...memberOptions];
+  const allOptions: AssigneeOption[] = [...agentOptions, ...memberOptions];
 
   const filtered = search.trim()
     ? allOptions.filter((o) => o.name.toLowerCase().includes(search.toLowerCase()))
@@ -63,8 +67,11 @@ export function AssigneeSelect({
     setSearch("");
   };
 
-  const renderAvatar = (opt: { name: string; image?: string; type?: string }, size = "w-4 h-4") => {
-    if (opt.type === "agent") return <Bot className={`${size} text-sol-violet`} />;
+  const agentColor = (id: string) =>
+    id === "agent:codex" ? "text-blue-400" : id === "agent:gemini" ? "text-amber-400" : "text-sol-violet";
+
+  const renderAvatar = (opt: { id?: string; name: string; image?: string; type?: string }, size = "w-4 h-4") => {
+    if (opt.type === "agent") return <Bot className={`${size} ${agentColor(opt.id || "")}`} />;
     if (opt.image) return <img src={opt.image} alt={opt.name} className={`${size} rounded-full`} />;
     const initials = opt.name.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
     return (
@@ -90,7 +97,7 @@ export function AssigneeSelect({
         }`}
       >
         {currentOpt
-          ? renderAvatar({ ...currentOpt, type: value === "agent" ? "agent" : "user" })
+          ? renderAvatar({ ...currentOpt, id: currentOpt.id, type: value?.startsWith("agent:") ? "agent" : "user" })
           : <User className="w-3.5 h-3.5" />
         }
         <span>{currentOpt ? currentOpt.name.replace(" (you)", "") : "Assignee"}</span>

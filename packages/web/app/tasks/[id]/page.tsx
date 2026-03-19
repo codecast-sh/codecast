@@ -7,7 +7,6 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem } from "../../../store/inboxStore";
 import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { TaskCommandPalette } from "../../../components/TaskCommandPalette";
-import { AssigneeSelect } from "../../../components/AssigneeSelect";
 import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
 import { toast } from "sonner";
 import { AuthGuard } from "../../../components/AuthGuard";
@@ -16,6 +15,7 @@ import { DashboardLayout } from "../../../components/DashboardLayout";
 const api = _api as any;
 import { Badge } from "../../../components/ui/badge";
 import { TaskStatusBadge } from "../../../components/TaskStatusBadge";
+import { getLabelColor } from "../../../lib/labelColors";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -34,9 +34,7 @@ import {
   ExternalLink,
   Clock,
   Zap,
-  User,
   Bot,
-  History,
   ChevronDown,
   GitBranch,
   Radio,
@@ -46,7 +44,7 @@ import {
 } from "lucide-react";
 
 const STATUS_OPTIONS = [
-  { key: "draft", icon: CircleDotDashed, label: "Draft", color: "text-sol-text-dim" },
+  { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
   { key: "open", icon: Circle, label: "Open", color: "text-sol-blue" },
   { key: "in_progress", icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
   { key: "in_review", icon: CircleDot, label: "In Review", color: "text-sol-violet" },
@@ -396,7 +394,6 @@ export default function TaskDetailPage() {
   const listItem = useInboxStore((s) => s.tasks[id]);
   const data = detail || (listItem as TaskDetail | undefined);
   const updateTask = useInboxStore((s) => s.updateTask);
-  const addTaskComment = useInboxStore((s) => s.addTaskComment);
   const webUpdate = useMutation(api.tasks.webUpdate);
   const webAddComment = useMutation(api.tasks.webAddComment);
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -404,9 +401,14 @@ export default function TaskDetailPage() {
   const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as any;
   const teamMembers = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId } : "skip");
   const [comment, setComment] = useState("");
+  const [submittingComment, setSubmittingComment] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const titleRef = useRef<HTMLInputElement>(null);
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
+  const descRef = useRef<HTMLTextAreaElement>(null);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [cmdMode, setCmdMode] = useState<"root" | "status" | "priority" | "labels" | "assign">("root");
   const [showHelp, setShowHelp] = useState(false);
@@ -420,14 +422,19 @@ export default function TaskDetailPage() {
   }, [data?.short_id, updateTask, webUpdate]);
 
   const handleAddComment = useCallback(async () => {
-    if (!comment.trim() || !data?.short_id) return;
-    addTaskComment(data.short_id, comment.trim(), "note");
+    if (!comment.trim() || !data?.short_id || submittingComment) return;
+    const text = comment.trim();
     setComment("");
-    toast.success("Comment added");
+    setSubmittingComment(true);
     try {
-      await webAddComment({ short_id: data.short_id, text: comment.trim(), comment_type: "note" });
-    } catch {}
-  }, [comment, data?.short_id, addTaskComment, webAddComment]);
+      await webAddComment({ short_id: data.short_id, text, comment_type: "note" });
+    } catch {
+      setComment(text);
+      toast.error("Failed to add comment");
+    } finally {
+      setSubmittingComment(false);
+    }
+  }, [comment, data?.short_id, submittingComment, webAddComment]);
 
   const startEditTitle = useCallback(() => {
     if (!data) return;
@@ -442,6 +449,20 @@ export default function TaskDetailPage() {
       handleUpdate({ title: titleDraft.trim() });
     }
   }, [titleDraft, data?.title, handleUpdate]);
+
+  const startEditDesc = useCallback(() => {
+    setDescDraft(data?.description || "");
+    setEditingDesc(true);
+    setTimeout(() => descRef.current?.focus(), 0);
+  }, [data?.description]);
+
+  const commitDesc = useCallback(() => {
+    setEditingDesc(false);
+    const trimmed = descDraft.trim();
+    if (trimmed !== (data?.description || "")) {
+      handleUpdate({ description: trimmed });
+    }
+  }, [descDraft, data?.description, handleUpdate]);
 
   const openCmd = useCallback((mode: "root" | "status" | "priority" | "labels" | "assign") => {
     setCmdMode(mode);
@@ -569,35 +590,20 @@ export default function TaskDetailPage() {
               <span className="text-sol-text-dim py-1">Priority</span>
               <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
 
-              {data.creator && (
-                <>
-                  <span className="text-sol-text-dim py-1">Creator</span>
-                  <div className="flex items-center gap-1.5 py-1">
-                    <Avatar name={data.creator.name} image={data.creator.image} />
-                    <span className="text-sol-text-muted">{data.creator.name}</span>
-                    {data.source === "agent" && <span title="Agent"><Bot className="w-3 h-3 text-sol-violet" /></span>}
-                    {data.source === "human" && <span title="User"><User className="w-3 h-3 text-sol-cyan" /></span>}
-                  </div>
-                </>
-              )}
-
               <span className="text-sol-text-dim py-1">Assignee</span>
-              <div className="py-0.5">
-                <AssigneeSelect
-                  value={(data as any).assignee || null}
-                  valueInfo={(data as any).assignee_info || null}
-                  onChange={(assigneeId) => handleUpdate({ assignee: assigneeId || "" })}
-                  teamMembers={teamMembers}
-                  currentUser={currentUser}
-                />
-              </div>
-
-              {data.task_type && (
-                <>
-                  <span className="text-sol-text-dim py-1">Type</span>
-                  <span className="text-sol-text-muted py-1 capitalize">{data.task_type}</span>
-                </>
-              )}
+              <button
+                onClick={() => openCmd("assign")}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-sol-bg-alt transition-colors text-left"
+              >
+                {(data as any).assignee_info ? (
+                  <>
+                    <Avatar name={(data as any).assignee_info.name} image={(data as any).assignee_info.image} />
+                    <span className="text-sol-text-muted">{(data as any).assignee_info.name}</span>
+                  </>
+                ) : (
+                  <span className="text-sol-text-dim">Unassigned</span>
+                )}
+              </button>
 
               <span className="text-sol-text-dim py-1">Created</span>
               <span className="flex items-center gap-1 text-sol-text-muted py-1">
@@ -630,9 +636,15 @@ export default function TaskDetailPage() {
                 <>
                   <span className="text-sol-text-dim py-1">Labels</span>
                   <div className="flex gap-1 py-1 flex-wrap">
-                    {data.labels.map((l: string) => (
-                      <Badge key={l} variant="outline" className="text-[10px] border-sol-border/50 text-sol-text-muted">{l}</Badge>
-                    ))}
+                    {data.labels.map((l: string) => {
+                      const lc = getLabelColor(l);
+                      return (
+                        <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
+                          {l}
+                        </span>
+                      );
+                    })}
                   </div>
                 </>
               )}
@@ -668,9 +680,40 @@ export default function TaskDetailPage() {
           )}
 
           {/* Description */}
-          {data.description && (
-            <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/30 p-5 mb-6">
-              <MarkdownRenderer content={data.description} className="text-sm text-sol-text leading-relaxed prose-sm prose-invert max-w-none" />
+          {editingDesc ? (
+            <div className="mb-6">
+              <textarea
+                ref={descRef}
+                value={descDraft}
+                onChange={(e) => setDescDraft(e.target.value)}
+                onBlur={commitDesc}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") { setEditingDesc(false); }
+                  if (e.key === "Enter" && e.metaKey) { commitDesc(); }
+                }}
+                placeholder="Add a description..."
+                rows={4}
+                className="w-full text-sm px-4 py-3 rounded-lg bg-sol-bg border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan resize-y min-h-[80px]"
+              />
+              <div className="flex justify-end gap-2 mt-1.5">
+                <span className="text-[10px] text-sol-text-dim self-center mr-auto">Markdown supported</span>
+                <button onClick={() => setEditingDesc(false)} className="text-xs text-sol-text-dim hover:text-sol-text px-2 py-1">Cancel</button>
+                <button onClick={commitDesc} className="text-xs px-3 py-1 rounded-md bg-sol-cyan text-sol-bg hover:opacity-90">Save</button>
+              </div>
+            </div>
+          ) : data.description ? (
+            <div
+              className="mb-6 cursor-text group"
+              onClick={startEditDesc}
+            >
+              <MarkdownRenderer content={data.description} className="text-sm text-sol-text-muted leading-relaxed prose-sm prose-invert max-w-none group-hover:text-sol-text transition-colors" />
+            </div>
+          ) : (
+            <div
+              className="mb-6 cursor-text text-sm text-sol-text-dim hover:text-sol-text-muted transition-colors"
+              onClick={startEditDesc}
+            >
+              Add a description...
             </div>
           )}
 
@@ -760,55 +803,60 @@ export default function TaskDetailPage() {
           )}
 
           {/* Activity */}
-          {data.history && data.history.length > 0 && (
-            <div className="mb-6">
-              <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
-                <History className="w-3.5 h-3.5" /> Activity
-              </h2>
-              <div className="border border-sol-border/30 rounded-lg bg-sol-bg-alt/20 px-4 py-2 divide-y divide-sol-border/10">
-                {data.history.map((h: any) => <HistoryItem key={h._id} entry={h} />)}
-              </div>
-            </div>
-          )}
-
-          {/* Comments */}
-          {data.comments && data.comments.length > 0 && (
-            <div className="mb-4">
-              <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">
-                Comments ({data.comments.length})
-              </h2>
-              <div className="space-y-2">
-                {data.comments.map((c: any) => (
-                  <div key={c._id} className="text-sm p-3 rounded-lg bg-sol-bg-alt border border-sol-border/20">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-medium text-sol-text">{c.author}</span>
-                      <span className="text-xs text-sol-text-dim">{formatRelative(c.created_at)}</span>
-                      {c.comment_type !== "note" && (
-                        <Badge variant="outline" className="text-[10px] px-1">{c.comment_type}</Badge>
-                      )}
+          <div className="mb-6">
+            <h2 className="text-sm font-semibold text-sol-text mb-3">Activity</h2>
+            <div className="space-y-0">
+              {[
+                ...(data.history || []).map((h: any) => ({ type: "history" as const, ts: h.created_at, data: h })),
+                ...(data.comments || []).map((c: any) => ({ type: "comment" as const, ts: c.created_at, data: c })),
+              ]
+                .sort((a, b) => a.ts - b.ts)
+                .map((item) =>
+                  item.type === "history" ? (
+                    <HistoryItem key={item.data._id} entry={item.data} />
+                  ) : (
+                    <div key={item.data._id} className="py-2 flex gap-2.5">
+                      <div className="w-5 h-5 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center mt-0.5">
+                        <MessageSquare className="w-3 h-3 text-sol-text-dim" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-xs font-medium text-sol-text-muted">{item.data.author}</span>
+                          {item.data.comment_type !== "note" && (
+                            <Badge variant="outline" className="text-[10px] px-1">{item.data.comment_type}</Badge>
+                          )}
+                          <span className="text-[11px] text-sol-text-dim">{formatRelative(item.data.created_at)}</span>
+                        </div>
+                        <MarkdownRenderer content={item.data.text} className="text-sm text-sol-text-muted prose-sm prose-invert max-w-none" />
+                      </div>
                     </div>
-                    <MarkdownRenderer content={c.text} className="text-sm text-sol-text-muted prose-sm prose-invert max-w-none" />
-                  </div>
-                ))}
-              </div>
+                  )
+                )}
             </div>
-          )}
+          </div>
 
           {/* Comment input */}
-          <div className="flex gap-2">
-            <input
+          <div className="relative mb-2">
+            <textarea
+              ref={commentRef}
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleAddComment()}
-              placeholder="Add a comment..."
-              className="flex-1 text-sm px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleAddComment();
+                }
+              }}
+              placeholder="Leave a comment..."
+              rows={2}
+              className="w-full text-sm pl-4 pr-12 py-3 rounded-lg bg-sol-bg border border-sol-border/30 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-border/60 resize-none"
             />
             <button
               onClick={handleAddComment}
-              disabled={!comment.trim()}
-              className="px-4 py-2 text-sm rounded-lg bg-sol-cyan text-sol-bg hover:opacity-90 disabled:opacity-40 transition-opacity"
+              disabled={!comment.trim() || submittingComment}
+              className="absolute right-2.5 bottom-2.5 w-7 h-7 flex items-center justify-center rounded-md bg-sol-cyan text-sol-bg hover:opacity-90 disabled:opacity-30 transition-opacity"
             >
-              Send
+              <ArrowUp className="w-4 h-4" />
             </button>
           </div>
 

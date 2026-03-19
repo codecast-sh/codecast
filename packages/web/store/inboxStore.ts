@@ -76,6 +76,7 @@ export type InboxSession = {
   active_task?: TaskRef;
   worktree_name?: string | null;
   worktree_branch?: string | null;
+  workflow_run_id?: string | null;
 };
 
 export type Message = {
@@ -160,7 +161,7 @@ export type TaskItem = {
   closed_at?: number;
   creator?: { name: string; image?: string };
   plan?: PlanRef;
-  activeSession?: { session_id: string; title?: string } | null;
+  activeSession?: { session_id: string; title?: string; agent_status?: string; agent_type?: string } | null;
   steps?: TaskStep[];
   acceptance_criteria?: string[];
   execution_status?: TaskExecutionStatus;

@@ -7,6 +7,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem } from "../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
+import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
 
 import { TaskCommandPalette } from "../../components/TaskCommandPalette";
 import { AssigneeSelect } from "../../components/AssigneeSelect";
@@ -14,9 +15,9 @@ import { AssigneeSelect } from "../../components/AssigneeSelect";
 const api = _api as any;
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { Badge } from "../../components/ui/badge";
 import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { toast } from "sonner";
+import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import {
   Plus,
   Circle,
@@ -36,23 +37,19 @@ import {
   FileCode,
   ListChecks,
   ShieldCheck,
-  Bug,
-  Wrench,
-  Star,
   ChevronDown,
   Tag,
   Search,
   LayoutGrid,
   List,
-  MoreHorizontal,
   EyeOff,
 } from "lucide-react";
 
-type TaskStatus = "draft" | "open" | "in_progress" | "in_review" | "done" | "dropped";
+type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type TaskPriority = "urgent" | "high" | "medium" | "low" | "none";
 
 const STATUS_CONFIG: Record<TaskStatus, { icon: typeof Circle; label: string; color: string }> = {
-  draft: { icon: CircleDotDashed, label: "Draft", color: "text-sol-text-dim" },
+  backlog: { icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
   open: { icon: Circle, label: "Open", color: "text-sol-blue" },
   in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
   in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet" },
@@ -68,7 +65,7 @@ const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: string;
   none: { icon: Minus, label: "None", color: "text-sol-text-dim" },
 };
 
-const STATUS_ORDER: TaskStatus[] = ["in_progress", "open", "draft", "in_review", "done", "dropped"];
+const STATUS_ORDER: TaskStatus[] = ["in_progress", "open", "backlog", "in_review", "done", "dropped"];
 
 function CreatorAvatar({ creator }: { creator?: { name: string; image?: string } }) {
   if (!creator) return null;
@@ -186,17 +183,30 @@ function TaskRow({
       ) : (
         <span className="flex-1 text-sm text-sol-text truncate">{task.title}</span>
       )}
-      {(task as any).activeSession && (
-        <Link
-          href={`/conversation/${(task as any).activeSession.session_id}`}
-          onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] cursor-pointer hover:bg-emerald-500/25 transition-colors flex-shrink-0"
-          title={(task as any).activeSession.title || "Active session"}
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          live
-        </Link>
-      )}
+      {(task as any).activeSession && (() => {
+        const { session_id, agent_status, agent_type, title } = (task as any).activeSession;
+        const isBlocked = agent_status === "permission_blocked";
+        const isIdle = agent_status === "idle" || agent_status === "stopped";
+        const dotClass = isBlocked ? "bg-orange-400" : isIdle ? "bg-sol-text-dim" : "bg-emerald-400 animate-pulse";
+        const badgeClass = isBlocked
+          ? "bg-orange-500/15 text-orange-400 hover:bg-orange-500/25"
+          : isIdle
+          ? "bg-sol-bg-alt text-sol-text-dim hover:bg-sol-bg-highlight"
+          : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25";
+        const statusLabel = isBlocked ? "blocked" : isIdle ? "idle"
+          : agent_type === "codex" ? "codex" : agent_type === "gemini" ? "gemini" : "live";
+        return (
+          <Link
+            href={`/conversation/${session_id}`}
+            onClick={(e) => e.stopPropagation()}
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] cursor-pointer transition-colors flex-shrink-0 ${badgeClass}`}
+            title={title || "Active session"}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+            {statusLabel}
+          </Link>
+        );
+      })()}
       {(task as any).plan && (
         <Link
           href={`/plans/${(task as any).plan._id}`}
@@ -216,11 +226,15 @@ function TaskRow({
       {task.blocked_by && task.blocked_by.length > 0 && (
         <Link2 className="w-3.5 h-3.5 text-sol-red flex-shrink-0" />
       )}
-      {task.labels?.map((l: string) => (
-        <Badge key={l} variant="outline" className="text-[10px] px-1.5 py-0 border-sol-border/50 text-sol-text-dim">
-          {l}
-        </Badge>
-      ))}
+      {task.labels?.map((l: string) => {
+        const lc = getLabelColor(l);
+        return (
+          <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0 rounded-full border ${lc.bg} ${lc.border} ${lc.text}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
+            {l}
+          </span>
+        );
+      })}
       {task.assignee_info && (
         <div className="flex items-center gap-1 flex-shrink-0" title={`Assigned: ${task.assignee_info.name}`}>
           {task.assignee_info.image ? (
@@ -232,7 +246,6 @@ function TaskRow({
           )}
         </div>
       )}
-      {!task.assignee_info && <CreatorAvatar creator={task.creator} />}
       <button
         onClick={(e) => { e.stopPropagation(); onPriorityClick(); }}
         className="flex-shrink-0 hover:scale-125 transition-transform"
@@ -245,16 +258,10 @@ function TaskRow({
   );
 }
 
-const TASK_TYPE_OPTIONS = [
-  { key: "task", label: "Task", icon: Circle },
-  { key: "feature", label: "Feature", icon: Star },
-  { key: "bug", label: "Bug", icon: Bug },
-  { key: "chore", label: "Chore", icon: Wrench },
-];
 
 const CREATE_STATUS_OPTIONS = [
   { key: "open", label: "Open", icon: Circle, color: "text-sol-blue" },
-  { key: "draft", label: "Draft", icon: CircleDotDashed, color: "text-sol-text-dim" },
+  { key: "backlog", label: "Backlog", icon: CircleDotDashed, color: "text-sol-text-dim" },
   { key: "in_progress", label: "In Progress", icon: CircleDot, color: "text-sol-yellow" },
 ];
 
@@ -323,11 +330,6 @@ function PropertyChip<T extends string>({
   );
 }
 
-const LABEL_PRESETS = [
-  "bug", "feature", "improvement", "refactor", "docs", "infra",
-  "design", "perf", "security", "testing", "urgent", "blocked",
-];
-
 function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -344,11 +346,21 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const filtered = [...new Set([...LABEL_PRESETS, ...value])]
+  const filtered = [...new Set([...DEFAULT_LABELS, ...value])]
     .filter((l) => !search.trim() || l.toLowerCase().includes(search.toLowerCase()));
+
+  const canCreate = search.trim() && !filtered.some((l) => l.toLowerCase() === search.trim().toLowerCase());
 
   const toggle = (label: string) => {
     onChange(value.includes(label) ? value.filter((l) => l !== label) : [...value, label]);
+  };
+
+  const createAndAdd = () => {
+    const name = search.trim().toLowerCase();
+    if (name && !value.includes(name)) {
+      onChange([...value, name]);
+    }
+    setSearch("");
   };
 
   return (
@@ -378,25 +390,40 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
               ref={inputRef}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Filter labels..."
+              placeholder="Type to search or create..."
               className="flex-1 text-xs bg-transparent text-sol-text placeholder:text-sol-text-dim outline-none"
-              onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setOpen(false);
+                if (e.key === "Enter" && canCreate) { e.preventDefault(); createAndAdd(); }
+              }}
             />
           </div>
           <div className="py-1 max-h-48 overflow-y-auto">
-            {filtered.map((label) => (
+            {canCreate && (
               <button
-                key={label}
-                onClick={() => toggle(label)}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
-                  value.includes(label) ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
+                onClick={createAndAdd}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-cyan hover:bg-sol-bg-alt transition-colors"
               >
-                <Tag className="w-3 h-3 flex-shrink-0" />
-                <span className="flex-1 text-left">{label}</span>
-                {value.includes(label) && <Check className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />}
+                <Plus className="w-3 h-3 flex-shrink-0" />
+                <span className="flex-1 text-left">Create "{search.trim()}"</span>
               </button>
-            ))}
+            )}
+            {filtered.map((label) => {
+              const color = getLabelColor(label);
+              return (
+                <button
+                  key={label}
+                  onClick={() => toggle(label)}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                    value.includes(label) ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                  }`}
+                >
+                  <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color.dot}`} />
+                  <span className="flex-1 text-left">{label}</span>
+                  {value.includes(label) && <Check className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -407,10 +434,10 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
 function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose: () => void; teamMembers?: any[] | null; currentUser?: any }) {
   const createTask = useInboxStore((s) => s.createTask);
   const webCreate = useMutation(api.tasks.webCreate);
+  const workspaceArgs = useWorkspaceArgs();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [taskType, setTaskType] = useState("task");
   const [priority, setPriority] = useState<string>("medium");
   const [status, setStatus] = useState<string>("open");
   const [assignee, setAssignee] = useState<string | null>(null);
@@ -425,15 +452,21 @@ function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose: () =>
     const opts: any = {
       title: title.trim(),
       description: description.trim() || undefined,
-      task_type: taskType,
+      task_type: "task",
       priority,
       status,
       assignee: assignee || undefined,
       labels: labels.length > 0 ? labels : undefined,
     };
     createTask(opts);
-    toast.success(`Created: ${title.trim()}`);
-    try { await webCreate(opts); } catch {}
+    try {
+      const wsArgs = workspaceArgs === "skip" ? {} : workspaceArgs;
+      await webCreate({ ...opts, ...wsArgs });
+      toast.success(`Created: ${title.trim()}`);
+    } catch (e: any) {
+      console.error("Task creation failed:", e);
+      toast.error(`Failed to create task: ${e?.message || "Unknown error"}`);
+    }
     if (createMore) {
       setTitle("");
       setDescription("");
@@ -441,7 +474,7 @@ function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose: () =>
     } else {
       onClose();
     }
-  }, [title, description, taskType, priority, status, assignee, labels, createMore, createTask, webCreate, onClose]);
+  }, [title, description, priority, status, assignee, labels, createMore, createTask, webCreate, onClose]);
 
   return (
     <div
@@ -478,7 +511,6 @@ function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose: () =>
         <div className="flex items-center gap-1.5 px-4 py-3 border-t border-sol-border/20 flex-wrap">
           <PropertyChip value={status as any} options={CREATE_STATUS_OPTIONS as any} onChange={(v) => setStatus(v)} />
           <PropertyChip value={priority as any} options={CREATE_PRIORITY_OPTIONS as any} onChange={(v) => setPriority(v)} />
-          <PropertyChip value={taskType as any} options={TASK_TYPE_OPTIONS as any} onChange={(v) => setTaskType(v)} />
           <LabelsChip value={labels} onChange={setLabels} />
           <AssigneeSelect
             value={assignee}
@@ -644,9 +676,15 @@ function TaskPreviewPanel({ taskId, onClose, onOpen }: { taskId: string; onClose
         </div>
         {data.labels && data.labels.length > 0 && (
           <div className="flex gap-1 flex-wrap mb-3">
-            {data.labels.map((l: string) => (
-              <Badge key={l} variant="outline" className="text-[10px] px-1.5 py-0 border-sol-border/50 text-sol-text-dim">{l}</Badge>
-            ))}
+            {data.labels.map((l: string) => {
+              const lc = getLabelColor(l);
+              return (
+                <span key={l} className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
+                  {l}
+                </span>
+              );
+            })}
           </div>
         )}
         {(data as any).assignee_info && (
@@ -721,23 +759,50 @@ function KanbanCard({
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">{task.short_id}</span>
-        {assignee ? (
-          assignee.image ? (
-            <img src={assignee.image} alt={assignee.name} className="w-4 h-4 rounded-full flex-shrink-0" title={assignee.name} />
-          ) : (
-            <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[7px] font-medium text-sol-text-muted" title={assignee.name}>
-              {assignee.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-            </div>
-          )
-        ) : null}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {(task as any).activeSession && (() => {
+            const { agent_status, agent_type } = (task as any).activeSession;
+            const isBlocked = agent_status === "permission_blocked";
+            const isIdle = agent_status === "idle" || agent_status === "stopped";
+            const dotClass = isBlocked ? "bg-orange-400" : isIdle ? "bg-sol-text-dim" : "bg-emerald-400 animate-pulse";
+            const badgeClass = isBlocked
+              ? "bg-orange-500/15 text-orange-400"
+              : isIdle
+              ? "bg-sol-bg-alt text-sol-text-dim"
+              : "bg-emerald-500/15 text-emerald-400";
+            const statusLabel = isBlocked ? "blocked" : isIdle ? "idle"
+              : agent_type === "codex" ? "codex" : agent_type === "gemini" ? "gemini" : "live";
+            return (
+              <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] ${badgeClass}`}>
+                <span className={`w-1 h-1 rounded-full ${dotClass}`} />
+                {statusLabel}
+              </span>
+            );
+          })()}
+          {assignee ? (
+            assignee.image ? (
+              <img src={assignee.image} alt={assignee.name} className="w-4 h-4 rounded-full" title={assignee.name} />
+            ) : (
+              <div className="w-4 h-4 rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[7px] font-medium text-sol-text-muted" title={assignee.name}>
+                {assignee.name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+              </div>
+            )
+          ) : null}
+        </div>
       </div>
       <p className="text-[13px] text-sol-text leading-snug mb-3 line-clamp-3 font-medium">{task.title}</p>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${priority.color}`} />
-          {task.labels && task.labels.length > 0 && (
-            <span className="text-[10px] text-sol-text-dim bg-sol-bg-alt/60 px-1.5 py-0.5 rounded">{task.labels[0]}</span>
-          )}
+          {task.labels && task.labels.length > 0 && (() => {
+            const lc = getLabelColor(task.labels[0]);
+            return (
+              <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
+                {task.labels[0]}
+              </span>
+            );
+          })()}
         </div>
         <span className="text-[10px] text-sol-text-dim tabular-nums">{fmtDate(task.updated_at)}</span>
       </div>
@@ -1091,7 +1156,7 @@ export default function TasksPage() {
         return;
       }
 
-      const filterKeys: Record<string, string> = { "1": "", "2": "draft", "3": "open", "4": "in_progress", "5": "done" };
+      const filterKeys: Record<string, string> = { "1": "", "2": "backlog", "3": "open", "4": "in_progress", "5": "done" };
       if (filterKeys[e.key] !== undefined && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
         stop();
         setTaskFilter({ status: filterKeys[e.key] });
@@ -1152,7 +1217,7 @@ export default function TasksPage() {
                   Active
                   {taskCounts.active > 0 && <span className="text-[10px] tabular-nums opacity-60">{taskCounts.active}</span>}
                 </button>
-                {(["draft", "open", "in_progress", "done"] as const).map((s) => (
+                {(["backlog", "open", "in_progress", "done"] as const).map((s) => (
                   <button
                     key={s}
                     onClick={() => setTaskFilter({ status: s })}
@@ -1227,7 +1292,7 @@ export default function TasksPage() {
               })}
               onCardClick={(t) => router.push(`/tasks/${t._id}`)}
               onContextMenu={handleContextMenu}
-              onAddTask={(status) => { setShowCreate(true); }}
+              onAddTask={() => { setShowCreate(true); }}
             />
           ) : (
           <div className="flex-1 flex overflow-hidden">
@@ -1372,6 +1437,7 @@ export default function TasksPage() {
                   ["s", "Change status"],
                   ["p", "Set priority"],
                   ["l", "Add labels"],
+                  ["a", "Assign task"],
                   ["c", "Create new task"],
                   ["e", "Edit title"],
                   ["d", "Command palette"],
