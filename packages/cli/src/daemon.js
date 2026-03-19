@@ -2328,6 +2328,7 @@ function extractMessages(entries) {
       }
     }
     if (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0) {
+      const stopReason = typeof entry.message === "object" && entry.message.stop_reason ? entry.message.stop_reason : undefined;
       messages.push({
         uuid: entry.uuid,
         role,
@@ -2336,7 +2337,8 @@ function extractMessages(entries) {
         thinking: thinking || undefined,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         toolResults: toolResults.length > 0 ? toolResults : undefined,
-        images: images.length > 0 ? images : undefined
+        images: images.length > 0 ? images : undefined,
+        stopReason
       });
     }
   }
@@ -12057,6 +12059,12 @@ function getPermissionFlags(agentType, config) {
   }
   return null;
 }
+function getDefaultParamFlags(agentType, config) {
+  const params = config?.agent_default_params?.[agentType];
+  if (!params || Object.keys(params).length === 0)
+    return null;
+  return Object.entries(params).map(([k, v]) => `--${k} ${v}`).join(" ");
+}
 var AUTH_FAILURE_THRESHOLD = 5;
 var WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
 var RECONCILIATION_INTERVAL_MS = 60 * 60 * 1000;
@@ -12486,6 +12494,18 @@ async function sendHeartbeat() {
         }
       }
     }
+    if (data.agent_default_params !== undefined) {
+      const currentConfig = readConfig();
+      const serverParams = data.agent_default_params;
+      const localParams = currentConfig?.agent_default_params;
+      if (JSON.stringify(serverParams) !== JSON.stringify(localParams)) {
+        log(`Agent default params updated from server: ${JSON.stringify(serverParams)}`);
+        patchConfig({ agent_default_params: serverParams });
+        if (activeConfig) {
+          activeConfig.agent_default_params = serverParams;
+        }
+      }
+    }
   } catch (err) {
     log(`Heartbeat error: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -12620,7 +12640,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
         let castBin;
         if (argv1.endsWith("daemon.ts") || argv1.endsWith("daemon.js")) {
           const ext = argv1.endsWith(".ts") ? ".ts" : ".js";
-          const indexPath = argv1.slice(0, argv1.lastIndexOf("/") + 1) + `index${ext}`;
+          const indexPath = path13.join(path13.dirname(argv1), `index${ext}`);
           castBin = `${process.argv[0]} ${indexPath}`;
         } else if (argv1 === "_daemon" || !argv1.includes("/")) {
           castBin = process.execPath;
@@ -12642,7 +12662,7 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
       case "start_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const rawAgentType = parsed.agent_type;
-        const agentType = rawAgentType === "codex" || rawAgentType === "gemini" ? rawAgentType : "claude";
+        const agentType = rawAgentType === "codex" || rawAgentType === "cursor" || rawAgentType === "gemini" ? rawAgentType : "claude";
         const rawPath = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId = parsed.conversation_id;
         const isolated = parsed.isolated === true;
@@ -12700,6 +12720,8 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
               }
             }
           }
+        } else if (agentType === "cursor") {
+          binary = "cursor-agent";
         } else if (agentType === "gemini") {
           binary = "gemini";
         } else {
@@ -12711,6 +12733,10 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode")) {
             binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
           }
+        }
+        const defaultFlags = getDefaultParamFlags(agentType, config);
+        if (defaultFlags) {
+          binaryArgs.push(...defaultFlags.split(/\s+/).filter(Boolean));
         }
         binaryArgs = sanitizeBinaryArgs(binaryArgs);
         const envPrefix = worktreeResult ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}` : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
@@ -13053,17 +13079,23 @@ async function executeRemoteCommand(commandId, command, config, commandArgs) {
           break;
         }
         const projectPath = parsed.project_path;
+        const forceReconstitute = parsed.force_reconstitute === true;
         if (resumeInFlight.has(sessionId)) {
           log(`[REMOTE] Resume already in flight for ${sessionId.slice(0, 8)}, skipping`);
           result = JSON.stringify({ skipped: true, reason: "resume_in_flight" });
           break;
         }
         restartingSessionIds.set(sessionId, Date.now());
-        log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
-        let resumed = await autoResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
-        if (!resumed) {
-          log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
+        let resumed = false;
+        if (forceReconstitute) {
+          log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
+        } else {
+          log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
+          resumed = await autoResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
+          if (!resumed) {
+            log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
+            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
+          }
         }
         if (resumed) {
           if (conversationId) {
@@ -14261,30 +14293,24 @@ ${snippet}
         });
         handlePermissionRequest(syncService2, conversationId, sessionId, permissionPrompt, log).then((decision) => {
           if (decision) {
-            const response = decision.approved ? "y" : "n";
-            log(`Attempting to inject response '${response}' to session ${sessionId.slice(0, 8)}`);
+            const key = decision.approved ? "Enter" : "Escape";
+            log(`Attempting to inject '${key}' to session ${sessionId.slice(0, 8)}`);
             findSessionProcess(sessionId, detectSessionAgentType(sessionId)).then((proc) => {
               if (!proc) {
                 log("No process found for session");
                 return;
               }
-              findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
-                if (tmuxTarget) {
-                  injectViaTmux(tmuxTarget, response).then(() => {
-                    log(`Injected '${response}' via tmux for session ${sessionId.slice(0, 8)}`);
-                  }).catch(() => {
-                    injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
-                      log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
-                    }).catch((err) => {
-                      log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
-                    });
-                  });
-                } else {
-                  injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
-                    log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
-                  }).catch((err) => {
-                    log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
-                  });
+              findTmuxPaneForTty(proc.tty).then(async (tmuxTarget) => {
+                try {
+                  if (tmuxTarget) {
+                    await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
+                    log(`Injected '${key}' via tmux for session ${sessionId.slice(0, 8)}`);
+                  } else {
+                    await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1B", proc.termProgram);
+                    log(`Injected '${key}' via terminal for session ${sessionId.slice(0, 8)}`);
+                  }
+                } catch (err) {
+                  log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
                 }
               });
             }).catch((err) => {
@@ -14327,6 +14353,14 @@ ${snippet}
           lastIdleNotifiedSize.set(sessionId, stats.size);
         } else if (hasPendingToolCalls) {
           idleTimers.delete(sessionId);
+        } else if (lastAssistantMessage.stopReason === "end_turn") {
+          idleTimers.delete(sessionId);
+          const capturedSize = stats.size;
+          if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
+            lastIdleNotifiedSize.set(sessionId, capturedSize);
+            const preview = truncateForNotification(lastAssistantMessage.content);
+            sendAgentStatus(syncService2, conversationId, sessionId, "idle", undefined, undefined, preview);
+          }
         } else {
           const capturedSize = stats.size;
           const capturedConvId = conversationId;
@@ -15772,6 +15806,16 @@ function findSessionFile(sessionId) {
       const jsonlPath = path13.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
       if (fs14.existsSync(jsonlPath))
         return { path: jsonlPath, agentType: "claude" };
+      const dirPath = path13.join(claudeProjectsDir, dir);
+      try {
+        const subEntries = fs14.readdirSync(dirPath, { withFileTypes: true }).filter((d) => d.isDirectory());
+        for (const subDir of subEntries) {
+          const subPath = path13.join(dirPath, subDir.name, `${sessionId}.jsonl`);
+          if (fs14.existsSync(subPath))
+            return { path: subPath, agentType: "claude" };
+        }
+      } catch {
+      }
     }
   }
   const codexSessionsDir = path13.join(process.env.HOME || "", ".codex", "sessions");
@@ -16200,7 +16244,30 @@ async function autoResumeSessionInner(sessionId, content, titleCache, nonInterac
     if (permFlags && !extraFlags.includes("--dangerously-skip-permissions") && !extraFlags.includes("--permission-mode")) {
       extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
     }
-    resumeCmd = `claude --resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
+    let resumeId = sessionId;
+    if (!UUID_RE.test(sessionId)) {
+      const newUuid = crypto.randomUUID();
+      const newPath = path13.join(path13.dirname(jsonlPath), `${newUuid}.jsonl`);
+      try {
+        const rawContent = fs14.readFileSync(jsonlPath, "utf-8");
+        const rewritten = rawContent.replace(new RegExp(`"sessionId"\\s*:\\s*"${sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "g"), `"sessionId":"${newUuid}"`);
+        fs14.writeFileSync(newPath, rewritten);
+        log(`Copied non-UUID session ${sessionId} to resumable UUID ${newUuid}`);
+        resumeId = newUuid;
+        if (conversationId) {
+          const cache = readConversationCache();
+          cache[newUuid] = conversationId;
+          saveConversationCache(cache);
+        }
+        if (syncServiceRef && conversationId) {
+          syncServiceRef.updateSessionId(conversationId, newUuid).catch(() => {
+          });
+        }
+      } catch (err) {
+        log(`Failed to copy session for UUID resume: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    resumeCmd = `claude --resume ${resumeId}${extraFlags ? " " + extraFlags : ""}`;
   }
   const prefix = agentType === "codex" ? "cx" : agentType === "gemini" ? "gm" : "cc";
   const tmuxSession = slug ? `${prefix}-resume-${slug}-${shortId}` : `${prefix}-resume-${shortId}`;
@@ -18058,21 +18125,25 @@ async function main() {
           handlePermissionRequest(syncService2, convId, sessionId, permPrompt, log).then((decision) => {
             permissionRecordPending.delete(sessionId);
             if (decision) {
-              const response = decision.approved ? "y" : "n";
-              log(`Permission ${decision.approved ? "approved" : "denied"} for session ${sessionId.slice(0, 8)}, injecting '${response}'`);
+              const key = decision.approved ? "Enter" : "Escape";
+              log(`Permission ${decision.approved ? "approved" : "denied"} for session ${sessionId.slice(0, 8)}, sending '${key}'`);
               findSessionProcess(sessionId, detectSessionAgentType(sessionId)).then((proc) => {
                 if (!proc) {
                   log("No process found for permission injection");
                   return;
                 }
-                findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
-                  const inject = tmuxTarget ? () => injectViaTmux(tmuxTarget, response) : () => injectViaTerminal(proc.tty, response, proc.termProgram);
-                  inject().then(() => {
-                    log(`Injected '${response}' for session ${sessionId.slice(0, 8)}`);
+                findTmuxPaneForTty(proc.tty).then(async (tmuxTarget) => {
+                  try {
+                    if (tmuxTarget) {
+                      await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
+                    } else {
+                      await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1B", proc.termProgram);
+                    }
+                    log(`Injected '${key}' for session ${sessionId.slice(0, 8)}`);
                     sendAgentStatus(syncService2, convId, sessionId, "working");
-                  }).catch((err) => {
+                  } catch (err) {
                     log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
-                  });
+                  }
                 });
               }).catch((err) => {
                 log(`Failed to find session process: ${err instanceof Error ? err.message : String(err)}`);
@@ -18093,6 +18164,9 @@ async function main() {
     }
   }
   function extractToolFromMessage(message) {
+    const colonMatch = message.match(/^(\w+):\s/);
+    if (colonMatch)
+      return colonMatch[1];
     const m = message.match(/permission to use (\w+)/i) || message.match(/allow (\w+)/i);
     return m?.[1] || "Bash";
   }
@@ -18531,7 +18605,8 @@ async function main() {
           }
           log(`New permission response: ${permission._id} status=${permission.status} tool=${permission.tool_name}`);
           try {
-            const response = permission.status === "approved" ? "y" : "n";
+            const approved = permission.status === "approved";
+            const key = approved ? "Enter" : "Escape";
             const sessionId = permission.session_id;
             let injected = false;
             if (sessionId) {
@@ -18540,14 +18615,14 @@ async function main() {
                 const tmuxTarget = await findTmuxPaneForTty(proc.tty);
                 if (tmuxTarget) {
                   try {
-                    await injectViaTmux(tmuxTarget, response);
+                    await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
                     injected = true;
                   } catch {
                   }
                 }
                 if (!injected) {
                   try {
-                    await injectViaTerminal(proc.tty, response, proc.termProgram);
+                    await injectViaTerminal(proc.tty, approved ? "\r" : "\x1B", proc.termProgram);
                     injected = true;
                   } catch {
                   }
@@ -18555,7 +18630,7 @@ async function main() {
               }
             }
             if (injected) {
-              log(`Injected permission response '${response}' for session ${sessionId?.slice(0, 8)}`);
+              log(`Injected permission '${key}' for session ${sessionId?.slice(0, 8)}`);
               processedPermissionIds.add(permission._id);
             } else {
               log(`Failed to inject permission response, will retry on next update`);

@@ -140,7 +140,7 @@ interface Config {
   };
 }
 
-function getPermissionFlags(agentType: "claude" | "codex" | "gemini", config?: Config | null): string | null {
+function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
   const modes = config?.agent_permission_modes;
 
   if (agentType === "claude") {
@@ -865,8 +865,8 @@ async function executeRemoteCommand(
       case "start_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const rawAgentType = parsed.agent_type;
-        const agentType: "claude" | "codex" | "gemini" =
-          rawAgentType === "codex" || rawAgentType === "gemini" ? rawAgentType : "claude";
+        const agentType: "claude" | "codex" | "cursor" | "gemini" =
+          rawAgentType === "codex" || rawAgentType === "cursor" || rawAgentType === "gemini" ? rawAgentType : "claude";
         const rawPath: string = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId: string | undefined = parsed.conversation_id;
         const isolated: boolean = parsed.isolated === true;
@@ -922,6 +922,8 @@ async function executeRemoteCommand(
               }
             }
           }
+        } else if (agentType === "cursor") {
+          binary = "cursor-agent";
         } else if (agentType === "gemini") {
           binary = "gemini";
         } else {
@@ -1284,6 +1286,7 @@ async function executeRemoteCommand(
           break;
         }
         const projectPath = parsed.project_path;
+        const forceReconstitute = parsed.force_reconstitute === true;
         // Skip if a resume is already in flight for this session
         if (resumeInFlight.has(sessionId)) {
           log(`[REMOTE] Resume already in flight for ${sessionId.slice(0, 8)}, skipping`);
@@ -1291,11 +1294,16 @@ async function executeRemoteCommand(
           break;
         }
         restartingSessionIds.set(sessionId, Date.now());
-        log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
-        let resumed = await autoResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
-        if (!resumed) {
-          log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-          resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
+        let resumed = false;
+        if (forceReconstitute) {
+          log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
+        } else {
+          log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
+          resumed = await autoResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
+          if (!resumed) {
+            log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
+            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), false, projectPath, conversationId);
+          }
         }
         if (resumed) {
           if (conversationId) {
@@ -2642,33 +2650,25 @@ async function processSessionFile(
           log
         ).then((decision) => {
           if (decision) {
-            const response = decision.approved ? "y" : "n";
-            log(`Attempting to inject response '${response}' to session ${sessionId.slice(0, 8)}`);
+            const key = decision.approved ? "Enter" : "Escape";
+            log(`Attempting to inject '${key}' to session ${sessionId.slice(0, 8)}`);
 
             findSessionProcess(sessionId, detectSessionAgentType(sessionId)).then((proc) => {
               if (!proc) {
                 log("No process found for session");
                 return;
               }
-              findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
-                if (tmuxTarget) {
-                  injectViaTmux(tmuxTarget, response).then(() => {
-                    log(`Injected '${response}' via tmux for session ${sessionId.slice(0, 8)}`);
-                  }).catch(() => {
-                    injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
-                      log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
-
-                    }).catch((err) => {
-                      log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
-                    });
-                  });
-                } else {
-                  injectViaTerminal(proc.tty, response, proc.termProgram).then(() => {
-                    log(`Injected '${response}' via iTerm2 for session ${sessionId.slice(0, 8)}`);
-
-                  }).catch((err) => {
-                    log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
-                  });
+              findTmuxPaneForTty(proc.tty).then(async (tmuxTarget) => {
+                try {
+                  if (tmuxTarget) {
+                    await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
+                    log(`Injected '${key}' via tmux for session ${sessionId.slice(0, 8)}`);
+                  } else {
+                    await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram);
+                    log(`Injected '${key}' via terminal for session ${sessionId.slice(0, 8)}`);
+                  }
+                } catch (err) {
+                  log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
                 }
               });
             }).catch((err) => {
@@ -2716,6 +2716,14 @@ async function processSessionFile(
           lastIdleNotifiedSize.set(sessionId, stats.size);
         } else if (hasPendingToolCalls) {
           idleTimers.delete(sessionId);
+        } else if (lastAssistantMessage.stopReason === "end_turn") {
+          idleTimers.delete(sessionId);
+          const capturedSize = stats.size;
+          if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
+            lastIdleNotifiedSize.set(sessionId, capturedSize);
+            const preview = truncateForNotification(lastAssistantMessage.content);
+            sendAgentStatus(syncService, conversationId, sessionId, "idle", undefined, undefined, preview);
+          }
         } else {
           const capturedSize = stats.size;
           const capturedConvId = conversationId;
@@ -3581,13 +3589,13 @@ function buildReverseConversationCache(cache: ConversationCache): Record<string,
   return reverse;
 }
 
-function detectSessionAgentType(sessionId: string): "claude" | "codex" | "gemini" {
+function detectSessionAgentType(sessionId: string): "claude" | "codex" | "cursor" | "gemini" {
   if (sessionId.startsWith("session-")) return "gemini";
   const sessionFile = findSessionFile(sessionId);
   return sessionFile?.agentType ?? "claude";
 }
 
-function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "codex" | "gemini"): void {
+function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini"): void {
   try {
     const registryDir = path.join(CONFIG_DIR, "session-registry");
     const registryFile = path.join(registryDir, `${sessionId}.json`);
@@ -3626,7 +3634,7 @@ function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "cod
   } catch {}
 }
 
-async function findSessionProcess(sessionId: string, agentType: "claude" | "codex" | "gemini" = "claude"): Promise<ClaudeSessionInfo | null> {
+async function findSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini" = "claude"): Promise<ClaudeSessionInfo | null> {
   // Check process cache first
   const cached = await getCachedSessionProcess(sessionId);
   if (cached) {
@@ -4330,7 +4338,7 @@ async function injectViaTerminal(tty: string, content: string, termProgram?: str
 }
 
 
-type SessionFileInfo = { path: string; agentType: "claude" | "codex" | "gemini" };
+type SessionFileInfo = { path: string; agentType: "claude" | "codex" | "cursor" | "gemini" };
 
 function findSessionJsonlPath(sessionId: string): string | null {
   return findSessionFile(sessionId)?.path ?? null;
@@ -4345,6 +4353,16 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
     for (const dir of projectDirs) {
       const jsonlPath = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
       if (fs.existsSync(jsonlPath)) return { path: jsonlPath, agentType: "claude" };
+      // Check subagent directories: <parent-session-id>/subagents/<sessionId>.jsonl
+      const dirPath = path.join(claudeProjectsDir, dir);
+      try {
+        const subEntries = fs.readdirSync(dirPath, { withFileTypes: true })
+          .filter(d => d.isDirectory());
+        for (const subDir of subEntries) {
+          const subPath = path.join(dirPath, subDir.name, `${sessionId}.jsonl`);
+          if (fs.existsSync(subPath)) return { path: subPath, agentType: "claude" };
+        }
+      } catch {}
     }
   }
 
@@ -4504,7 +4522,7 @@ type StartedSessionInfo = {
   tmuxSession: string;
   projectPath: string;
   startedAt: number;
-  agentType: "claude" | "codex" | "gemini";
+  agentType: "claude" | "codex" | "cursor" | "gemini";
   worktreeName?: string;
   worktreeBranch?: string;
   worktreePath?: string;
@@ -4822,7 +4840,32 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     if (permFlags && !extraFlags.includes("--dangerously-skip-permissions") && !extraFlags.includes("--permission-mode")) {
       extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
     }
-    resumeCmd = `claude --resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
+    let resumeId = sessionId;
+    if (!UUID_RE.test(sessionId)) {
+      const newUuid = crypto.randomUUID();
+      const newPath = path.join(path.dirname(jsonlPath), `${newUuid}.jsonl`);
+      try {
+        const rawContent = fs.readFileSync(jsonlPath, "utf-8");
+        const rewritten = rawContent.replace(
+          new RegExp(`"sessionId"\\s*:\\s*"${sessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, "g"),
+          `"sessionId":"${newUuid}"`
+        );
+        fs.writeFileSync(newPath, rewritten);
+        log(`Copied non-UUID session ${sessionId} to resumable UUID ${newUuid}`);
+        resumeId = newUuid;
+        if (conversationId) {
+          const cache = readConversationCache();
+          cache[newUuid] = conversationId;
+          saveConversationCache(cache);
+        }
+        if (syncServiceRef && conversationId) {
+          syncServiceRef.updateSessionId(conversationId, newUuid).catch(() => {});
+        }
+      } catch (err) {
+        log(`Failed to copy session for UUID resume: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    resumeCmd = `claude --resume ${resumeId}${extraFlags ? " " + extraFlags : ""}`;
   }
 
   const prefix = agentType === "codex" ? "cx" : agentType === "gemini" ? "gm" : "cc";
@@ -5478,7 +5521,7 @@ async function deliverMessage(
   }
 
   // Detect codex sessions by checking if the JSONL exists in codex paths
-  let detectedType: "claude" | "codex" | "gemini" = isGeminiSession ? "gemini" : "claude";
+  let detectedType: "claude" | "codex" | "cursor" | "gemini" = isGeminiSession ? "gemini" : "claude";
   if (!isGeminiSession) {
     const sessionFile = findSessionFile(sessionId);
     if (sessionFile) detectedType = sessionFile.agentType;
@@ -7016,20 +7059,22 @@ async function main(): Promise<void> {
             .then((decision) => {
               permissionRecordPending.delete(sessionId);
               if (decision) {
-                const response = decision.approved ? "y" : "n";
-                log(`Permission ${decision.approved ? "approved" : "denied"} for session ${sessionId.slice(0, 8)}, injecting '${response}'`);
+                const key = decision.approved ? "Enter" : "Escape";
+                log(`Permission ${decision.approved ? "approved" : "denied"} for session ${sessionId.slice(0, 8)}, sending '${key}'`);
                 findSessionProcess(sessionId, detectSessionAgentType(sessionId)).then((proc) => {
                   if (!proc) { log("No process found for permission injection"); return; }
-                  findTmuxPaneForTty(proc.tty).then((tmuxTarget) => {
-                    const inject = tmuxTarget
-                      ? () => injectViaTmux(tmuxTarget, response)
-                      : () => injectViaTerminal(proc.tty, response, proc.termProgram);
-                    inject().then(() => {
-                      log(`Injected '${response}' for session ${sessionId.slice(0, 8)}`);
+                  findTmuxPaneForTty(proc.tty).then(async (tmuxTarget) => {
+                    try {
+                      if (tmuxTarget) {
+                        await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
+                      } else {
+                        await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram);
+                      }
+                      log(`Injected '${key}' for session ${sessionId.slice(0, 8)}`);
                       sendAgentStatus(syncService, convId, sessionId, "working");
-                    }).catch((err) => {
+                    } catch (err) {
                       log(`Failed to inject permission: ${err instanceof Error ? err.message : String(err)}`);
-                    });
+                    }
                   });
                 }).catch((err) => {
                   log(`Failed to find session process: ${err instanceof Error ? err.message : String(err)}`);
@@ -7052,6 +7097,8 @@ async function main(): Promise<void> {
   }
 
   function extractToolFromMessage(message: string): string {
+    const colonMatch = message.match(/^(\w+):\s/);
+    if (colonMatch) return colonMatch[1];
     const m = message.match(/permission to use (\w+)/i) || message.match(/allow (\w+)/i);
     return m?.[1] || "Bash";
   }
@@ -7636,7 +7683,8 @@ async function main(): Promise<void> {
             log(`New permission response: ${permission._id} status=${permission.status} tool=${permission.tool_name}`);
 
             try {
-              const response = permission.status === "approved" ? "y" : "n";
+              const approved = permission.status === "approved";
+              const key = approved ? "Enter" : "Escape";
               const sessionId = permission.session_id;
               let injected = false;
 
@@ -7646,13 +7694,13 @@ async function main(): Promise<void> {
                   const tmuxTarget = await findTmuxPaneForTty(proc.tty);
                   if (tmuxTarget) {
                     try {
-                      await injectViaTmux(tmuxTarget, response);
+                      await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
                       injected = true;
                     } catch {}
                   }
                   if (!injected) {
                     try {
-                      await injectViaTerminal(proc.tty, response, proc.termProgram);
+                      await injectViaTerminal(proc.tty, approved ? "\r" : "\x1b", proc.termProgram);
                       injected = true;
                     } catch {}
                   }
@@ -7660,7 +7708,7 @@ async function main(): Promise<void> {
               }
 
               if (injected) {
-                log(`Injected permission response '${response}' for session ${sessionId?.slice(0, 8)}`);
+                log(`Injected permission '${key}' for session ${sessionId?.slice(0, 8)}`);
                 processedPermissionIds.add(permission._id);
               } else {
                 log(`Failed to inject permission response, will retry on next update`);
