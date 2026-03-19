@@ -192,7 +192,6 @@ export type DirectoryMapping = {
 export function resolveTeamForPath(
   userMappings: DirectoryMapping[],
   conversationPath: string | undefined,
-  teamSharePaths: string[] | undefined,
   fallbackTeamId: Id<"teams"> | undefined
 ): { teamId: Id<"teams"> | undefined; isPrivate: boolean; autoShared: boolean } {
   let resolvedTeamId = fallbackTeamId;
@@ -217,16 +216,6 @@ export function resolveTeamForPath(
       if (bestMatch.auto_share) { isPrivate = false; autoShared = true; }
     } else {
       resolvedTeamId = undefined;
-    }
-  }
-
-  if (!autoShared && teamSharePaths && teamSharePaths.length > 0 && resolvedTeamId && conversationPath) {
-    for (const sharePath of teamSharePaths) {
-      if (conversationPath === sharePath || conversationPath.startsWith(sharePath + "/")) {
-        isPrivate = false;
-        autoShared = true;
-        break;
-      }
     }
   }
 

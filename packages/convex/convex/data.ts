@@ -114,9 +114,7 @@ async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promis
       .query("directory_team_mappings")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", opts.userId))
       .collect();
-    const user = await ctx.db.get(opts.userId);
-    const fallbackTeamId = user?.active_team_id || user?.team_id;
-    const result = resolveTeamForPath(mappings, opts.project_path, user?.team_share_paths, fallbackTeamId);
+    const result = resolveTeamForPath(mappings, opts.project_path, undefined);
     if (result.teamId) return { type: "team", teamId: result.teamId };
     return { type: "personal", userId: opts.userId };
   }

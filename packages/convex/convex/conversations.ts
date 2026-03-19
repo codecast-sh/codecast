@@ -413,7 +413,6 @@ export const createConversation = mutation({
     const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
       mappings,
       conversationPath,
-      (user as any)?.team_share_paths,
       fallbackTeamId
     );
 
@@ -563,7 +562,6 @@ export const createQuickSession = mutation({
     const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
       mappings,
       conversationPath,
-      (user as any)?.team_share_paths,
       (user as any)?.active_team_id || (user as any)?.team_id
     );
 
@@ -4819,7 +4817,6 @@ export const backfillConversationTeamIds = internalMutation({
         const { teamId, isPrivate, autoShared } = resolveTeamForPath(
           mappings,
           projectPath,
-          (user as any).team_share_paths,
           (user as any).active_team_id || (user as any).team_id
         );
 

@@ -792,37 +792,6 @@ export const updateSyncSettingsForCLI = mutation({
   },
 });
 
-export const getTeamSharePaths = query({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      return null;
-    }
-    const user = await ctx.db.get(userId);
-    if (!user) {
-      return null;
-    }
-    return user.team_share_paths ?? [];
-  },
-});
-
-export const updateTeamSharePaths = mutation({
-  args: {
-    team_share_paths: v.array(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Not authenticated");
-    }
-    await ctx.db.patch(userId, {
-      team_share_paths: args.team_share_paths,
-    });
-    return { success: true };
-  },
-});
-
 export const getDirectoryTeamMappings = query({
   args: {},
   handler: async (ctx) => {

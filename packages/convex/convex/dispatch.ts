@@ -164,7 +164,6 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
       mappings,
       conversationPath,
-      user?.team_share_paths,
       user?.active_team_id || user?.team_id
     );
 
