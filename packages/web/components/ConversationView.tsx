@@ -308,7 +308,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
           updated_at: now,
           project_path: trimmed,
           git_root: trimmed,
-          agent_type: currentAgent as "claude_code" | "codex" | "gemini",
+          agent_type: currentAgent as "claude_code" | "codex" | "cursor" | "gemini",
           message_count: 0,
           is_idle: true,
           has_pending: false,
@@ -341,7 +341,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
       }
 
       const conversationId = await createQuickSession({
-        agent_type: currentAgent as "claude_code" | "codex" | "gemini",
+        agent_type: currentAgent as "claude_code" | "codex" | "cursor" | "gemini",
         project_path: trimmed,
         git_root: trimmed,
         session_id: isInInbox ? sessionId : undefined,
@@ -434,16 +434,21 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   );
 }
 
-function AgentSwitcher({ conversation }: { conversation: ConversationData }) {
+function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows }: {
+  conversation: ConversationData;
+  showWorkflow: boolean;
+  onToggleWorkflow: () => void;
+  selectedWorkflowId: string;
+  onSelectWorkflow: (id: string) => void;
+  workflows: Array<{ _id: string; name: string }> | undefined;
+}) {
   const switchAgent = useMutation(api.conversations.switchSessionAgent);
   const setConversationAgent = useInboxStore((s) => s.setConversationAgent);
-  const storeSession = useInboxStore((s) =>
-    s.sessions[conversation._id]
-  );
+  const storeSession = useInboxStore((s) => s.sessions[conversation._id]);
   const resolvedId = storeSession?._id || conversation._id;
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
 
-  const handleAgentSwitch = useCallback((agentType: "claude_code" | "codex" | "gemini") => {
+  const handleAgentSwitch = useCallback((agentType: "claude_code" | "codex" | "cursor" | "gemini") => {
     if (agentType === currentAgent) return;
     setConversationAgent(resolvedId, agentType);
     if (isConvexId(resolvedId)) {
@@ -454,32 +459,64 @@ function AgentSwitcher({ conversation }: { conversation: ConversationData }) {
   const agents = [
     { type: "claude_code" as const, label: "Claude" },
     { type: "codex" as const, label: "Codex" },
+    { type: "cursor" as const, label: "Cursor" },
     { type: "gemini" as const, label: "Gemini" },
   ];
 
   return (
-    <div className="flex items-center justify-center gap-1.5 px-4 pb-7">
-      {agents.map((a) => {
-        const isActive = currentAgent === a.type;
-        return (
-          <button
-            key={a.type}
-            onClick={() => handleAgentSwitch(a.type)}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all ${
-              isActive
-                ? a.type === "claude_code"
-                  ? "bg-sol-yellow/15 text-sol-yellow border-sol-yellow/40"
-                  : a.type === "codex"
-                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/40"
-                    : "bg-blue-500/15 text-blue-400 border-blue-500/40"
-                : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
-            }`}
-          >
-            <AgentTypeIcon agentType={a.type} />
-            {a.label}
-          </button>
-        );
-      })}
+    <div className="flex flex-col items-center gap-2 px-4 pb-7">
+      <div className="flex items-center gap-1.5">
+        {agents.map((a) => {
+          const isActive = currentAgent === a.type && !showWorkflow;
+          return (
+            <button
+              key={a.type}
+              onClick={() => { handleAgentSwitch(a.type); if (showWorkflow) onToggleWorkflow(); }}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all ${
+                isActive
+                  ? a.type === "claude_code"
+                    ? "bg-sol-yellow/15 text-sol-yellow border-sol-yellow/40"
+                    : a.type === "codex"
+                      ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/40"
+                      : a.type === "cursor"
+                        ? "bg-purple-500/15 text-purple-400 border-purple-500/40"
+                        : "bg-blue-500/15 text-blue-400 border-blue-500/40"
+                  : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
+              }`}
+            >
+              <AgentTypeIcon agentType={a.type} />
+              {a.label}
+            </button>
+          );
+        })}
+        <span className="text-sol-border/50 text-xs">|</span>
+        <button
+          onClick={onToggleWorkflow}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all ${
+            showWorkflow
+              ? "bg-sol-violet/15 text-sol-violet border-sol-violet/40"
+              : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
+          }`}
+        >
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          Workflow
+        </button>
+      </div>
+
+      {showWorkflow && (
+        <select
+          value={selectedWorkflowId}
+          onChange={(e) => onSelectWorkflow(e.target.value)}
+          className="w-full max-w-sm px-3 py-1.5 text-xs bg-sol-bg-alt border border-sol-violet/40 rounded-lg text-sol-text focus:outline-none focus:border-sol-violet/70"
+        >
+          <option value="">Select a workflow...</option>
+          {(workflows || []).map((wf) => (
+            <option key={wf._id} value={wf._id}>{wf.name}</option>
+          ))}
+        </select>
+      )}
     </div>
   );
 }
@@ -2718,7 +2755,16 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   const displayText = cmdName ? rawDisplay.replace(new RegExp(`(/?${cmdName}\\s*)+`), "").trim() : rawDisplay;
 
   if (cmdName) {
-    return null;
+    return (
+      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs">
+        <svg className="w-3 h-3 text-sol-cyan/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+        </svg>
+        <span className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>
+        {displayText && <span className="text-[11px] text-sol-text-dim truncate">{displayText}</span>}
+        <span className="text-sol-text-dim text-[10px] ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+    );
   }
 
   return (
@@ -4754,7 +4800,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null> }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void> }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -5103,6 +5149,13 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (onWorkflowLaunch) {
+      const goal = message.trim();
+      setMessage("");
+      updateDraft("", null);
+      await onWorkflowLaunch(goal);
+      return;
+    }
     const hasUploadingImages = pastedImages.some(img => img.uploading);
     const readyImages = pastedImages.filter(img => !img.uploading && img.storageId);
     const canSend = message.trim() || readyImages.length > 0 || hasUploadingImages;
@@ -5520,7 +5573,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   onFocus={() => setIsFocused(true)}
                   onBlur={() => setIsFocused(false)}
                   disabled={isWaitingForUpload}
-                  placeholder={agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : "Answer the question to continue...") : "Send a message..."}
+                  placeholder={onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : "Answer the question to continue...") : "Send a message..."}
                   rows={1}
                   className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                 />
@@ -5697,6 +5750,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setGateResponding(true);
     try { await respondToGate({ id: workflowRun._id as any, response: key }); } finally { setGateResponding(false); }
   }, [workflowRun, respondToGate]);
+
+  const [showWorkflow, setShowWorkflow] = useState(false);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+  const workflows = useQuery(api.workflows.webList);
+  const createWorkflowRun = useMutation(api.workflow_runs.create);
+  const handleWorkflowLaunch = useCallback(async (goal: string) => {
+    if (!selectedWorkflowId) return;
+    try {
+      await createWorkflowRun({
+        workflow_id: selectedWorkflowId,
+        goal_override: goal || undefined,
+        project_path: conversation?.project_path || undefined,
+      });
+      toast.success("Workflow started");
+      setShowWorkflow(false);
+      setSelectedWorkflowId("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to start workflow");
+    }
+  }, [selectedWorkflowId, createWorkflowRun, conversation?.project_path]);
 
   const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
   const optimisticTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -6438,11 +6511,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (msg.role === "user") {
         const kind = userMsgKindMap.get(msg._id);
         switch (kind?.kind) {
-          case 'command': {
-            const cmdContent = msg.content || "";
-            const hasSlashCmd = /<command-name>/.test(cmdContent) || /^\/([\w-]+)/.test(cmdContent.trim());
-            return hasSlashCmd ? 0 : 30;
-          }
+          case 'command': return 30;
           case 'interrupt': return 30;
           case 'skill_expansion': return 44;
           case 'task_notification': return 40;
@@ -8131,10 +8200,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         <div ref={messageInputRef} className="relative">
           {conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (
             <div className="absolute left-0 right-0 bottom-full">
-              <AgentSwitcher conversation={conversation} />
+              <AgentSwitcher
+                conversation={conversation}
+                showWorkflow={showWorkflow}
+                onToggleWorkflow={() => setShowWorkflow(v => !v)}
+                selectedWorkflowId={selectedWorkflowId}
+                onSelectWorkflow={setSelectedWorkflowId}
+                workflows={workflows as any}
+              />
             </div>
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}

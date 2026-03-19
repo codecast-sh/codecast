@@ -290,7 +290,7 @@ class Parser {
     if (attrs.script) node.script = attrs.script as string;
     if (attrs.reasoning_effort) node.reasoning_effort = attrs.reasoning_effort as string;
     if (attrs.model) node.model = attrs.model as string;
-    if (attrs.backend) node.backend = attrs.backend as string;
+    if (attrs.backend) node.backend = attrs.backend as any;
     if (attrs.temperature !== undefined) node.temperature = attrs.temperature as number;
     if (attrs.max_visits !== undefined) node.max_visits = attrs.max_visits as number;
     if (attrs.max_retries !== undefined) node.max_retries = attrs.max_retries as number;
