@@ -209,6 +209,7 @@ export default defineSchema({
     )),
     workflow_run_id: v.optional(v.id("workflow_runs")),
     is_workflow_sub: v.optional(v.boolean()),
+    is_workflow_primary: v.optional(v.boolean()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -1293,6 +1294,7 @@ export default defineSchema({
     goal_override: v.optional(v.string()),
     project_path: v.optional(v.string()),
     primary_session_id: v.optional(v.string()),
+    primary_conversation_id: v.optional(v.id("conversations")),
     tmux_session: v.optional(v.string()),
     gate_prompt: v.optional(v.string()),
     gate_choices: v.optional(v.array(v.object({
