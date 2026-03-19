@@ -706,6 +706,21 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     nodeOutcomes[current.id] = outcome;
     state.completed.push(current.id);
 
+    // Log node completion to bound plan
+    if (options.planId && options.apiToken && options.convexSiteUrl && current.type !== "start") {
+      try {
+        await fetch(`${options.convexSiteUrl}/cli/plans/log`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: options.apiToken,
+            short_id: options.planId,
+            entry: `Workflow node "${current.label}" ${outcome === "success" ? "completed" : "failed"}`,
+          }),
+        });
+      } catch {}
+    }
+
     // ── Stage 5: Select next node ─────────────────────────────────────────────
     // Priority: human gate target > conditional edges > unconditional edges >
     //           retry_target on failure with no edge > abort
@@ -814,6 +829,21 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
         node_status: "completed",
         run_status: "completed",
       });
+    }
+
+    // Log completion to bound plan
+    if (options.planId && options.apiToken && options.convexSiteUrl) {
+      try {
+        await fetch(`${options.convexSiteUrl}/cli/plans/log`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: options.apiToken,
+            short_id: options.planId,
+            entry: `Workflow "${graph.name}" completed: ${state.completed.join(" → ")}`,
+          }),
+        });
+      } catch {}
     }
   } else if (state.failed) {
     console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
