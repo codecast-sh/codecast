@@ -1686,38 +1686,57 @@ ${TASK_SNIPPET_END}
 
 const WORK_SNIPPET_END = "<!-- /codecast-work -->";
 const WORK_SNIPPET = `
-## Tasks & Plans
+## Tasks, Plans & Workflows
 
-All task and plan creation flows into the same backend — use whichever approach fits the situation:
+Codecast tracks work across three layers. Tasks are the WHAT (specific work items). Plans group tasks with goals. Workflows define the HOW (execution patterns with loops, conditions, and human approval gates). The human monitors everything in the web dashboard — you communicate status through the system, not through chat.
 
-- **CC native \`TaskCreate\`/\`TaskUpdate\`/\`ExitPlanMode\`**: automatically intercepted by the daemon and synced. Use freely for natural session-level decomposition and plan approval flows.
-- **\`cast task\`**: explicit control with richer metadata (priority, type, dependencies, project). Use when a work item needs to persist, be queryable, or be assigned.
-- **\`cast plan\`**: multi-agent orchestration — decompose into tasks, spawn agents in waves, autopilot to completion.
+### Working on a task
 
-### Tasks
+When you receive a task (via prompt, plan context, or \`cast task ready\`):
 
-\`\`\`bash
-cast task ready                                    # Unblocked tasks ready to work
-cast task create "Title" -t task -p high           # Create task (types: task, bug, feature)
-cast task start ct-a1b2                            # Claim it (set in_progress)
-cast task done ct-a1b2 -m "Done"                  # Mark complete
-cast task comment ct-a1b2 "note" -t progress       # Log progress
-cast task context ct-a1b2                          # Full context for agents
-cast task ls                                       # List tasks
-\`\`\`
+1. **Claim it**: \`cast task start <short_id>\` — binds your session to the task, visible in the dashboard
+2. **Implement**: Read acceptance criteria, write code, verify
+3. **Report progress**: \`cast task comment <short_id> "what you did" -t progress\`
+4. **Complete**: \`cast task done <short_id> -m "summary of what you implemented and verified"\`
+
+If you hit problems, use escalation markers so the orchestrator and dashboard can act:
+- **BLOCKED: <reason>** — hard blocker, task gets flagged for human intervention
+- **NEEDS_CONTEXT: <what you need>** — missing information, escalated to the user
+- **DONE_WITH_CONCERNS: <concern>** — completed but with quality worries, marked for review
 
 ### Plans
 
+Plans group related tasks with a goal and track progress automatically.
+
 \`\`\`bash
-cast plan create "Title" --goal "..."              # Create a plan
-cast plan ls                                       # List plans
-cast plan show pl-xxxx                             # Plan details
-cast plan bind pl-xxxx                             # Bind current session to plan (injects context)
-cast plan update pl-xxxx -n "note"                 # Log progress
-cast plan decompose pl-xxxx                        # Break plan into granular tasks
-cast plan orchestrate pl-xxxx                      # Spawn parallel agents for open tasks
-cast plan autopilot pl-xxxx                        # Continuous orchestrate → verify loop
-cast plan status pl-xxxx                           # Progress, active agents, blocked tasks
+cast plan create "Title" --goal "..."     # Create a plan
+cast plan bind pl-xxxx                    # Bind session to plan (injects context)
+cast plan decompose pl-xxxx               # AI-generate tasks from the goal
+cast plan orchestrate pl-xxxx             # Spawn agents for ready tasks
+cast plan update pl-xxxx -n "progress"    # Log progress
+cast plan decide pl-xxxx "rationale"      # Log a decision
+\`\`\`
+
+### Workflows
+
+Workflows are execution graphs (DOT syntax) that define multi-step processes with loops, conditions, and human gates. They bind to tasks or plans.
+
+\`\`\`bash
+cast workflow run flow.cast --task ct-xxxx  # Execute workflow for a task
+cast workflow run flow.cast --plan pl-xxxx  # Execute workflow for a plan
+cast workflow list                          # Available templates
+cast workflow push                          # Push workflow to web UI
+\`\`\`
+
+### Quick reference
+
+\`\`\`bash
+cast task ready                             # Find available work
+cast task start/done/comment <short_id>     # Task lifecycle
+cast task create "Title" -t task -p high    # Create task
+cast task context <short_id>                # Full context for agents
+cast plan show/status <short_id>            # Plan details
+cast workflow run <file> --task/--plan      # Execute workflow
 \`\`\`
 ${WORK_SNIPPET_END}
 `;
@@ -2779,6 +2798,7 @@ program
   )
   .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths)")
   .argument("[value]", "Value to set for the key")
+  .allowUnknownOption()
   .action(async (key, value) => {
     const config = readConfig();
 
@@ -2819,7 +2839,7 @@ program
     if (key === "agent") {
       const idx = process.argv.indexOf("config");
       const extraArgs = process.argv.slice(idx + 2);
-      const [agentArg, paramArg, valueArg] = extraArgs;
+      const agentArg = extraArgs[0];
 
       if (!agentArg) {
         const allParams = config?.agent_default_params;
@@ -2828,9 +2848,9 @@ program
           return !p || Object.keys(p).length === 0;
         })) {
           console.log("No agent default params configured.");
-          console.log("\nUsage: cast config agent <agent> <param> <value>");
-          console.log("  cast config agent claude effort max");
-          console.log("  cast config agent claude model claude-opus-4-6");
+          console.log("\nUsage: cast config agent <agent> --<flag> <value> [--<flag> <value> ...]");
+          console.log("  cast config agent claude --effort max");
+          console.log("  cast config agent claude --effort max --model claude-opus-4-6");
           return;
         }
         for (const [agent, params] of Object.entries(allParams)) {
@@ -2851,7 +2871,8 @@ program
         process.exit(1);
       }
 
-      if (!paramArg) {
+      const flagArgs = extraArgs.slice(1);
+      if (flagArgs.length === 0) {
         const params = config?.agent_default_params?.[agentArg as keyof NonNullable<Config["agent_default_params"]>];
         if (!params || Object.keys(params).length === 0) {
           console.log(`No default params for ${agentArg}.`);
@@ -2864,22 +2885,41 @@ program
         return;
       }
 
-      if (!valueArg) {
-        const params = config?.agent_default_params?.[agentArg as keyof NonNullable<Config["agent_default_params"]>];
-        const val = params?.[paramArg];
-        console.log(`${agentArg} --${paramArg}: ${val || "(not set)"}`);
-        return;
+      const parsedFlags: Record<string, string> = {};
+      for (let i = 0; i < flagArgs.length; i++) {
+        const arg = flagArgs[i];
+        if (arg.startsWith("--")) {
+          const flagName = arg.replace(/^--/, "");
+          const flagValue = flagArgs[i + 1];
+          if (!flagValue || flagValue.startsWith("--")) {
+            console.error(`Missing value for --${flagName}`);
+            process.exit(1);
+          }
+          parsedFlags[flagName] = flagValue;
+          i++;
+        } else {
+          const flagName = arg;
+          const flagValue = flagArgs[i + 1];
+          if (!flagValue || flagValue.startsWith("--")) {
+            const params = config?.agent_default_params?.[agentArg as keyof NonNullable<Config["agent_default_params"]>];
+            const val = params?.[flagName];
+            console.log(`${agentArg} --${flagName}: ${val || "(not set)"}`);
+            return;
+          }
+          parsedFlags[flagName] = flagValue;
+          i++;
+        }
       }
 
       const updatedConfig: Config = config || {};
       const allParams: any = updatedConfig.agent_default_params || {};
-      const agentParams = { ...(allParams[agentArg] || {}) };
-      const cleanParam = paramArg.replace(/^--/, "");
-      agentParams[cleanParam] = valueArg;
+      const agentParams = { ...(allParams[agentArg] || {}), ...parsedFlags };
       allParams[agentArg] = agentParams;
       updatedConfig.agent_default_params = allParams;
       writeConfig(updatedConfig);
-      console.log(`Updated ${agentArg} --${cleanParam} ${valueArg}`);
+      for (const [k, v] of Object.entries(parsedFlags)) {
+        console.log(`Updated ${agentArg} --${k} ${v}`);
+      }
 
       try {
         const { ConvexHttpClient } = await import("convex/browser");
