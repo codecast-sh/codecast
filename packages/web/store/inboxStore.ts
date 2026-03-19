@@ -1140,9 +1140,13 @@ export const useInboxStore = create<InboxStoreState>(
   docProjectPaths: [],
 
   syncTaskDetail: (id: string, detail: TaskDetail) => {
-    set((s: InboxStoreState) => ({
-      taskDetails: { ...s.taskDetails, [id]: detail },
-    }));
+    set((s: InboxStoreState) => {
+      const existing = s.tasks[id];
+      const merged = existing ? { ...existing, ...detail } : detail;
+      return {
+        taskDetails: { ...s.taskDetails, [id]: merged },
+      };
+    });
   },
 
   syncDocDetail: (id: string, detail: DocDetail) => {
