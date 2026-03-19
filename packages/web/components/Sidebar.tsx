@@ -102,9 +102,17 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 ${isDragOver ? "ring-1 ring-sol-cyan bg-sol-cyan/10" : ""}`}
+      className={`flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group ${
+        conv.is_subagent || conv.parent_conversation_id
+          ? "text-sol-text-dim/50 hover:text-sol-text-dim/70 hover:bg-sol-bg-alt/30 opacity-60"
+          : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
+      } ${isDragOver ? "ring-1 ring-sol-cyan bg-sol-cyan/10" : ""}`}
     >
-      {conv.is_active ? (
+      {conv.is_subagent || conv.parent_conversation_id ? (
+        <svg className="w-3 h-3 text-sol-text-dim/40 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+        </svg>
+      ) : conv.is_active ? (
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
       ) : conv.is_favorite ? (
         <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
@@ -113,7 +121,7 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
       ) : (
         <span className="w-3 h-3 flex-shrink-0" />
       )}
-      <span className="truncate flex-1 leading-tight">{cleanTitle(conv.title || "Untitled")}</span>
+      <span className={`truncate flex-1 leading-tight ${conv.is_subagent || conv.parent_conversation_id ? "text-[13px]" : ""}`}>{cleanTitle(conv.title || "Untitled")}</span>
       {conv.worktree_name && (
         <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px] flex-shrink-0" title={conv.worktree_branch || conv.worktree_name}>
           {conv.worktree_name}

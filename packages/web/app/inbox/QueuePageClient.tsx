@@ -317,14 +317,20 @@ function SessionCard({
       onDrop={handleFileDrop}
       className={`relative group border-b border-sol-border/30 transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         isActive
-          ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
-          : isWorking
-            ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
-            : isDismissed && isSubagent
-              ? "opacity-40 hover:opacity-60 hover:bg-sol-bg-alt/50 border-l border-l-violet-500/20"
-              : isDismissed
-                ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
-                : "hover:bg-sol-bg-alt/80"
+          ? isSubagent
+            ? "bg-sol-cyan/10 border-l-2 border-l-violet-500/50 opacity-70"
+            : "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
+          : isWorking && isSubagent
+            ? "bg-sol-bg-alt/30 border-l border-l-violet-500/30 hover:bg-sol-bg-alt/50 opacity-55 hover:opacity-70"
+            : isWorking
+              ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
+              : isDismissed && isSubagent
+                ? "opacity-35 hover:opacity-50 hover:bg-sol-bg-alt/50 border-l border-l-violet-500/15"
+                : isDismissed
+                  ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
+                  : isSubagent
+                    ? "opacity-50 hover:opacity-65 hover:bg-sol-bg-alt/50 border-l border-l-violet-500/20"
+                    : "hover:bg-sol-bg-alt/80"
       }`}
     >
       <div
@@ -333,11 +339,13 @@ function SessionCard({
         onClick={() => onSelect(globalIndex)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(globalIndex); } }}
         className={`w-full text-left cursor-pointer ${
-          isDismissed && isSubagent ? "px-2 py-1" : "px-2.5 sm:px-3 py-1.5 sm:py-2"
+          isSubagent ? "px-2 py-1" : "px-2.5 sm:px-3 py-1.5 sm:py-2"
         }`}
       >
         <div className={`truncate leading-tight ${
-          isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed && isSubagent ? "text-xs text-sol-text-muted" : "text-sm text-sol-text"
+          isSubagent
+            ? "text-xs text-sol-text-dim/70 font-normal"
+            : isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
           {isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}
         </div>

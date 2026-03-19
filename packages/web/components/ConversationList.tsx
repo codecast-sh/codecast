@@ -525,8 +525,8 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
       <div className={`relative border rounded-lg sm:rounded-xl transition-all duration-200 dark:shadow-none ${
         conv.is_subagent
           ? !conv.is_active
-            ? "p-2 sm:p-2.5 bg-sol-bg-alt/20 dark:bg-sol-bg-alt/10 border-sol-border/20 opacity-40 hover:opacity-60"
-            : "p-2 sm:p-2.5 bg-sol-bg-alt/30 dark:bg-sol-bg-alt/20 border-violet-500/20 hover:border-violet-500/40 opacity-60 hover:opacity-80"
+            ? "p-1.5 sm:p-2 bg-sol-bg/50 dark:bg-sol-bg/30 border-sol-border/15 opacity-35 hover:opacity-55 scale-[0.97] origin-left"
+            : "p-1.5 sm:p-2 bg-sol-bg/60 dark:bg-sol-bg/40 border-sol-border/25 hover:border-violet-500/30 opacity-50 hover:opacity-70 scale-[0.97] origin-left"
           : isOthersRestrictedView
             ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt border-sol-border/30 opacity-70"
             : filter === "team" && conv.is_own && !conv.is_private
@@ -541,9 +541,11 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-3 mb-1">
               <div className="flex items-center gap-2 min-w-0 flex-1">
-                <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4 shrink-0" />
-                <span className={`font-medium text-sm sm:text-base transition-colors ${
-                  isOthersRestrictedView ? "text-sol-text-muted" : "text-sol-text"
+                <AgentIcon agentType={conv.agent_type || "claude_code"} className={`shrink-0 ${conv.is_subagent ? "w-3.5 h-3.5 opacity-50" : "w-4 h-4"}`} />
+                <span className={`transition-colors ${
+                  conv.is_subagent
+                    ? "font-normal text-xs sm:text-sm text-sol-text-dim/70"
+                    : isOthersRestrictedView ? "font-medium text-sm sm:text-base text-sol-text-muted" : "font-medium text-sm sm:text-base text-sol-text"
                 }`}>
                   {cleanTitle(conv.title || "Untitled")}
                 </span>
