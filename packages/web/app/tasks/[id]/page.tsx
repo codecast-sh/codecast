@@ -7,6 +7,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem } from "../../../store/inboxStore";
 import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { TaskCommandPalette } from "../../../components/TaskCommandPalette";
+import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
 import { toast } from "sonner";
 import { AuthGuard } from "../../../components/AuthGuard";
@@ -714,6 +715,13 @@ export default function TaskDetailPage() {
               onClick={startEditDesc}
             >
               Add a description...
+            </div>
+          )}
+
+          {/* Workflow Progress */}
+          {data.workflow_run_id && (
+            <div className="mb-6">
+              <WorkflowContextPanel workflowRunId={data.workflow_run_id as any} />
             </div>
           )}
 

@@ -755,7 +755,7 @@ function KanbanCard({
     <div
       onClick={onClick}
       onContextMenu={onContextMenu}
-      className="bg-sol-bg border border-sol-border/30 rounded-lg p-3 cursor-pointer hover:border-sol-border/70 hover:shadow-lg hover:shadow-black/10 transition-all select-none"
+      className="bg-white dark:bg-sol-bg-alt border border-sol-border/40 rounded-lg sm:rounded-xl p-3 cursor-pointer shadow-sm hover:border-sol-yellow/50 hover:shadow-md transition-all select-none"
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">{task.short_id}</span>

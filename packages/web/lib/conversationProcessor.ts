@@ -135,3 +135,99 @@ export function cleanTitle(title: string): string {
 
   return title.replace(/<[^>]+>/g, "").replace(/<[^>]*$/, "").trim().slice(0, 50) || "Untitled";
 }
+
+export type SkillItem = { name: string; description: string };
+
+export function extractSkillsFromMessages(messages: Array<{ role: string; content?: string; tool_calls?: Array<{ name: string; input: string }> }>): SkillItem[] {
+  const skills: SkillItem[] = [];
+  const seen = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role !== "system" || !msg.content) continue;
+    const lines = msg.content.split("\n");
+    let inSkillSection = false;
+    for (const line of lines) {
+      if (/following skills|available.*skills|available-deferred-tools/i.test(line)) {
+        inSkillSection = true;
+        continue;
+      }
+      if (inSkillSection) {
+        const match = line.match(/^[-*]\s+`?\/?([\w:.-]+)`?\s*[-–—:]\s*(.+)/);
+        if (match && !seen.has(match[1])) {
+          seen.add(match[1]);
+          skills.push({ name: match[1], description: match[2].trim() });
+        } else if (line.trim() === "" || /^[#<]/.test(line.trim())) {
+          inSkillSection = false;
+        }
+      }
+    }
+  }
+  for (const msg of messages) {
+    if (msg.role === "assistant" && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        if (tc.name === "Skill") {
+          try {
+            const parsed = JSON.parse(tc.input);
+            const name = parsed.skill;
+            if (name && !seen.has(name)) {
+              seen.add(name);
+              skills.push({ name, description: "" });
+            }
+          } catch {}
+        }
+      }
+    }
+  }
+  if (skills.length === 0) {
+    for (const msg of messages) {
+      if (msg.role !== "system" || !msg.content) continue;
+      const skillMatches = msg.content.matchAll(/\"skill\":\s*\"([\w:.-]+)\"/g);
+      for (const m of skillMatches) {
+        if (!seen.has(m[1])) {
+          seen.add(m[1]);
+          skills.push({ name: m[1], description: "" });
+        }
+      }
+      const nameMatches = msg.content.matchAll(/skill:\s*"([\w:.-]+)"/g);
+      for (const m of nameMatches) {
+        if (!seen.has(m[1])) {
+          seen.add(m[1]);
+          skills.push({ name: m[1], description: "" });
+        }
+      }
+    }
+  }
+  return skills;
+}
+
+export function extractFilePaths(messages: Array<{ role: string; content?: string; tool_calls?: Array<{ name: string; input: string }> }>): string[] {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  const addPath = (p: string) => {
+    if (!p || seen.has(p) || p.length < 3) return;
+    seen.add(p);
+    paths.push(p);
+  };
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === "assistant" && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        if (["Read", "Write", "Edit", "Glob"].includes(tc.name)) {
+          try {
+            const parsed = JSON.parse(tc.input);
+            if (parsed.file_path) addPath(parsed.file_path);
+            if (parsed.path) addPath(parsed.path);
+          } catch {}
+        }
+        if (tc.name === "Bash") {
+          try {
+            const parsed = JSON.parse(tc.input);
+            const cmd = parsed.command || "";
+            const fileMatches = cmd.matchAll(/(?:^|\s)(\/[\w./-]+(?:\.\w+))/g);
+            for (const m of fileMatches) addPath(m[1]);
+          } catch {}
+        }
+      }
+    }
+  }
+  return paths;
+}

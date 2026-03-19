@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Badge } from "./ui/badge";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
+import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
 import {
   Circle,
@@ -1062,6 +1063,12 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
 
       {plan.progress && plan.progress.total > 0 && (
         <PlanProgressBar progress={plan.progress} />
+      )}
+
+      {(plan as any).workflow_run_id && (
+        <div className="mb-5">
+          <WorkflowContextPanel workflowRunId={(plan as any).workflow_run_id} />
+        </div>
       )}
 
       {hasTasks && (

@@ -77,6 +77,7 @@ export type InboxSession = {
   worktree_name?: string | null;
   worktree_branch?: string | null;
   workflow_run_id?: string | null;
+  is_workflow_primary?: boolean;
 };
 
 export type Message = {
@@ -171,6 +172,8 @@ export type TaskItem = {
   estimated_minutes?: number;
   actual_minutes?: number;
   started_at?: number;
+  workflow_run_id?: string;
+  workflow_node_id?: string;
 };
 
 export type TaskDetail = TaskItem & {

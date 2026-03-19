@@ -10,7 +10,8 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractSkillsFromMessages, extractFilePaths } from "../lib/conversationProcessor";
+import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { toast } from "sonner";
@@ -4181,6 +4182,104 @@ function SystemBlock({ content, subtype, timestamp, messageUuid, messageId, conv
   );
 }
 
+function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding }: {
+  content: string;
+  workflowRun?: { _id: string; status: string; gate_response?: string | null } | null;
+  onGateChoice?: (key: string) => void;
+  gateResponding?: boolean;
+}) {
+  let event: Record<string, any> = {};
+  try { event = JSON.parse(content); } catch { return null; }
+
+  const wf = event.__wf as string;
+
+  if (wf === "started") {
+    return (
+      <div className="my-2 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-sol-violet/10 border border-sol-violet/25 text-xs">
+        <svg className="w-3.5 h-3.5 text-sol-violet flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <span className="text-sol-text-muted">Workflow started</span>
+        {event.goal && <span className="text-sol-text-dim truncate">— {event.goal}</span>}
+      </div>
+    );
+  }
+
+  if (wf === "node_start") {
+    return (
+      <div className="my-1.5 flex items-center gap-2.5 px-3 py-1.5 rounded bg-sol-yellow/8 border border-sol-yellow/20 text-xs">
+        <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse flex-shrink-0" />
+        <span className="text-sol-text-dim font-mono">{event.node_id}</span>
+        <span className="text-sol-text-dim/60">running…</span>
+      </div>
+    );
+  }
+
+  if (wf === "node_done") {
+    return (
+      <div className="my-1.5 flex items-center gap-2 px-3 py-1.5 rounded bg-sol-green/8 border border-sol-green/20 text-xs">
+        <svg className="w-3 h-3 text-sol-green flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+        </svg>
+        <span className="text-sol-text-dim font-mono">{event.node_id}</span>
+        {event.session_id && (
+          <Link href={`/conversation/${event.session_id}`} className="ml-auto text-sol-cyan/70 hover:text-sol-cyan transition-colors">
+            view session →
+          </Link>
+        )}
+      </div>
+    );
+  }
+
+  if (wf === "node_failed") {
+    return (
+      <div className="my-1.5 flex items-center gap-2 px-3 py-1.5 rounded bg-red-500/8 border border-red-500/20 text-xs">
+        <svg className="w-3 h-3 text-red-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+        <span className="text-sol-text-dim font-mono">{event.node_id}</span>
+        <span className="text-red-400/70">failed</span>
+      </div>
+    );
+  }
+
+  if (wf === "gate") {
+    const choices = event.choices as Array<{ key: string; label: string; target: string }> | undefined;
+    const isResolved = workflowRun && workflowRun.status !== "paused";
+    return (
+      <div className="my-3 rounded-lg border border-sol-magenta/40 bg-sol-magenta/8 overflow-hidden">
+        <div className="px-3 py-2 border-b border-sol-magenta/20 flex items-center gap-2">
+          <svg className="w-3.5 h-3.5 text-sol-magenta flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="text-[10px] text-sol-magenta uppercase tracking-wider font-semibold">Human Gate</span>
+          {isResolved && <span className="ml-auto text-[10px] text-sol-text-dim">responded</span>}
+        </div>
+        <div className="px-3 py-2.5">
+          <p className="text-sm text-sol-text mb-2.5">{event.prompt}</p>
+          {choices && (
+            <div className="flex flex-wrap gap-2">
+              {choices.map(choice => (
+                <button
+                  key={choice.key}
+                  onClick={() => !isResolved && onGateChoice?.(choice.key)}
+                  disabled={isResolved || gateResponding}
+                  className="px-3 py-1.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded-lg hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-40 disabled:cursor-default"
+                >
+                  <span className="font-mono text-sol-magenta mr-1.5">[{choice.key}]</span>
+                  {choice.label.replace(/^\[.\]\s*/, "")}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function CompactionSummaryBlock({ content }: { content: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -4800,7 +4899,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void> }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, skills, filePaths }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[] }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -4823,6 +4922,64 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
   const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
   const sentContentRef = useRef<string | null>(null);
+
+  type AutocompleteTrigger = { type: "/" | "@"; startPos: number } | null;
+  const [acTrigger, setAcTrigger] = useState<AutocompleteTrigger>(null);
+  const [acIndex, setAcIndex] = useState(0);
+  const acRef = useRef<HTMLDivElement>(null);
+
+  const acItems = useMemo(() => {
+    if (!acTrigger) return [];
+    const rawQuery = message.slice(acTrigger.startPos + 1);
+    const query = (acTrigger.type === "@" ? rawQuery.match(/^[\w./\\-]*/)?.[0] ?? "" : rawQuery).toLowerCase();
+    if (acTrigger.type === "/") {
+      return (skills || [])
+        .filter(s => s.name.toLowerCase().includes(query))
+        .slice(0, 8)
+        .map(s => ({ label: s.name, description: s.description, type: "skill" as const }));
+    }
+    if (acTrigger.type === "@") {
+      return (filePaths || [])
+        .filter(p => {
+          const name = p.split("/").pop() || p;
+          return name.toLowerCase().includes(query) || p.toLowerCase().includes(query);
+        })
+        .slice(0, 8)
+        .map(p => ({ label: p, description: undefined, type: "file" as const }));
+    }
+    return [];
+  }, [acTrigger, message, skills, filePaths]);
+
+  const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
+
+  const applyAutocomplete = useCallback((item: { label: string; type: "skill" | "file" }) => {
+    if (!acTrigger) return;
+    if (acTrigger.type === "/") {
+      const newVal = `/${item.label} `;
+      setMessage(newVal);
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newVal.length;
+        }
+      }, 0);
+    } else {
+      const before = message.slice(0, acTrigger.startPos);
+      const cursorPos = textareaRef.current?.selectionStart ?? message.length;
+      const after = message.slice(cursorPos);
+      const inserted = `@${item.label} `;
+      const newVal = before + inserted + after;
+      setMessage(newVal);
+      const newCursor = before.length + inserted.length;
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newCursor;
+        }
+      }, 0);
+    }
+    setAcTrigger(null);
+    setAcIndex(0);
+    textareaRef.current?.focus();
+  }, [acTrigger, message]);
 
   const messageStatus = useQuery(
     api.pendingMessages.getMessageStatus,
@@ -5014,6 +5171,25 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
     if (savedDraftRef.current !== null) {
       isSelectionEditedRef.current = true;
     }
+    if (val.startsWith("/") && (skills?.length ?? 0) > 0) {
+      const query = val.slice(1);
+      if (!query.includes(" ")) {
+        setAcTrigger({ type: "/", startPos: 0 });
+        setAcIndex(0);
+      } else {
+        setAcTrigger(null);
+      }
+    } else {
+      const cursorPos = textareaRef.current?.selectionStart ?? val.length;
+      const textBefore = val.slice(0, cursorPos);
+      const atMatch = textBefore.match(/@([\w./\\-]*)$/);
+      if (atMatch && (filePaths?.length ?? 0) > 0) {
+        setAcTrigger({ type: "@", startPos: cursorPos - atMatch[0].length });
+        setAcIndex(0);
+      } else {
+        setAcTrigger(null);
+      }
+    }
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
     draftTimerRef.current = setTimeout(() => {
       const existing = useInboxStore.getState().getDraft(conversationId);
@@ -5023,7 +5199,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
         useInboxStore.getState().setDraft(conversationId, { ...existing, draft_message: val || null });
       }
     }, 300);
-  }, [conversationId]);
+  }, [conversationId, skills, filePaths]);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -5256,6 +5432,34 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (acTrigger && acItems.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAcIndex(i => (i + 1) % acItems.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAcIndex(i => (i - 1 + acItems.length) % acItems.length);
+        return;
+      }
+      if (e.key === "Tab" && !e.shiftKey) {
+        e.preventDefault();
+        applyAutocomplete(acItems[clampedAcIndex]);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        applyAutocomplete(acItems[clampedAcIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setAcTrigger(null);
+        return;
+      }
+    }
     if (e.key === "Tab" && e.shiftKey) {
       e.preventDefault();
       onCycleMode?.();
@@ -5513,6 +5717,31 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
               </div>
             </div>
           )}
+          {acTrigger && acItems.length > 0 && (
+            <div ref={acRef} className={`mx-auto px-2 sm:px-4 mb-1 ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
+              <div className="bg-sol-bg-alt border border-sol-border rounded-lg shadow-xl overflow-hidden max-h-64 overflow-y-auto">
+                {acItems.map((item, i) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    className={`w-full text-left px-3 py-1.5 flex items-baseline gap-2 text-sm transition-colors ${i === clampedAcIndex ? "bg-sol-blue/15 text-sol-text" : "text-sol-text-dim hover:bg-sol-bg/50"}`}
+                    onMouseEnter={() => setAcIndex(i)}
+                    onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
+                  >
+                    <span className="text-sol-cyan font-mono text-xs shrink-0">
+                      {acTrigger.type === "/" ? "/" : "@"}{item.type === "file" ? (item.label.split("/").pop() || item.label) : item.label}
+                    </span>
+                    {item.description && (
+                      <span className="text-sol-text-dim/60 text-xs truncate">{item.description}</span>
+                    )}
+                    {item.type === "file" && (
+                      <span className="text-sol-text-dim/40 text-[10px] truncate ml-auto">{item.label.replace(/\/[^/]+$/, "")}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className={`mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "max-w-4xl" : "max-w-md"}`}>
             <div className={`flex flex-col border px-4 py-2 shadow-lg transition-all duration-200 ${isExpanded ? "rounded-2xl" : "rounded-full"} bg-sol-bg-alt ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : "border-sol-border"}`}>
               {isSelectionActive && (
@@ -5571,7 +5800,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
                   onFocus={() => setIsFocused(true)}
-                  onBlur={() => setIsFocused(false)}
+                  onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
                   disabled={isWaitingForUpload}
                   placeholder={onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : "Answer the question to continue...") : "Send a message..."}
                   rows={1}
@@ -5712,6 +5941,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const sendInlineMessage = useMutation(api.pendingMessages.sendMessageToSession);
   const toggleFavoriteMutation = useMutation(api.conversations.toggleFavorite);
   const restartSession = useMutation(api.conversations.restartSession);
+  const repairSession = useMutation(api.conversations.repairSession);
   const promoteToPlan = useMutation(api.plans.webPromoteSession);
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
 
@@ -5742,7 +5972,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const workflowRun = useQuery(
     api.workflow_runs.get,
     conversation?.workflow_run_id ? { id: conversation.workflow_run_id as any } : "skip"
-  ) as { _id: string; status: string; gate_prompt?: string; gate_choices?: Array<{ key: string; label: string; target: string }> } | null | undefined;
+  ) as { _id: string; status: string; gate_prompt?: string; gate_choices?: Array<{ key: string; label: string; target: string }>; gate_response?: string | null } | null | undefined;
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const [gateResponding, setGateResponding] = useState(false);
   const handleGateChoice = useCallback(async (key: string) => {
@@ -6155,7 +6385,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [timeline, conversation?.agent_type]);
 
+  const sessionSkills = useMemo(() => {
+    if (!conversation?.messages) return [];
+    return extractSkillsFromMessages(conversation.messages);
+  }, [conversation?.messages]);
 
+  const sessionFilePaths = useMemo(() => {
+    if (!conversation?.messages) return [];
+    return extractFilePaths(conversation.messages);
+  }, [conversation?.messages]);
 
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
@@ -6414,6 +6652,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const projectDir = conversation.project_path || conversation.git_root;
     const cdPrefix = projectDir ? `cd ${projectDir} && ` : "";
     const flags = (conversation as any).cli_flags ? ` ${(conversation as any).cli_flags}` : "";
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId);
+    if (!isUuid) {
+      return `${cdPrefix}cast resume ${sessionId}${targetAgent !== "claude" ? ` --as ${targetAgent}` : ""}`;
+    }
     const sourceAgent = conversation.agent_type === "codex" ? "codex" : "claude";
     if (targetAgent === sourceAgent) {
       return targetAgent === "codex"
@@ -7380,6 +7622,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (msg.role === "assistant") {
+      if (msg.subtype === "workflow_event") {
+        return <WorkflowEventBlock key={msg._id} content={msg.content || ""} workflowRun={workflowRun as any} onGateChoice={handleGateChoice} gateResponding={gateResponding} />;
+      }
+
       const prevMsgForCompaction = getPreviousNonToolResultMessage(index);
       if (prevMsgForCompaction?.role === "user" && userMsgKindMap.get(prevMsgForCompaction._id)?.kind === 'compaction_prompt') {
         const summaryContent = extractCompactionSummaryContent(msg.content || "");
@@ -7737,19 +7983,35 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </>
                     )}
                     {isOwner && conversation?.session_id && (
-                      <DropdownMenuItem onSelect={() => {
-                        setTimeout(async () => {
-                          try {
-                            await restartSession({ conversation_id: conversation._id });
-                            toast.success("Session restarting...");
-                          } catch { toast.error("Failed to restart session"); }
-                        });
-                      }}>
-                        <svg className="w-3 h-3 mr-1.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        Kill & restart
-                      </DropdownMenuItem>
+                      <>
+                        <DropdownMenuItem onSelect={() => {
+                          setTimeout(async () => {
+                            try {
+                              await restartSession({ conversation_id: conversation._id });
+                              toast.success("Session restarting...");
+                            } catch { toast.error("Failed to restart session"); }
+                          });
+                        }}>
+                          <svg className="w-3 h-3 mr-1.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          Kill & restart
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => {
+                          setTimeout(async () => {
+                            try {
+                              await repairSession({ conversation_id: conversation._id });
+                              toast.success("Repairing session from DB...");
+                            } catch { toast.error("Failed to repair session"); }
+                          });
+                        }}>
+                          <svg className="w-3 h-3 mr-1.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          </svg>
+                          Repair session
+                        </DropdownMenuItem>
+                      </>
                     )}
                     {conversation?.short_id && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
@@ -8210,7 +8472,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               />
             </div>
           )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} skills={sessionSkills} filePaths={sessionFilePaths} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}
