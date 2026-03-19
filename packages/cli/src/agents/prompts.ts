@@ -309,14 +309,9 @@ export function buildImplementerPrompt(plan: any, task: any): string {
     threadContext,
   ].filter(Boolean).join("\n");
 
-  return `You are implementing a specific task from a plan. Follow structured development methodology.
+  return `You are implementing a task. Your progress is visible to the team in the codecast dashboard.
 
-## First step
-
-Bind yourself to this task so your session is tracked:
-\`\`\`bash
-cast task start ${task.short_id}
-\`\`\`
+Start by binding to this task: \`cast task start ${task.short_id}\`
 
 ## Context
 ${planContext}
@@ -324,49 +319,24 @@ ${planContext}
 ## Acceptance Criteria
 ${acceptance}
 ${steps ? `\n## Steps\n${steps}\n` : ""}
-## Development Protocol
+## How to work
 
-1. **Understand first**: Read acceptance criteria and relevant code. If unclear, report NEEDS_CONTEXT.
-2. **Worktree**: If available, work in your worktree branch. Commit on the branch -- autopilot handles merging to main.
-3. **Test-driven**: Write failing test -> implement minimal code -> verify -> commit.
-4. **Small commits**: One logical change per commit. Conventional commits format. Add trailers to every commit:
-   \`\`\`
-   git commit -m "feat(scope): description
+1. Read the acceptance criteria and relevant code. If anything is unclear, output NEEDS_CONTEXT: <what you need>.
+2. Implement in small commits. Conventional commits format with trailers:
+   \`git commit -m "feat(scope): description\n\nCodecast-Plan: ${plan.short_id}\nCodecast-Task: ${task.short_id}"\`
+3. Before reporting done, verify: typecheck (\`npx tsc --noEmit\`), run related tests, review your diff for dead code and slop.
+4. If the change is user-facing, take a screenshot as evidence.
 
-   Codecast-Plan: ${plan.short_id}
-   Codecast-Task: ${task.short_id}"
-   \`\`\`
-5. **Verify everything**: Run tests, check build. Evidence before claims.
-6. **Self-review**: Before reporting done, review your changes. Check for AI slop, missing edge cases, dead code.
+## When done
 
-## Verification Protocol
+\`cast task done ${task.short_id} -m "what you implemented and how you verified it"\`
 
-Before marking any task as done, you MUST complete this checklist:
+## If problems
 
-1. **Typecheck**: Run \`npx tsc --noEmit\` in the relevant package directory. If it fails, fix the errors before proceeding.
-2. **Tests**: Run tests related to your changed files. If a test suite exists (jest, vitest, etc.), run it. Include the test output in your completion message.
-3. **Screenshot**: If the change is user-facing (UI, visual), take a screenshot as evidence using the browser or simulator tools.
-4. **Build**: If you modified build-relevant files, verify the build still succeeds.
-5. **Diff review**: Run \`git diff\` and review every changed line. Remove dead code, unnecessary comments, and AI slop.
-
-Only proceed to reporting after ALL applicable checks pass. Include verification evidence in your completion message.
-
-## Escalation Protocol
-
-When you encounter problems, use these structured markers in your output so the orchestrator can detect and act on them:
-
-- **BLOCKED: <reason>** -- You cannot complete the task due to a hard blocker (missing dependency, broken upstream, access issue). The orchestrator will pause the task and flag it for intervention.
-- **NEEDS_CONTEXT: <what you need>** -- You need information that isn't available in the codebase or task description (clarification on spec, access to an API key, design decision). The orchestrator will escalate to the user.
-- **DONE_WITH_CONCERNS: <concern>** -- You completed the task but have quality or correctness worries (untested edge case, potential regression, tech debt introduced). The orchestrator will mark it for review.
-
-Always use the exact marker format above (uppercase, colon, space, description) so automated parsing can detect it.
-
-## Reporting
-
-When done:
-\`\`\`bash
-cast task done ${task.short_id} -m "what you implemented and how you verified it"
-\`\`\``;
+Use these markers (exact format, the orchestrator parses them):
+- **BLOCKED: <reason>** — hard blocker, can't proceed
+- **NEEDS_CONTEXT: <what>** — need information or clarification
+- **DONE_WITH_CONCERNS: <concern>** — completed but with worries`;
 }
 
 export function buildReviewerPrompt(plan: any, task: any, branchName: string): string {
