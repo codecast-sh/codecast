@@ -4245,7 +4245,7 @@ function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding
 
   if (wf === "gate") {
     const choices = event.choices as Array<{ key: string; label: string; target: string }> | undefined;
-    const isResolved = workflowRun && workflowRun.status !== "paused";
+    const isResolved = !workflowRun || workflowRun.status !== "paused";
     return (
       <div className="my-3 rounded-lg border border-sol-magenta/40 bg-sol-magenta/8 overflow-hidden">
         <div className="px-3 py-2 border-b border-sol-magenta/20 flex items-center gap-2">
@@ -4253,20 +4253,23 @@ function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <span className="text-[10px] text-sol-magenta uppercase tracking-wider font-semibold">Human Gate</span>
-          {isResolved && <span className="ml-auto text-[10px] text-sol-text-dim">responded</span>}
+          {isResolved
+            ? <span className="ml-auto text-[10px] text-sol-green">responded</span>
+            : <span className="ml-auto text-[10px] text-sol-magenta/70 animate-pulse">waiting…</span>
+          }
         </div>
         <div className="px-3 py-2.5">
-          <p className="text-sm text-sol-text mb-2.5">{event.prompt}</p>
-          {choices && (
-            <div className="flex flex-wrap gap-2">
+          <p className="text-sm text-sol-text">{event.prompt}</p>
+          {!isResolved && choices && choices.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
               {choices.map(choice => (
                 <button
                   key={choice.key}
-                  onClick={() => !isResolved && onGateChoice?.(choice.key)}
-                  disabled={isResolved || gateResponding}
-                  className="px-3 py-1.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded-lg hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-40 disabled:cursor-default"
+                  onClick={() => onGateChoice?.(choice.key)}
+                  disabled={gateResponding}
+                  className="px-2 py-0.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-40"
                 >
-                  <span className="font-mono text-sol-magenta mr-1.5">[{choice.key}]</span>
+                  <span className="font-mono text-sol-magenta mr-1">[{choice.key}]</span>
                   {choice.label.replace(/^\[.\]\s*/, "")}
                 </button>
               ))}
@@ -5978,11 +5981,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   ) as { _id: string; status: string; gate_prompt?: string; gate_choices?: Array<{ key: string; label: string; target: string }>; gate_response?: string | null } | null | undefined;
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const [gateResponding, setGateResponding] = useState(false);
-  const handleGateChoice = useCallback(async (key: string) => {
-    if (!workflowRun) return;
+  const [gateText, setGateText] = useState("");
+  const handleGateRespond = useCallback(async (text: string) => {
+    if (!workflowRun || !text.trim()) return;
     setGateResponding(true);
-    try { await respondToGate({ id: workflowRun._id as any, response: key }); } finally { setGateResponding(false); }
+    try { await respondToGate({ id: workflowRun._id as any, response: text.trim() }); setGateText(""); } finally { setGateResponding(false); }
   }, [workflowRun, respondToGate]);
+  const handleGateChoice = handleGateRespond;
 
   const [showWorkflow, setShowWorkflow] = useState(false);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
@@ -8435,21 +8440,43 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {workflowRun?.status === "paused" && workflowRun.gate_prompt && (
-        <div className="border-t border-sol-magenta/30 bg-sol-magenta/5 px-4 py-3">
-          <div className="text-[10px] text-sol-magenta uppercase tracking-wider font-semibold mb-2">Human Gate</div>
-          <p className="text-sm text-sol-text mb-3">{workflowRun.gate_prompt}</p>
-          <div className="flex flex-wrap gap-2">
-            {workflowRun.gate_choices?.map(choice => (
-              <button
-                key={choice.key}
-                onClick={() => handleGateChoice(choice.key)}
-                disabled={gateResponding}
-                className="px-3 py-1.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded-lg hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-50"
-              >
-                <span className="font-mono text-sol-magenta mr-1.5">[{choice.key}]</span>
-                {choice.label.replace(/^\[.\]\s*/, "")}
-              </button>
-            ))}
+        <div className="border-t border-sol-magenta/30 bg-sol-magenta/5 px-4 py-3 space-y-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-sol-magenta uppercase tracking-wider font-semibold">Human Gate</span>
+            <span className="text-xs text-sol-text-muted flex-1">{workflowRun.gate_prompt}</span>
+          </div>
+          {workflowRun.gate_choices && workflowRun.gate_choices.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {workflowRun.gate_choices.map(choice => (
+                <button
+                  key={choice.key}
+                  onClick={() => handleGateRespond(choice.key)}
+                  disabled={gateResponding}
+                  className="px-2 py-1 text-xs font-medium text-sol-text border border-sol-border/30 rounded hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-50"
+                >
+                  <span className="font-mono text-sol-magenta mr-1">[{choice.key}]</span>
+                  {choice.label.replace(/^\[.\]\s*/, "")}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <textarea
+              value={gateText}
+              onChange={e => setGateText(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGateRespond(gateText); } }}
+              placeholder="Type your response or instructions… (⌘↵ to send)"
+              rows={2}
+              disabled={gateResponding}
+              className="flex-1 px-3 py-2 text-sm bg-sol-bg border border-sol-border/40 rounded-lg text-sol-text placeholder-sol-text-dim/50 focus:outline-none focus:border-sol-magenta/50 resize-none disabled:opacity-50"
+            />
+            <button
+              onClick={() => handleGateRespond(gateText)}
+              disabled={gateResponding || !gateText.trim()}
+              className="px-3 py-2 text-xs font-medium bg-sol-magenta/20 border border-sol-magenta/40 text-sol-magenta rounded-lg hover:bg-sol-magenta/30 transition-colors disabled:opacity-40 self-end"
+            >
+              Send
+            </button>
           </div>
         </div>
       )}

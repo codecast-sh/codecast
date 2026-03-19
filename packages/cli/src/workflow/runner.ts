@@ -271,6 +271,12 @@ async function executeCliAgent(
         return "success";
       }
 
+      // No explicit completion markers — check for error signals
+      if (text.includes("error") || text.includes("failed") || text.includes("exit code 1")) {
+        console.log(`  ${c.yellow}agent exited (possible failure)${c.reset}`);
+        context["last_error"] = output.text.slice(-2000);
+        return "failure";
+      }
       console.log(`  ${c.dim}agent exited${c.reset}`);
       return "success";
     }
@@ -349,6 +355,9 @@ async function executeRemoteHumanGate(
   const response = await reportGate(options, node.id, node.label, choices);
   if (!response) return "failure";
 
+  // Always store the human's message as context for the next agent
+  context["human.message"] = response;
+
   const match = choices.find(ch => ch.key.toUpperCase() === response.toUpperCase());
   if (match) {
     context["human.gate.selected"] = match.key;
@@ -358,11 +367,9 @@ async function executeRemoteHumanGate(
     return match.key.toLowerCase();
   }
 
-  const first = choices[0];
-  context["human.gate.selected"] = first.key;
-  context["human.gate.label"] = first.label;
-  context["human.gate.target"] = first.target;
-  return first.key.toLowerCase();
+  // Free-form text — route via unconditional edges (success path)
+  console.log(`  ${c.green}✓ received message (free-form)${c.reset}`);
+  return "success";
 }
 
 // Extract key from label like "[A] Approve" → "A"
@@ -410,9 +417,14 @@ function buildNodePrompt(
     parts.push(`# Task: ${node.label}\n${goal ? `Complete this step of the goal: ${goal}` : node.label}`);
   }
 
+  // Surface human message prominently if present
+  if (context["human.message"]) {
+    parts.push(`\n# Human Instructions\n${context["human.message"]}`);
+  }
+
   // Add relevant context
   const contextEntries = Object.entries(context)
-    .filter(([k, _v]) => !k.endsWith(".output") && !["outcome", "last_error"].includes(k))
+    .filter(([k, _v]) => !k.endsWith(".output") && !["outcome", "last_error", "human.message"].includes(k))
     .slice(0, 10);
   if (contextEntries.length > 0) {
     parts.push(`\n# Context\n${contextEntries.map(([k, v]) => `- ${k}: ${v}`).join("\n")}`);
@@ -780,7 +792,12 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
           } else if (current.type === "human") {
             outcome2 = await executeHumanGate(current, graph, state.context);
           } else if (current.type === "agent" || current.type === "prompt") {
-            outcome2 = await executeAgent(current, graph, state.context, cwd, options);
+            const backend2 = current.backend || "builtin";
+            if (backend2 !== "builtin") {
+              outcome2 = await executeCliAgent(current, graph, state.context, cwd, options);
+            } else {
+              outcome2 = await executeAgent(current, graph, state.context, cwd, options);
+            }
           } else {
             outcome2 = "success";
           }

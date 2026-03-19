@@ -86,6 +86,97 @@ export const create = mutation({
   },
 });
 
+export const createFromCli = mutation({
+  args: {
+    api_token: v.string(),
+    workflow_name: v.string(),
+    workflow_goal: v.optional(v.string()),
+    workflow_id: v.optional(v.string()),
+    task_id: v.optional(v.string()),
+    plan_id: v.optional(v.string()),
+    goal_override: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) throw new Error("Unauthorized");
+    const userId = result.userId;
+
+    const now = Date.now();
+
+    let taskDocId: any = undefined;
+    if (args.task_id) {
+      const tasks = await ctx.db.query("tasks").withIndex("by_short_id", q => q.eq("short_id", args.task_id!)).first();
+      if (tasks) taskDocId = tasks._id;
+    }
+
+    let planDocId: any = undefined;
+    if (args.plan_id) {
+      const plan = await ctx.db.query("plans").withIndex("by_short_id", q => q.eq("short_id", args.plan_id!)).first();
+      if (plan) planDocId = plan._id;
+    }
+
+    // Resolve workflow_id — either passed directly or look up by name
+    let workflowDocId: any = args.workflow_id ? (args.workflow_id as any) : undefined;
+    if (!workflowDocId) {
+      const wf = await ctx.db.query("workflows")
+        .withIndex("by_user_id", q => q.eq("user_id", userId))
+        .collect();
+      const match = wf.find(w => w.name === args.workflow_name);
+      if (match) workflowDocId = match._id;
+    }
+
+    const runId = await ctx.db.insert("workflow_runs", {
+      user_id: userId,
+      workflow_id: workflowDocId || (undefined as any),
+      task_id: taskDocId,
+      plan_id: planDocId,
+      status: "pending",
+      node_statuses: [],
+      goal_override: args.goal_override,
+      project_path: args.project_path,
+      created_at: now,
+      updated_at: now,
+    });
+
+    if (taskDocId) {
+      await ctx.db.patch(taskDocId, { workflow_run_id: runId, status: "in_progress" as any, updated_at: now });
+    }
+    if (planDocId) {
+      await ctx.db.patch(planDocId, { workflow_run_id: runId, updated_at: now });
+    }
+
+    const primaryConvId = await ctx.db.insert("conversations", {
+      user_id: userId,
+      agent_type: "claude_code",
+      session_id: `wf-${runId}`,
+      title: args.workflow_name,
+      project_path: args.project_path,
+      started_at: now,
+      updated_at: now,
+      message_count: 0,
+      is_private: false,
+      status: "active",
+      workflow_run_id: runId,
+      is_workflow_primary: true,
+    });
+
+    await ctx.db.patch(runId, { primary_conversation_id: primaryConvId });
+
+    await ctx.db.insert("messages", {
+      conversation_id: primaryConvId,
+      role: "assistant",
+      content: JSON.stringify({ __wf: "started", goal: args.goal_override || args.workflow_goal || "", workflow_name: args.workflow_name }),
+      subtype: "workflow_event",
+      timestamp: now,
+    });
+
+    await ctx.db.patch(primaryConvId, { message_count: 1, last_message_role: "assistant" });
+
+    return { run_id: runId };
+  },
+});
+
 export const listForWorkflow = query({
   args: { workflow_id: v.id("workflows") },
   handler: async (ctx, args) => {
@@ -122,11 +213,43 @@ export const respondToGate = mutation({
     if (!run || run.user_id !== userId) throw new Error("Not found");
     if (run.status !== "paused") throw new Error("Not paused");
 
+    const now = Date.now();
     await ctx.db.patch(args.id, {
       gate_response: args.response,
       status: "running",
-      updated_at: Date.now(),
+      updated_at: now,
     });
+
+    // Post the human's response as a user message to the primary conversation
+    if (run.primary_conversation_id) {
+      const primaryConv = await ctx.db.get(run.primary_conversation_id);
+      if (primaryConv) {
+        await ctx.db.insert("messages", {
+          conversation_id: run.primary_conversation_id,
+          role: "user",
+          content: args.response,
+          timestamp: now,
+        });
+        await ctx.db.patch(run.primary_conversation_id, {
+          message_count: (primaryConv.message_count || 0) + 1,
+          updated_at: now,
+          last_message_role: "user",
+        });
+      }
+    }
+  },
+});
+
+export const respondToGateFromCli = mutation({
+  args: { api_token: v.string(), run_id: v.id("workflow_runs"), response: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) return { error: "Unauthorized" };
+    const run = await ctx.db.get(args.run_id);
+    if (!run || run.user_id !== auth.userId) return { error: "Not found" };
+    if (run.status !== "paused") return { error: "Not paused" };
+    await ctx.db.patch(args.run_id, { gate_response: args.response, status: "running", updated_at: Date.now() });
+    return { ok: true };
   },
 });
 
@@ -139,10 +262,23 @@ export const getForDaemon = mutation({
     const run = await ctx.db.get(args.run_id);
     if (!run || run.user_id !== auth.userId) return { error: "Not found" };
 
-    const workflow = await ctx.db.get(run.workflow_id);
-    if (!workflow) return { error: "Workflow not found" };
+    const workflow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
 
-    return { run, workflow };
+    let taskShortId: string | undefined;
+    if (run.task_id) {
+      const task = await ctx.db.get(run.task_id);
+      if (task) taskShortId = task.short_id;
+    }
+    let planShortId: string | undefined;
+    if (run.plan_id) {
+      const plan = await ctx.db.get(run.plan_id);
+      if (plan) planShortId = plan.short_id;
+    }
+
+    return {
+      run: { ...run, task_short_id: taskShortId, plan_short_id: planShortId },
+      workflow: workflow || { name: "workflow", goal: run.goal_override, nodes: [], edges: [] },
+    };
   },
 });
 
