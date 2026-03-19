@@ -1383,6 +1383,7 @@ export const startSession = mutation({
     agent_type: v.union(
       v.literal("claude"),
       v.literal("codex"),
+      v.literal("cursor"),
       v.literal("gemini")
     ),
     project_path: v.optional(v.string()),

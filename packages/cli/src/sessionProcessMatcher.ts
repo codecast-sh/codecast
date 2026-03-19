@@ -1,4 +1,4 @@
-export type SessionAgentType = "claude" | "codex" | "gemini";
+export type SessionAgentType = "claude" | "codex" | "cursor" | "gemini";
 export interface CodexProcessCandidate {
   pid: number;
   tty: string;

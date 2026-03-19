@@ -586,7 +586,7 @@ export const createQuickSession = mutation({
       short_id: conversationId.toString().slice(0, 7),
     });
 
-    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : "gemini";
+    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
     const daemonArgs: Record<string, any> = {
       agent_type: daemonAgentType,
       project_path: args.project_path || args.git_root,
@@ -6111,7 +6111,7 @@ export const switchSessionProject = mutation({
     });
 
     const agentType = conv.agent_type || "claude_code";
-    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : "gemini";
+    const daemonAgentType = agentType === "claude_code" ? "claude" : agentType === "codex" ? "codex" : agentType === "cursor" ? "cursor" : "gemini";
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_session",
@@ -6144,7 +6144,7 @@ export const switchSessionAgent = mutation({
     }
 
     const now = Date.now();
-    const daemonAgentType = args.agent_type === "claude_code" ? "claude" : args.agent_type === "codex" ? "codex" : "gemini";
+    const daemonAgentType = args.agent_type === "claude_code" ? "claude" : args.agent_type === "codex" ? "codex" : args.agent_type === "cursor" ? "cursor" : "gemini";
 
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
