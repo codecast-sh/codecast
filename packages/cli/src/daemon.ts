@@ -301,10 +301,8 @@ function sendLogImmediate(level: LogLevel, message: string, metadata?: RemoteLog
   }).catch(() => {});
 }
 
-const IDLE_TIMEOUT_MS = 2 * 60_000;
 const IDLE_COOLDOWN_MS = 5 * 60_000;
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const lastIdleNotification = new Map<string, number>();
 const lastIdleNotifiedSize = new Map<string, number>();
 const lastErrorNotification = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
@@ -716,11 +714,15 @@ async function executeRemoteCommand(
         });
         setTimeout(() => {
           log("Restarting daemon per remote command...");
-          const spawned = spawnReplacement();
-          if (spawned) {
-            skipRespawn = true;
+          if (isManagedByLaunchd()) {
+            log("Launchd will restart daemon after exit");
           } else {
-            log("spawnReplacement failed, letting exit handler respawn");
+            const spawned = spawnReplacement();
+            if (spawned) {
+              skipRespawn = true;
+            } else {
+              log("spawnReplacement failed, letting exit handler respawn");
+            }
           }
           setTimeout(() => process.exit(0), 500);
         }, 1000);
@@ -748,11 +750,15 @@ async function executeRemoteCommand(
             logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
             await flushRemoteLogs();
             log("Update successful, restarting...");
-            const spawned = spawnReplacement();
-            if (spawned) {
-              skipRespawn = true;
+            if (isManagedByLaunchd()) {
+              log("Launchd will restart daemon after update");
             } else {
-              log("spawnReplacement failed, letting exit handler respawn");
+              const spawned = spawnReplacement();
+              if (spawned) {
+                skipRespawn = true;
+              } else {
+                log("spawnReplacement failed, letting exit handler respawn");
+              }
             }
             setTimeout(() => process.exit(0), 500);
           } else {
@@ -2656,30 +2662,20 @@ async function processSessionFile(
         } else if (hasPendingToolCalls) {
           idleTimers.delete(sessionId);
         } else {
-          const capturedFilePath = filePath;
           const capturedSize = stats.size;
 
-          if (capturedSize === lastIdleNotifiedSize.get(sessionId)) {
-            // Already notified for this state, skip
-          } else {
-            idleTimers.set(sessionId, setTimeout(() => {
-              idleTimers.delete(sessionId);
-              try {
-                const currentStats = fs.statSync(capturedFilePath);
-                if (currentStats.size !== capturedSize) return;
-              } catch { return; }
-
-              lastIdleNotifiedSize.set(sessionId, capturedSize);
-              sendAgentStatus(syncService, conversationId, sessionId, "idle");
-              const preview = truncateForNotification(lastAssistantMessage.content);
-              syncService.createSessionNotification({
-                conversation_id: conversationId,
-                type: "session_idle",
-                title: "Claude done",
-                message: preview,
-              }).catch(() => {});
-              log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
-            }, IDLE_TIMEOUT_MS));
+          if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
+            idleTimers.delete(sessionId);
+            lastIdleNotifiedSize.set(sessionId, capturedSize);
+            sendAgentStatus(syncService, conversationId, sessionId, "idle");
+            const preview = truncateForNotification(lastAssistantMessage.content);
+            syncService.createSessionNotification({
+              conversation_id: conversationId,
+              type: "session_idle",
+              title: "Claude done",
+              message: preview,
+            }).catch(() => {});
+            log(`Sent idle notification for session ${sessionId.slice(0, 8)}`);
           }
         }
       }
@@ -5770,6 +5766,10 @@ function isAgentProcess(pid: number): boolean {
 
 let skipRespawn = false;
 
+function isManagedByLaunchd(): boolean {
+  return !!process.env.XPC_SERVICE_NAME;
+}
+
 function spawnReplacement(): boolean {
   try {
     const child = spawn(process.execPath, process.argv.slice(1), {
@@ -5810,6 +5810,7 @@ function clearCrashCount(): void {
 }
 
 function acquireLock(): boolean {
+  const underLaunchd = isManagedByLaunchd();
   if (fs.existsSync(PID_FILE)) {
     try {
       const existingPid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
@@ -5826,14 +5827,16 @@ function acquireLock(): boolean {
 
   // Even without a PID file, check for zombie daemon processes (e.g. from a
   // shutdown that deleted the PID file but failed to exit).
-  try {
-    const pgrepOut = execSync(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
-    const pids = pgrepOut.trim().split("\n").map(Number).filter(p => p && p !== process.pid && isProcessRunning(p));
-    for (const zombiePid of pids) {
-      log(`Killing zombie daemon process ${zombiePid}`);
-      try { process.kill(zombiePid, "SIGKILL"); } catch {}
-    }
-  } catch {}
+  if (!underLaunchd) {
+    try {
+      const pgrepOut = execSync(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
+      const pids = pgrepOut.trim().split("\n").map(Number).filter(p => p && p !== process.pid && isProcessRunning(p));
+      for (const zombiePid of pids) {
+        log(`Killing zombie daemon process ${zombiePid}`);
+        try { process.kill(zombiePid, "SIGKILL"); } catch {}
+      }
+    } catch {}
+  }
 
   fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
   // Verify we won the race (another process may have written simultaneously)
@@ -6224,7 +6227,9 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
       if (success) {
         logLifecycle("forced_update_complete", `Binary replaced from v${currentVersion}, target>=${minVersion}`);
         await flushRemoteLogs();
-        spawnReplacement();
+        if (!isManagedByLaunchd()) {
+          spawnReplacement();
+        }
         await new Promise(resolve => setTimeout(resolve, 500));
         process.exit(0);
       } else {
@@ -6257,12 +6262,16 @@ function checkDiskVersionMismatch(): void {
       log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, restarting`);
       logLifecycle("version_mismatch_restart", `${daemonVersion} -> ${diskVersion}`);
       flushRemoteLogs().then(() => {
-        const spawned = spawnReplacement();
-        if (spawned) skipRespawn = true;
+        if (!isManagedByLaunchd()) {
+          const spawned = spawnReplacement();
+          if (spawned) skipRespawn = true;
+        }
         setTimeout(() => process.exit(0), 500);
       }).catch(() => {
-        const spawned = spawnReplacement();
-        if (spawned) skipRespawn = true;
+        if (!isManagedByLaunchd()) {
+          const spawned = spawnReplacement();
+          if (spawned) skipRespawn = true;
+        }
         setTimeout(() => process.exit(0), 500);
       });
     }
@@ -6603,7 +6612,7 @@ async function main(): Promise<void> {
 
   // Exit guard: respawn with backoff if crash looping.
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).
-  const underLaunchd = !!process.env.XPC_SERVICE_NAME;
+  const underLaunchd = isManagedByLaunchd();
   process.on("exit", (code) => {
     persistLogQueue();
     if (skipRespawn || underLaunchd) return;
