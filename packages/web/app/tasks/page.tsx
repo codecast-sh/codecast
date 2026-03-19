@@ -65,7 +65,7 @@ const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: string;
   none: { icon: Minus, label: "None", color: "text-sol-text-dim" },
 };
 
-const STATUS_ORDER: TaskStatus[] = ["in_progress", "open", "backlog", "in_review", "done", "dropped"];
+const STATUS_ORDER: TaskStatus[] = ["backlog", "open", "in_progress", "in_review", "done", "dropped"];
 
 function CreatorAvatar({ creator }: { creator?: { name: string; image?: string } }) {
   if (!creator) return null;
@@ -740,12 +740,18 @@ function fmtDate(ms: number): string {
 
 function KanbanCard({
   task,
+  isDragging,
   onClick,
   onContextMenu,
+  onDragStart,
+  onDragEnd,
 }: {
   task: TaskItem;
+  isDragging?: boolean;
   onClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragEnd?: () => void;
 }) {
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.none;
   const PriorityIcon = priority.icon;
@@ -753,9 +759,14 @@ function KanbanCard({
 
   return (
     <div
+      draggable
       onClick={onClick}
       onContextMenu={onContextMenu}
-      className="bg-white dark:bg-sol-bg-alt border border-sol-border/40 rounded-lg sm:rounded-xl p-3 cursor-pointer shadow-sm hover:border-sol-yellow/50 hover:shadow-md transition-all select-none"
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      className={`bg-white dark:bg-sol-bg-alt border border-sol-border/40 rounded-lg sm:rounded-xl p-3 cursor-grab shadow-sm hover:border-sol-yellow/50 hover:shadow-md transition-all select-none ${
+        isDragging ? "opacity-40" : ""
+      }`}
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">{task.short_id}</span>
@@ -817,6 +828,7 @@ function KanbanView({
   onCardClick,
   onContextMenu,
   onAddTask,
+  onStatusChange,
 }: {
   grouped: Record<string, TaskItem[]>;
   hiddenStatuses: Set<string>;
@@ -824,9 +836,48 @@ function KanbanView({
   onCardClick: (task: TaskItem) => void;
   onContextMenu: (e: React.MouseEvent, task: TaskItem) => void;
   onAddTask: (status: string) => void;
+  onStatusChange: (task: TaskItem, newStatus: string) => void;
 }) {
   const visibleStatuses = STATUS_ORDER.filter((s) => !hiddenStatuses.has(s) && (grouped[s]?.length || true));
   const hiddenWithTasks = STATUS_ORDER.filter((s) => hiddenStatuses.has(s));
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+
+  const onDragStart = useCallback((e: React.DragEvent, shortId: string) => {
+    e.dataTransfer.setData("text/plain", shortId);
+    e.dataTransfer.effectAllowed = "move";
+    setDragging(shortId);
+  }, []);
+
+  const onDragEnd = useCallback(() => {
+    setDragging(null);
+    setDragOver(null);
+  }, []);
+
+  const onDrop = useCallback((e: React.DragEvent, targetStatus: string) => {
+    e.preventDefault();
+    setDragOver(null);
+    const shortId = e.dataTransfer.getData("text/plain");
+    if (!shortId) return;
+    const allTasks = Object.values(grouped).flat();
+    const task = allTasks.find(t => t.short_id === shortId);
+    if (!task || task.status === targetStatus) {
+      setDragging(null);
+      return;
+    }
+    onStatusChange(task, targetStatus);
+    setDragging(null);
+  }, [grouped, onStatusChange]);
+
+  const handleDragOver = useCallback((e: React.DragEvent, status: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOver(status);
+  }, []);
+
+  const onDragLeave = useCallback(() => {
+    setDragOver(null);
+  }, []);
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -837,7 +888,15 @@ function KanbanView({
           const Icon = cfg.icon;
           const tasks = grouped[status] || [];
           return (
-            <div key={status} className="flex flex-col w-[272px] flex-shrink-0 min-h-0">
+            <div
+              key={status}
+              onDrop={e => onDrop(e, status)}
+              onDragOver={e => handleDragOver(e, status)}
+              onDragLeave={onDragLeave}
+              className={`flex flex-col w-[272px] flex-shrink-0 min-h-0 rounded-lg transition-colors ${
+                dragOver === status ? "bg-sol-bg-alt/50 ring-1 ring-sol-yellow/30" : ""
+              }`}
+            >
               {/* Column header */}
               <div className="flex items-center gap-2 px-1 py-2 mb-2">
                 <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} />
@@ -866,8 +925,11 @@ function KanbanView({
                   <KanbanCard
                     key={task._id}
                     task={task}
+                    isDragging={dragging === task.short_id}
                     onClick={() => onCardClick(task)}
                     onContextMenu={(e) => onContextMenu(e, task)}
+                    onDragStart={(e) => onDragStart(e, task.short_id)}
+                    onDragEnd={onDragEnd}
                   />
                 ))}
                 {tasks.length === 0 && (
@@ -1293,6 +1355,15 @@ export default function TasksPage() {
               onCardClick={(t) => router.push(`/tasks/${t._id}`)}
               onContextMenu={handleContextMenu}
               onAddTask={() => { setShowCreate(true); }}
+              onStatusChange={async (task, newStatus) => {
+                updateTask(task.short_id, { status: newStatus });
+                try {
+                  await webUpdate({ short_id: task.short_id, status: newStatus });
+                  toast.success(`${task.short_id} → ${newStatus.replace("_", " ")}`);
+                } catch {
+                  toast.error("Failed to update task");
+                }
+              }}
             />
           ) : (
           <div className="flex-1 flex overflow-hidden">
