@@ -719,6 +719,221 @@ export const fixDocTeams = internalMutation({
   },
 });
 
+export const webPatch = mutation({
+  args: {
+    id: v.id("docs"),
+    old_string: v.string(),
+    new_string: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+
+    const doc = await ctx.db.get(args.id);
+    if (!doc) throw new Error("Doc not found");
+    if (doc.user_id !== userId) throw new Error("Not authorized");
+
+    const idx = doc.content.indexOf(args.old_string);
+    if (idx === -1) throw new Error("old_string not found in document");
+
+    const newContent =
+      doc.content.slice(0, idx) +
+      args.new_string +
+      doc.content.slice(idx + args.old_string.length);
+
+    await ctx.db.patch(args.id, {
+      content: newContent,
+      updated_at: Date.now(),
+    });
+
+    return { success: true, content: newContent };
+  },
+});
+
+export const mentionSearch = query({
+  args: {
+    query: v.string(),
+    types: v.optional(v.array(v.string())),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const user = await ctx.db.get(userId);
+    const teamId = user?.active_team_id;
+    const q = args.query.toLowerCase();
+    const limit = args.limit || 10;
+    const types = args.types || ["person", "doc", "task", "session", "plan"];
+    const results: Array<{
+      id: string;
+      type: string;
+      label: string;
+      sublabel?: string;
+      image?: string;
+      shortId?: string;
+    }> = [];
+
+    if (types.includes("person") && teamId) {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_team_id", (tm) => tm.eq("team_id", teamId))
+        .collect();
+      for (const m of memberships) {
+        if (results.length >= limit) break;
+        const u = await ctx.db.get(m.user_id);
+        if (!u) continue;
+        const name = (u.name || "").toLowerCase();
+        const username = (u.github_username || "").toLowerCase();
+        if (q && !name.includes(q) && !username.includes(q)) continue;
+        results.push({
+          id: String(u._id),
+          type: "person",
+          label: u.name || u.github_username || "Unknown",
+          sublabel: u.github_username ? `@${u.github_username}` : u.email,
+          image: u.image || u.github_avatar_url,
+        });
+      }
+    }
+
+    if (types.includes("task")) {
+      let tasks;
+      if (q) {
+        tasks = await ctx.db
+          .query("tasks")
+          .withSearchIndex("search_title", (s) => s.search("title", args.query).eq("user_id", userId))
+          .take(limit);
+      } else {
+        tasks = await ctx.db
+          .query("tasks")
+          .withIndex("by_user_id", (t) => t.eq("user_id", userId))
+          .order("desc")
+          .take(limit);
+      }
+      for (const task of tasks) {
+        if (results.length >= limit * 2) break;
+        results.push({
+          id: String(task._id),
+          type: "task",
+          label: task.title,
+          sublabel: task.short_id,
+          shortId: task.short_id,
+        });
+      }
+    }
+
+    if (types.includes("doc")) {
+      let docs;
+      if (q) {
+        docs = await ctx.db
+          .query("docs")
+          .withSearchIndex("search_docs", (s) => s.search("title", args.query).eq("user_id", userId))
+          .take(limit);
+      } else {
+        docs = await ctx.db
+          .query("docs")
+          .withIndex("by_user_id", (d) => d.eq("user_id", userId))
+          .order("desc")
+          .take(limit);
+      }
+      for (const doc of docs) {
+        if (doc.archived_at) continue;
+        if (results.length >= limit * 2) break;
+        results.push({
+          id: String(doc._id),
+          type: "doc",
+          label: doc.title,
+          sublabel: doc.doc_type,
+        });
+      }
+    }
+
+    if (types.includes("plan")) {
+      let plans;
+      if (q) {
+        plans = await ctx.db
+          .query("plans")
+          .withSearchIndex("search_plans", (s) => s.search("title", args.query))
+          .take(limit);
+      } else {
+        plans = await ctx.db
+          .query("plans")
+          .withIndex("by_user_id", (p) => p.eq("user_id", userId))
+          .order("desc")
+          .take(limit);
+      }
+      for (const plan of plans) {
+        if (results.length >= limit * 2) break;
+        results.push({
+          id: String(plan._id),
+          type: "plan",
+          label: plan.title,
+          sublabel: plan.short_id,
+          shortId: plan.short_id,
+        });
+      }
+    }
+
+    if (types.includes("session")) {
+      let sessions;
+      if (q) {
+        sessions = await ctx.db
+          .query("conversations")
+          .withSearchIndex("search_title", (s) => s.search("title", args.query))
+          .take(limit);
+      } else {
+        sessions = await ctx.db
+          .query("conversations")
+          .withIndex("by_user_updated", (c) => c.eq("user_id", userId))
+          .order("desc")
+          .take(limit);
+      }
+      for (const sess of sessions) {
+        if (results.length >= limit * 2) break;
+        results.push({
+          id: String(sess._id),
+          type: "session",
+          label: sess.title || "Untitled Session",
+          sublabel: sess.short_id,
+          shortId: sess.short_id,
+        });
+      }
+    }
+
+    return results.slice(0, limit * 2);
+  },
+});
+
+export const webCreate = mutation({
+  args: {
+    title: v.string(),
+    content: v.optional(v.string()),
+    doc_type: v.optional(v.string()),
+    labels: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+
+    const user = await ctx.db.get(userId);
+    const now = Date.now();
+
+    const id = await ctx.db.insert("docs", {
+      user_id: userId,
+      team_id: user?.active_team_id,
+      title: args.title,
+      content: args.content || "",
+      doc_type: (args.doc_type || "note") as any,
+      source: "human" as any,
+      labels: args.labels,
+      created_at: now,
+      updated_at: now,
+    });
+
+    return { id };
+  },
+});
+
 export const linkPlanToSessions = internalMutation({
   args: {
     mappings: v.array(v.object({
