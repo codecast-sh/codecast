@@ -224,6 +224,19 @@ export const addMessage = mutation({
     }
     await ctx.db.patch(args.conversation_id, convPatch);
 
+    if (args.role === "assistant") {
+      const session = await ctx.db
+        .query("managed_sessions")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+        .first();
+      if (session && session.agent_status === "idle") {
+        await ctx.db.patch(session._id, {
+          agent_status: "working" as const,
+          agent_status_updated_at: Date.now(),
+        });
+      }
+    }
+
     if (args.api_token || args.role === "user") {
       await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
         userId: conversation.user_id,
@@ -425,6 +438,20 @@ export const addMessages = mutation({
         }
       }
       await ctx.db.patch(args.conversation_id, convPatch);
+
+      const hasAssistantMsg = args.messages.some((m) => m.role === "assistant");
+      if (hasAssistantMsg) {
+        const session = await ctx.db
+          .query("managed_sessions")
+          .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+          .first();
+        if (session && session.agent_status === "idle") {
+          await ctx.db.patch(session._id, {
+            agent_status: "working" as const,
+            agent_status_updated_at: Date.now(),
+          });
+        }
+      }
 
       const lastUserTs = userMsgs.length > 0
         ? userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0)
