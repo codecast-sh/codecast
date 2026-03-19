@@ -5912,6 +5912,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
   const isPaginatingRef = useRef(false);
   const paginationCooldownRef = useRef(false);
+  const paginationPropsRef = useRef({ hasMoreAbove: false, hasMoreBelow: false, isLoadingOlder: false, isLoadingNewer: false, onLoadOlder: undefined as (() => void) | undefined, onLoadNewer: undefined as (() => void) | undefined });
+  paginationPropsRef.current = { hasMoreAbove: !!hasMoreAbove, hasMoreBelow: !!hasMoreBelow, isLoadingOlder: !!isLoadingOlder, isLoadingNewer: !!isLoadingNewer, onLoadOlder, onLoadNewer };
+  const scrollCtxRef = useRef({ messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 });
   const knownItemIdsRef = useRef<Set<string>>(new Set());
   const newItemIdsRef = useRef<Set<string>>(new Set());
   const [shareSelectionMode, setShareSelectionMode] = useState(false);
@@ -6274,6 +6277,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     ) as TimelineItem[];
   }, [messages, commits, pullRequests, activeBranches, inboxMessages]);
   timelineRef.current = timeline;
+  scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const populateInputRef = useRef<((text: string) => void) | null>(null);
@@ -6714,68 +6718,76 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return total > 0 ? { total, completed } : null;
   }, [messages]);
 
-  const virtualizer = useVirtualizer({
-    count: timeline.length,
-    getScrollElement: () => containerRef.current,
-    estimateSize: (index) => {
-      const item = timeline[index];
-      if (!item) return 100;
+  const getItemKey = useCallback((index: number) => {
+    const item = timeline[index];
+    if (!item) return index;
+    if (item.type === 'message') return (item.data as Message)._id;
+    if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
+    return `pr-${(item.data as any)._id}`;
+  }, [timeline]);
 
-      if (item.type === 'commit') {
-        return 80;
-      }
+  const estimateSize = useCallback((index: number) => {
+    const item = timeline[index];
+    if (!item) return 100;
 
-      const msg = item.data as Message;
-      if (collapsed) {
-        if (msg.role === "system") return 0;
-        if (msg.role === "user") {
-          const kind = userMsgKindMap.get(msg._id);
-          if (kind && kind.kind !== 'normal' && kind.kind !== 'plan' && kind.kind !== 'skill_expansion') return 0;
-        }
-        if (msg.role === "assistant") {
-          const hasTextContent = msg.content && msg.content.trim().length > 0;
-          if (!hasTextContent) return 0;
-          // Check if there's an earlier assistant with text in this sequence
-          for (let i = index - 1; i >= 0; i--) {
-            const checkItem = timeline[i];
-            if (checkItem.type !== 'message') continue;
-            const checkMsg = checkItem.data as Message;
-            if (checkMsg.role === "user") break;
-            if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
-              return 0;
-            }
-          }
-        }
-        return 80;
-      }
+    if (item.type === 'commit') return 80;
 
-      if (msg.role === "system") return 8;
+    const msg = item.data as Message;
+    if (collapsed) {
+      if (msg.role === "system") return 0;
       if (msg.role === "user") {
         const kind = userMsgKindMap.get(msg._id);
-        switch (kind?.kind) {
-          case 'command': return 30;
-          case 'interrupt': return 30;
-          case 'skill_expansion': return 44;
-          case 'task_notification': return 40;
-          case 'teammate_events': return 40;
-          case 'task_prompt': return 0;
-          case 'compaction_prompt': return 0;
-          case 'compaction_summary': return 60;
-          case 'noise': return 0;
-          case 'tool_results_only': return 0;
-          case 'empty': return 0;
-        }
-        return 100;
+        if (kind && kind.kind !== 'normal' && kind.kind !== 'plan' && kind.kind !== 'skill_expansion') return 0;
       }
       if (msg.role === "assistant") {
         const hasTextContent = msg.content && msg.content.trim().length > 0;
-        const toolCount = msg.tool_calls?.length || 0;
-        if (!hasTextContent && !msg.thinking && !msg.images?.length) return 8;
-        if (!hasTextContent && toolCount > 0) return Math.min(toolCount * 30, 200);
-        return 200;
+        if (!hasTextContent) return 0;
+        for (let i = index - 1; i >= 0; i--) {
+          const checkItem = timeline[i];
+          if (checkItem.type !== 'message') continue;
+          const checkMsg = checkItem.data as Message;
+          if (checkMsg.role === "user") break;
+          if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
+            return 0;
+          }
+        }
       }
-      return 40;
-    },
+      return 80;
+    }
+
+    if (msg.role === "system") return 8;
+    if (msg.role === "user") {
+      const kind = userMsgKindMap.get(msg._id);
+      switch (kind?.kind) {
+        case 'command': return 30;
+        case 'interrupt': return 30;
+        case 'skill_expansion': return 44;
+        case 'task_notification': return 40;
+        case 'teammate_events': return 40;
+        case 'task_prompt': return 0;
+        case 'compaction_prompt': return 0;
+        case 'compaction_summary': return 60;
+        case 'noise': return 0;
+        case 'tool_results_only': return 0;
+        case 'empty': return 0;
+      }
+      return 100;
+    }
+    if (msg.role === "assistant") {
+      const hasTextContent = msg.content && msg.content.trim().length > 0;
+      const toolCount = msg.tool_calls?.length || 0;
+      if (!hasTextContent && !msg.thinking && !msg.images?.length) return 8;
+      if (!hasTextContent && toolCount > 0) return Math.min(toolCount * 30, 200);
+      return 200;
+    }
+    return 40;
+  }, [timeline, collapsed, userMsgKindMap]);
+
+  const virtualizer = useVirtualizer({
+    count: timeline.length,
+    getScrollElement: () => containerRef.current,
+    getItemKey,
+    estimateSize,
     overscan: 10,
     paddingStart: 16,
     paddingEnd: 100,
@@ -7056,7 +7068,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }), [timeline, virtualizer]);
 
-  useWatchEffect(() => {
+  useMountEffect(() => {
     const scrollContainer = containerRef.current;
     if (!scrollContainer) return;
 
@@ -7072,31 +7084,25 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
       lastScrollTopRef.current = scrollTop;
 
-      // Detect user scrolling up (works for touch and wheel).
-      // Skip during pagination cooldown since scroll position is being restored.
       if (scrolledUp && !isNearBottom && !paginationCooldownRef.current) {
         setUserScrolled(true);
       }
 
-      // Only clear userScrolled when the user actively scrolls DOWN to
-      // the bottom. This prevents small wheel-up events (still near bottom)
-      // from being immediately overridden by the isNearBottom check.
       if (isNearBottom && scrolledDown) {
         setUserScrolled(false);
       }
 
       if (scrollProgressRef.current) {
-        const totalMessages = conversation?.message_count || messages.length;
+        const ctx = scrollCtxRef.current;
+        const totalMessages = ctx.messageCount;
         const isPaginated = totalMessages > 150;
         let progress: number;
         if (isPaginated) {
           const items = virtualizer.getVirtualItems();
           if (items.length > 0) {
             const centerIdx = items[Math.floor(items.length / 2)].index;
-            const loadedMessages = messages.length;
-            const startOffset = conversation?.loaded_start_index ?? 0;
-            const tLen = Math.max(timeline.length, 1);
-            progress = totalMessages > 0 ? Math.max(0, Math.min(1, (startOffset + (centerIdx / tLen) * loadedMessages) / totalMessages)) : 1;
+            const tLen = Math.max(ctx.timelineLen, 1);
+            progress = totalMessages > 0 ? Math.max(0, Math.min(1, (ctx.loadedStartIndex + (centerIdx / tLen) * ctx.messagesLen) / totalMessages)) : 1;
           } else {
             progress = 0;
           }
@@ -7107,38 +7113,27 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         scrollProgressRef.current.style.height = `${progress * 100}%`;
       }
 
-      // Load older messages when near top (within 300px)
-      if (scrollTop < 300 && hasMoreAbove && !isLoadingOlder && !isLoadingNewer && !paginationCooldownRef.current && onLoadOlder) {
-        // Save scrollHeight so we can compute the prepended height delta later
+      const pp = paginationPropsRef.current;
+      if (scrollTop < 300 && pp.hasMoreAbove && !pp.isLoadingOlder && !pp.isLoadingNewer && !paginationCooldownRef.current && pp.onLoadOlder) {
         scrollAnchorRef.current = scrollHeight;
         isPaginatingRef.current = true;
-        onLoadOlder();
+        pp.onLoadOlder();
       }
 
-      // Load newer messages when near bottom (within 300px)
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-      if (distanceFromBottom < 300 && hasMoreBelow && !isLoadingNewer && !isLoadingOlder && !paginationCooldownRef.current && onLoadNewer) {
+      if (distanceFromBottom < 300 && pp.hasMoreBelow && !pp.isLoadingNewer && !pp.isLoadingOlder && !paginationCooldownRef.current && pp.onLoadNewer) {
         isPaginatingRef.current = true;
-        onLoadNewer();
+        pp.onLoadNewer();
       }
     };
 
     scrollContainer.addEventListener("scroll", handleScroll);
-
-    // When content shrinks below viewport, scroll events won't fire so run a
-    // one-shot pagination check after the DOM settles. Skip this when collapsed
-    // because collapsed content is intentionally tiny and would trigger an
-    // infinite load-all-pages loop (scrollTop stays near 0 after each page).
-    let rafId: number | undefined;
-    if (!collapsed) {
-      rafId = requestAnimationFrame(handleScroll);
-    }
+    requestAnimationFrame(handleScroll);
 
     return () => {
       scrollContainer.removeEventListener("scroll", handleScroll);
-      if (rafId !== undefined) cancelAnimationFrame(rafId);
     };
-  }, [hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, collapsed]);
+  });
 
   const totalSize = virtualizer.getTotalSize();
   useWatchEffect(() => {
