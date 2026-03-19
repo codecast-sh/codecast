@@ -149,6 +149,7 @@ export type ConversationData = {
   } | null;
   is_favorite?: boolean;
   workflow_run_id?: string | null;
+  is_workflow_primary?: boolean;
   draft_message?: string;
   subtitle?: string | null;
   compaction_count?: number;
@@ -4902,7 +4903,7 @@ function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMa
   );
 }
 
-const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, skills, filePaths }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[] }) {
+const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, sessionId, agentType, agentStatus, pendingPermissionsCount, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected"; pendingPermissionsCount?: number; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[] }) {
   const cached = useInboxStore.getState().getDraft(conversationId);
   const [message, setMessage] = useState(() => cached?.draft_message ?? initialDraft ?? "");
   const messageRef = useRef(message);
@@ -5328,6 +5329,14 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (onGateSend) {
+      const text = message.trim();
+      if (!text) return;
+      setMessage("");
+      updateDraft("", null);
+      await onGateSend(text);
+      return;
+    }
     if (onWorkflowLaunch) {
       const goal = message.trim();
       setMessage("");
@@ -5805,7 +5814,7 @@ const MessageInput = memo(function MessageInput({ conversationId, status, embedd
                   onFocus={() => setIsFocused(true)}
                   onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
                   disabled={isWaitingForUpload}
-                  placeholder={onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : "Answer the question to continue...") : "Send a message..."}
+                  placeholder={onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : "Answer the question to continue...") : "Send a message..."}
                   rows={1}
                   className={`flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                 />
@@ -5981,11 +5990,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   ) as { _id: string; status: string; gate_prompt?: string; gate_choices?: Array<{ key: string; label: string; target: string }>; gate_response?: string | null } | null | undefined;
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const [gateResponding, setGateResponding] = useState(false);
-  const [gateText, setGateText] = useState("");
   const handleGateRespond = useCallback(async (text: string) => {
     if (!workflowRun || !text.trim()) return;
     setGateResponding(true);
-    try { await respondToGate({ id: workflowRun._id as any, response: text.trim() }); setGateText(""); } finally { setGateResponding(false); }
+    try { await respondToGate({ id: workflowRun._id as any, response: text.trim() }); } finally { setGateResponding(false); }
   }, [workflowRun, respondToGate]);
   const handleGateChoice = handleGateRespond;
 
@@ -8439,62 +8447,38 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
       </div>
 
-      {workflowRun?.status === "paused" && workflowRun.gate_prompt && (
-        <div className="border-t border-sol-magenta/30 bg-sol-magenta/5 px-4 py-3 space-y-2.5">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-sol-magenta uppercase tracking-wider font-semibold">Human Gate</span>
-            <span className="text-xs text-sol-text-muted flex-1">{workflowRun.gate_prompt}</span>
-          </div>
-          {workflowRun.gate_choices && workflowRun.gate_choices.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {workflowRun.gate_choices.map(choice => (
+      {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
+        <div ref={messageInputRef} className="relative">
+          {workflowRun?.status === "paused" && workflowRun.gate_prompt ? (
+            <div className="absolute left-0 right-0 bottom-full flex items-center gap-2 px-4 py-1.5 bg-sol-bg border-t border-sol-magenta/20 text-xs">
+              <span className="text-sol-magenta font-semibold shrink-0">Gate</span>
+              <span className="text-sol-text-muted truncate flex-1">{workflowRun.gate_prompt}</span>
+              {workflowRun.gate_choices?.map(choice => (
                 <button
                   key={choice.key}
                   onClick={() => handleGateRespond(choice.key)}
                   disabled={gateResponding}
-                  className="px-2 py-1 text-xs font-medium text-sol-text border border-sol-border/30 rounded hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-50"
+                  className="shrink-0 px-1.5 py-0.5 text-[10px] font-mono font-medium text-sol-magenta border border-sol-magenta/30 rounded hover:bg-sol-magenta/10 transition-colors disabled:opacity-40"
                 >
-                  <span className="font-mono text-sol-magenta mr-1">[{choice.key}]</span>
-                  {choice.label.replace(/^\[.\]\s*/, "")}
+                  [{choice.key}] {choice.label.replace(/^\[.\]\s*/, "")}
                 </button>
               ))}
             </div>
+          ) : (
+            conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (
+              <div className="absolute left-0 right-0 bottom-full">
+                <AgentSwitcher
+                  conversation={conversation}
+                  showWorkflow={showWorkflow}
+                  onToggleWorkflow={() => setShowWorkflow(v => !v)}
+                  selectedWorkflowId={selectedWorkflowId}
+                  onSelectWorkflow={setSelectedWorkflowId}
+                  workflows={workflows as any}
+                />
+              </div>
+            )
           )}
-          <div className="flex gap-2">
-            <textarea
-              value={gateText}
-              onChange={e => setGateText(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGateRespond(gateText); } }}
-              placeholder="Type your response or instructions… (⌘↵ to send)"
-              rows={2}
-              disabled={gateResponding}
-              className="flex-1 px-3 py-2 text-sm bg-sol-bg border border-sol-border/40 rounded-lg text-sol-text placeholder-sol-text-dim/50 focus:outline-none focus:border-sol-magenta/50 resize-none disabled:opacity-50"
-            />
-            <button
-              onClick={() => handleGateRespond(gateText)}
-              disabled={gateResponding || !gateText.trim()}
-              className="px-3 py-2 text-xs font-medium bg-sol-magenta/20 border border-sol-magenta/40 text-sol-magenta rounded-lg hover:bg-sol-magenta/30 transition-colors disabled:opacity-40 self-end"
-            >
-              Send
-            </button>
-          </div>
-        </div>
-      )}
-      {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
-        <div ref={messageInputRef} className="relative">
-          {conversation.status === "active" && (conversation.message_count ?? 0) === 0 && (
-            <div className="absolute left-0 right-0 bottom-full">
-              <AgentSwitcher
-                conversation={conversation}
-                showWorkflow={showWorkflow}
-                onToggleWorkflow={() => setShowWorkflow(v => !v)}
-                selectedWorkflowId={selectedWorkflowId}
-                onSelectWorkflow={setSelectedWorkflowId}
-                workflows={workflows as any}
-              />
-            </div>
-          )}
-          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} skills={sessionSkills} filePaths={sessionFilePaths} />
+          <MessageInput conversationId={firstActiveForkId || conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected ? undefined : managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} />
           {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
             <MessageNavigator
               userMessages={navigatorUserMessages}

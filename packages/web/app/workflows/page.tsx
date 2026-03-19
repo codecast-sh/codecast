@@ -234,17 +234,14 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const cancelRun = useMutation(api.workflow_runs.cancel);
   const [responding, setResponding] = useState(false);
-  const [gateText, setGateText] = useState("");
 
   const st = STATUS_STYLES[run.status] || STATUS_STYLES.pending;
   const StatusIcon = st.icon;
 
-  const handleChoice = async (text: string) => {
-    if (!text.trim()) return;
+  const handleChoice = async (key: string) => {
     setResponding(true);
-    await respondToGate({ id: run._id as any, response: text.trim() });
+    await respondToGate({ id: run._id as any, response: key });
     setResponding(false);
-    setGateText("");
   };
 
   const orderedNodes = workflow.nodes.filter(n => n.type !== "start" && n.type !== "exit");
@@ -293,42 +290,24 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
       )}
 
       {run.status === "paused" && run.gate_prompt && (
-        <div className="border-b border-sol-magenta/20 bg-sol-magenta/5 px-3 py-3 space-y-2">
-          <div className="text-[9px] text-sol-magenta uppercase tracking-widest font-semibold">Human Gate</div>
-          <p className="text-xs text-sol-text">{run.gate_prompt}</p>
-          {run.gate_choices && run.gate_choices.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {run.gate_choices.map(choice => (
-                <button
-                  key={choice.key}
-                  onClick={() => handleChoice(choice.key)}
-                  disabled={responding}
-                  className="px-2 py-1 text-xs font-medium text-sol-text border border-sol-border/30 rounded hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-50"
-                >
-                  <span className="font-mono text-sol-magenta mr-1">[{choice.key}]</span>
-                  {choice.label.replace(/^\[.\]\s*/, "")}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="flex gap-2">
-            <textarea
-              value={gateText}
-              onChange={e => setGateText(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleChoice(gateText); } }}
-              placeholder="Type your response… (⌘↵ to send)"
-              rows={3}
+        <div className="border-b border-sol-magenta/20 bg-sol-magenta/5 px-3 py-2 flex items-center gap-2 flex-wrap">
+          <span className="text-[9px] text-sol-magenta font-semibold uppercase tracking-widest shrink-0">Gate</span>
+          <span className="text-[10px] text-sol-text-muted truncate flex-1 min-w-0">{run.gate_prompt}</span>
+          {run.gate_choices?.map(choice => (
+            <button
+              key={choice.key}
+              onClick={() => handleChoice(choice.key)}
               disabled={responding}
-              className="flex-1 px-2.5 py-2 text-xs bg-sol-bg border border-sol-border/40 rounded-lg text-sol-text placeholder-sol-text-dim/50 focus:outline-none focus:border-sol-magenta/50 resize-none disabled:opacity-50"
-            />
-          </div>
-          <button
-            onClick={() => handleChoice(gateText)}
-            disabled={responding || !gateText.trim()}
-            className="w-full px-2.5 py-1.5 text-xs font-medium text-sol-magenta border border-sol-magenta/30 rounded-lg hover:bg-sol-magenta/10 transition-colors disabled:opacity-40"
-          >
-            Send Response
-          </button>
+              className="shrink-0 px-1.5 py-0.5 text-[10px] font-mono font-medium text-sol-magenta border border-sol-magenta/30 rounded hover:bg-sol-magenta/10 transition-colors disabled:opacity-40"
+            >
+              [{choice.key}] {choice.label.replace(/^\[.\]\s*/, "")}
+            </button>
+          ))}
+          {run.primary_session_id && (
+            <Link href={`/conversation/${run.primary_session_id}`} className="shrink-0 text-[9px] text-sol-text-dim hover:text-sol-cyan transition-colors">
+              reply →
+            </Link>
+          )}
         </div>
       )}
 
@@ -438,15 +417,14 @@ function RunsPanel({ workflowId, activeRunId, onSelectRun }: {
                 <span className={`text-[10px] ${st.color} capitalize`}>{run.status}</span>
                 <span className="text-[10px] text-sol-text-dim ml-auto">{timeAgo(run.created_at)}</span>
               </button>
-              {run.primary_session_id && (
-                <Link
-                  href={`/conversation/${run.primary_session_id}`}
-                  className="px-2 py-1.5 text-sol-text-dim hover:text-sol-cyan transition-colors"
-                  title="View in inbox"
-                >
-                  <ExternalLink className="w-3 h-3" />
-                </Link>
-              )}
+              <Link
+                href={`/workflows/runs/${run._id}`}
+                className="px-2 py-1.5 text-sol-text-dim hover:text-sol-cyan transition-colors"
+                title="View run detail"
+                onClick={e => e.stopPropagation()}
+              >
+                <ExternalLink className="w-3 h-3" />
+              </Link>
               {(run.status === "running" || run.status === "paused" || run.status === "pending") && (
                 <button
                   onClick={(e) => { e.stopPropagation(); cancelRun({ id: run._id as any }); }}

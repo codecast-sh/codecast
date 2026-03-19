@@ -48,7 +48,6 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
   const respondToGate = useMutation(api.workflow_runs.respondToGate);
   const [expanded, setExpanded] = useState(true);
   const [responding, setResponding] = useState(false);
-  const [gateText, setGateText] = useState("");
 
   if (!run || !workflow) return null;
 
@@ -56,12 +55,10 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
   const doneCount = run.node_statuses.filter((n: any) => n.status === "completed").length;
   const totalNodes = workflow.nodes.length;
 
-  const handleGateResponse = async (text: string) => {
-    if (!text.trim()) return;
+  const handleGateResponse = async (key: string) => {
     setResponding(true);
     try {
-      await respondToGate({ id: workflowRunId, response: text.trim() });
-      setGateText("");
+      await respondToGate({ id: workflowRunId, response: key });
     } finally {
       setResponding(false);
     }
@@ -101,45 +98,26 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
           )}
 
           {run.status === "paused" && run.gate_prompt && (
-            <div className="space-y-2">
-              <p className="text-[11px] text-sol-text-muted">{run.gate_prompt}</p>
-              {!run.gate_response && (
-                <>
-                  {run.gate_choices && (
-                    <div className="flex flex-wrap gap-1">
-                      {run.gate_choices.map((choice: any) => (
-                        <button
-                          key={choice.key}
-                          onClick={() => handleGateResponse(choice.key)}
-                          disabled={responding}
-                          className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/10 border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/20 transition-colors disabled:opacity-50"
-                        >
-                          [{choice.key}] {choice.label.replace(/^\[.\]\s*/, "")}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex gap-1.5">
-                    <textarea
-                      value={gateText}
-                      onChange={e => setGateText(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGateResponse(gateText); } }}
-                      placeholder="Type response… (⌘↵)"
-                      rows={2}
-                      disabled={responding}
-                      className="flex-1 px-2 py-1 text-[11px] bg-sol-bg border border-sol-border/40 rounded text-sol-text placeholder-sol-text-dim/50 focus:outline-none focus:border-sol-violet/50 resize-none disabled:opacity-50"
-                    />
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] text-sol-magenta font-semibold">Gate</span>
+                <span className="text-[10px] text-sol-text-muted truncate flex-1">{run.gate_prompt}</span>
+              </div>
+              {!run.gate_response ? (
+                <div className="flex flex-wrap gap-1">
+                  {run.gate_choices?.map((choice: any) => (
                     <button
-                      onClick={() => handleGateResponse(gateText)}
-                      disabled={responding || !gateText.trim()}
-                      className="px-2 py-1 text-[10px] font-medium bg-sol-violet/20 border border-sol-violet/40 text-sol-violet rounded hover:bg-sol-violet/30 transition-colors disabled:opacity-40 self-end"
+                      key={choice.key}
+                      onClick={() => handleGateResponse(choice.key)}
+                      disabled={responding}
+                      className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium text-sol-magenta border border-sol-magenta/30 hover:bg-sol-magenta/10 transition-colors disabled:opacity-50"
                     >
-                      Send
+                      [{choice.key}] {choice.label.replace(/^\[.\]\s*/, "")}
                     </button>
-                  </div>
-                </>
-              )}
-              {run.gate_response && (
+                  ))}
+                  <span className="text-[10px] text-sol-text-dim">· reply in conversation</span>
+                </div>
+              ) : (
                 <p className="text-[10px] text-sol-green">Responded: {run.gate_response}</p>
               )}
             </div>
