@@ -62,6 +62,12 @@ export default defineSchema({
       codex: v.optional(v.union(v.literal("default"), v.literal("full_auto"), v.literal("bypass"))),
       gemini: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
     })),
+    agent_default_params: v.optional(v.object({
+      claude: v.optional(v.record(v.string(), v.string())),
+      codex: v.optional(v.record(v.string(), v.string())),
+      gemini: v.optional(v.record(v.string(), v.string())),
+      cursor: v.optional(v.record(v.string(), v.string())),
+    })),
     available_agents: v.optional(v.array(v.object({
       name: v.string(),
       description: v.optional(v.string()),

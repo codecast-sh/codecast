@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
@@ -26,6 +27,8 @@ const geminiOptions: { value: GeminiMode; label: string; description: string; fl
 export default function AgentsPage() {
   const modes = useQuery(api.users.getAgentPermissionModes);
   const updateModes = useMutation(api.users.updateAgentPermissionModes);
+  const defaultParams = useQuery(api.users.getAgentDefaultParams);
+  const updateDefaultParamsMutation = useMutation(api.users.updateAgentDefaultParams);
 
   const claude = modes?.claude ?? "default";
   const codex = modes?.codex ?? "default";
@@ -43,6 +46,17 @@ export default function AgentsPage() {
         gemini: updates.gemini ?? gemini,
       });
       toast.success("Permission mode updated");
+    } catch (err) {
+      toast.error(`Failed to update: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const updateDefaultParams = async (args: { agent: string; params: Record<string, string> }) => {
+    try {
+      await updateDefaultParamsMutation({
+        agent: args.agent as "claude" | "codex" | "gemini" | "cursor",
+        params: args.params,
+      });
     } catch (err) {
       toast.error(`Failed to update: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -77,6 +91,40 @@ export default function AgentsPage() {
             options={geminiOptions}
             onChange={(v) => handleUpdate({ gemini: v as GeminiMode })}
           />
+        </div>
+
+        <div className="mt-8 pt-6 border-t border-sol-border">
+          <h2 className="text-lg font-semibold text-sol-text mb-1">Default Parameters</h2>
+          <p className="text-sm text-sol-base1 mb-6">
+            Set default CLI flags for each agent. These are passed as --flag value when sessions start.
+          </p>
+
+          <div className="space-y-6">
+            <AgentParams
+              name="Claude Code"
+              agent="claude"
+              params={defaultParams?.claude}
+              onUpdate={updateDefaultParams}
+            />
+            <AgentParams
+              name="Codex"
+              agent="codex"
+              params={defaultParams?.codex}
+              onUpdate={updateDefaultParams}
+            />
+            <AgentParams
+              name="Gemini"
+              agent="gemini"
+              params={defaultParams?.gemini}
+              onUpdate={updateDefaultParams}
+            />
+            <AgentParams
+              name="Cursor"
+              agent="cursor"
+              params={defaultParams?.cursor}
+              onUpdate={updateDefaultParams}
+            />
+          </div>
         </div>
       </Card>
     </div>
@@ -116,6 +164,87 @@ function AgentSection({
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function AgentParams({
+  name,
+  agent,
+  params,
+  onUpdate,
+}: {
+  name: string;
+  agent: "claude" | "codex" | "gemini" | "cursor";
+  params?: Record<string, string>;
+  onUpdate: (args: { agent: string; params: Record<string, string> }) => Promise<void>;
+}) {
+  const [newKey, setNewKey] = useState("");
+  const [newValue, setNewValue] = useState("");
+
+  const entries = Object.entries(params ?? {});
+
+  const handleAdd = async () => {
+    if (!newKey.trim() || !newValue.trim()) return;
+    const key = newKey.replace(/^--/, "").trim();
+    const updated = { ...(params ?? {}), [key]: newValue.trim() };
+    await onUpdate({ agent, params: updated });
+    setNewKey("");
+    setNewValue("");
+    toast.success(`Added --${key} ${newValue.trim()}`);
+  };
+
+  const handleDelete = async (key: string) => {
+    const updated = { ...(params ?? {}) };
+    delete updated[key];
+    await onUpdate({ agent, params: updated });
+    toast.success(`Removed --${key}`);
+  };
+
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-sol-text mb-2">{name}</h3>
+      {entries.length > 0 ? (
+        <div className="space-y-1 mb-2">
+          {entries.map(([k, v]) => (
+            <div key={k} className="flex items-center gap-2 text-sm font-mono">
+              <span className="text-sol-base1">--{k}</span>
+              <span className="text-sol-text">{v}</span>
+              <button
+                onClick={() => handleDelete(k)}
+                className="text-sol-red hover:text-sol-red/80 text-xs ml-auto"
+              >
+                remove
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-sol-base1 mb-2">No default params</p>
+      )}
+      <div className="flex gap-2 items-center">
+        <input
+          type="text"
+          placeholder="--flag"
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          className="bg-sol-bg-alt border border-sol-border rounded px-2 py-1 text-sm font-mono text-sol-text w-32"
+        />
+        <input
+          type="text"
+          placeholder="value"
+          value={newValue}
+          onChange={(e) => setNewValue(e.target.value)}
+          className="bg-sol-bg-alt border border-sol-border rounded px-2 py-1 text-sm font-mono text-sol-text w-40"
+          onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+        />
+        <button
+          onClick={handleAdd}
+          className="text-sm text-sol-cyan hover:text-sol-cyan/80"
+        >
+          add
+        </button>
       </div>
     </div>
   );

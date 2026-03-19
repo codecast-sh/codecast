@@ -132,6 +132,12 @@ interface Config {
     codex?: "default" | "full_auto" | "bypass";
     gemini?: "default" | "bypass";
   };
+  agent_default_params?: {
+    claude?: Record<string, string>;
+    codex?: Record<string, string>;
+    gemini?: Record<string, string>;
+    cursor?: Record<string, string>;
+  };
 }
 
 function getPermissionFlags(agentType: "claude" | "codex" | "gemini", config?: Config | null): string | null {
@@ -151,6 +157,12 @@ function getPermissionFlags(agentType: "claude" | "codex" | "gemini", config?: C
   }
 
   return null;
+}
+
+function getDefaultParamFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
+  const params = config?.agent_default_params?.[agentType];
+  if (!params || Object.keys(params).length === 0) return null;
+  return Object.entries(params).map(([k, v]) => `--${k} ${v}`).join(" ");
 }
 
 interface ConversationCache {
@@ -671,6 +683,19 @@ async function sendHeartbeat(): Promise<void> {
         }
       }
     }
+
+    if (data.agent_default_params !== undefined) {
+      const currentConfig = readConfig();
+      const serverParams = data.agent_default_params;
+      const localParams = currentConfig?.agent_default_params;
+      if (JSON.stringify(serverParams) !== JSON.stringify(localParams)) {
+        log(`Agent default params updated from server: ${JSON.stringify(serverParams)}`);
+        patchConfig({ agent_default_params: serverParams });
+        if (activeConfig) {
+          activeConfig.agent_default_params = serverParams;
+        }
+      }
+    }
   } catch (err) {
     log(`Heartbeat error: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -907,6 +932,11 @@ async function executeRemoteCommand(
           if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode")) {
             binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
           }
+        }
+
+        const defaultFlags = getDefaultParamFlags(agentType as "claude" | "codex" | "cursor" | "gemini", config);
+        if (defaultFlags) {
+          binaryArgs.push(...defaultFlags.split(/\s+/).filter(Boolean));
         }
 
         binaryArgs = sanitizeBinaryArgs(binaryArgs);

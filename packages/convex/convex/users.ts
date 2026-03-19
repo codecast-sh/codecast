@@ -153,6 +153,7 @@ export const daemonHeartbeat = mutation({
       team_id: user?.active_team_id ?? user?.team_id ?? undefined,
       min_cli_version: minVersionConfig?.value ?? undefined,
       agent_permission_modes: user?.agent_permission_modes ?? undefined,
+      agent_default_params: user?.agent_default_params ?? undefined,
     };
   },
 });
@@ -1657,6 +1658,66 @@ export const updateAgentPermissionModes = mutation({
         claude: args.claude,
         codex: args.codex,
         gemini: args.gemini,
+      },
+    });
+    return userId;
+  },
+});
+
+export const getAgentDefaultParams = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const user = await ctx.db.get(userId);
+    return user?.agent_default_params ?? null;
+  },
+});
+
+export const updateAgentDefaultParams = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    agent: v.union(v.literal("claude"), v.literal("codex"), v.literal("gemini"), v.literal("cursor")),
+    params: v.record(v.string(), v.string()),
+  },
+  handler: async (ctx, args) => {
+    let userId;
+    if (args.api_token) {
+      const auth = await verifyApiToken(ctx, args.api_token, false);
+      if (!auth) throw new Error("Unauthorized");
+      userId = auth.userId;
+    } else {
+      userId = await getAuthUserId(ctx);
+      if (!userId) throw new Error("Not authenticated");
+    }
+    const user = await ctx.db.get(userId);
+    const existing = user?.agent_default_params ?? {};
+    await ctx.db.patch(userId, {
+      agent_default_params: {
+        ...existing,
+        [args.agent]: args.params,
+      },
+    });
+    return userId;
+  },
+});
+
+export const deleteAgentDefaultParam = mutation({
+  args: {
+    agent: v.union(v.literal("claude"), v.literal("codex"), v.literal("gemini"), v.literal("cursor")),
+    param: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const user = await ctx.db.get(userId);
+    const existing = user?.agent_default_params ?? {};
+    const agentParams = { ...(existing[args.agent] ?? {}) };
+    delete agentParams[args.param];
+    await ctx.db.patch(userId, {
+      agent_default_params: {
+        ...existing,
+        [args.agent]: agentParams,
       },
     });
     return userId;

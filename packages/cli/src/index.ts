@@ -361,6 +361,12 @@ interface Config {
   stable_mode?: "solo" | "team";
   stable_global?: boolean;
   team_share_mode?: "full" | "summary";
+  agent_default_params?: {
+    claude?: Record<string, string>;
+    codex?: Record<string, string>;
+    gemini?: Record<string, string>;
+    cursor?: Record<string, string>;
+  };
   created_at?: string;
   updated_at?: string;
 }
@@ -2773,7 +2779,7 @@ program
   )
   .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths)")
   .argument("[value]", "Value to set for the key")
-  .action((key, value) => {
+  .action(async (key, value) => {
     const config = readConfig();
 
     if (!key) {
@@ -2790,9 +2796,103 @@ program
         if (config.codex_args) console.log(`  codex_args: ${config.codex_args}`);
         if (config.created_at) console.log(`  created_at: ${config.created_at}`);
         if (config.updated_at) console.log(`  updated_at: ${config.updated_at}`);
+        const adp = config.agent_default_params;
+        if (adp && Object.keys(adp).some(a => {
+          const p = adp[a as keyof typeof adp];
+          return p && Object.keys(p).length > 0;
+        })) {
+          console.log("  agent_default_params:");
+          for (const [agent, params] of Object.entries(adp)) {
+            if (params && Object.keys(params).length > 0) {
+              for (const [k, v] of Object.entries(params)) {
+                console.log(`    ${agent}: --${k} ${v}`);
+              }
+            }
+          }
+        }
       } else {
         console.log("  (no configuration found - run 'cast setup')");
       }
+      return;
+    }
+
+    if (key === "agent") {
+      const idx = process.argv.indexOf("config");
+      const extraArgs = process.argv.slice(idx + 2);
+      const [agentArg, paramArg, valueArg] = extraArgs;
+
+      if (!agentArg) {
+        const allParams = config?.agent_default_params;
+        if (!allParams || Object.keys(allParams).every(a => {
+          const p = allParams[a as keyof typeof allParams];
+          return !p || Object.keys(p).length === 0;
+        })) {
+          console.log("No agent default params configured.");
+          console.log("\nUsage: cast config agent <agent> <param> <value>");
+          console.log("  cast config agent claude effort max");
+          console.log("  cast config agent claude model claude-opus-4-6");
+          return;
+        }
+        for (const [agent, params] of Object.entries(allParams)) {
+          if (params && Object.keys(params).length > 0) {
+            console.log(`\n${agent}:`);
+            for (const [k, v] of Object.entries(params)) {
+              console.log(`  --${k} ${v}`);
+            }
+          }
+        }
+        return;
+      }
+
+      const validAgents = ["claude", "codex", "gemini", "cursor"];
+      if (!validAgents.includes(agentArg)) {
+        console.error(`Unknown agent: ${agentArg}`);
+        console.log(`Valid agents: ${validAgents.join(", ")}`);
+        process.exit(1);
+      }
+
+      if (!paramArg) {
+        const params = config?.agent_default_params?.[agentArg as keyof NonNullable<Config["agent_default_params"]>];
+        if (!params || Object.keys(params).length === 0) {
+          console.log(`No default params for ${agentArg}.`);
+          return;
+        }
+        console.log(`${agentArg}:`);
+        for (const [k, v] of Object.entries(params)) {
+          console.log(`  --${k} ${v}`);
+        }
+        return;
+      }
+
+      if (!valueArg) {
+        const params = config?.agent_default_params?.[agentArg as keyof NonNullable<Config["agent_default_params"]>];
+        const val = params?.[paramArg];
+        console.log(`${agentArg} --${paramArg}: ${val || "(not set)"}`);
+        return;
+      }
+
+      const updatedConfig: Config = config || {};
+      const allParams: any = updatedConfig.agent_default_params || {};
+      const agentParams = { ...(allParams[agentArg] || {}) };
+      const cleanParam = paramArg.replace(/^--/, "");
+      agentParams[cleanParam] = valueArg;
+      allParams[agentArg] = agentParams;
+      updatedConfig.agent_default_params = allParams;
+      writeConfig(updatedConfig);
+      console.log(`Updated ${agentArg} --${cleanParam} ${valueArg}`);
+
+      try {
+        const { ConvexHttpClient } = await import("convex/browser");
+        const client = new ConvexHttpClient(updatedConfig.convex_url!);
+        await (client as any).mutation("users:updateAgentDefaultParams", {
+          api_token: updatedConfig.auth_token,
+          agent: agentArg,
+          params: agentParams,
+        });
+      } catch (_e) {
+        // Server sync failed silently - local config is updated
+      }
+
       return;
     }
 
@@ -2802,7 +2902,7 @@ program
 
     if (!settableKeys.includes(key as SettableKey)) {
       console.error(`Unknown config key: ${key}`);
-      console.log(`Valid keys: ${settableKeys.join(", ")}`);
+      console.log(`Valid keys: ${settableKeys.join(", ")}, agent`);
       process.exit(1);
     }
 
