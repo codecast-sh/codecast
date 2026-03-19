@@ -379,7 +379,7 @@ export const list = query({
       });
     }
 
-    const limit = args.limit || 50;
+    const limit = args.limit || 300;
     return tasks.slice(0, limit);
   },
 });
@@ -724,6 +724,7 @@ export const webList = query({
     execution_status: v.optional(v.string()),
     ready: v.optional(v.boolean()),
     limit: v.optional(v.number()),
+    page: v.optional(v.number()),
     include_derived: v.optional(v.boolean()),
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
@@ -787,7 +788,10 @@ export const webList = query({
       });
     }
 
-    const result = tasks.slice(0, args.limit || 50);
+    const numItems = args.limit || 300;
+    const offset = (args.page || 0) * numItems;
+    const hasMore = offset + numItems < tasks.length;
+    const result = tasks.slice(offset, offset + numItems);
 
     // Enrich with creator and assignee info
     const allUserIds = new Set<string>();
@@ -835,13 +839,14 @@ export const webList = query({
       }
     }
 
-    return result.map(t => ({
+    const items = result.map(t => ({
       ...t,
       creator: userMap.get(t.user_id.toString()) || null,
       assignee_info: t.assignee ? userMap.get(t.assignee.toString()) || null : null,
       plan: t.plan_id ? planMap.get(t.plan_id.toString()) || null : null,
       activeSession: activeTaskMap.get(t._id.toString()) || null,
     }));
+    return { items, hasMore };
   },
 });
 
@@ -998,6 +1003,7 @@ export const webCreate = mutation({
     plan_id: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    assignee: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1024,6 +1030,8 @@ export const webCreate = mutation({
       if (plan) plan_id = plan._id;
     }
 
+    const resolvedAssignee = args.assignee === "me" ? userId.toString() : args.assignee;
+
     const now = Date.now();
     const id = await db.insert("tasks", {
       project_id,
@@ -1035,6 +1043,7 @@ export const webCreate = mutation({
       status: (args.status || "open") as any,
       priority: (args.priority || "medium") as any,
       labels: args.labels,
+      assignee: resolvedAssignee,
       source: "human",
       attempt_count: 0,
       retry_count: 0,
@@ -1099,7 +1108,7 @@ export const webTeamList = query({
       tasks = tasks.filter(t => t.source !== "insight" || t.promoted === true);
     }
 
-    return tasks.slice(0, args.limit || 100);
+    return tasks.slice(0, args.limit || 300);
   },
 });
 

@@ -6137,6 +6137,31 @@ export const switchSessionAgent = mutation({
     if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
 
     await ctx.db.patch(args.conversation_id, { agent_type: args.agent_type });
+
+    if (conv.status !== "active") {
+      return;
+    }
+
+    const now = Date.now();
+    const daemonAgentType = args.agent_type === "claude_code" ? "claude" : args.agent_type === "codex" ? "codex" : "gemini";
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "kill_session",
+      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      created_at: now,
+    });
+
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "start_session",
+      args: JSON.stringify({
+        agent_type: daemonAgentType,
+        project_path: conv.project_path || conv.git_root,
+        conversation_id: args.conversation_id,
+      }),
+      created_at: now + 1,
+    });
   },
 });
 
