@@ -1,3 +1,4 @@
+"use client";
 import { useState, useCallback, useRef, useMemo, Fragment } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
@@ -6,8 +7,9 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem } from "../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../hooks/useSyncTasks";
-import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
+
 import { TaskCommandPalette } from "../../components/TaskCommandPalette";
+import { AssigneeSelect } from "../../components/AssigneeSelect";
 
 const api = _api as any;
 import { AuthGuard } from "../../components/AuthGuard";
@@ -34,6 +36,12 @@ import {
   FileCode,
   ListChecks,
   ShieldCheck,
+  Bug,
+  Wrench,
+  Star,
+  ChevronDown,
+  Tag,
+  Search,
 } from "lucide-react";
 
 type TaskStatus = "draft" | "open" | "in_progress" | "in_review" | "done" | "dropped";
@@ -233,85 +241,265 @@ function TaskRow({
   );
 }
 
-function CreateTaskModal({ onClose }: { onClose: () => void }) {
+const TASK_TYPE_OPTIONS = [
+  { key: "task", label: "Task", icon: Circle },
+  { key: "feature", label: "Feature", icon: Star },
+  { key: "bug", label: "Bug", icon: Bug },
+  { key: "chore", label: "Chore", icon: Wrench },
+];
+
+const CREATE_STATUS_OPTIONS = [
+  { key: "open", label: "Open", icon: Circle, color: "text-sol-blue" },
+  { key: "draft", label: "Draft", icon: CircleDotDashed, color: "text-sol-text-dim" },
+  { key: "in_progress", label: "In Progress", icon: CircleDot, color: "text-sol-yellow" },
+];
+
+const CREATE_PRIORITY_OPTIONS = [
+  { key: "urgent", label: "Urgent", icon: AlertTriangle, color: "text-sol-red" },
+  { key: "high", label: "High", icon: ArrowUp, color: "text-sol-orange" },
+  { key: "medium", label: "Medium", icon: Minus, color: "text-sol-text-muted" },
+  { key: "low", label: "Low", icon: ArrowDown, color: "text-sol-text-dim" },
+];
+
+function PropertyChip<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { key: T; label: string; icon: any; color?: string }[];
+  onChange: (v: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = options.find((o) => o.key === value) || options[0];
+  const Icon = current.icon;
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border border-sol-border/30 hover:border-sol-border/60 text-sol-text-muted hover:text-sol-text transition-colors"
+      >
+        <Icon className={`w-3.5 h-3.5 ${current.color || ""}`} />
+        <span>{current.label}</span>
+        <ChevronDown className="w-3 h-3 opacity-60" />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 w-40 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+          {options.map((opt) => {
+            const OptIcon = opt.icon;
+            return (
+              <button
+                key={opt.key}
+                onClick={() => { onChange(opt.key); setOpen(false); }}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                  opt.key === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                <OptIcon className={`w-3.5 h-3.5 ${opt.color || ""}`} />
+                <span className="flex-1 text-left">{opt.label}</span>
+                {opt.key === value && <Check className="w-3 h-3 text-sol-cyan" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const LABEL_PRESETS = [
+  "bug", "feature", "improvement", "refactor", "docs", "infra",
+  "design", "perf", "security", "testing", "urgent", "blocked",
+];
+
+function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useWatchEffect(() => {
+    if (!open) return;
+    setTimeout(() => inputRef.current?.focus(), 0);
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const filtered = [...new Set([...LABEL_PRESETS, ...value])]
+    .filter((l) => !search.trim() || l.toLowerCase().includes(search.toLowerCase()));
+
+  const toggle = (label: string) => {
+    onChange(value.includes(label) ? value.filter((l) => l !== label) : [...value, label]);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors border ${
+          value.length > 0
+            ? "border-sol-border/60 bg-sol-bg-alt text-sol-text"
+            : "border-sol-border/30 hover:border-sol-border/60 text-sol-text-dim hover:text-sol-text"
+        }`}
+      >
+        <Tag className="w-3.5 h-3.5" />
+        {value.length > 0 ? (
+          <span>{value.length === 1 ? value[0] : `${value.length} labels`}</span>
+        ) : (
+          <span>Labels</span>
+        )}
+        <ChevronDown className="w-3 h-3 opacity-60" />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
+            <Search className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
+            <input
+              ref={inputRef}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Filter labels..."
+              className="flex-1 text-xs bg-transparent text-sol-text placeholder:text-sol-text-dim outline-none"
+              onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+            />
+          </div>
+          <div className="py-1 max-h-48 overflow-y-auto">
+            {filtered.map((label) => (
+              <button
+                key={label}
+                onClick={() => toggle(label)}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                  value.includes(label) ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                <Tag className="w-3 h-3 flex-shrink-0" />
+                <span className="flex-1 text-left">{label}</span>
+                {value.includes(label) && <Check className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose: () => void; teamMembers?: any[] | null; currentUser?: any }) {
   const createTask = useInboxStore((s) => s.createTask);
   const webCreate = useMutation(api.tasks.webCreate);
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [taskType, setTaskType] = useState("task");
-  const [priority, setPriority] = useState("medium");
+  const [priority, setPriority] = useState<string>("medium");
+  const [status, setStatus] = useState<string>("open");
+  const [assignee, setAssignee] = useState<string | null>(null);
+  const [assigneeInfo, setAssigneeInfo] = useState<{ name: string; image?: string } | null>(null);
+  const [labels, setLabels] = useState<string[]>([]);
+  const [createMore, setCreateMore] = useState(false);
+
+  const titleRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = useCallback(async () => {
     if (!title.trim()) return;
-    const opts = {
+    const opts: any = {
       title: title.trim(),
       description: description.trim() || undefined,
       task_type: taskType,
       priority,
-      status: "open",
+      status,
+      assignee: assignee || undefined,
+      labels: labels.length > 0 ? labels : undefined,
     };
     createTask(opts);
     toast.success(`Created: ${title.trim()}`);
-    try {
-      await webCreate(opts);
-    } catch {}
-    onClose();
-  }, [title, description, taskType, priority, createTask, webCreate, onClose]);
+    try { await webCreate(opts); } catch {}
+    if (createMore) {
+      setTitle("");
+      setDescription("");
+      setTimeout(() => titleRef.current?.focus(), 0);
+    } else {
+      onClose();
+    }
+  }, [title, description, taskType, priority, status, assignee, labels, createMore, createTask, webCreate, onClose]);
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center pt-[15vh]" onClick={onClose}>
-      <div className="bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <div className="p-6">
-          <h2 className="text-lg font-semibold text-sol-text mb-4">New Task</h2>
+    <div
+      className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center pt-[12vh]"
+      onClick={onClose}
+    >
+      <div
+        className="bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-[540px]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 pt-5 pb-2">
           <input
+            ref={titleRef}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Task title"
             autoFocus
-            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            className="w-full text-sm px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan mb-3"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
+              if (e.key === "Escape") onClose();
+            }}
+            className="w-full text-base font-medium text-sol-text placeholder:text-sol-text-dim/50 bg-transparent outline-none"
           />
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Description (optional)"
+            placeholder="Add description..."
             rows={3}
-            className="w-full text-sm px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan mb-3 resize-none"
+            onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+            className="w-full mt-2 text-sm text-sol-text-muted placeholder:text-sol-text-dim/40 bg-transparent outline-none resize-none"
           />
-          <div className="flex gap-3 mb-4">
-            <select
-              value={taskType}
-              onChange={(e) => setTaskType(e.target.value)}
-              className="text-sm px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text focus:outline-none focus:border-sol-cyan"
-            >
-              <option value="task">Task</option>
-              <option value="feature">Feature</option>
-              <option value="bug">Bug</option>
-              <option value="chore">Chore</option>
-            </select>
-            <select
-              value={priority}
-              onChange={(e) => setPriority(e.target.value)}
-              className="text-sm px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text focus:outline-none focus:border-sol-cyan"
-            >
-              <option value="urgent">Urgent</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-          <div className="flex justify-end gap-2">
-            <button onClick={onClose} className="px-4 py-2 text-sm text-sol-text-muted hover:text-sol-text transition-colors">
-              Cancel
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={!title.trim()}
-              className="px-4 py-2 text-sm rounded-lg bg-sol-cyan text-sol-bg hover:opacity-90 disabled:opacity-40 transition-opacity"
-            >
-              Create
-            </button>
-          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 px-4 py-3 border-t border-sol-border/20 flex-wrap">
+          <PropertyChip value={status as any} options={CREATE_STATUS_OPTIONS as any} onChange={(v) => setStatus(v)} />
+          <PropertyChip value={priority as any} options={CREATE_PRIORITY_OPTIONS as any} onChange={(v) => setPriority(v)} />
+          <PropertyChip value={taskType as any} options={TASK_TYPE_OPTIONS as any} onChange={(v) => setTaskType(v)} />
+          <LabelsChip value={labels} onChange={setLabels} />
+          <AssigneeSelect
+            value={assignee}
+            valueInfo={assigneeInfo}
+            onChange={(id, info) => { setAssignee(id); setAssigneeInfo(info); }}
+            teamMembers={teamMembers}
+            currentUser={currentUser}
+          />
+          <div className="flex-1" />
+          <label className="flex items-center gap-1.5 text-xs text-sol-text-dim cursor-pointer select-none hover:text-sol-text transition-colors">
+            <input
+              type="checkbox"
+              checked={createMore}
+              onChange={(e) => setCreateMore(e.target.checked)}
+              className="w-3 h-3 accent-[var(--sol-cyan)]"
+            />
+            Create more
+          </label>
+          <button
+            onClick={handleSubmit}
+            disabled={!title.trim()}
+            className="px-3 py-1.5 text-xs rounded-lg bg-sol-cyan text-sol-bg font-medium hover:opacity-90 disabled:opacity-40 transition-opacity"
+          >
+            Create
+          </button>
         </div>
       </div>
     </div>
@@ -515,12 +703,11 @@ export default function TasksPage() {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<"status" | "priority" | "created" | "updated">("status");
 
-  useSyncTasks(statusFilter || undefined);
-  const workspaceArgs = useWorkspaceArgs();
-  const projects = useQuery(api.projects.webList,
-    workspaceArgs === "skip" ? "skip" : { ...workspaceArgs }
-  );
-
+  const { hasMore, loadMore } = useSyncTasks(statusFilter || undefined);
+  const currentUser = useQuery(api.users.getCurrentUser);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as any;
+  const teamMembers = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId } : "skip");
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
   const tasksList = useMemo(() => Object.values(tasks), [tasks]);
@@ -927,26 +1114,17 @@ export default function TasksPage() {
               })
             )}
 
-            {projects && projects.length > 0 && (
-              <div className="border-t border-sol-border/30 px-6 py-3">
-                <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2">Projects</div>
-                <div className="flex gap-2 flex-wrap">
-                  {projects.map((p: any) => {
-                    const counts = p.task_counts || {};
-                    return (
-                      <div key={p._id} className="text-xs px-3 py-1.5 rounded-lg bg-sol-bg-alt border border-sol-border/30 text-sol-text-muted">
-                        <span className="font-medium text-sol-text">{p.title}</span>
-                        {counts.total > 0 && (
-                          <span className="ml-2 tabular-nums">
-                            {counts.done}/{counts.total}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+            {hasMore && (
+              <div className="px-6 py-3 border-t border-sol-border/20">
+                <button
+                  onClick={loadMore}
+                  className="text-xs text-sol-text-dim hover:text-sol-text transition-colors"
+                >
+                  Load more tasks
+                </button>
               </div>
             )}
+
           </div>
 
           {previewTaskId && (
@@ -973,13 +1151,15 @@ export default function TasksPage() {
           </div>
         </div>
 
-        {showCreate && <CreateTaskModal onClose={() => setShowCreate(false)} />}
+        {showCreate && <CreateTaskModal onClose={() => setShowCreate(false)} teamMembers={teamMembers} currentUser={currentUser} />}
 
         <TaskCommandPalette
           open={cmdOpen}
           onClose={() => setCmdOpen(false)}
           targetTasks={cmdTargetOverride || getTargetTasks()}
           initialMode={cmdMode}
+          teamMembers={teamMembers}
+          currentUser={currentUser}
         />
 
         {showHelp && (

@@ -1,11 +1,13 @@
+"use client";
 import { useState, useCallback, useRef, Fragment } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem } from "../../../store/inboxStore";
 import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { TaskCommandPalette } from "../../../components/TaskCommandPalette";
+import { AssigneeSelect } from "../../../components/AssigneeSelect";
 import { MarkdownRenderer } from "../../../components/tools/MarkdownRenderer";
 import { toast } from "sonner";
 import { AuthGuard } from "../../../components/AuthGuard";
@@ -397,6 +399,10 @@ export default function TaskDetailPage() {
   const addTaskComment = useInboxStore((s) => s.addTaskComment);
   const webUpdate = useMutation(api.tasks.webUpdate);
   const webAddComment = useMutation(api.tasks.webAddComment);
+  const currentUser = useQuery(api.users.getCurrentUser);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as any;
+  const teamMembers = useQuery(api.teams.getTeamMembers, effectiveTeamId ? { team_id: effectiveTeamId } : "skip");
   const [comment, setComment] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
@@ -575,15 +581,16 @@ export default function TaskDetailPage() {
                 </>
               )}
 
-              {(data as any).assignee_info && (
-                <>
-                  <span className="text-sol-text-dim py-1">Assignee</span>
-                  <div className="flex items-center gap-1.5 py-1">
-                    <Avatar name={(data as any).assignee_info.name} image={(data as any).assignee_info.image} />
-                    <span className="text-sol-text-muted">{(data as any).assignee_info.name}</span>
-                  </div>
-                </>
-              )}
+              <span className="text-sol-text-dim py-1">Assignee</span>
+              <div className="py-0.5">
+                <AssigneeSelect
+                  value={(data as any).assignee || null}
+                  valueInfo={(data as any).assignee_info || null}
+                  onChange={(assigneeId) => handleUpdate({ assignee: assigneeId || "" })}
+                  teamMembers={teamMembers}
+                  currentUser={currentUser}
+                />
+              </div>
 
               {data.task_type && (
                 <>
@@ -825,6 +832,8 @@ export default function TaskDetailPage() {
             onClose={() => setCmdOpen(false)}
             targetTasks={[data as unknown as TaskItem]}
             initialMode={cmdMode}
+            teamMembers={teamMembers}
+            currentUser={currentUser}
           />
         )}
 

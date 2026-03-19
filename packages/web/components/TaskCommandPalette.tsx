@@ -21,6 +21,7 @@ import {
   Trash2,
   Check,
   CornerDownLeft,
+  Bot,
 } from "lucide-react";
 
 const api = _api as any;
@@ -59,6 +60,8 @@ interface TaskCommandPaletteProps {
   onClose: () => void;
   targetTasks: TaskItem[];
   initialMode?: CommandMode;
+  teamMembers?: any[] | null;
+  currentUser?: any;
 }
 
 export function TaskCommandPalette({
@@ -66,6 +69,8 @@ export function TaskCommandPalette({
   onClose,
   targetTasks,
   initialMode = "root",
+  teamMembers,
+  currentUser,
 }: TaskCommandPaletteProps) {
   const [mode, setMode] = useState<CommandMode>(initialMode);
   const [search, setSearch] = useState("");
@@ -84,6 +89,10 @@ export function TaskCommandPalette({
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   }, [open, initialMode]);
+
+  useWatchEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 0);
+  }, [open, mode]);
 
   const applyUpdate = useCallback(
     async (fields: Record<string, any>) => {
@@ -114,7 +123,7 @@ export function TaskCommandPalette({
       { id: "status", label: "Change status...", icon: CircleDot, shortcut: "S", action: () => setMode("status") },
       { id: "priority", label: "Set priority...", icon: ArrowUp, shortcut: "P", action: () => setMode("priority") },
       { id: "labels", label: "Add labels...", icon: Tag, shortcut: "L", action: () => setMode("labels") },
-      { id: "assign", label: "Assign to me", icon: User, shortcut: "I", action: () => { applyUpdate({ assignee: "me" }); toast.success("Assigned to you"); } },
+      { id: "assign", label: "Assign to...", icon: User, shortcut: "A", action: () => setMode("assign") },
       { id: "copy", label: "Copy task ID", icon: Copy, shortcut: "\u2318.", action: () => {
         if (targetTasks.length === 1) {
           navigator.clipboard.writeText(targetTasks[0].short_id);
@@ -149,8 +158,19 @@ export function TaskCommandPalette({
           shortcut: i < 9 ? String(i + 1) : undefined,
         }));
     }
+    if (mode === "assign") {
+      const agentOpt = { key: "agent", label: "Claude Agent", type: "agent" as const, image: undefined };
+      const memberOpts = (teamMembers || []).filter(Boolean).map((m: any) => ({
+        key: m._id,
+        label: currentUser && m._id === currentUser._id ? `${m.name} (you)` : m.name,
+        type: "user" as const,
+        image: m.image || m.github_avatar_url,
+      }));
+      const allAssignees = [agentOpt, ...memberOpts];
+      return allAssignees.filter((o) => o.label.toLowerCase().includes(q));
+    }
     return [];
-  }, [mode, search, rootItems, currentLabels]);
+  }, [mode, search, rootItems, currentLabels, teamMembers, currentUser]);
 
   const items = getFilteredItems();
 
@@ -185,6 +205,12 @@ export function TaskCommandPalette({
             : [...currentLabels, item.key];
           applyUpdate({ labels: newLabels });
           toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
+        }
+      } else if (mode === "assign") {
+        const item = items[index] as any;
+        if (item) {
+          applyUpdate({ assignee: item.key });
+          toast.success(`Assigned to ${item.label.replace(" (you)", "")}`);
         }
       }
     },
@@ -221,7 +247,7 @@ export function TaskCommandPalette({
         return;
       }
 
-      if (mode === "status" || mode === "priority" || mode === "labels") {
+      if (mode === "status" || mode === "priority" || mode === "labels" || mode === "assign") {
         const num = parseInt(e.key);
         if (num >= 1 && num <= items.length) {
           e.preventDefault();
@@ -230,13 +256,23 @@ export function TaskCommandPalette({
         }
       }
 
+      // Root mode: single-key shortcuts jump directly to submenus (only when search is empty)
+      if (mode === "root" && search === "" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === "s") { e.preventDefault(); setMode("status"); setSearch(""); return; }
+        if (key === "p") { e.preventDefault(); setMode("priority"); setSearch(""); return; }
+        if (key === "l") { e.preventDefault(); setMode("labels"); setSearch(""); return; }
+        if (key === "a") { e.preventDefault(); setMode("assign"); setSearch(""); return; }
+        if (key === "d") { e.preventDefault(); applyUpdate({ status: "dropped" }); toast.success("Task dropped"); return; }
+      }
+
       if (e.key === "Backspace" && search === "" && mode !== "root" && initialMode === "root") {
         e.preventDefault();
         setMode("root");
         return;
       }
     },
-    [mode, initialMode, items, highlightIndex, selectItem, onClose, search]
+    [mode, initialMode, items, highlightIndex, selectItem, onClose, search, applyUpdate]
   );
 
   useWatchEffect(() => {
@@ -254,7 +290,7 @@ export function TaskCommandPalette({
     mode === "status" ? "Change status..." :
     mode === "priority" ? "Set priority..." :
     mode === "labels" ? "Toggle label..." :
-    mode === "assign" ? "Assign to..." :
+    mode === "assign" ? "Assign to person or agent..." :
     "Type a command or search...";
 
   return (
@@ -391,6 +427,31 @@ export function TaskCommandPalette({
                 )}
               </button>
             ))}
+
+          {mode === "assign" &&
+            (items as any[]).map((item, i) => (
+              <button
+                key={item.key}
+                onClick={() => selectItem(i)}
+                onMouseEnter={() => setHighlightIndex(i)}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+                  i === highlightIndex
+                    ? "bg-sol-bg-highlight text-sol-text"
+                    : "text-sol-text-muted hover:bg-sol-bg-alt/50"
+                }`}
+              >
+                {item.type === "agent" ? (
+                  <Bot className="w-4 h-4 flex-shrink-0 text-sol-violet" />
+                ) : item.image ? (
+                  <img src={item.image} alt={item.label} className="w-4 h-4 rounded-full flex-shrink-0" />
+                ) : (
+                  <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                    {item.label.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                  </div>
+                )}
+                <span className="flex-1 text-left">{item.label}</span>
+              </button>
+            ))}
         </div>
 
         {/* Footer hints */}
@@ -407,9 +468,25 @@ export function TaskCommandPalette({
             <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">esc</kbd>
             {mode !== "root" && initialMode === "root" ? "back" : "close"}
           </span>
-          {(mode === "status" || mode === "priority") && (
+          {mode === "root" && (
+            <>
+              {[
+                { key: "s", label: "status" },
+                { key: "p", label: "priority" },
+                { key: "l", label: "labels" },
+                { key: "a", label: "assign" },
+                { key: "d", label: "drop" },
+              ].map(({ key, label }) => (
+                <span key={key} className="flex items-center gap-1">
+                  <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">{key}</kbd>
+                  {label}
+                </span>
+              ))}
+            </>
+          )}
+          {(mode === "status" || mode === "priority" || mode === "labels" || mode === "assign") && items.length > 0 && (
             <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">1-{mode === "status" ? "6" : "5"}</kbd>
+              <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">1-{items.length}</kbd>
               quick pick
             </span>
           )}
