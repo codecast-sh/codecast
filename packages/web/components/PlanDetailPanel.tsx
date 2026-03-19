@@ -67,7 +67,7 @@ const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; color: string; label
 
 const PRIORITY_CYCLE = ["low", "medium", "high", "urgent"];
 
-const ALL_TASK_STATUSES = ["open", "in_progress", "in_review", "done", "dropped", "draft"];
+const ALL_TASK_STATUSES = ["open", "in_progress", "in_review", "done", "dropped", "backlog"];
 
 function formatTimestamp(ts: number): string {
   return new Date(ts).toLocaleString("en-US", {

@@ -762,6 +762,7 @@ function createConversationAriaLabel(conv: Conversation): string {
 }
 
 export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const [mode, setMode] = useState<"session" | "workflow">("session");
   const [agentType, setAgentType] = useState<"claude" | "codex" | "gemini">("claude");
   const [projectPath, setProjectPath] = useState("");
   const [isolated, setIsolated] = useState(false);
@@ -769,7 +770,11 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [dropdownIndex, setDropdownIndex] = useState(-1);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
+  const [goalOverride, setGoalOverride] = useState("");
   const createQuickSession = useMutation(api.conversations.createQuickSession);
+  const createWorkflowRun = useMutation((api as any).workflow_runs.create);
+  const workflows = useQuery((api as any).workflows.webList);
   const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
@@ -823,17 +828,28 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
     setIsSubmitting(true);
     soundNewSession();
     try {
-      const convexAgentType = agentType === "claude" ? "claude_code" as const : agentType === "codex" ? "codex" as const : "gemini" as const;
-      const conversationId = await createQuickSession({
-        agent_type: convexAgentType,
-        project_path: projectPath || undefined,
-        git_root: projectPath || undefined,
-        isolated: isolated || undefined,
-        worktree_name: (isolated && worktreeName) ? worktreeName : undefined,
-      });
-      router.push(`/conversation/${conversationId}?focus=1`);
-      onClose();
-      setProjectPath("");
+      if (mode === "workflow") {
+        if (!selectedWorkflowId) { toast.error("Select a workflow"); return; }
+        await createWorkflowRun({
+          workflow_id: selectedWorkflowId,
+          goal_override: goalOverride || undefined,
+          project_path: projectPath || undefined,
+        });
+        toast.success("Workflow run started");
+        onClose();
+      } else {
+        const convexAgentType = agentType === "claude" ? "claude_code" as const : agentType === "codex" ? "codex" as const : "gemini" as const;
+        const conversationId = await createQuickSession({
+          agent_type: convexAgentType,
+          project_path: projectPath || undefined,
+          git_root: projectPath || undefined,
+          isolated: isolated || undefined,
+          worktree_name: (isolated && worktreeName) ? worktreeName : undefined,
+        });
+        router.push(`/conversation/${conversationId}?focus=1`);
+        onClose();
+        setProjectPath("");
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create session");
     } finally {
@@ -846,12 +862,56 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
     <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm">
       <div ref={modalRef} className="bg-white dark:bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-md mx-4">
         <div className="px-5 pt-5 pb-3">
-          <h3 className="text-base font-semibold text-sol-text">New Session</h3>
-          <p className="text-xs text-sol-text-muted mt-0.5">Start a coding session on your machine</p>
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-semibold text-sol-text">New Session</h3>
+            <div className="flex gap-1 p-0.5 bg-sol-bg-alt rounded-lg border border-sol-border/30">
+              <button
+                onClick={() => setMode("session")}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${mode === "session" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text"}`}
+              >
+                Session
+              </button>
+              <button
+                onClick={() => setMode("workflow")}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${mode === "workflow" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text"}`}
+              >
+                Workflow
+              </button>
+            </div>
+          </div>
+          <p className="text-xs text-sol-text-muted mt-0.5">
+            {mode === "workflow" ? "Run a workflow on your machine" : "Start a coding session on your machine"}
+          </p>
         </div>
 
         <div className="px-5 pb-4 space-y-3">
-          {/* Agent type */}
+          {mode === "workflow" ? (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-sol-text-muted mb-1">Workflow</label>
+                <select
+                  value={selectedWorkflowId}
+                  onChange={(e) => setSelectedWorkflowId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text focus:outline-none focus:border-sol-violet/50"
+                >
+                  <option value="">Select a workflow...</option>
+                  {(workflows || []).map((wf: any) => (
+                    <option key={wf._id} value={wf._id}>{wf.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-sol-text-muted mb-1">Goal override <span className="text-sol-text-dim">(optional)</span></label>
+                <input
+                  type="text"
+                  value={goalOverride}
+                  onChange={(e) => setGoalOverride(e.target.value)}
+                  placeholder="Override the workflow goal..."
+                  className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-violet/50"
+                />
+              </div>
+            </>
+          ) : (
           <div className="flex gap-2">
             {(["claude", "codex", "gemini"] as const).map((type) => (
               <button
@@ -874,6 +934,7 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
               </button>
             ))}
           </div>
+          )}
 
           {/* Project path */}
           <div className="relative">
@@ -957,28 +1018,30 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
           </div>
         </div>
 
-        <div className="px-5 pb-3">
-          <button
-            onClick={() => setIsolated(!isolated)}
-            className={`flex items-center gap-2 text-xs transition-colors ${
-              isolated ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-muted"
-            }`}
-          >
-            <span className={`w-7 h-4 rounded-full transition-colors relative ${isolated ? "bg-sol-cyan/30" : "bg-sol-border/50"}`}>
-              <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
-            </span>
-            Isolated worktree
-          </button>
-          {isolated && (
-            <input
-              type="text"
-              value={worktreeName}
-              onChange={(e) => setWorktreeName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ""))}
-              placeholder="feature-name (optional)"
-              className="mt-2 w-full px-3 py-1.5 text-xs bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/50 font-mono"
-            />
-          )}
-        </div>
+        {mode === "session" && (
+          <div className="px-5 pb-3">
+            <button
+              onClick={() => setIsolated(!isolated)}
+              className={`flex items-center gap-2 text-xs transition-colors ${
+                isolated ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-muted"
+              }`}
+            >
+              <span className={`w-7 h-4 rounded-full transition-colors relative ${isolated ? "bg-sol-cyan/30" : "bg-sol-border/50"}`}>
+                <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
+              </span>
+              Isolated worktree
+            </button>
+            {isolated && (
+              <input
+                type="text"
+                value={worktreeName}
+                onChange={(e) => setWorktreeName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ""))}
+                placeholder="feature-name (optional)"
+                className="mt-2 w-full px-3 py-1.5 text-xs bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/50 font-mono"
+              />
+            )}
+          </div>
+        )}
 
         <div className="px-5 pb-4 flex justify-end gap-2">
           <button
@@ -990,9 +1053,13 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
           <button
             onClick={handleSubmit}
             disabled={isSubmitting}
-            className="px-4 py-2 text-sm font-medium bg-sol-yellow text-sol-bg rounded-lg hover:bg-sol-yellow/90 transition-colors disabled:opacity-50"
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
+              mode === "workflow"
+                ? "bg-sol-violet text-white hover:bg-sol-violet/90"
+                : "bg-sol-yellow text-sol-bg hover:bg-sol-yellow/90"
+            }`}
           >
-            {isSubmitting ? "Creating..." : "Create Session"}
+            {isSubmitting ? (mode === "workflow" ? "Starting..." : "Creating...") : mode === "workflow" ? "Run Workflow" : "Create Session"}
           </button>
         </div>
       </div>
@@ -1368,222 +1435,15 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                 );
               }
 
-              // Summary mode: shows title + subtitle but not clickable for others
-              // Detailed mode: shows title + subtitle but not clickable for others
-
-              const isOthersRestrictedView = (conv.visibility_mode === "detailed" || conv.visibility_mode === "summary") && !conv.is_own;
-
               return (
-                <Link
+                <ConversationCard
                   key={conv._id}
-                  href={isOthersRestrictedView ? "#" : `/conversation/${conv._id}`}
-                  className={`group block relative ${isOthersRestrictedView ? "cursor-default" : ""}`}
-                  role="listitem"
-                  aria-label={createConversationAriaLabel(conv)}
-                  aria-current={isFocused ? "true" : undefined}
-                  onClick={isOthersRestrictedView ? (e) => e.preventDefault() : onNavigate ? (e) => { e.preventDefault(); onNavigate(conv._id); } : undefined}
-                  data-flip-key={conv._id}
-                >
-                  <div className={`relative border rounded-lg sm:rounded-xl transition-all duration-200 dark:shadow-none ${
-                    conv.is_subagent
-                      ? !conv.is_active
-                        ? "p-2 sm:p-2.5 bg-sol-bg-alt/20 dark:bg-sol-bg-alt/10 border-sol-border/20 opacity-40 hover:opacity-60"
-                        : "p-2 sm:p-2.5 bg-sol-bg-alt/30 dark:bg-sol-bg-alt/20 border-violet-500/20 hover:border-violet-500/40 opacity-60 hover:opacity-80"
-                    : isOthersRestrictedView
-                      ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt border-sol-border/30 opacity-70"
-                      : filter === "team" && conv.is_own && !conv.is_private
-                        ? isFocused
-                          ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-[#fcfffc] dark:bg-[#0d1f15] ring-2 ring-sol-yellow border-2 border-emerald-400/40 hover:border-emerald-400/60 hover:shadow-md"
-                          : "p-2.5 sm:p-3 md:p-4 shadow-sm bg-[#fcfffc] dark:bg-[#0d1f15] border-2 border-emerald-400/35 hover:border-emerald-400/50 hover:shadow-md"
-                        : isFocused
-                          ? "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt ring-2 ring-sol-yellow border-sol-yellow/60 hover:border-sol-yellow/50 hover:shadow-md"
-                          : "p-2.5 sm:p-3 md:p-4 shadow-sm bg-white dark:bg-sol-bg-alt border-sol-border/40 hover:border-sol-yellow/50 hover:shadow-md"
-                  }`}>
-                  <div className="flex items-start justify-between gap-2 sm:gap-3 md:gap-4">
-                    <div className="flex-1 min-w-0">
-                      {/* Header row: title + timestamp */}
-                      <div className="flex items-start justify-between gap-3 mb-1">
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4 shrink-0" />
-                          <span className={`font-medium text-sm sm:text-base transition-colors ${
-                            isOthersRestrictedView
-                              ? "text-sol-text-muted"
-                              : "text-sol-text"
-                          }`}>
-                            {cleanTitle(conv.title || "Untitled")}
-                          </span>
-                          {conv.is_active && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-green/20 border border-sol-green/50 shrink-0 select-none">
-                              <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
-                              <span className="text-[10px] text-sol-green font-semibold">LIVE</span>
-                            </span>
-                          )}
-                        </div>
-                        <div
-                          className="flex items-center gap-1.5 shrink-0 select-none"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {filter === "team" && hasTeam && conv.is_own && (
-                            <VisibilityDropdown
-                              conversationId={conv._id}
-                              isPrivate={conv.is_private ?? false}
-                              visibilityMode={conv.visibility_mode}
-                              teamVisibility={conv.team_visibility}
-                            />
-                          )}
-                          {filter === "team" && hasTeam && !conv.is_own && conv.visibility_mode && (
-                            <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                              conv.visibility_mode === "full" ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30" :
-                              conv.visibility_mode === "summary" ? "bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/30" :
-                              "bg-sol-base02/50 text-sol-text-muted border border-sol-border/40"
-                            }`}>
-                              {(conv.visibility_mode === "full" || conv.visibility_mode === "summary") && (
-                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-                                </svg>
-                              )}
-                              {conv.visibility_mode === "full" ? "Full" :
-                               conv.visibility_mode === "summary" ? "Summary" :
-                               conv.visibility_mode === "minimal" ? "Activity" :
-                               conv.visibility_mode}
-                            </span>
-                          )}
-                          <FavoriteButton
-                            conversationId={conv._id}
-                            isFavorite={conv.is_favorite ?? false}
-                          />
-                          <span className="text-[11px] text-sol-text-dim/60">
-                            {getRelativeTime(conv.updated_at)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Subagent parent link */}
-                      {conv.parent_conversation_id && (
-                        <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-sol-text-dim">
-                          <svg className="w-3 h-3 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                          </svg>
-                          <span>sub of</span>
-                          <button
-                            className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[200px] transition-colors text-left"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              router.push(`/conversation/${conv.parent_conversation_id}`);
-                            }}
-                          >
-                            {conv.parent_title || "parent session"}
-                          </button>
-                        </div>
-                      )}
-
-                      <ConvSubtitleSection conv={conv} />
-
-
-                      <div className="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs flex-wrap text-sol-text-dim select-none">
-                        {(filter === "team" || !conv.is_own) && (
-                          <span className="flex items-center gap-1.5 font-medium">
-                            {conv.author_avatar ? (
-                              <img
-                                src={conv.author_avatar}
-                                alt={conv.author_name}
-                                className="w-4 h-4 rounded-full"
-                              />
-                            ) : (
-                              <span className="w-4 h-4 rounded-full bg-sol-base02 flex items-center justify-center text-[8px] text-sol-text-muted">
-                                {conv.author_name?.charAt(0).toUpperCase()}
-                              </span>
-                            )}
-                            {conv.is_own ? (
-                              <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 dark:text-blue-300 font-semibold text-xs border border-blue-500/30">You</span>
-                            ) : conv.author_name}
-                          </span>
-                        )}
-                        {(conv.project_path || conv.git_root) && (
-                          <span className="inline-flex items-center gap-1 text-sol-text-dim" title={conv.project_path || conv.git_root || ""}>
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                            </svg>
-                            <span className="truncate max-w-[100px]">{(conv.git_root || conv.project_path || "").split("/").pop()}</span>
-                          </span>
-                        )}
-                        {filter === "team" && !conv.is_own && conv.is_private === false && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30 text-[10px] font-medium">
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                            </svg>
-                            Shared
-                          </span>
-                        )}
-                        {conv.duration_ms > 60000 && (
-                          <span className={`hidden sm:inline-flex items-center gap-1 ${getDurationColor(conv.duration_ms).split(' ')[0]}`}>
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            {formatDuration(conv.duration_ms)}
-                          </span>
-                        )}
-                        {(conv.message_count ?? 0) > 0 && (
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border ${getMessageCountColor(conv.message_count ?? 0)}`}>
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                            </svg>
-                            <span className="text-[10px] font-semibold">{conv.message_count}</span>
-                          </span>
-                        )}
-                        {conv.latest_todos && conv.latest_todos.todos.length > 0 && (
-                          <TodoBadge todos={conv.latest_todos.todos} />
-                        )}
-                        {((conv.fork_count ?? 0) > 0 || conv.forked_from) && (
-                          <span
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/30"
-                            title={conv.forked_from ? "This is a fork" : `${conv.fork_count} fork${conv.fork_count === 1 ? '' : 's'}`}
-                          >
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-                            </svg>
-                            {conv.forked_from ? "fork" : conv.fork_count}
-                          </span>
-                        )}
-                        {conv.subagent_types && conv.subagent_types.length > 0 && conv.subagent_types.map((type) => (
-                          <span
-                            key={type}
-                            className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-cyan/20 text-sol-cyan border border-sol-cyan/40 text-[10px] font-mono"
-                          >
-                            {type}
-                          </span>
-                        ))}
-                        {(conv.is_subagent || conv.title?.startsWith("Session agent-")) && (
-                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                            !conv.is_active
-                              ? "bg-sol-bg-alt/50 text-sol-text-dim border border-sol-border/30 line-through"
-                              : "bg-violet-900/40 text-violet-300 border border-violet-600/50"
-                          }`}>
-                            {!conv.is_active ? "Terminated" : "Subagent"}
-                          </span>
-                        )}
-                        {conv.workflow_run_id && !conv.is_workflow_sub && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 text-[10px] font-medium">
-                            Workflow
-                          </span>
-                        )}
-                        {conv.parent_conversation_id && !conv.is_subagent && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-blue/20 text-sol-blue border border-sol-blue/40 text-[10px] font-medium">
-                            Plan
-                          </span>
-                        )}
-                        {(conv as any).active_plan && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] font-medium max-w-[120px] truncate" title={(conv as any).active_plan.title}>
-                            {(conv as any).active_plan.title}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Link>
+                  conv={conv}
+                  filter={filter}
+                  isFocused={isFocused}
+                  onNavigate={onNavigate}
+                  hasTeam={hasTeam}
+                />
               );
             })}
           </div>

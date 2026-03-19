@@ -150,7 +150,7 @@ export function MessageNavButton({
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
   }, []);
 
-  if (!messages || total === 0) return null;
+  if (!messages || total < 2) return null;
 
   const MAX_BARS = 24;
   const displayCount = Math.min(total, MAX_BARS);

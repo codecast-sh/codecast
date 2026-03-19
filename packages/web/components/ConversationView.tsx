@@ -2718,7 +2718,7 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   const displayText = cmdName ? rawDisplay.replace(new RegExp(`(/?${cmdName}\\s*)+`), "").trim() : rawDisplay;
 
   if (cmdName) {
-    return <SkillExpansionBlock content={content} timestamp={timestamp} cmdName={cmdName} />;
+    return null;
   }
 
   return (
@@ -2732,10 +2732,22 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
-function SkillExpansionBlock({ content, timestamp, cmdName }: { content: string; timestamp: number; cmdName?: string }) {
+function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: { content: string; timestamp: number; cmdName?: string; collapsed?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const info = extractSkillInfo(content);
   const skillName = cmdName || info?.name || "skill";
+
+  if (collapsed) {
+    return (
+      <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+        <svg className="w-3 h-3 text-sol-cyan/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+        </svg>
+        <span className="font-mono text-sol-cyan/80 font-medium">/{skillName}</span>
+        <span className="text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+    );
+  }
 
   return (
     <div className="mb-2">
@@ -6403,7 +6415,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (msg.role === "system") return 0;
         if (msg.role === "user") {
           const kind = userMsgKindMap.get(msg._id);
-          if (kind && kind.kind !== 'normal' && kind.kind !== 'plan') return 0;
+          if (kind && kind.kind !== 'normal' && kind.kind !== 'plan' && kind.kind !== 'skill_expansion') return 0;
         }
         if (msg.role === "assistant") {
           const hasTextContent = msg.content && msg.content.trim().length > 0;
@@ -6426,7 +6438,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (msg.role === "user") {
         const kind = userMsgKindMap.get(msg._id);
         switch (kind?.kind) {
-          case 'command': return 30;
+          case 'command': {
+            const cmdContent = msg.content || "";
+            const hasSlashCmd = /<command-name>/.test(cmdContent) || /^\/([\w-]+)/.test(cmdContent.trim());
+            return hasSlashCmd ? 0 : 30;
+          }
           case 'interrupt': return 30;
           case 'skill_expansion': return 44;
           case 'task_notification': return 40;
@@ -6658,7 +6674,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               }
             }
           } else {
-            const contentBottom = virtualizer.getTotalSize() - scrollTop;
+            const contentBottom = el.scrollHeight - scrollTop;
             if (contentBottom < viewportHeight + 100) {
               hideForNextMsg = true;
             }
@@ -7274,8 +7290,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           if (collapsed) return null;
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
         case 'skill_expansion':
-          if (collapsed) return null;
-          return <SkillExpansionBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} cmdName={kind.cmdName} />;
+          return <SkillExpansionBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} cmdName={kind.cmdName} collapsed={collapsed} />;
         case 'task_notification':
           if (collapsed) return null;
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;

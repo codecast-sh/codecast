@@ -9,6 +9,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationView, ConversationData } from "../../../components/ConversationView";
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
 import { PlanContextPanel } from "../../../components/PlanContextPanel";
+import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { PublicCommentSection } from "../../../components/PublicCommentSection";
 import { SharePopover } from "../../../components/SharePopover";
 import { toast } from "sonner";
@@ -190,10 +191,12 @@ function OwnerView({
   }
 
   const activePlanId = (conversation as any)?.active_plan_id;
+  const workflowRunId = (conversation as any)?.workflow_run_id;
 
   return (
     <DashboardLayout>
       {activePlanId && <PlanContextPanel planId={activePlanId} />}
+      {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
       {isSearchingForTarget && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-sol-bg-alt border border-sol-border rounded-full px-4 py-2 shadow-lg flex items-center gap-2">
           <svg className="w-4 h-4 animate-spin text-sol-cyan" viewBox="0 0 24 24" fill="none">
@@ -432,12 +435,11 @@ export default function ConversationPage() {
 
   const redirectId = useMemo(() => {
     if (isUUID) {
-      if (sessionLookup === undefined) {
+      if (sessionLookup === undefined || sessionLookup === null) {
         const hasLocalSession = useInboxStore.getState().conversations[id];
         if (hasLocalSession) return id;
         return null;
       }
-      if (sessionLookup === null) return null;
       if (publicData === undefined) return null;
       if (publicData.access_level === "owner" || publicData.access_level === "team") {
         return resolvedConvexId || id;
@@ -450,6 +452,12 @@ export default function ConversationPage() {
     }
     return null;
   }, [isUUID, sessionLookup, publicData, resolvedConvexId, id]);
+
+  const storeHasSession = useInboxStore((s) => !!(s.sessions[id] || s.conversations[id]));
+
+  if (storeHasSession) {
+    return <QueuePageClient initialSessionId={id} />;
+  }
 
   if (!isUUID && !isValidConvexId) {
     return <NotFoundView />;

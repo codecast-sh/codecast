@@ -21,6 +21,7 @@ import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { TaskStatusBadge } from "../../components/TaskStatusBadge";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
+import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { toast } from "sonner";
 
 const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan"];
@@ -153,6 +154,8 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
   );
 
   const activePlanId = (conversation as any)?.active_plan_id;
+  const workflowRunId = (conversation as any)?.workflow_run_id;
+  const hasContext = activePlanId || workflowRunId;
 
   return (
     <div className="relative h-full flex flex-col">
@@ -192,7 +195,10 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       {activePlanId && (
         <PlanContextPanel planId={activePlanId} />
       )}
-      <div className={activePlanId ? "flex-1 min-h-0" : "h-full"}>
+      {workflowRunId && (
+        <WorkflowContextPanel workflowRunId={workflowRunId} />
+      )}
+      <div className={hasContext ? "flex-1 min-h-0" : "h-full"}>
         <ConversationDiffLayout
           conversation={conversation as ConversationData}
           embedded

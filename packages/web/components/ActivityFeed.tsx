@@ -1,4 +1,4 @@
-import { useQuery, useAction } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import React, { useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
@@ -6,6 +6,7 @@ import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { ConversationList } from "./ConversationList";
 import { useEventListener } from "../hooks/useEventListener";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 function getRelativeTime(timestamp: number): string {
@@ -79,6 +80,22 @@ function avatarColor(name: string, id?: string): string {
     "bg-sol-blue/20 text-sol-blue",
     "bg-sol-red/20 text-sol-red",
     "bg-sol-orange/20 text-sol-orange",
+  ];
+  const key = id ?? name;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function avatarRingColor(name: string, id?: string): string {
+  const colors = [
+    "ring-sol-yellow/70",
+    "ring-sol-cyan/70",
+    "ring-sol-violet/70",
+    "ring-sol-green/70",
+    "ring-sol-blue/70",
+    "ring-sol-red/70",
+    "ring-sol-orange/70",
   ];
   const key = id ?? name;
   let hash = 0;
@@ -354,19 +371,20 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
   return (
     <div
       onClick={() => hasDetail && setExpanded(!expanded)}
-      className={`group relative border border-sol-border/30 bg-white dark:bg-sol-bg-alt rounded-xl shadow-sm ${compact ? "pl-4 pr-2.5 py-2" : "pl-5 pr-3 py-2.5"} ${isTrivial ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer" : ""} hover:border-sol-yellow/30 hover:shadow-md transition-all`}
+      className={`group relative border border-sol-border/30 bg-white dark:bg-sol-bg-alt rounded-xl shadow-sm overflow-hidden ${compact ? "pl-4 pr-2.5 py-2" : "pl-5 pr-3 py-2.5"} ${isTrivial ? "opacity-50" : ""} ${hasDetail ? "cursor-pointer" : ""} hover:border-sol-yellow/30 hover:shadow-md transition-all`}
     >
       <div className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-l-xl ${outcome.accent}`} />
       {/* Row 1: actor + title + project + time */}
       <div className="flex items-center gap-1.5 min-w-0">
         {showActor && (
-          <span className={`shrink-0 ${avatarColor(actorName, actorId)} rounded-full w-[18px] h-[18px] text-[9px] flex items-center justify-center font-bold`}>
-            {actorName[0].toUpperCase()}
-          </span>
-        )}
-        {showActor && (
-          <span className={`font-medium text-sol-text shrink-0 ${compact ? "text-[11px]" : "text-[12px]"}`}>
-            {actorName.split(" ")[0]}
+          <span className="shrink-0 rounded-full w-[20px] h-[20px] overflow-hidden flex items-center justify-center flex-shrink-0">
+            {item.actor?.image ? (
+              <img src={item.actor.image} alt={actorName} className="w-full h-full object-cover" />
+            ) : (
+              <span className={`${avatarColor(actorName, actorId)} w-full h-full flex items-center justify-center text-[9px] font-bold`}>
+                {actorName[0].toUpperCase()}
+              </span>
+            )}
           </span>
         )}
         <span
@@ -411,9 +429,7 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
               <span className="text-sol-text-muted0">{item.blockers}</span>
             </div>
           )}
-          {hasTurns ? (
-            <SessionTurns turns={item.turns} onDeepDive={() => setDeepDive(true)} />
-          ) : changes.length > 0 ? (
+          {changes.length > 0 ? (
             <ul className="space-y-0.5">
               {changes.map((c: string, i: number) => (
                 <li key={i} className="flex gap-1.5 text-sol-text-muted leading-snug">
@@ -422,6 +438,8 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
                 </li>
               ))}
             </ul>
+          ) : hasTurns ? (
+            <SessionTurns turns={item.turns} onDeepDive={() => setDeepDive(true)} />
           ) : hasTimeline ? (
             <SessionTimeline timeline={item.timeline} />
           ) : null}
@@ -639,7 +657,7 @@ function DaySection({ day, items, compact, showActor, onNavigate, projectColors,
         <>
           {dayNarrative && <DayNarrative narrative={dayNarrative.narrative} events={dayNarrative.events} />}
 
-          <div className="divide-y divide-sol-border/8">
+          <div className="space-y-1.5">
             {items.map((item: any) => (
               <SessionCard
                 key={item.conversation_id}
@@ -674,8 +692,12 @@ function PeopleRow({ people, onSelect, selectedId }: { people: any[]; onSelect: 
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
             }`}
           >
-            <span className={`w-5 h-5 text-[10px] rounded-full flex items-center justify-center font-semibold shrink-0 ${avatarColor(person.actor.name, person.actor._id)}`}>
-              {initial}
+            <span className={`w-5 h-5 rounded-full flex items-center justify-center font-semibold shrink-0 ring-2 ${avatarRingColor(person.actor.name, person.actor._id)} overflow-hidden`}>
+              {person.actor.image ? (
+                <img src={person.actor.image} alt={person.actor.name} className="w-full h-full object-cover" />
+              ) : (
+                <span className={`w-full h-full flex items-center justify-center text-[10px] font-semibold ${avatarColor(person.actor.name, person.actor._id)}`}>{initial}</span>
+              )}
             </span>
             <span className="font-medium">{person.actor.name.split(" ")[0]}</span>
             <span className="opacity-40">{person.sessions}</span>
@@ -695,11 +717,14 @@ interface ActivityFeedProps {
   onNavigate?: (conversationId: string) => void;
 }
 
+const WINDOW_STEPS: WindowHours[] = [168, 720];
+
 export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeedProps) {
-  const [windowHours, setWindowHours] = useState<WindowHours>(168);
+  const [windowIdx, setWindowIdx] = useState(0);
+  const windowHours = WINDOW_STEPS[windowIdx];
   const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(undefined);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"feed" | "raw">("raw");
+  const [viewMode, setViewMode] = useState<"feed" | "raw">("feed");
 
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
 
@@ -709,6 +734,26 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
     window_hours: windowHours,
     timezone: tz,
   });
+
+  const canLoadMore = windowIdx < WINDOW_STEPS.length - 1;
+
+  useWatchEffect(() => {
+    if (!canLoadMore || viewMode !== "feed" || digest === undefined) return;
+
+    const scrollContainer = document.querySelector("[data-main-scroll]") as HTMLElement | null;
+    if (!scrollContainer) return;
+
+    const onScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+      if (scrollHeight - scrollTop - clientHeight < 400) {
+        setWindowIdx((i) => Math.min(i + 1, WINDOW_STEPS.length - 1));
+      }
+    };
+
+    scrollContainer.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => scrollContainer.removeEventListener("scroll", onScroll);
+  }, [canLoadMore, viewMode, digest]);
 
   const filteredFeed = useMemo(() => {
     if (!digest?.feed) return [];
@@ -752,8 +797,6 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
           sessionCount={digest.sessions_analyzed}
           viewMode={viewMode}
           setViewMode={setViewMode}
-          windowHours={windowHours}
-          setWindowHours={(h) => { setWindowHours(h); setActorFilter(undefined); }}
           compact={compact}
         />
         <ConversationList filter={mode === "team" ? "team" : "my"} onNavigate={onNavigate} />
@@ -767,8 +810,6 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
         sessionCount={digest.sessions_analyzed}
         viewMode={viewMode}
         setViewMode={setViewMode}
-        windowHours={windowHours}
-        setWindowHours={(h) => { setWindowHours(h); setActorFilter(undefined); setProjectFilter(null); }}
         compact={compact}
       />
 
@@ -811,82 +852,32 @@ export function ActivityFeed({ mode, teamId, compact, onNavigate }: ActivityFeed
   );
 }
 
-function FeedControls({ sessionCount, viewMode, setViewMode, windowHours, setWindowHours, compact }: {
+function FeedControls({ sessionCount, viewMode, setViewMode, compact }: {
   sessionCount: number;
   viewMode: "feed" | "raw";
   setViewMode: (m: "feed" | "raw") => void;
-  windowHours: WindowHours;
-  setWindowHours: (h: WindowHours) => void;
   compact?: boolean;
 }) {
-  const backfillTimelines = useAction(api.sessionInsights.backfillTimelines);
-  const backfillDayNarratives = useAction(api.sessionInsights.backfillDayNarratives);
-  const [backfilling, setBackfilling] = useState(false);
-  const [genDays, setGenDays] = useState(false);
-
-  const handleBackfill = useCallback(async () => {
-    setBackfilling(true);
-    try {
-      const result = await backfillTimelines({ window_hours: windowHours, limit: 50 });
-      console.log("Backfill result:", result);
-    } catch (e) {
-      console.error("Backfill failed:", e);
-    }
-    setBackfilling(false);
-  }, [backfillTimelines, windowHours]);
-
-  const handleGenDays = useCallback(async () => {
-    setGenDays(true);
-    try {
-      const result = await backfillDayNarratives({ window_hours: windowHours });
-      console.log("Day narrative result:", result);
-    } catch (e) {
-      console.error("Day narrative gen failed:", e);
-    }
-    setGenDays(false);
-  }, [backfillDayNarratives, windowHours]);
-
   return (
     <div className={`flex items-center justify-between ${compact ? "px-1" : ""}`}>
       <div className="flex items-center gap-2">
         <span className="text-[11px] text-sol-text-dim tabular-nums">
           {sessionCount} session{sessionCount !== 1 ? "s" : ""}
         </span>
-        <span className="text-sol-text-dim/15">|</span>
-        <button
-          onClick={async () => { await handleBackfill(); await handleGenDays(); }}
-          disabled={backfilling || genDays}
-          className="text-[10px] text-sol-text-dim/40 hover:text-sol-cyan/60 transition-colors disabled:opacity-30"
-        >
-          {backfilling || genDays ? "regenerating..." : "regen"}
-        </button>
       </div>
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-0.5 bg-sol-bg-alt/60 rounded-md p-0.5">
-          <button
-            onClick={() => setViewMode("feed")}
-            className={`px-2 py-0.5 text-[11px] rounded transition-colors ${viewMode === "feed" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-muted hover:text-sol-text"}`}
-          >
-            Feed
-          </button>
-          <button
-            onClick={() => setViewMode("raw")}
-            className={`px-2 py-0.5 text-[11px] rounded transition-colors ${viewMode === "raw" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-muted hover:text-sol-text"}`}
-          >
-            Raw
-          </button>
-        </div>
-        <div className="flex items-center gap-0.5 bg-sol-bg-alt/60 rounded-md p-0.5">
-          {([24, 168, 720] as WindowHours[]).map((h) => (
-            <button
-              key={h}
-              onClick={() => setWindowHours(h)}
-              className={`px-2 py-0.5 text-[11px] rounded transition-colors ${windowHours === h ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-muted hover:text-sol-text"}`}
-            >
-              {h === 24 ? "24h" : h === 168 ? "7d" : "30d"}
-            </button>
-          ))}
-        </div>
+      <div className="flex items-center border border-sol-border/30 rounded-md overflow-hidden">
+        <button
+          onClick={() => setViewMode("feed")}
+          className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${viewMode === "feed" ? "bg-sol-yellow/15 text-sol-text" : "text-sol-text-dim/50 hover:text-sol-text hover:bg-sol-bg-alt/50"}`}
+        >
+          Feed
+        </button>
+        <button
+          onClick={() => setViewMode("raw")}
+          className={`px-2.5 py-1 text-[11px] font-medium transition-colors border-l border-sol-border/30 ${viewMode === "raw" ? "bg-sol-yellow/15 text-sol-text" : "text-sol-text-dim/50 hover:text-sol-text hover:bg-sol-bg-alt/50"}`}
+        >
+          Raw
+        </button>
       </div>
     </div>
   );
