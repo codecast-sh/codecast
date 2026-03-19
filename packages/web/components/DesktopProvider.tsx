@@ -89,7 +89,21 @@ export function DesktopProvider() {
 
     const handleNavigate = (e: Event) => {
       const path = (e as CustomEvent).detail;
-      if (path) router.push(path);
+      if (!path) return;
+
+      const convMatch = path.match(/^\/conversation\/([^/?#]+)/);
+      if (convMatch) {
+        const convId = convMatch[1];
+        useInboxStore.getState().navigateToSession(convId);
+
+        const cur = window.location.pathname;
+        if (cur.startsWith("/inbox") || cur.startsWith("/conversation/")) {
+          window.history.pushState({ inboxId: convId }, "", path);
+          return;
+        }
+      }
+
+      router.push(path);
     };
     window.addEventListener("codecast-navigate", handleNavigate);
 

@@ -185,8 +185,8 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       } else {
         store.navigateToSession(conv._id);
       }
-      if (isInboxRoute(pathname)) {
-        window.history.replaceState({ inboxId: conv._id }, "", conversationPath);
+      if (isInboxRoute(pathname) || pathname?.startsWith("/conversation/")) {
+        window.history.pushState({ inboxId: conv._id }, "", conversationPath);
       } else {
         router.push(conversationPath);
       }

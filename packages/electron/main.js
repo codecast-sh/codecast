@@ -273,6 +273,17 @@ function buildAppMenu() {
         { role: "forceReload" },
         { role: "toggleDevTools" },
         { type: "separator" },
+        {
+          label: "Back",
+          accelerator: "CommandOrControl+[",
+          click: () => mainWindow?.webContents.goBack(),
+        },
+        {
+          label: "Forward",
+          accelerator: "CommandOrControl+]",
+          click: () => mainWindow?.webContents.goForward(),
+        },
+        { type: "separator" },
         { role: "togglefullscreen" },
       ],
     },

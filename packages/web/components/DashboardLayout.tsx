@@ -19,6 +19,7 @@ import { TeamSwitcher } from "./TeamSwitcher";
 import { Logo } from "./Logo";
 import { soundNewSession } from "../lib/sounds";
 import { Plus } from "lucide-react";
+import { nanoid } from "nanoid";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
@@ -27,7 +28,7 @@ import { ElectronUpdateBanner } from "./ElectronUpdateBanner";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
 import { usePrefetch } from "../hooks/usePrefetch";
-import { desktopHeaderClass, setupDesktopDrag } from "../lib/desktop";
+import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { isInboxRoute as isInboxRoutePath, isInboxSessionView } from "../lib/inboxRouting";
 
 interface DashboardLayoutProps {
@@ -59,6 +60,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const closeNewSession = useInboxStore((state) => state.closeNewSession);
   const currentConvContext = useInboxStore((s) => s.currentConversation);
   const [desktopClass, setDesktopClass] = useState("");
+  const [isDesktopApp, setIsDesktopApp] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
   usePrefetch();
 
@@ -70,7 +72,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
 
   useMountEffect(() => {
     setDesktopClass(desktopHeaderClass());
-    const timer = setTimeout(() => setDesktopClass(desktopHeaderClass()), 500);
+    setIsDesktopApp(isElectron());
+    const timer = setTimeout(() => { setDesktopClass(desktopHeaderClass()); setIsDesktopApp(isElectron()); }, 500);
     return () => clearTimeout(timer);
   });
 
@@ -107,7 +110,7 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
     soundNewSession();
     const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
     const agentType = (currentConvContext.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-    const sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const sessionId = nanoid(10);
     const now = Date.now();
 
     const store = useInboxStore.getState();
@@ -191,6 +194,30 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <Link href="/"><span className="hidden sm:contents"><Logo size="md" showText={true} /></span></Link>
             <Link href="/"><span className="sm:hidden"><Logo size="md" showText={false} /></span></Link>
+            {isDesktopApp && (
+              <div className="flex items-center gap-0.5">
+                <button
+                  onClick={() => window.history.back()}
+                  className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
+                  title="Back (⌘[)"
+                  aria-label="Go back"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => window.history.forward()}
+                  className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
+                  title="Forward (⌘])"
+                  aria-label="Go forward"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
+            )}
             {!hideSidebar && (
               <button
                 onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
