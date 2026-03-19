@@ -17,7 +17,6 @@ import { useSessionSwitcher } from "../../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../../components/ui/tooltip";
 import { cleanTitle } from "../../lib/conversationProcessor";
-import { MessageBrowserPopover } from "../../components/MessageBrowserPopover";
 import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { TaskStatusBadge } from "../../components/TaskStatusBadge";
@@ -297,7 +296,6 @@ function SessionCard({
   }, [session._id, displayTitle, generateUploadUrl, sendMessage]);
 
   return (
-    <MessageBrowserPopover conversationId={session._id}>
     <div
       onDragEnter={handleFileDragEnter}
       onDragOver={handleFileDragOver}
@@ -517,7 +515,6 @@ function SessionCard({
         </TooltipProvider>
       )}
     </div>
-    </MessageBrowserPopover>
   );
 }
 
@@ -528,7 +525,7 @@ function NeedsAttentionSection() {
   const [collapsed, setCollapsed] = useState(false);
 
   const tasks = useMemo(() => {
-    const all = [...(blockedTasks || []), ...(needsContextTasks || [])];
+    const all = [...(blockedTasks?.items || []), ...(needsContextTasks?.items || [])];
     const seen = new Set<string>();
     return all.filter(t => {
       if (seen.has(t.short_id)) return false;
@@ -1035,9 +1032,12 @@ export function QueuePageClient() {
     if (currentSessionId) handleDismiss(currentSessionId);
   }, [currentSessionId, handleDismiss]);
 
-  const handleDeferCurrent = useCallback(() => {
-    if (currentSessionId) deferSession(currentSessionId);
-  }, [currentSessionId, deferSession]);
+  const handleDeferAndAdvance = useCallback(() => {
+    if (currentSessionId) {
+      deferSession(currentSessionId);
+      advanceToNext();
+    }
+  }, [currentSessionId, deferSession, advanceToNext]);
 
   const handlePinCurrent = useCallback(() => {
     if (currentSessionId) pinSession(currentSessionId);
@@ -1134,7 +1134,7 @@ export function QueuePageClient() {
       if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === "Backspace") {
         e.preventDefault();
         e.stopImmediatePropagation();
-        handleDeferCurrent();
+        handleDeferAndAdvance();
         return;
       }
       if (e.ctrlKey && e.key === "i") {

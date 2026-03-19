@@ -7,6 +7,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { useInboxStore, InboxSession } from "../store/inboxStore";
 import { isElectron } from "../lib/desktop";
+import { isInboxRoute } from "../lib/inboxRouting";
 
 const NAV_PAGES = [
   { label: "Dashboard", path: "/dashboard", icon: "grid", keywords: "home sessions main" },
@@ -162,8 +163,9 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const navigateToSession = useCallback(
     (conv: { _id: string; session_id?: string; title?: string; updated_at: number; project_path?: string; git_root?: string; agent_type?: string; message_count?: number; is_idle?: boolean }) => {
+      const conversationPath = `/conversation/${conv._id}`;
       if (standalone && isElectron()) {
-        window.__CODECAST_ELECTRON__!.paletteNavigate(`/inbox?s=${conv._id}`);
+        window.__CODECAST_ELECTRON__!.paletteNavigate(conversationPath);
         return;
       }
       const store = useInboxStore.getState();
@@ -183,11 +185,10 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       } else {
         store.navigateToSession(conv._id);
       }
-      const inboxPath = `/inbox?s=${conv._id}`;
-      if (pathname === "/inbox") {
-        window.history.replaceState({ inboxId: conv._id }, "", inboxPath);
+      if (isInboxRoute(pathname)) {
+        window.history.replaceState({ inboxId: conv._id }, "", conversationPath);
       } else {
-        router.push(inboxPath);
+        router.push(conversationPath);
       }
       setOpen(false);
     },

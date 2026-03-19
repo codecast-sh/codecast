@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
@@ -60,6 +60,8 @@ import { BranchSelector } from "./BranchSelector";
 import { ForkTreePanel } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
+import { isInboxRoute } from "../lib/inboxRouting";
+import { MessageNavButton } from "./MessageBrowserPopover";
 
 function parseSearchTerms(query: string): string[] {
   const terms: string[] = [];
@@ -254,10 +256,10 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
     s.sessions[conversation._id]
   );
   const openNewSession = useInboxStore((s) => s.openNewSession);
-  const inboxSource = useInboxStore((s) => s.currentConversation?.source);
   const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
   const createQuickSession = useMutation(api.conversations.createQuickSession);
   const killSession = useMutation(api.conversations.killSession);
+  const pathname = usePathname();
   const router = useRouter();
 
   const recentProjects = freshProjects ?? cachedProjects;
@@ -268,7 +270,7 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
   const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path || currentConvContext?.projectPath || currentConvContext?.gitRoot;
   const currentName = currentPath?.split("/").filter(Boolean).pop() || "unknown";
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
-  const isInInbox = inboxSource === "inbox";
+  const isInInbox = isInboxRoute(pathname);
 
   const otherProjects = useMemo(() => {
     return recentProjects.filter((p: { path: string }) => p.path !== currentPath);
@@ -433,28 +435,20 @@ function ProjectSwitcher({ conversation }: { conversation: ConversationData }) {
 
 function AgentSwitcher({ conversation }: { conversation: ConversationData }) {
   const switchAgent = useMutation(api.conversations.switchSessionAgent);
-  const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
+  const setConversationAgent = useInboxStore((s) => s.setConversationAgent);
   const storeSession = useInboxStore((s) =>
     s.sessions[conversation._id]
   );
   const resolvedId = storeSession?._id || conversation._id;
-  const currentPath = storeSession?.project_path || storeSession?.git_root || conversation.git_root || conversation.project_path;
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
 
   const handleAgentSwitch = useCallback((agentType: "claude_code" | "codex" | "gemini") => {
     if (agentType === currentAgent) return;
-    useInboxStore.getState().patchSession(resolvedId, { agent_type: agentType });
-    setCurrentConversation({
-      conversationId: resolvedId,
-      projectPath: currentPath || undefined,
-      gitRoot: currentPath || undefined,
-      agentType,
-      source: "inbox",
-    });
+    setConversationAgent(resolvedId, agentType);
     if (isConvexId(resolvedId)) {
       switchAgent({ conversation_id: resolvedId as Id<"conversations">, agent_type: agentType }).catch(() => {});
     }
-  }, [switchAgent, resolvedId, currentAgent, currentPath, setCurrentConversation]);
+  }, [switchAgent, resolvedId, currentAgent, setConversationAgent]);
 
   const agents = [
     { type: "claude_code" as const, label: "Claude" },
@@ -4516,7 +4510,7 @@ const CYCLING_SHORTCUTS = [
   { keys: ["Ctrl", "J"], label: "next session" },
   { keys: ["Ctrl", "K"], label: "previous session" },
   { keys: ["Ctrl", "Tab"], label: "MRU next" },
-  { keys: ["Shift", "←"], label: "defer session" },
+  { keys: ["Shift", "←"], label: "defer & next session" },
   { keys: ["Ctrl", "←"], label: "dismiss session" },
   { keys: ["Esc"], label: "escape to session" },
   { keys: ["Esc", "Esc"], label: "send escape" },
@@ -5618,6 +5612,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const scrollToBottomFnRef = useRef<() => void>(() => {});
   const lastScrollTopRef = useRef(0);
   const scrollProgressRef = useRef<HTMLDivElement>(null);
+  const [navScrollProgress, setNavScrollProgress] = useState(1);
   const hasScrolledToTarget = useRef(false);
   const jumpDirectionRef = useRef<'start' | 'end' | null>(null);
   const isPaginatingRef = useRef(false);
@@ -6074,24 +6069,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return map;
   }, [timeline, conversation?.agent_type]);
 
-  const userMessagePositions = useMemo(() => {
-    const totalMessages = conversation?.message_count || messages.length;
-    if (totalMessages === 0) return [];
-    const isPaginated = totalMessages > 150;
-    const startOffset = conversation?.loaded_start_index ?? 0;
-    const positions: number[] = [];
-    for (let i = 0; i < timeline.length; i++) {
-      const item = timeline[i];
-      if (item.type !== 'message') continue;
-      const msg = item.data as Message;
-      if (msg.role !== 'user') continue;
-      const kind = userMsgKindMap.get(msg._id)?.kind;
-      if (!kind || kind === 'tool_results_only' || kind === 'empty' || kind === 'noise' || kind === 'task_notification' || kind === 'task_prompt' || kind === 'compaction_prompt' || kind === 'compaction_summary' || kind === 'teammate_events') continue;
-      const globalIndex = isPaginated ? startOffset + i : i;
-      positions.push(globalIndex / totalMessages);
-    }
-    return positions;
-  }, [timeline, messages.length, conversation?.message_count, conversation?.loaded_start_index, userMsgKindMap]);
+
 
   const isWaitingForResponse = useMemo(() => {
     if (!conversation || conversation.status !== "active" || timeline.length === 0 || hasMoreBelow) return false;
@@ -6855,6 +6833,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       progress = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 1;
     }
     scrollProgressRef.current.style.height = `${progress * 100}%`;
+    setNavScrollProgress(progress);
   }, [conversation?.message_count, messages.length, timeline.length, conversation?.loaded_start_index, totalSize]);
 
   // Restore scroll position after loading older messages.
@@ -7893,6 +7872,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
           </div>
         </div>
+        {conversation && (
+          <div className="absolute top-full right-3 mt-12 z-30">
+            <MessageNavButton
+              conversationId={conversation._id}
+              currentMessageId={activeStickyMsg?.id ?? null}
+              scrollProgress={navScrollProgress}
+            />
+          </div>
+        )}
       </header>
 
       {stickyMsgVisible && activeStickyMsg && (
@@ -8202,20 +8190,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 )}
               </button>
           </div>
-          {(isScrollable && (!isNearTop || userScrolled) || hasMoreAbove || hasMoreBelow) && (
-            <div className="hidden sm:block w-1.5 relative border border-sol-border overflow-hidden">
+          {(isScrollable || hasMoreAbove || hasMoreBelow) && (
+            <div className="hidden sm:block w-2 self-stretch bg-sol-border/20 rounded-full overflow-hidden">
               <div
                 ref={scrollProgressRef}
-                className="w-full bg-sol-cyan/60 absolute inset-x-0 top-0"
+                className="w-full bg-sol-green rounded-full"
                 style={{ height: '0%', transition: 'height 0.15s ease-out' }}
               />
-              {userMessagePositions.map((pos, i) => (
-                <div
-                  key={i}
-                  className="absolute inset-x-0 bg-sol-blue"
-                  style={{ top: `${pos * 100}%`, height: 2 }}
-                />
-              ))}
             </div>
           )}
         </div>

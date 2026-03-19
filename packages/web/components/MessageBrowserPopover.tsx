@@ -1,16 +1,13 @@
 "use client";
 
-import { useState, useRef, useCallback, createContext, useContext } from "react";
+import { useState, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-
-export const MessageBrowserOpenContext = createContext(false);
-export function useMessageBrowserOpen() { return useContext(MessageBrowserOpenContext); }
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isCommandMessage, cleanContent, isSystemMessage } from "../lib/conversationProcessor";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { useInboxStore } from "../store/inboxStore";
+import { isConvexId, useInboxStore } from "../store/inboxStore";
 
 function getCommandLabel(content: string): string | null {
   const m = content.match(/<command-(?:name|message)>([^<]*)<\/command-(?:name|message)>/);
@@ -26,47 +23,49 @@ function processUserMessage(content: string): { display: string; isCmd: boolean 
   return { display: cleanContent(content), isCmd: false };
 }
 
-function MessageList({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
+type PM = { _id: string; display: string; isCmd: boolean };
+
+function NavDropdown({
+  messages,
+  conversationId,
+  currentMessageId,
+  triggerRect,
+  onClose,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  messages: PM[];
+  conversationId: string;
+  currentMessageId: string | null;
+  triggerRect: DOMRect;
+  onClose: () => void;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) {
+  const [mounted, setMounted] = useState(false);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const messages = useQuery(api.conversations.getUserMessages, {
-    conversation_id: conversationId as Id<"conversations">,
-  });
+  useMountEffect(() => setMounted(true));
 
-  if (!messages) {
-    return (
-      <div className="flex items-center justify-center h-20 text-xs text-sol-text-muted/50">
-        Loading...
-      </div>
-    );
-  }
+  if (!mounted || typeof document === "undefined") return null;
 
-  type ProcessedMessage = { _id: string; content: string; timestamp: number; display: string; isCmd: boolean };
-  const processed: ProcessedMessage[] = messages
-    .map((m: { _id: string; content: string; timestamp: number }) => ({ ...m, ...processUserMessage(m.content) }))
-    .filter((m: { display: string }) => m.display.length > 0 && !isSystemMessage(m.display));
+  const dropdownWidth = 300;
+  const margin = 8;
+  // Open to the left of the trigger button
+  const left = Math.max(margin, triggerRect.left - dropdownWidth - 8);
+  // Align vertically with the trigger
+  const top = Math.max(margin, triggerRect.top);
 
-  if (processed.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-20 text-xs text-sol-text-muted/50">
-        No messages
-      </div>
-    );
-  }
-
-  const previewMsg = (hoveredId ? processed.find((m) => m._id === hoveredId) : null) || processed[0];
-
-  return (
-    <div className="flex h-full">
-      {/* Left: preview of hovered (or first) message */}
-      <div className="w-[160px] shrink-0 p-3 border-r border-sol-border/30 flex flex-col justify-start overflow-hidden">
-        <p className="text-[11px] text-sol-text-muted leading-relaxed line-clamp-[12] transition-[color] duration-100">
-          {previewMsg.display}
-        </p>
-      </div>
-
-      {/* Right: all user messages as scrollable list */}
-      <div className="flex-1 min-w-0 overflow-y-auto p-2 space-y-0.5">
-        {processed.map((m) => (
+  return createPortal(
+    <div
+      className="fixed z-[9999] bg-white dark:bg-sol-bg border border-sol-border/20 rounded-xl shadow-2xl overflow-hidden py-1.5"
+      style={{ top, left, width: dropdownWidth }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      {messages.map((m) => {
+        const isCurrent = m._id === currentMessageId;
+        const isHovered = m._id === hoveredId;
+        return (
           <div
             key={m._id}
             onMouseEnter={() => setHoveredId(m._id)}
@@ -78,128 +77,120 @@ function MessageList({ conversationId, onClose }: { conversationId: string; onCl
               });
               onClose();
             }}
-            className={`px-2 py-1 rounded text-[12px] truncate transition-colors cursor-pointer ${
-              m.isCmd
-                ? "bg-sol-bg-highlight text-sol-cyan font-mono font-medium hover:bg-sol-bg-highlight/80"
-                : "text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text"
+            className={`px-4 py-2 text-[13px] cursor-pointer truncate transition-colors leading-snug ${
+              isCurrent
+                ? "bg-sol-bg-alt/60 text-sol-text font-semibold"
+                : isHovered
+                ? "bg-sol-bg-alt/40 text-sol-text"
+                : m.isCmd
+                ? "text-sol-text-muted font-mono"
+                : "text-sol-text-muted"
             }`}
           >
-            {m.display.length > 55 ? m.display.slice(0, 55) + " …" : m.display}
+            {m.display.length > 52 ? m.display.slice(0, 52) + "…" : m.display}
           </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-interface PopoverPosition {
-  top: number;
-  left: number;
-}
-
-function PopoverPortal({
-  position,
-  conversationId,
-  onClose,
-  onMouseEnter,
-  onMouseLeave,
-}: {
-  position: PopoverPosition;
-  conversationId: string;
-  onClose: () => void;
-  onMouseEnter: () => void;
-  onMouseLeave: () => void;
-}) {
-  const [mounted, setMounted] = useState(false);
-  useMountEffect(() => setMounted(true));
-
-  if (!mounted || typeof document === "undefined") return null;
-
-  return createPortal(
-    <div
-      className="fixed z-[9999] w-[420px] h-[260px] bg-sol-bg border border-sol-border/40 rounded-xl shadow-2xl overflow-hidden"
-      style={{ top: position.top, left: position.left }}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-    >
-      <MessageList conversationId={conversationId} onClose={onClose} />
+        );
+      })}
     </div>,
     document.body
   );
 }
 
-export function MessageBrowserPopover({
+export function MessageNavButton({
   conversationId,
-  children,
+  currentMessageId,
+  scrollProgress = 1,
 }: {
   conversationId: string;
-  children: React.ReactNode;
+  currentMessageId: string | null;
+  scrollProgress?: number;
 }) {
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<PopoverPosition>({ top: 0, left: 0 });
-  const triggerRef = useRef<HTMLDivElement>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const computePosition = useCallback(() => {
-    if (!triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    const popoverWidth = 420;
-    const popoverHeight = 260;
-    const margin = 8;
+  const messages = useQuery(
+    api.conversations.getUserMessages,
+    isConvexId(conversationId)
+      ? { conversation_id: conversationId as Id<"conversations"> }
+      : "skip"
+  );
 
-    // Prefer left of trigger; fall back to right
-    let left = rect.left - popoverWidth - margin;
-    if (left < margin) {
-      left = rect.right + margin;
-    }
-    // Clamp to viewport width
-    left = Math.max(margin, Math.min(left, window.innerWidth - popoverWidth - margin));
+  const processed: PM[] = messages
+    ? messages
+        .map((m: { _id: string; content: string; timestamp: number }) => ({
+          _id: m._id,
+          ...processUserMessage(m.content),
+        }))
+        .filter((m: PM) => m.display.length > 0 && !isSystemMessage(m.display))
+    : [];
 
-    // Align top of popover with top of trigger, clamp to viewport
-    let top = rect.top;
-    top = Math.max(margin, Math.min(top, window.innerHeight - popoverHeight - margin));
+  const total = processed.length;
+  const effectiveId = currentMessageId === "__fallback__" ? null : currentMessageId;
+  const currentIndex = effectiveId ? processed.findIndex((m) => m._id === effectiveId) : -1;
+  const activeIndex =
+    currentIndex >= 0 ? currentIndex : Math.min(total - 1, Math.floor(scrollProgress * total));
 
-    setPosition({ top, left });
-  }, []);
-
-  const handleMouseEnter = useCallback(() => {
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    openTimer.current = setTimeout(() => {
-      computePosition();
+  const scheduleOpen = useCallback(() => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    openTimerRef.current = setTimeout(() => {
+      if (btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
       setOpen(true);
-    }, 350);
-  }, [computePosition]);
-
-  const handleMouseLeave = useCallback(() => {
-    if (openTimer.current) clearTimeout(openTimer.current);
-    closeTimer.current = setTimeout(() => setOpen(false), 200);
+    }, 180);
   }, []);
 
-  const handleClose = useCallback(() => {
-    if (openTimer.current) clearTimeout(openTimer.current);
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-    setOpen(false);
+  const scheduleClose = useCallback(() => {
+    if (openTimerRef.current) clearTimeout(openTimerRef.current);
+    closeTimerRef.current = setTimeout(() => setOpen(false), 250);
   }, []);
+
+  const cancelClose = useCallback(() => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  }, []);
+
+  if (!messages || total === 0) return null;
+
+  const MAX_BARS = 24;
+  const displayCount = Math.min(total, MAX_BARS);
 
   return (
-    <MessageBrowserOpenContext.Provider value={open}>
-    <div
-      ref={triggerRef}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-    >
-      {children}
-      {open && (
-        <PopoverPortal
-          position={position}
+    <>
+      <button
+        ref={btnRef}
+        onMouseEnter={scheduleOpen}
+        onMouseLeave={scheduleClose}
+        className={`flex flex-col gap-[3px] items-end justify-center px-2 py-1.5 rounded transition-colors ${
+          open ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"
+        }`}
+        title={`${total} user message${total !== 1 ? "s" : ""}`}
+      >
+        {Array.from({ length: displayCount }).map((_, i) => {
+          const isActive = total <= MAX_BARS
+            ? i === activeIndex
+            : Math.round((i / (displayCount - 1)) * (total - 1)) === activeIndex;
+          return (
+            <span
+              key={i}
+              className={`block rounded-full transition-all duration-150 ${
+                isActive ? "bg-sol-text w-4 h-[2.5px]" : "bg-current w-3 h-px opacity-35"
+              }`}
+            />
+          );
+        })}
+      </button>
+      {open && triggerRect && (
+        <NavDropdown
+          messages={processed}
           conversationId={conversationId}
-          onClose={handleClose}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
+          currentMessageId={effectiveId}
+          triggerRect={triggerRect}
+          onClose={() => setOpen(false)}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
         />
       )}
-    </div>
-    </MessageBrowserOpenContext.Provider>
+    </>
   );
 }

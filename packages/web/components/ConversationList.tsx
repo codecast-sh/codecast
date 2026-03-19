@@ -17,7 +17,6 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { soundNewSession } from "../lib/sounds";
-import { MessageBrowserPopover, useMessageBrowserOpen } from "./MessageBrowserPopover";
 
 function VisibilityDropdown({
   conversationId,
@@ -409,8 +408,6 @@ function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; cl
 
 
 function ConvSubtitleSection({ conv }: { conv: Conversation }) {
-  const isBrowserOpen = useMessageBrowserOpen();
-
   const cleanTeammate = (c: string) => {
     if (!c?.includes('<teammate-message')) return c;
     return c.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').trim();
@@ -430,38 +427,6 @@ function ConvSubtitleSection({ conv }: { conv: Conversation }) {
     .filter(m => m.cleanContent.length > 0 && !isSystemMessage(m.cleanContent));
 
   const hasBullets = processed.length > 0;
-
-  // When popover is open: hide subtitle, show bullets
-  if (isBrowserOpen && hasBullets) {
-    const firstMsgs = processed.slice(0, 2);
-    const lastMsgs = processed.length > 4 ? processed.slice(-2) : [];
-    const showEllipsis = processed.length > 4;
-    const renderMessage = (m: typeof processed[0], key: string) => (
-      <div key={key} className="flex items-start gap-2 min-w-0">
-        {m.role === "assistant" ? (
-          <span className="flex-shrink-0 mt-0.5">
-            <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-4 h-4" />
-          </span>
-        ) : (
-          <span className="flex-shrink-0 w-4 h-4 rounded-full bg-sol-violet/60 flex items-center justify-center mt-0.5 text-[8px] font-medium text-white">
-            {(conv.author_name?.charAt(0) || "U").toUpperCase()}
-          </span>
-        )}
-        {m.isCmd ? (
-          <span className="font-mono text-sol-cyan/80 font-medium truncate min-w-0 leading-relaxed">{m.cleanContent}</span>
-        ) : (
-          <span className={`truncate min-w-0 leading-relaxed ${m.role === "user" ? "text-sky-700 dark:text-sky-300" : "text-sol-text-muted"}`}>{m.cleanContent}</span>
-        )}
-      </div>
-    );
-    return (
-      <div className="mb-2 sm:mb-3 space-y-1 sm:space-y-1.5 text-[11px] sm:text-xs overflow-hidden opacity-70">
-        {firstMsgs.map((m, idx) => renderMessage(m, `first-${idx}`))}
-        {showEllipsis && <div className="flex items-center gap-2 pl-6"><span className="text-sol-text-muted0">...</span></div>}
-        {lastMsgs.map((m, idx) => renderMessage(m, `last-${idx}`))}
-      </div>
-    );
-  }
 
   // Default: show subtitle
   if (conv.subtitle && conv.visibility_mode !== "minimal") {
@@ -1195,8 +1160,8 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
               const isOthersRestrictedView = (conv.visibility_mode === "detailed" || conv.visibility_mode === "summary") && !conv.is_own;
 
               return (
-                <MessageBrowserPopover key={conv._id} conversationId={conv._id}>
                 <Link
+                  key={conv._id}
                   href={isOthersRestrictedView ? "#" : `/conversation/${conv._id}`}
                   className={`group block relative ${isOthersRestrictedView ? "cursor-default" : ""}`}
                   role="listitem"
@@ -1405,7 +1370,6 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onMemb
                   </div>
                 </div>
               </Link>
-              </MessageBrowserPopover>
               );
             })}
           </div>

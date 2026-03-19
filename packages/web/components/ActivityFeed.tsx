@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { ConversationList } from "./ConversationList";
-import { MessageBrowserPopover, useMessageBrowserOpen } from "./MessageBrowserPopover";
 import { useEventListener } from "../hooks/useEventListener";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -319,7 +318,6 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const [deepDive, setDeepDive] = useState(false);
-  const isBrowserOpen = useMessageBrowserOpen();
   const actorName = item.actor?.name || "Unknown";
   const project = extractProject(item.project_path);
   const outcome = OUTCOME_STYLES[item.outcome_type] || OUTCOME_STYLES.unknown;
@@ -434,20 +432,6 @@ function SessionCardInner({ item, compact, showActor, onNavigate, projectColor }
             <div className="font-mono text-sol-text-dim opacity-20 text-[9px]">{item.git_branch}</div>
           )}
         </div>
-      ) : isBrowserOpen && (changes.length > 0 || hasTurns) ? (
-        <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
-          <ul className="space-y-0">
-            {(changes.length > 0
-              ? changes.slice(0, 3)
-              : (item.turns as Array<{ ask: string; did: string[] }>).slice(0, 3).map(t => t.ask)
-            ).map((c: string, i: number) => (
-              <li key={i} className={`flex gap-1.5 text-sol-text-muted0 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
-                <span className="text-sol-text-dim opacity-30 select-none shrink-0">-</span>
-                <span className="truncate">{c}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
       ) : headline ? (
         <div className={`mt-0.5 ${showActor ? "ml-[26px]" : ""}`}>
           <p className={`text-sol-base0/50 leading-snug ${compact ? "text-[11px]" : "text-[12px]"}`}>
@@ -471,9 +455,7 @@ function SessionCard({ item, compact, showActor, onNavigate, projectColor }: {
   projectColor?: string;
 }) {
   return (
-    <MessageBrowserPopover conversationId={item.conversation_id}>
-      <SessionCardInner item={item} compact={compact} showActor={showActor} onNavigate={onNavigate} projectColor={projectColor} />
-    </MessageBrowserPopover>
+    <SessionCardInner item={item} compact={compact} showActor={showActor} onNavigate={onNavigate} projectColor={projectColor} />
   );
 }
 

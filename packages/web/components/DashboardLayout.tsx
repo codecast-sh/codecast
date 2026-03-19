@@ -28,6 +28,7 @@ import { NewSessionModal } from "./ConversationList";
 import { useInboxStore } from "../store/inboxStore";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag } from "../lib/desktop";
+import { isInboxRoute as isInboxRoutePath, isInboxSessionView } from "../lib/inboxRouting";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -83,7 +84,8 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
   const isOnCommitPage = pathname?.includes("/commit/") ?? false;
   const isOnPRPage = pathname?.includes("/pr/") ?? false;
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
-  const isOnInboxPage = pathname === "/inbox" || (pathname?.startsWith("/inbox/") ?? false) || (isOnConversationPage && inboxSource === "inbox");
+  const isInboxRoute = isInboxRoutePath(pathname);
+  const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
   const isOnTasksPage = pathname === "/tasks" || (pathname?.startsWith("/tasks/") ?? false);
   const isOnWorkflowsPage = pathname === "/workflows" || (pathname?.startsWith("/workflows/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
@@ -122,10 +124,10 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       session_id: sessionId,
     });
 
-    if (!isOnInboxPage) {
+    if (!isInboxRoute) {
       router.push(`/conversation/${sessionId}?focus=1`);
     }
-  }, [currentConvContext, directoryFilter, router, isOnInboxPage]);
+  }, [currentConvContext, directoryFilter, router, isInboxRoute]);
 
   const handleQuickCreateIsolated = useCallback(async () => {
     const path = directoryFilter || currentConvContext.projectPath || currentConvContext.gitRoot;
@@ -141,12 +143,12 @@ export function DashboardLayout({ children, filter, onFilterChange, directoryFil
       git_root: currentConvContext.gitRoot || path,
       isolated: true,
     });
-    if (isOnInboxPage) {
+    if (isInboxRoute) {
       useInboxStore.getState().setCurrentSession(conversationId as string);
     } else {
       router.push(`/conversation/${conversationId}?focus=1`);
     }
-  }, [currentConvContext, directoryFilter, router, isOnInboxPage, createQuickSession, openNewSession]);
+  }, [currentConvContext, directoryFilter, router, isInboxRoute, createQuickSession, openNewSession]);
 
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "." && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
