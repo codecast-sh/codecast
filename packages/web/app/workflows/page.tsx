@@ -564,6 +564,7 @@ function WorkflowsContent() {
             <div className="flex-1 min-h-0 flex">
               <div className="flex-1 relative min-w-0">
                 <WorkflowGraphView
+                  key={selected._id}
                   nodes={selected.nodes}
                   edges={selected.edges}
                   selectedNodeId={selectedNode?.id}

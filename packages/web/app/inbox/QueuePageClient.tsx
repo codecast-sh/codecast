@@ -255,7 +255,7 @@ function SessionCard({
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isDismissed = variant === "dismissed";
-  const isSubagent = !!session.is_subagent;
+  const isSubagent = !!session.is_subagent || !!session.worktree_name;
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);

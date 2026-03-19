@@ -4,8 +4,6 @@ import {
   Background,
   Controls,
   MiniMap,
-  useNodesState,
-  useEdgesState,
   Handle,
   Position,
   BaseEdge,
@@ -333,18 +331,15 @@ export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect
   const { theme } = useTheme();
   const p = SOL[theme];
 
-  const { nodes: initNodes, edges: initEdges } = useMemo(
+  const { nodes: graphNodes, edges: graphEdges } = useMemo(
     () => buildGraph(wfNodes, wfEdges, p, nodeStatuses, currentNodeId),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [wfNodes, wfEdges, theme, nodeStatuses, currentNodeId]
   );
 
-  const [nodes, , onNodesChange] = useNodesState(initNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initEdges);
-
   const nodesWithSelection = useMemo(() =>
-    nodes.map(n => ({ ...n, selected: n.id === selectedNodeId })),
-    [nodes, selectedNodeId]
+    graphNodes.map(n => ({ ...n, selected: n.id === selectedNodeId })),
+    [graphNodes, selectedNodeId]
   );
 
   if (wfNodes.length === 0) return null;
@@ -353,9 +348,7 @@ export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect
     <div style={{ width: "100%", height: "100%", background: p.bg }}>
       <ReactFlow
         nodes={nodesWithSelection}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
+        edges={graphEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={(_, node) => {
